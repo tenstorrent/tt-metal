@@ -251,17 +251,21 @@ class Generator(WarmupForwardMixin):
         ):
             use_batched_prefill = True
 
-        # For OLMo: when doing sequential B1 prefill with short ISLs (≤ 2048), force
-        # eager mode (no trace). Reason: traced B1 prefill completes in ~340ms at ISL
-        # ~1024, but OLMo's cluster_axis=0 QK-norm (fused_rms_minimal) keeps async
-        # Ethernet fabric CCL in-flight beyond the trace. The next user's trace starts
-        # before the previous user's Ethernet CCL drains, causing NOC deadlocks after
-        # ~8 sequential users. Eager mode has implicit per-op synchronization that
-        # naturally drains the Ethernet fabric between users (same reason ISL 4k B32
-        # works in text_olmo_demo.py — it runs eagerly since no B32 trace exists for
-        # ISL ≥ 4096). At ISL > 2048, traced prefill naturally spaces out enough.
+        # OLMo multi-user sequential prefill workaround: for short ISLs (≤ 2048), force
+        # eager mode. Traced sequential prefill keeps cluster_axis=0 QK-norm
+        # (fused_rms_minimal) async Ethernet CCL in-flight beyond the trace, so the
+        # next user's trace starts before the previous user's fabric drains, causing
+        # NOC deadlocks after ~8 sequential users. Only gate this when there is more
+        # than one user in the call — single-user prefill can't deadlock against
+        # itself, so it must keep tracing to preserve B1 prefill performance.
         olmo_force_eager_threshold = 2048
-        if is_olmo and not use_batched_prefill and any(s <= olmo_force_eager_threshold for s in prefill_seq_lens):
+        num_sequential_users = 1 if use_batched_prefill else len(empty_slots)
+        if (
+            is_olmo
+            and not use_batched_prefill
+            and num_sequential_users > 1
+            and any(s <= olmo_force_eager_threshold for s in prefill_seq_lens)
+        ):
             enable_trace = False
 
         if return_logits:
@@ -368,11 +372,11 @@ class Generator(WarmupForwardMixin):
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
 
-            # For OLMo eager sequential prefill, drain after the whole per-user
-            # prefill path, including final norm / LM head / sampling all-gather.
-            # text_olmo_demo.py does this after process_output_prefill; doing it
-            # earlier leaves SAMPLING CCL semaphores dirty before the next user.
-            if is_olmo and not use_batched_prefill and not enable_trace:
+            # For OLMo eager sequential prefill (multi-user only), drain after the
+            # whole per-user prefill path, including final norm / LM head / sampling
+            # all-gather. Skip for single-user runs — there is no next user to
+            # collide with, so the sync + semaphore reset is pure overhead.
+            if is_olmo and not use_batched_prefill and not enable_trace and num_sequential_users > 1:
                 ttnn.synchronize_device(self.mesh_device)
                 self.model.tt_ccl.reset_gather_semaphores()
 
