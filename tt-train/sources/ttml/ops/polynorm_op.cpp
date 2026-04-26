@@ -7,11 +7,12 @@
 #include <array>
 #include <cstdint>
 #include <stdexcept>
+#include <tuple>
 
-#include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "metal/operations.hpp"
+#include "metal/ops/polynorm_bw/polynorm_bw.hpp"
+#include "metal/ops/polynorm_fw/polynorm_fw.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -25,12 +26,6 @@ namespace ttml::ops {
 namespace {
 
 constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
-enum class PolyNorm3ForwardVariant : uint8_t {
-    Fused,
-    CompositeComparisonOnly,
-};
-// Keep fused as the production default.
-constexpr PolyNorm3ForwardVariant kPolyNorm3ForwardVariant = PolyNorm3ForwardVariant::Fused;
 
 void validate_input_shapes(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
@@ -169,12 +164,92 @@ ttnn::Tensor polynorm3_forward_variant(
     return polynorm3_composite_forward(x, weight_tensor, bias_tensor, epsilon);
 }
 
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_composite_backward(
+    const ttnn::Tensor& x, const ttnn::Tensor& dL_dout, const ttnn::Tensor& weight_tensor, float epsilon) {
+    const auto x2 = ttnn::square(x);
+    const auto x3 = ttnn::multiply(x, x2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+
+    const auto [x_norm, x_inv_rms] = rms_normalize_last_dim(x, epsilon);
+    const auto [x2_norm, x2_inv_rms] = rms_normalize_last_dim(x2, epsilon);
+    const auto [x3_norm, x3_inv_rms] = rms_normalize_last_dim(x3, epsilon);
+
+    const auto [w0, w1, w2] = split_weight_scalars(weight_tensor);
+
+    auto dL_dx = ttnn::multiply(x, 0.0F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    const float inv_channels = 1.0F / static_cast<float>(x.logical_shape()[-1]);
+
+    const auto dL_dx_term1 = grad_wrt_rmsnorm_input(
+        x,
+        ttnn::multiply(dL_dout, w2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+        x_inv_rms,
+        inv_channels);
+    dL_dx = ttnn::add(dL_dx, dL_dx_term1, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+
+    const auto dL_dx2 = grad_wrt_rmsnorm_input(
+        x2,
+        ttnn::multiply(dL_dout, w1, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+        x2_inv_rms,
+        inv_channels);
+    const auto dL_dx_term2 = ttnn::multiply(
+        dL_dx2,
+        ttnn::multiply(x, 2.0F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        none,
+        none,
+        none,
+        false);
+    dL_dx = ttnn::add(dL_dx, dL_dx_term2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+
+    const auto dL_dx3 = grad_wrt_rmsnorm_input(
+        x3,
+        ttnn::multiply(dL_dout, w0, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+        x3_inv_rms,
+        inv_channels);
+    const auto dL_dx_term3 = ttnn::multiply(
+        dL_dx3,
+        ttnn::multiply(x2, 3.0F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        none,
+        none,
+        none,
+        false);
+    dL_dx = ttnn::add(dL_dx, dL_dx_term3, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+
+    const auto dL_dw0 =
+        scalar_sum(ttnn::multiply(dL_dout, x3_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
+    const auto dL_dw1 =
+        scalar_sum(ttnn::multiply(dL_dout, x2_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
+    const auto dL_dw2 =
+        scalar_sum(ttnn::multiply(dL_dout, x_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
+
+    auto dL_dw = ttnn::concat(std::vector<ttnn::Tensor>{dL_dw0, dL_dw1, dL_dw2}, /*dim=*/3);
+    auto dL_db = scalar_sum(dL_dout);
+    return {std::move(dL_dx), std::move(dL_dw), std::move(dL_db)};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_backward_variant(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& dL_dout,
+    const ttnn::Tensor& weight_tensor,
+    float epsilon,
+    PolyNorm3BackwardVariant backward_variant) {
+    if (backward_variant == PolyNorm3BackwardVariant::Fused) {
+        return metal::polynorm3_bw(x, dL_dout, weight_tensor, epsilon);
+    }
+    return polynorm3_composite_backward(x, dL_dout, weight_tensor, epsilon);
+}
+
 autograd::TensorPtr polynorm3_impl(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
     float epsilon,
-    PolyNorm3ForwardVariant forward_variant) {
+    PolyNorm3ForwardVariant forward_variant,
+    PolyNorm3BackwardVariant backward_variant) {
     validate_input_shapes(tensor, weight, bias);
 
     const auto x = tensor->get_value();
@@ -184,74 +259,15 @@ autograd::TensorPtr polynorm3_impl(
 
     auto out = autograd::create_tensor(out_value);
 
-    autograd::GradFunction grad = [tensor, weight, bias, out, epsilon]() {
-        const auto x = tensor->get_value();
-        const auto x2 = ttnn::square(x);
-        const auto x3 = ttnn::multiply(x, x2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
-
-        const auto [x_norm, x_inv_rms] = rms_normalize_last_dim(x, epsilon);
-        const auto [x2_norm, x2_inv_rms] = rms_normalize_last_dim(x2, epsilon);
-        const auto [x3_norm, x3_inv_rms] = rms_normalize_last_dim(x3, epsilon);
-
+    autograd::GradFunction grad = [tensor, weight, bias, out, epsilon, backward_variant]() {
         const auto dL_dout = out->get_grad();
-        const auto [w0, w1, w2] = split_weight_scalars(weight->get_value());
-
-        auto dL_dx = ttnn::multiply(x, 0.0F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
-        const float inv_channels = 1.0F / static_cast<float>(x.logical_shape()[-1]);
-
-        const auto dL_dx_term1 = grad_wrt_rmsnorm_input(
-            x,
-            ttnn::multiply(dL_dout, w2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-            x_inv_rms,
-            inv_channels);
-        dL_dx = ttnn::add(dL_dx, dL_dx_term1, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
-
-        const auto dL_dx2 = grad_wrt_rmsnorm_input(
-            x2,
-            ttnn::multiply(dL_dout, w1, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-            x2_inv_rms,
-            inv_channels);
-        const auto dL_dx_term2 = ttnn::multiply(
-            dL_dx2,
-            ttnn::multiply(x, 2.0F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            false);
-        dL_dx = ttnn::add(dL_dx, dL_dx_term2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
-
-        const auto dL_dx3 = grad_wrt_rmsnorm_input(
-            x3,
-            ttnn::multiply(dL_dout, w0, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-            x3_inv_rms,
-            inv_channels);
-        const auto dL_dx_term3 = ttnn::multiply(
-            dL_dx3,
-            ttnn::multiply(x2, 3.0F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            false);
-        dL_dx = ttnn::add(dL_dx, dL_dx_term3, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+        const auto x = tensor->get_value();
+        const auto weight_tensor = weight->get_value();
+        const auto [dL_dx, dL_dw, dL_db] =
+            polynorm3_backward_variant(x, dL_dout, weight_tensor, epsilon, backward_variant);
         tensor->add_grad(dL_dx);
-
-        const auto dL_dw0 = scalar_sum(
-            ttnn::multiply(dL_dout, x3_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
-        const auto dL_dw1 = scalar_sum(
-            ttnn::multiply(dL_dout, x2_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
-        const auto dL_dw2 = scalar_sum(
-            ttnn::multiply(dL_dout, x_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
-
-        auto dL_dw = ttnn::concat(std::vector<ttnn::Tensor>{dL_dw0, dL_dw1, dL_dw2}, /*dim=*/3);
         weight->add_grad(dL_dw);
-
-        bias->add_grad(scalar_sum(dL_dout));
+        bias->add_grad(dL_db);
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, weight, bias));
@@ -264,8 +280,10 @@ autograd::TensorPtr polynorm3(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
-    float epsilon) {
-    return polynorm3_impl(tensor, weight, bias, epsilon, kPolyNorm3ForwardVariant);
+    float epsilon,
+    PolyNorm3ForwardVariant forward_variant,
+    PolyNorm3BackwardVariant backward_variant) {
+    return polynorm3_impl(tensor, weight, bias, epsilon, forward_variant, backward_variant);
 }
 
 autograd::TensorPtr polynorm3_composite(
@@ -273,7 +291,13 @@ autograd::TensorPtr polynorm3_composite(
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
     float epsilon) {
-    return polynorm3_impl(tensor, weight, bias, epsilon, PolyNorm3ForwardVariant::CompositeComparisonOnly);
+    return polynorm3_impl(
+        tensor,
+        weight,
+        bias,
+        epsilon,
+        PolyNorm3ForwardVariant::CompositeComparisonOnly,
+        PolyNorm3BackwardVariant::CompositeComparisonOnly);
 }
 
 }  // namespace ttml::ops
