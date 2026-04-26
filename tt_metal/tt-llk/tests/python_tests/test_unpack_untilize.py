@@ -8,7 +8,7 @@ from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     TILE_COUNT,
@@ -43,7 +43,7 @@ def test_unpack_untilize(
             32,
         ]  # Multiple tile unpack untilize not supported for Float32, @ldjurovic can take a look to extend this
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
