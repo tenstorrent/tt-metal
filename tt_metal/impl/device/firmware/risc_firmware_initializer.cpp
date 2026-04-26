@@ -133,9 +133,10 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             generate_worker_logical_to_virtual_map(
                 device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
 
-            // Skip build env registration and firmware building for mock/emulated devices
+            // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
+            // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
+            BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
             if (!cluster_.is_mock_or_emulated()) {
-                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                 // build_firmware ensures that the FW is built only once for a given build key
                 // (which captures the fw_compile_hash).
                 BuildEnvManager::get_instance().build_firmware(device_id);
