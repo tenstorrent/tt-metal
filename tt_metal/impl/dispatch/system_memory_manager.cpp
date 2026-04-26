@@ -358,23 +358,32 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     // EventSynchronize / wait_for_pending_events actually waits on new events
     // instead of short-circuiting on a stale quiesce publication.
     this->cq_to_quiesced[cq_id].store(false, std::memory_order_release);
-    // Reset the prefetch queue in-flight counter. Firmware re-initializes its
-    // rd_ptr to the limit sentinel (base + N*entry_size) when the dispatch kernel
-    // is reloaded, so the host counter must also start at 0 to stay consistent.
+    // Reset the prefetch queue in-flight counter. The caller must ensure all
+    // in-flight entries have been consumed before calling reset().
     this->prefetch_q_in_flight[cq_id] = 0;
-    // Also reset prefetch_q_dev_fences to the sentinel. Without this, a stale
-    // fences value from the prior session causes count_consumed(stale, sentinel)
-    // to return a non-zero fictitious count the first time refresh_in_flight()
-    // reads the freshly-reinitialized firmware fence (sentinel). That off-by-one
-    // error allows the host to write one extra entry past queue capacity, giving
-    // firmware garbage data and causing it to hang (N300 dispatch timeout).
+    // Sync dev_fences with the actual hardware fence.  Reading the register
+    // instead of hardcoding the sentinel handles two cases correctly:
+    //
+    // (A) Dispatch kernel was reloaded: firmware wrote limit (sentinel) to
+    //     PREFETCH_Q_RD during kernel init, so hw == limit.  dev_fences = limit
+    //     → count_consumed(limit, first_consumed) uses the sentinel-transition
+    //     path and returns the right count.
+    //
+    // (B) Dispatch kernel was NOT reloaded: firmware's fence still holds the
+    //     last-consumed pointer from the previous session.  dev_fences = that
+    //     stale value → count_consumed(stale, next_update) uses normal arithmetic
+    //     and gives the correct delta.  The old sentinel-hardcode caused
+    //     count_consumed(limit, stale) to fire the sentinel path and credit
+    //     fictitious consumed slots, letting the host overwrite in-flight entries
+    //     and hanging firmware (N300/wh_n300_civ2 dispatch timeout).
     {
         auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
-        const uint32_t prefetch_q_base =
-            ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-        this->prefetch_q_dev_fences[cq_id] =
-            prefetch_q_base + ctx.dispatch_mem_map().prefetch_q_entries() *
-                                  sizeof(DispatchSettings::prefetch_q_entry_type);
+        const uint32_t prefetch_q_rd_ptr =
+            ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+        uint32_t hw_fence;
+        ctx.get_cluster().read_core(
+            &hw_fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
+        this->prefetch_q_dev_fences[cq_id] = hw_fence;
     }
 }
 
