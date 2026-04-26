@@ -52,11 +52,12 @@ void kernel_main() {
     //  10: cb_factor                             - CB size reduction factor (1 for Blackhole, 4 for Wormhole)
     //  11: tile_height                            - tile height in rows (e.g. 32)
     //  12: tile_width                             - tile width in columns (e.g. 32)
-    //  13: core_id                               - local index within the owning sender's idle group (0-based)
-    //  14: num_idle_cores                        - size of the owning sender's idle group (k_s)
-    //  15: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
-    //  16: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
-    //  17+: TensorAccessorArgs for dispatched_buffer
+    //  13: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
+    //  14: core_id                               - local index within the owning sender's idle group (0-based)
+    //  15: num_idle_cores                        - size of the owning sender's idle group (k_s)
+    //  16: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
+    //  17: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
+    //  18+: TensorAccessorArgs for dispatched_buffer
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
@@ -70,11 +71,12 @@ void kernel_main() {
     constexpr uint32_t cb_factor = get_compile_time_arg_val(10);
     constexpr uint32_t tile_height = get_compile_time_arg_val(11);
     constexpr uint32_t tile_width = get_compile_time_arg_val(12);
-    constexpr uint32_t core_id = get_compile_time_arg_val(13);
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(16);
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<17>();
+    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(13);
+    constexpr uint32_t core_id = get_compile_time_arg_val(14);
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(15);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(17);
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<18>();
 
     constexpr uint32_t tiles_per_batch = hidden_size / tile_width;
 
@@ -132,6 +134,14 @@ void kernel_main() {
 
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
         uint32_t expert_tokens = local_expert_counts[local_expert];
+        // Clamp to the dispatch buffer capacity to mirror reader_dispatch's overflow guard.
+        // start_page_tiled is in tiles; convert via tile_height to compare with the row-count cap.
+        uint32_t start_token = (start_page_tiled / tiles_per_batch) * tile_height;
+        if (start_token >= max_dispatch_buffer_token_size) {
+            expert_tokens = 0;
+        } else if (start_token + expert_tokens > max_dispatch_buffer_token_size) {
+            expert_tokens = max_dispatch_buffer_token_size - start_token;
+        }
         DPRINT_COMBINE << "Expert " << local_expert << ": tokens=" << expert_tokens << ENDL();
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;

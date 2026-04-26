@@ -145,6 +145,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
+    auto max_dispatch_buffer_token_size = dispatched_shape[-2];
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     // Maximum worker cores: one per fabric link.
@@ -451,11 +452,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             computed_ndg);
     }
 
-    // Expert region offsets tensor metadata (indices 35-38): CB id, pages, page sizes
+    // Expert region offsets tensor metadata (indices 34-37): CB id, pages, page sizes
     compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_8));
     compile_time_args.push_back(detail::get_num_pages(expert_region_offsets));
     compile_time_args.push_back(detail::get_page_size(expert_region_offsets));
     compile_time_args.push_back(detail::get_aligned_page_size(expert_region_offsets));
+
+    // Dispatch buffer total per-chip capacity (index 38): used by readers as overflow guard.
+    compile_time_args.push_back((uint32_t)max_dispatch_buffer_token_size);
 
     // Append TensorAccessorArgs for all 5 tensors (starting at index 39)
     tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(compile_time_args);
@@ -639,12 +643,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;
     if (is_tile_layout) {
         // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
-        //   0-12: shared base (below, includes tile_height/tile_width at 11-12)
-        //   13:   core_id   — local index within sender s's idle group (0..k_s-1)
-        //   14:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
-        //   15:   aligned_output_page_size
-        //   16:   aligned_experts_tok_counter_page_size
-        //   17+:  TensorAccessorArgs for dispatched_buffer (no num_senders — single-sender kernel)
+        //   0-13: shared base (below, includes max_dispatch_buffer_token_size at 13)
+        //   14:   core_id   — local index within sender s's idle group (0..k_s-1)
+        //   15:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
+        //   16:   aligned_output_page_size
+        //   17:   aligned_experts_tok_counter_page_size
+        //   18+:  TensorAccessorArgs for dispatched_buffer (no num_senders — single-sender kernel)
         const uint32_t tile_height = dispatched_buffer.tensor_spec().tile().get_height();
         const uint32_t tile_width = dispatched_buffer.tensor_spec().tile().get_width();
         const std::vector<uint32_t> reader_untilize_compile_time_args_base = {
@@ -661,6 +665,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             cb_factor,                                         // 10: cb_factor
             tile_height,                                       // 11: tile_height
             tile_width,                                        // 12: tile_width
+            (uint32_t)max_dispatch_buffer_token_size,          // 13: max_dispatch_buffer_token_size
         };
 
         // Partitioned idle cores: each sender s owns a dedicated group of k_s idle cores.
@@ -674,11 +679,11 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             for (uint32_t j = 0; j < k_s; j++, global_idle_idx++) {
                 auto per_core_args = reader_untilize_compile_time_args_base;
-                per_core_args.push_back(j);    // 13: core_id (local to sender s's group)
-                per_core_args.push_back(k_s);  // 14: num_idle_cores (per-sender)
-                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 15
-                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 16
-                // 17+: TensorAccessorArgs (no num_senders — single-sender kernel)
+                per_core_args.push_back(j);    // 14: core_id (local to sender s's group)
+                per_core_args.push_back(k_s);  // 15: num_idle_cores (per-sender)
+                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 16
+                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 17
+                // 18+: TensorAccessorArgs (no num_senders — single-sender kernel)
                 tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(per_core_args);
 
                 CoreRangeSet single_idle_core({CoreRange(idle_row_cores[global_idle_idx])});
