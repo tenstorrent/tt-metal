@@ -1329,7 +1329,11 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 base_umd_channels_map[dev->id()] = std::move(result.base_umd_channels);
             }
 
-            if (relay_broken || !probe_dead_channels.empty()) {
+            // FIX E2 (#42429): Only mark non-MMIO devices as dead-relay when ETH relay is
+            // compromised.  MMIO devices dispatch via PCIe — their ETH relay channel health
+            // does not affect dispatch kernel writes.  Applying this to MMIO devices causes
+            // dispatch to be skipped entirely even though it would succeed over PCIe.
+            if (is_non_mmio && (relay_broken || !probe_dead_channels.empty())) {
                 dead_relay_devices_.insert(dev->id());
                 log_warning(
                     tt::LogMetal,
@@ -1339,7 +1343,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                     dev->id(),
                     relay_broken,
                     probe_dead_channels.size());
-                if (relay_broken && is_non_mmio) {
+                if (relay_broken) {
                     any_relay_broken = true;
                 }
             }
