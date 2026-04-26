@@ -69,6 +69,9 @@ public:
         noc_dram_rw_pointers = get_noc_addr64(dram_x, dram_y, dram_rw_pointers);
         noc_dram_buffer_start = get_noc_addr64(dram_x, dram_y, dram_buffer_start);
         this->dram_buffer_size = dram_buffer_size;
+        dram_read_pointer = 0;
+        dram_write_pointer = 0;
+        enabled = true;
 
         // Align the start of rw pointers buffer
         l1_rw_pointers_buffer_start = l1_align(l1_cache_buffer_address);
@@ -87,9 +90,24 @@ public:
             // device_print buffer. Disable dispatching to DRAM and fallback to host only reading buffers.
             enabled = false;
 
-            // Write data to DRAM that will tell host to do fallback.
+            // Write disabled magic plus diagnostics: word[0]=magic, word[1]=0 (rpos),
+            // word[2]=provided L1 cache size, word[3]=minimum L1 cache size that would
+            // have made the aggregator usable. Host reads these to produce an actionable
+            // warning. The leading 32-byte (DRAM-aligned) slot in DRAM has plenty of
+            // room for these four words.
             volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
             dram_rw_pointers[0] = DEBUG_PRINT_SERVER_DISABLED_MAGIC;
+            dram_rw_pointers[1] = 0;
+            dram_rw_pointers[2] = l1_cache_buffer_size;
+            dram_rw_pointers[3] = min_buffer_end - l1_cache_buffer_address;
+            noc_async_write(l1_dram_rw_pointers, noc_dram_rw_pointers, 4 * sizeof(uint32_t));
+            noc_async_write_barrier();
+        } else {
+            // Clear STARTING_MAGIC the host wrote at attach time so it can distinguish
+            // "kernel hasn't booted yet" (STARTING_MAGIC) from "kernel is alive but has
+            // produced no payload yet" (write_pointer == 0).
+            volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
+            dram_rw_pointers[0] = 0;
             noc_async_write(l1_dram_rw_pointers, noc_dram_rw_pointers, sizeof(uint32_t));
             noc_async_write_barrier();
         }
@@ -221,7 +239,14 @@ private:
                 (volatile tt_l1_ptr uint32_t*)(rw_pointer_address_in_l1 + rw_ptr_alignment);
             uint32_t write_position = rw_pointers[0];
             uint32_t read_position = rw_pointers[1];
-            bool stall = (write_position & DEVICE_PRINT_WRITE_STALL_FLAG) == 0;
+            // The kernel sets STALL_FLAG bit on wpos right before entering one of the
+            // three wait_for_space busy loops. Each of those loops explicitly checks for
+            // rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC and atomically resets the buffer.
+            // So when the flag is present we can safely send RESET_MAGIC. When the flag
+            // is absent the kernel may be actively writing — racing it with RESET_MAGIC
+            // would clobber in-flight writes — so we send rpos = wpos instead and let
+            // the kernel catch up next iteration.
+            bool kernel_in_wait_loop = (write_position & DEVICE_PRINT_WRITE_STALL_FLAG) != 0;
             write_position = write_position & ~DEVICE_PRINT_WRITE_STALL_FLAG;
 
             uint64_t remote_buffer_address;
@@ -312,8 +337,9 @@ private:
                 rw_pointers[1] = read_position;
             }
 
-            // Update read position that will be send to NOC location later.
-            rw_pointers[1] = stall ? DEVICE_PRINT_RESET_BUFFER_MAGIC : write_position;
+            // Update read position that will be sent to NOC location later. See comment
+            // on `kernel_in_wait_loop` above for why MAGIC is safe iff that's true.
+            rw_pointers[1] = kernel_in_wait_loop ? DEVICE_PRINT_RESET_BUFFER_MAGIC : write_position;
 
             // Update current buffer address for next iterations.
             current_l1_buffer_address += dram_align(buffer_l1_alignment + remote_buffer_size);
@@ -422,6 +448,11 @@ private:
         }
     }
 
+    // NOTE: None of the fields cannot be initialized here because this
+    // class needs to be zero-initializable and any non-zero field would
+    // generate .init_array entries for static instances of this class on
+    // dispatch_s, which the dispatch_s ELF linker script rejects.
+
     // Input data from host about NOC locations and their device_print buffer info
     volatile tt_l1_ptr device_print_dispatch::NocLocationInputInfo* noc_locations;
     uint32_t noc_locations_count;
@@ -432,15 +463,15 @@ private:
     uint32_t l1_rw_pointers_buffer_start;
     uint32_t l1_dram_rw_pointers;
     uint32_t l1_device_print_buffer_start;
-    bool enabled = true;
+    bool enabled;
 
     // NOC locations that are marked to be processed in current iteration.
     uint8_t noc_locations_to_process[MaxNocLocations];
     uint32_t num_noc_locations_to_process;
 
     // DRAM address where we will push data for host to read.
-    uint32_t dram_read_pointer = 0;
-    uint32_t dram_write_pointer = 0;
+    uint32_t dram_read_pointer;
+    uint32_t dram_write_pointer;
     uint64_t noc_dram_rw_pointers;
     uint64_t noc_dram_buffer_start;
     uint32_t dram_buffer_size;
