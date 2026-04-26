@@ -7,11 +7,12 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_ema_sfpu_entry.h"
+#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 ALWI void ema_init(uint32_t alpha, uint32_t beta) {
-    MATH((llk_math_ema_sfpu_init()));
+    MATH((SFPU_TERNARY_INIT(unused)));
     MATH((llk_math_ema_sfpu_load_alpha_beta(alpha, beta)));
 }
 

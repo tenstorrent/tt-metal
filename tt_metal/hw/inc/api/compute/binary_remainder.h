@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_binary_remainder.h"
+#include "ckernel_sfpu_binary_remainder.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,13 +31,23 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
 ALWI void remainder_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_remainder_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_remainder_int32,
+        (APPROX, 8),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for remainder_int32_tile.
  */
-ALWI void remainder_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_remainder_int32_init<APPROX>())); }
+ALWI void remainder_int32_tile_init() {
+    MATH((SFPU_BINARY_INIT_CB(remainder_int32, sfpu::remainder_int32_init, (APPROX))));
+}
 
 // BF16, FP32
 
@@ -60,14 +71,22 @@ ALWI void remainder_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_remai
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
 ALWI void remainder_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_remainder<APPROX, DST_ACCUM_MODE>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_remainder,
+        (APPROX, 8, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for remainder_binary_tile.
  */
 ALWI void remainder_binary_tile_init() {
-    MATH((llk_math_eltwise_binary_sfpu_binary_remainder_init<APPROX, DST_ACCUM_MODE>()));
+    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::remainder_binary_init, (APPROX, DST_ACCUM_MODE))));
 }
 
 }  // namespace ckernel

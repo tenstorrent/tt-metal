@@ -4,15 +4,12 @@
 
 #pragma once
 
-#include "llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_binary_bitwise.h"
 
 namespace ckernel {
 
-inline void llk_math_eltwise_binary_sfpu_bitwise_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>();
-}
+inline void llk_math_eltwise_binary_sfpu_bitwise_init() { SFPU_BINARY_INIT(unused); }
 
 template <bool APPROXIMATE, sfpu::BinaryBitwiseOp BITWISE_OP, DataFormat DATA_FORMAT>
 inline void llk_math_eltwise_binary_sfpu_bitwise(
@@ -22,8 +19,11 @@ inline void llk_math_eltwise_binary_sfpu_bitwise(
         "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         DATA_FORMAT == DataFormat::UInt16 ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    _llk_math_eltwise_binary_sfpu_params_(
-        sfpu::calculate_sfpu_binary_bitwise<APPROXIMATE, BITWISE_OP, INSTRUCTION_MODE>,
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_bitwise,
+        (APPROXIMATE, BITWISE_OP, INSTRUCTION_MODE),
         dst_index0,
         dst_index1,
         odst,

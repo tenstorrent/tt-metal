@@ -4,15 +4,12 @@
 
 #pragma once
 
-#include "llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_rsub_int32.h"
 
 namespace ckernel {
 
-inline void llk_math_eltwise_binary_sfpu_rsub_int_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>();
-}
+inline void llk_math_eltwise_binary_sfpu_rsub_int_init() { SFPU_BINARY_INIT(unused); }
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
 inline void llk_math_eltwise_binary_sfpu_rsub_int(
@@ -22,8 +19,11 @@ inline void llk_math_eltwise_binary_sfpu_rsub_int(
         "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::calculate_rsub_int<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>,
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsub_int,
+        (APPROXIMATE, INSTRUCTION_MODE, ITERATIONS),
         dst_index0,
         dst_index1,
         odst,

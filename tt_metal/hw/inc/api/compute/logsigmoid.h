@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_logsigmoid.h"
+#include "ckernel_sfpu_logsigmoid.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -25,7 +26,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
-    MATH((llk_math_eltwise_binary_sfpu_logsigmoid<APPROX>(idst_in0, idst_in1, idst_out)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_logsigmoid,
+        (APPROX, 8),
+        idst_in0,
+        idst_in1,
+        idst_out,
+        (int)VectorMode::RC)));
 }
 
 /**
@@ -34,6 +43,6 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((llk_math_eltwise_binary_sfpu_logsigmoid_init())); }
+ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
 
 }  // namespace ckernel

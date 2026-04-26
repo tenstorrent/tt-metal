@@ -23,7 +23,9 @@
 #ifndef ARCH_QUASAR
 #include "llk_math_binary_api.h"
 #include "llk_math_unary_sfpu_api.h"
-#include "llk_math_binary_sfpu_api.h"
+#include "ckernel_sfpu_add_top_row.h"
+#include "ckernel_sfpu_max_pool_indices.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_math_reduce_api.h"
 #endif
 #define MATH(x) x
@@ -621,13 +623,16 @@ template <
     int ITERATIONS = 8>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
-    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<
-          true, /* APPROXIMATE */
-          DST_ACCUM_MODE,
-          num_rows,
-          ITERATIONS,
-          layout,
-          accumulate>(idst, idst_idx, chunk)));
+    MATH((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_max_pool_with_indices,
+        (/*APPROXIMATE=*/true, DST_ACCUM_MODE, num_rows, ITERATIONS, layout, accumulate),
+        RC,
+        idst,
+        idst_idx,
+        0 /* DST out unused */,
+        chunk)));
 }
 
 /**
@@ -635,7 +640,8 @@ ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chu
  */
 template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
 ALWI void max_reduce_with_indices_init() {
-    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true, layout>()));
+    MATH(
+        (SFPU_BINARY_INIT_CB(max_pool_with_indices, sfpu::init_max_pool_with_indices, (/*APPROXIMATE=*/true, layout))));
 }
 
 // clang-format off
@@ -727,13 +733,21 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
-    MATH((llk_math_eltwise_binary_sfpu_add_top_row<format>(dst_tile_0, dst_tile_1, dst_tile_out)));
+    MATH((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_add_top_row,
+        (format),
+        RC_custom,
+        dst_tile_0,
+        dst_tile_1,
+        dst_tile_out)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sfpu_add_top_row_init() { MATH((llk_math_eltwise_binary_sfpu_add_top_row_init())); }
+ALWI void sfpu_add_top_row_init() { MATH((SFPU_BINARY_INIT_FN(add_top_row, sfpu::init_add_top_row))); }
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
