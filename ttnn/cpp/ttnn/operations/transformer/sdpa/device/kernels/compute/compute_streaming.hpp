@@ -10,6 +10,8 @@
 
 #include <type_traits>
 
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
+
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
@@ -838,11 +840,8 @@ static void sdpa_inner_loop_step(
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
     {
-        // The host subblock solver requires Sq_chunk_t % h == 0, so it falls back to h=1
-        // when Sq_chunk_t is odd. The kernel can do better: use h=2 for the V matmul when
-        // dest can fit it (2*w <= dst_size) and handle the leftover row(s) explicitly.
         constexpr uint32_t qktv_h =
-            (qktv_subblock_h == 1 && 2 * qktv_subblock_w <= dst_size && Sq_chunk_t >= 2) ? 2 : qktv_subblock_h;
+            ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
         constexpr uint32_t qktv_remainder_h = Sq_chunk_t % qktv_h;
         constexpr bool has_qktv_remainder = qktv_remainder_h != 0;
         static_assert(Sq_chunk_t >= qktv_h, "Sq_chunk_t must be at least qktv_h");
