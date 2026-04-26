@@ -50,6 +50,32 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
         expert_shape[-1]);
     TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be equal to 32, got {}", topk_shape[-2]);
     TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be equal to 32, got {}", expert_shape[-2]);
+
+    // Validate broadcasting compatibility for mask tensors
+    auto expert_mask_logical = expert_mask_tensor.logical_shape();
+    auto topk_mask_logical = topk_mask_tensor.logical_shape();
+    auto input_logical = input_tensor.logical_shape();
+
+    // Check if mask batch dimensions are compatible with broadcasting
+    uint32_t input_batch_height = input_logical[0] * input_logical[1] * input_logical[2];
+    uint32_t expert_batch_height = expert_mask_logical[0] * expert_mask_logical[1] * expert_mask_logical[2];
+    uint32_t topk_batch_height = topk_mask_logical[0] * topk_mask_logical[1] * topk_mask_logical[2];
+
+    if (expert_batch_height != input_batch_height) {
+        TT_FATAL(
+            expert_batch_height == 1,
+            "Expert mask batch dimensions (N*C*H={}) must either match input (N*C*H={}) or be 1 for broadcasting",
+            expert_batch_height,
+            input_batch_height);
+    }
+
+    if (topk_batch_height != input_batch_height) {
+        TT_FATAL(
+            topk_batch_height == 1,
+            "Topk mask batch dimensions (N*C*H={}) must either match input (N*C*H={}) or be 1 for broadcasting",
+            topk_batch_height,
+            input_batch_height);
+    }
 }
 
 TensorSpec MoeDeviceOperation::compute_output_specs(

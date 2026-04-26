@@ -52,7 +52,13 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(6);
     constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
 
-    constexpr auto s0_args = TensorAccessorArgs<7>();
+    // New compile-time args for broadcasting support
+    constexpr bool expert_mask_broadcast_h = get_compile_time_arg_val(7) != 0;
+    constexpr bool topk_mask_broadcast_h = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t expert_mask_Ht = get_compile_time_arg_val(9);
+    constexpr uint32_t topk_mask_Ht = get_compile_time_arg_val(10);
+
+    constexpr auto s0_args = TensorAccessorArgs<11>();
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto s2_args = TensorAccessorArgs<s1_args.next_compile_time_args_offset()>();
 
@@ -79,8 +85,6 @@ void kernel_main() {
     // require substantially more memory (we would be double buffering four Wt sized CBs)
 
     uint32_t tile_id = 0;
-    uint32_t tile_id_topk = 0;
-    uint32_t tile_id_expert = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
         // input
         cb_in0.reserve_back(Wt);
@@ -92,22 +96,30 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_in0.push_back(Wt);
 
-        // topk mask
+        // topk mask with broadcasting support
         cb_topk.reserve_back(Kt);
+        // When broadcasting, stay at row 0; otherwise, use current row i
+        uint32_t topk_h_index = topk_mask_broadcast_h ? 0 : i;
+        uint32_t topk_tile_base = topk_h_index * Kt;
         for (uint32_t j = 0; j < Kt; ++j) {
             noc.async_read(
-                s1, cb_topk, tile_bytes_topk, {.page_id = tile_id_topk}, {.offset_bytes = j * tile_bytes_topk});
-            tile_id_topk++;
+                s1, cb_topk, tile_bytes_topk, {.page_id = topk_tile_base + j}, {.offset_bytes = j * tile_bytes_topk});
         }
         noc.async_read_barrier();
         cb_topk.push_back(Kt);
 
-        // expert mask
+        // expert mask with broadcasting support
         cb_expert.reserve_back(Wt);
+        // When broadcasting, stay at row 0; otherwise, use current row i
+        uint32_t expert_h_index = expert_mask_broadcast_h ? 0 : i;
+        uint32_t expert_tile_base = expert_h_index * Wt;
         for (uint32_t j = 0; j < Wt; ++j) {
             noc.async_read(
-                s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
-            tile_id_expert++;
+                s2,
+                cb_expert,
+                tile_bytes_expert,
+                {.page_id = expert_tile_base + j},
+                {.offset_bytes = j * tile_bytes_expert});
         }
         noc.async_read_barrier();
         cb_expert.push_back(Wt);
