@@ -459,6 +459,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     // timeout would produce 150+ seconds of serial waits, blowing the CI step budget.
     // With a global deadline, all channels that respond quickly are polled immediately;
     // any channels that don't respond by the deadline are force-reset in a second pass.
+    // FIX AJ (#42429): declared here (outside the anonymous block below) so it is visible
+    // to the relay drain loop after the block closes.  Populated inside the block when a
+    // non-MMIO device's relay path is confirmed dead (diagnostic read or assert_risc_reset
+    // threw).  l1_barrier on such a device calls wait_for_non_mmio_flush() which BLOCKS
+    // INDEFINITELY rather than throwing, so we must skip it for these devices.
+    std::unordered_set<ChipId> relay_dead_devices;
     {
         const auto router_sync_address = builder_ctx.get_fabric_router_sync_address_and_status().first;
         constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
@@ -549,15 +555,6 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         // GAP 5: Record force-reset channels so the next verify_all_fabric_channels_healthy()
         // can distinguish "was force-reset" from "corrupt from prior crash".
         std::vector<std::string> reset_failed_channels;
-        // FIX AJ (#42429): Track non-MMIO devices whose relay path is confirmed dead during
-        // this force-reset pass (diagnostic read threw OR assert_risc_reset threw).
-        // Used below to skip l1_barrier() for these devices — l1_barrier on a dead-relay
-        // device calls wait_for_non_mmio_flush() which BLOCKS INDEFINITELY rather than
-        // throwing, causing the GitHub Actions 5-minute job timeout.  The try/catch around
-        // l1_barrier only helps if it throws; a blocking hang is not catchable.
-        // These devices are safe to skip — their relay queue can't be drained anyway, and
-        // the next session's relay_broken guard will protect against queue saturation.
-        std::unordered_set<ChipId> relay_dead_devices;
         for (const auto& ch : pending) {
             // Diagnostic read: log the last-seen status before asserting reset.
             // Wrapped in try/catch — if the read itself throws (e.g. device unresponsive),
