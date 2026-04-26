@@ -649,6 +649,9 @@ void MeshGraph::initialize_from_mgd(
 }
 
 void MeshGraph::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
+    // The connection_hash (std::get<2>) is intentionally unused here: MeshGraph models the
+    // chip-level topology and doesn't need per-cable identification. ControlPlane uses the
+    // hash for its own per-cable bookkeeping.
     for (const auto& connection : intermesh_connections) {
         auto src_mesh = std::get<0>(connection).first;
         auto dst_mesh = std::get<1>(connection).first;
