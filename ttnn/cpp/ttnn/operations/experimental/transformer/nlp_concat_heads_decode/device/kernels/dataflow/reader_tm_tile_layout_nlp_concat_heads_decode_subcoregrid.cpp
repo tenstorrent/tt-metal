@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/constants.hpp>
+
+using namespace tt::constants;
 
 void kernel_main() {
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);

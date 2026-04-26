@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/constants.hpp>
+
+using namespace tt::constants;
 
 // #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
@@ -37,6 +40,7 @@ void kernel_main() {
     uint32_t q_write_addr = 0;
     uint32_t tile_size = head_size / head_size_num_tiles;
     const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
+    constexpr uint32_t HALF_TILE_ELEMENTS = FACE_HEIGHT * TILE_WIDTH;
 
     for (uint32_t q = 0; q < batch; ++q) {
         uint32_t wptr_offset = q < 16 ? q * SUBTILE_LINE_BYTES : (q - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
