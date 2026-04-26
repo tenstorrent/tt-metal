@@ -110,6 +110,7 @@ def test_ccl_ddr_smoke_test(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
         (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (2, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
 )
 @pytest.mark.parametrize(
@@ -202,6 +203,6 @@ def test_ccl_other_smoke_test(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
-        num_l1_banks=120,
+        num_l1_banks=100,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
