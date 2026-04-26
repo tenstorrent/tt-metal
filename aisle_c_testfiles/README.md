@@ -1,6 +1,12 @@
-# Aisle D — disaggregated prefill / decode (host-to-host)
+# Aisle C — disaggregated prefill / decode (host-to-host)
 
-This directory holds **Aisle D** hostnames (`bh-glx-d…`) for the Blitz-style decode pipeline rank layout, plus a **host-to-host** rank-bindings mapping: sub-context **0** uses `blitz_decode_pipeline_rank_binding_superpod.yaml` (decode-scale mesh graph), sub-context **1** uses `single_bh_galaxy_one_rank_rank_bindings.yaml` (single BH Galaxy mesh).
+This directory holds **Aisle C** hostnames (`bh-glx-c…`) for the Blitz-style decode pipeline rank layout, plus a **host-to-host** rank-bindings mapping: sub-context **0** uses `blitz_decode_pipeline_rank_binding_superpod.yaml` (decode-scale mesh graph), sub-context **1** uses `single_bh_galaxy_one_rank_rank_bindings.yaml` (single BH Galaxy mesh).
+
+## SP5 mock cluster mapping (MPI world rank → PSD)
+
+**`sp5_cluster_desc_mapping.yaml`** matches the lab layout: **20** ranks (**0–19**) map to **`bh-glx-c01u02` … `bh-glx-c10u08`** with per-rank YAML under **`sp5_cluster_descs/`** (paths are relative to **`TT_METAL_HOME`**). Use this with **`--mock-cluster-rank-binding`** when driving tests that expect one physical cluster descriptor per MPI rank (same content as the repo-root `sp5_cluster_desc_mapping.yaml` if present).
+
+The **Blitz superpod** rank file **`blitz_decode_pipeline_rank_file_superpod`** matches **`generated/ttrun/.../phase2_mock_mapping.yaml`** (and **`sp5_cluster_descs/`**): MPI ranks **0–63** use **16** GLx hosts (**`c01`–`c04`** and **`c07`–`c10`**, four ranks per host), then rank **64** is the single-Galaxy prefill placeholder.
 
 ## What to fill in `runme.sh`
 
@@ -28,7 +34,7 @@ Replace **`<YOUR_BH_GALAXY_HOST>`** in **`HOSTSP`** and on **rank 64** in the ra
 Example **`HOSTSP`** (same as in `runme.sh`; replace `<YOUR_BH_GALAXY_HOST>`):
 
 ```bash
-export HOSTSP=bh-glx-d03u08:4,bh-glx-d03u02:4,bh-glx-d04u02:4,bh-glx-d04u08:4,bh-glx-d06u08:4,bh-glx-d06u02:4,bh-glx-d05u08:4,bh-glx-d05u02:4,bh-glx-d07u02:4,bh-glx-d07u08:4,bh-glx-d08u02:4,bh-glx-d08u08:4,bh-glx-d09u02:4,bh-glx-d09u08:4,bh-glx-d10u02:4,bh-glx-d10u08:4,<YOUR_BH_GALAXY_HOST>:1
+export HOSTSP=bh-glx-c01u02:4,bh-glx-c01u08:4,bh-glx-c02u02:4,bh-glx-c02u08:4,bh-glx-c03u02:4,bh-glx-c03u08:4,bh-glx-c04u02:4,bh-glx-c04u08:4,bh-glx-c07u02:4,bh-glx-c07u08:4,bh-glx-c08u02:4,bh-glx-c08u08:4,bh-glx-c09u02:4,bh-glx-c09u08:4,bh-glx-c10u02:4,bh-glx-c10u08:4,<YOUR_BH_GALAXY_HOST>:1
 ```
 
 ## Rank file vs mock cluster descriptor
@@ -36,20 +42,17 @@ export HOSTSP=bh-glx-d03u08:4,bh-glx-d03u02:4,bh-glx-d04u02:4,bh-glx-d04u08:4,bh
 - **Hardware / multi-host runs** use the **MPI rank file** `blitz_decode_pipeline_rank_file_superpod` with `--map-by rankfile:file=…` and **`--rank-bindings-mapping disaggregated_prefill_decode_host_2_host_rank_bindings_mapping.yaml`** (or the aisle-specific mapping).
   Do **not** pass `--mock-cluster-rank-binding` for that flow; placement comes from the rank file + hosts.
 
-- **`tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping_blitz_decode_rank_order.yaml`** is a **per-rank mock PSD cluster YAML** mapping used for **mock / CPU-side** bring-up (e.g. CI). It is **not** a substitute for the rank file when mapping real hosts with OpenMPI.
+- **`sp5_cluster_desc_mapping.yaml`** is a **per-rank mock PSD cluster YAML** mapping for **20** Aisle C GLx hosts (ranks **0–19**). Use it for mock / bring-up where each MPI rank needs the captured PSD for that machine.
 
 ## Run
 
 ```bash
 export TT_METAL_HOME="$PWD"
 # Build example_disaggregated_prefill_decode_cross_context first; edit HOSTSP/rank 64 if using optional fabric line
-./aisle_d_testfiles/runme.sh
+./aisle_c_testfiles/runme.sh
 ```
 
-## Aisle A
+## Other aisles
 
-**Aisle A** (`bh-glx-120-a…`): **`aisle_a_testfiles/runme.sh`** and **`aisle_a_testfiles/README.md`**.
-
-## Aisle C
-
-**Aisle C** (`bh-glx-c…`): **`aisle_c_testfiles/runme.sh`** and **`aisle_c_testfiles/README.md`**.
+- **Aisle A** (`bh-glx-120-a…`): **`aisle_a_testfiles/README.md`**
+- **Aisle D** (`bh-glx-d…`): **`aisle_d_testfiles/README.md`**

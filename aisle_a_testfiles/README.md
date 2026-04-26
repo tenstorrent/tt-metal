@@ -37,3 +37,7 @@ export TT_METAL_HOME="$PWD"
 ## Aisle D
 
 **Aisle D** (`bh-glx-d…`): **`aisle_d_testfiles/README.md`** and **`aisle_d_testfiles/runme.sh`**.
+
+## Aisle C
+
+**Aisle C** (`bh-glx-c…`): **`aisle_c_testfiles/README.md`** and **`aisle_c_testfiles/runme.sh`**.
