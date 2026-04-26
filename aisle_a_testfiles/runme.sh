@@ -11,7 +11,7 @@ tt-run \
   --mock-cluster-rank-binding "${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_bh_6u_65_rank_prefill_decode_cluster_desc_mapping.yaml" \
   --rank-bindings-mapping "${TT_METAL_HOME}/tests/tt_metal/distributed/config/disaggregated_prefill_decode_1_prefill_64_decode_rank_bindings_mapping.yaml" \
   --mpi-args "--allow-run-as-root --oversubscribe" \
-  "${TT_METAL_HOME}/build/test/tt_metal/distributed/example_disaggregated_prefill_decode_cross_context"
+  "${TT_METAL_HOME}/build/programming_examples/distributed/example_disaggregated_prefill_decode_cross_context"
 
 # Optional: fabric control plane (hardware rankfile; fill HOSTSP)
 # TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
