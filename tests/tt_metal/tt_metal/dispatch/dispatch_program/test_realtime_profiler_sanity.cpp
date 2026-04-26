@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -48,10 +49,35 @@ using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
 constexpr uint32_t kNumPrograms = 5;
-// Generous upper bound: the multi_op kernels run ~40K unrolled NOPs. Even
-// on slow silicon that stays in the tens-of-microseconds range, so 1s is a
-// sanity cap only intended to catch a broken clock / mis-decoded timestamp.
+// Generous upper bound: the inlined NOP loop kernels below run ~40K
+// unrolled NOPs. Even on slow silicon that stays in the tens-of-microseconds
+// range, so 1s is a sanity cap only intended to catch a broken clock /
+// mis-decoded timestamp.
 constexpr double kMaxDurationNs = 1'000'000'000.0;
+
+// Inlined kernel source: 200 × 200 = 40K unrolled NOPs. Used for both data
+// movement (BRISC/NCRISC) and compute (TRISC) RISCs. We inline rather than
+// loading from a file under tt_metal/programming_examples/... because those
+// files ship in the `metalium-examples` deb, while this test runs from
+// `tt-metalium-validation` deb in CI (`metalium-basic-tests` job in
+// merge-gate.yaml). Using CreateKernelFromString keeps the test
+// self-contained and decoupled from install-rule changes. The 40K-NOP
+// duration is the load-bearing property: it makes the implausible-duration
+// check meaningful (a corrupted timestamp e.g. with swapped 32-bit halves
+// would still satisfy end > start for ns-scale blank kernels but would
+// surface here as a multi-second duration).
+constexpr const char* kSanityKernelSource = R"(
+#include <cstdint>
+
+void kernel_main() {
+    for (int i = 0; i < 200; i++) {
+#pragma GCC unroll 65534
+        for (int j = 0; j < 200; j++) {
+            asm("nop");
+        }
+    }
+}
+)";
 
 // Runs a single compute program on all tensix cores on `mesh_device`,
 // tagged with `runtime_id`, so the RT profiler pipeline emits a record
@@ -61,21 +87,19 @@ void enqueue_sanity_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t runtime_id, const CoreRange& all_cores) {
     Program program = CreateProgram();
 
-    CreateKernel(
+    const std::string kernel_src{kSanityKernelSource};
+
+    CreateKernelFromString(
         program,
-        "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op.cpp",
+        kernel_src,
         all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateKernel(
+    CreateKernelFromString(
         program,
-        "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op.cpp",
+        kernel_src,
         all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernel(
-        program,
-        "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op_compute.cpp",
-        all_cores,
-        ComputeConfig{});
+    CreateKernelFromString(program, kernel_src, all_cores, ComputeConfig{});
 
     program.set_runtime_id(static_cast<uint64_t>(runtime_id));
 
