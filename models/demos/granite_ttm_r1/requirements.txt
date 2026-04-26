@@ -1,0 +1,7 @@
+transformers>=4.40
+torch>=2.2
+loguru
+# tsfm_public is provided by the granite-tsfm package from IBM:
+#   pip install "granite-tsfm @ git+https://github.com/ibm-granite/granite-tsfm.git" --ignore-requires-python --no-deps
+# The package requires Python >=3.11 but works on 3.10 with --ignore-requires-python.
+tsfm_public
