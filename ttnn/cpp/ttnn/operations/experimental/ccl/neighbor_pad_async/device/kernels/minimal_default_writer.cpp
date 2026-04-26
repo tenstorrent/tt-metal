@@ -52,6 +52,9 @@ constexpr bool is_w_fabric_writer = get_compile_time_arg_val(ct_after_dst + 3);
 constexpr uint32_t ring_size = get_compile_time_arg_val(ct_after_dst + 4);
 
 void kernel_main() {
+    // Reset packet header pool for trace replay compatibility (statics persist in L1)
+    PacketHeaderPool::reset();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
