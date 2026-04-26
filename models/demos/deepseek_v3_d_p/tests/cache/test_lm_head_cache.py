@@ -12,6 +12,7 @@ import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import report_and_clear
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_lm_head")
@@ -23,6 +24,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
+    report_and_clear()
 
 
 @pytest.mark.parametrize(
@@ -31,8 +33,8 @@ def cleanup_cache():
         pytest.param(
             (2, 2),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
-            id="linear-2x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
+            id="linear-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],

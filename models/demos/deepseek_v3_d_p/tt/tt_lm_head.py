@@ -279,7 +279,7 @@ class TtLMHead(LightweightModule):
         logger.debug(f"Created sharded LM head weight: {tt_weight.shape}")
         return tt_weight
 
-    def forward(self, x: ttnn.Tensor, global_token_id: int) -> tuple[ttnn.Tensor, int]:
+    def forward(self, x: ttnn.Tensor, global_token_id: int) -> tuple[ttnn.Tensor, tuple[int, int]]:
         """
         Forward pass: project hidden states to vocabulary logits.
 
@@ -288,9 +288,10 @@ class TtLMHead(LightweightModule):
             global_token_id: The global token position whose logits we need.
 
         Returns:
-            A tuple of:
-                - Logits tensor [dispatch_group_size, TILE_SIZE, vocab_size]
-                - Token offset within the output tile (index in dim 1 for the target token)
+            tuple[ttnn.Tensor, tuple[int, int]]:
+                - Logits tensor [dispatch_group_size, TILE_SIZE, vocab_size/tp]
+                - (device_id, token_offset): which SP device holds the target token
+                  and the index within the tile
         """
         logger.debug(f"[TtLMHead.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
@@ -338,8 +339,8 @@ class TtLMHead(LightweightModule):
         output = ttnn.matmul(x_full, self.weight, compute_kernel_config=self.compute_kernel_config)
         logger.debug(f"[TtLMHead.forward] output (after matmul) shape: {output.shape}")
 
-        # output is logits [1,1, TILE_SIZE, vocab_size]
-        # fractured over SP; replicated over TP
+        # output is logits [1,1, TILE_SIZE, vocab_size/tp]
+        # fractured over SP; TP-sharded on vocab dim
         # the last logit/token is on device_id at token_offset within the tile
         return output, (device_id, token_offset)
 
@@ -350,14 +351,12 @@ class TtLMHead(LightweightModule):
             mesh_composer=ttnn.create_mesh_composer(
                 self.mesh_device,
                 config=ttnn.MeshComposerConfig(
-                    dims=(0, 1),
-                    mesh_shape_override=ttnn.MeshShape(
-                        self.mesh_device.shape[0], 1  # SP fractured
-                    ),  # Replicated across TP axis
+                    dims=(0, -1),  # SP fractured on dim 0, TP concat on vocab dim
+                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], self.mesh_device.shape[1]),
                 ),
             ),
         ).to(torch.bfloat16)
         return tt_logit_host
 
-    def select_first_token(self, tt_logit_host: ttnn.Tensor, device_id: int, token_offset: int) -> torch.Tensor:
-        return tt_logit_host[device_id, 0, token_offset, :].unsqueeze(0).unsqueeze(0)
+    def select_first_token(self, logit_host: torch.Tensor, device_id: int, token_offset: int) -> torch.Tensor:
+        return logit_host[device_id, 0, token_offset, :].unsqueeze(0).unsqueeze(0)

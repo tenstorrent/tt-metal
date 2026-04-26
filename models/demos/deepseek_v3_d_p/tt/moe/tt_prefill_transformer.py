@@ -5,12 +5,10 @@
 """
 TtPrefillTransformer — multi-layer prefill model for DeepSeek V3.
 
-Composes: embed -> [block x N] -> norm
+Composes: embed -> [block x N] -> norm -> lm_head -> sample
 
 Equivalent to the reference Transformer class (models/demos/deepseek_v3/reference/deepseek/model.py:419)
 but targeting the TT prefill path with SP+TP parallelism.
-
-No LM head — returns hidden states after final norm.
 """
 
 import os
@@ -37,15 +35,12 @@ class TtPrefillTransformer(LightweightModule):
     """
     Multi-layer prefill transformer for DeepSeek V3.
 
-    Architecture: embed -> [TtPrefillBlock x num_layers] -> norm
+    Architecture: embed -> [TtPrefillBlock x num_layers] -> norm -> lm_head -> sample
 
     State dict keys:
         embed_weight:   torch.Tensor [vocab_size, emb_dim]
         norm_weight:    torch.Tensor [emb_dim]
         layers:         list[dict] — per-layer state dicts for TtPrefillBlock
-
-    Note: LM head (ColumnParallelLinear output projection) is not implemented yet.
-    TODO: Add LM head after https://github.com/tenstorrent/tt-metal/pull/41275 lands.
     """
 
     @staticmethod
@@ -280,6 +275,9 @@ class TtPrefillTransformer(LightweightModule):
         logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
 
         logits_host = self.lm_head.logit_to_host(logits)
+        assert (
+            logits_host.shape[-1] == self.lm_head.vocab_size
+        ), f"Expected full vocab {self.lm_head.vocab_size}, got {logits_host.shape[-1]} — TP concat may be broken"
         first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
 
         # Handle temperature as float or list
@@ -332,10 +330,22 @@ class TtPrefillTransformer(LightweightModule):
             Tuple of (sampled_token_id, probability, top5_list)
             where top5_list is [{token_id, probability}, ...]
         """
-        logits = logits / max(temperature, 1e-5)
         probs = torch.softmax(logits.float(), dim=-1)
 
-        # Get top-5 tokens
+        # Get top-5 tokens (unscaled)
+        top5_probs, top5_ids = torch.topk(probs.flatten(), k=5)
+        top5 = [{"token_id": tid.item(), "probability": tprob.item()} for tid, tprob in zip(top5_ids, top5_probs)]
+
+        if temperature <= 0:
+            # Deterministic argmax — no Gumbel noise
+            sampled_id = probs.argmax(dim=-1)
+            prob = probs.flatten()[sampled_id.item()].item()
+            return sampled_id.item(), prob, top5
+
+        logits = logits / temperature
+        probs = torch.softmax(logits.float(), dim=-1)
+
+        # Recompute top-5 with temperature-scaled probs
         top5_probs, top5_ids = torch.topk(probs.flatten(), k=5)
         top5 = [{"token_id": tid.item(), "probability": tprob.item()} for tid, tprob in zip(top5_ids, top5_probs)]
 
