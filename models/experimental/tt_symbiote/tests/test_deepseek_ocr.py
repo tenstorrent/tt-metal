@@ -74,37 +74,40 @@ if not hasattr(DynamicCache, "get_usable_length"):
 _vision_cache = {}
 
 
-def _install_vision_cache(model):
-    """Cache vision pipeline outputs so subsequent infer() calls reuse run-0 results.
+def _mesh_to_torch(tensor):
+    dev = tensor.device()
+    if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+    return ttnn.to_torch(tensor)
 
-    The TTNN program cache must be cleared between runs to avoid conv2d buffer
-    corruption, but recompilation introduces floating-point non-determinism in
-    the vision transformer.  Caching the SAM and ViT outputs from the first run
-    eliminates both problems: conv2d never re-executes, and vision features are
-    bit-identical across runs.
-    """
+
+def _mesh_from_torch(torch_tensor, device, **kwargs):
+    is_mesh = device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+    if is_mesh:
+        kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+    return ttnn.from_torch(torch_tensor, device=device, **kwargs)
+
+
+def _install_vision_cache(model):
     from models.experimental.tt_symbiote.modules.conv import _unwrap_ttnn as _uw
 
     sam = getattr(model.model, "sam_model", None)
     if sam is not None and isinstance(sam, TTNNModule):
 
         def _cached_sam_forward(x):
-            # Key the cache on input shape: with crop_mode=True the SAM tower
-            # is invoked twice per infer() (base image + 9 cropped patches),
-            # and a single shared key would corrupt the second call.
             x_raw = _uw(x)
             sam_key = ("sam", tuple(x_raw.shape))
             if sam_key in _vision_cache:
-                return ttnn.from_torch(
+                return _mesh_from_torch(
                     _vision_cache[sam_key],
-                    device=sam.device,
+                    sam.device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
 
             if isinstance(x_raw, torch.Tensor):
-                x_raw = ttnn.from_torch(x_raw, device=sam.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                x_raw = _mesh_from_torch(x_raw, sam.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             if x_raw.layout != ttnn.TILE_LAYOUT:
                 x_raw = ttnn.to_layout(x_raw, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -118,9 +121,9 @@ def _install_vision_cache(model):
                     pos = sam.torch_layer.pos_embed
                     src_size = pos.shape[1]
                     if src_size != H:
-                        pos_nhwc = ttnn.from_torch(
+                        pos_nhwc = _mesh_from_torch(
                             pos,
-                            device=sam.device,
+                            sam.device,
                             dtype=ttnn.bfloat16,
                             layout=ttnn.ROW_MAJOR_LAYOUT,
                             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -132,9 +135,9 @@ def _install_vision_cache(model):
                         pos_nhwc = ttnn.repeat(pos_nhwc, (B, 1, 1, 1))
                         sam._pos_cache[cache_key] = pos_nhwc
                     else:
-                        sam._pos_cache[cache_key] = ttnn.from_torch(
+                        sam._pos_cache[cache_key] = _mesh_from_torch(
                             pos.expand(B, -1, -1, -1),
-                            device=sam.device,
+                            sam.device,
                             dtype=ttnn.bfloat16,
                             layout=ttnn.TILE_LAYOUT,
                         )
@@ -151,7 +154,7 @@ def _install_vision_cache(model):
             x_conv = _uw(sam.net_3(x_conv))
 
             x_conv = ttnn.permute(x_conv, (0, 3, 1, 2))
-            _vision_cache[sam_key] = ttnn.to_torch(x_conv).detach().clone()
+            _vision_cache[sam_key] = _mesh_to_torch(x_conv).detach().clone()
             return x_conv
 
         sam.forward = _cached_sam_forward
@@ -161,18 +164,17 @@ def _install_vision_cache(model):
         orig_vit_forward = vit.forward
 
         def _cached_vit_forward(x, patch_embeds=None):
-            # Same shape-keying rationale as SAM above.
             vit_key = ("vit", tuple(_uw(x).shape))
             if vit_key in _vision_cache:
-                return ttnn.from_torch(
+                return _mesh_from_torch(
                     _vision_cache[vit_key],
-                    device=vit.device,
+                    vit.device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             result = orig_vit_forward(x, patch_embeds)
-            _vision_cache[vit_key] = ttnn.to_torch(result).detach().clone()
+            _vision_cache[vit_key] = _mesh_to_torch(result).detach().clone()
             return result
 
         vit.forward = _cached_vit_forward
@@ -197,10 +199,35 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 245760}],
+    [
+        {
+            "l1_small_size": 245760,
+            "trace_region_size": 200000000,
+            "num_command_queues": 1,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
     indirect=True,
 )
-def test_deepseek_ocr(device):
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+            "BHGLX": (8, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
+def test_deepseek_ocr(mesh_device):
     """Test DeepSeek-OCR model with TTNN acceleration."""
 
     model_name = "deepseek-ai/DeepSeek-OCR"
@@ -239,11 +266,17 @@ def test_deepseek_ocr(device):
 
     use_traced = os.environ.get("TT_SYMBIOTE_RUN_MODE", "").upper() == "TRACED"
     if use_traced:
-        TracedRun.configure(device=device)
+        TracedRun.configure(device=mesh_device)
 
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    set_device(model, device)
+    set_device(model, mesh_device)
+
+    if use_traced and hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
+        from models.experimental.tt_symbiote.core.run_config import trace_enabled as _register_trace
+        from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoETraced
+
+        _register_trace(TTNNDeepseekV2MoETraced)
 
     for layer in model.model.layers:
         if isinstance(layer, TTNNModule):
@@ -253,7 +286,7 @@ def test_deepseek_ocr(device):
         v.preprocess_weights()
         v.move_weights_to_device()
 
-    paged_cache = create_paged_kv_cache(model.config, device, batch_size=1)
+    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
     _orig_generate = model.generate
 
     def _generate_with_paged_kv(*args, **kwargs):
@@ -312,13 +345,13 @@ def test_deepseek_ocr(device):
                 _clear_device_caches_on_ttnn_module(mod, visited)
 
     def _reset_between_runs():
-        ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
         paged_cache.reset()
         if not use_traced:
             TTNNConv2dNHWC.CACHED_TTCNN.clear()
             _clear_all_device_caches()
-            device.disable_and_clear_program_cache()
-            device.enable_program_cache()
+            mesh_device.disable_and_clear_program_cache()
+            mesh_device.enable_program_cache()
 
     # Warmup runs fill the program cache and populate vision cache.
     # In TRACED mode the TracedRun lifecycle also progresses:

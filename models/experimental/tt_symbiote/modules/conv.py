@@ -1101,7 +1101,8 @@ class TTNNClipVisionEmbeddings(TTNNModule):
     def get_abs_pos_ttnn(self, abs_pos: ttnn.Tensor, tgt_size: int, device: ttnn.Device) -> ttnn.Tensor:
         if tgt_size in self._abs_pos_cache:
             return self._abs_pos_cache[tgt_size]
-        abs_pos_torch = ttnn.to_torch(abs_pos)
+        _is_mesh = device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+        abs_pos_torch = ttnn.to_torch(ttnn.get_device_tensors(abs_pos)[0]) if _is_mesh else ttnn.to_torch(abs_pos)
         src_total = abs_pos_torch.shape[1] - 1
         src_size = int(math.sqrt(src_total))
         tgt_size_sqrt = int(math.sqrt(tgt_size))
@@ -1111,44 +1112,49 @@ class TTNNClipVisionEmbeddings(TTNNModule):
             old_pos_embed = abs_pos_torch[:, 1:, :]
             old_pos_nhwc = old_pos_embed.view(1, src_size, src_size, -1)
 
-            old_pos_ttnn = ttnn.from_torch(
-                old_pos_nhwc,
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            _from_kw = dict(
+                device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            if _is_mesh:
+                _from_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+            old_pos_ttnn = ttnn.from_torch(old_pos_nhwc, **_from_kw)
             scale = tgt_size_sqrt / src_size
             new_pos_ttnn = ttnn.upsample(old_pos_ttnn, scale_factor=scale, mode="bicubic")
-            new_pos_torch = ttnn.to_torch(new_pos_ttnn).reshape(1, tgt_size, -1)
+            new_pos_torch = (
+                ttnn.to_torch(ttnn.get_device_tensors(new_pos_ttnn)[0]) if _is_mesh else ttnn.to_torch(new_pos_ttnn)
+            ).reshape(1, tgt_size, -1)
             vision_pos_embed = torch.cat([cls_token_torch, new_pos_torch], dim=1)
         else:
             vision_pos_embed = abs_pos_torch
 
-        result = ttnn.from_torch(
-            vision_pos_embed,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        _result_kw = dict(
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        if _is_mesh:
+            _result_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+        result = ttnn.from_torch(vision_pos_embed, **_result_kw)
         self._abs_pos_cache[tgt_size] = result
         return result
 
     def forward(self, pixel_values: ttnn.Tensor, patch_embeds: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         pixel_values = _unwrap_ttnn(pixel_values)
+        _is_mesh = (
+            self.device is not None and hasattr(self.device, "get_num_devices") and self.device.get_num_devices() > 1
+        )
         if isinstance(pixel_values, torch.Tensor):
-            pixel_values = ttnn.from_torch(
-                pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
+            _kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            if _is_mesh:
+                _kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+            pixel_values = ttnn.from_torch(pixel_values, **_kw)
         if pixel_values.layout != ttnn.TILE_LAYOUT:
             pixel_values = ttnn.to_layout(pixel_values, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if patch_embeds is not None:
             patch_embeds = _unwrap_ttnn(patch_embeds)
             if isinstance(patch_embeds, torch.Tensor):
-                patch_embeds = ttnn.from_torch(
-                    patch_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-                )
+                _kw2 = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+                if _is_mesh:
+                    _kw2["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+                patch_embeds = ttnn.from_torch(patch_embeds, **_kw2)
             if patch_embeds.layout != ttnn.TILE_LAYOUT:
                 patch_embeds = ttnn.to_layout(patch_embeds, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -1228,19 +1234,23 @@ class TTNNVitModel(TTNNModule):
 
     def forward(self, x: ttnn.Tensor, patch_embeds: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         x = _unwrap_ttnn(x)
+        _is_mesh = (
+            self.device is not None and hasattr(self.device, "get_num_devices") and self.device.get_num_devices() > 1
+        )
         if isinstance(x, torch.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            _kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            if _is_mesh:
+                _kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+            x = ttnn.from_torch(x, **_kw)
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if patch_embeds is not None:
             patch_embeds = _unwrap_ttnn(patch_embeds)
             if isinstance(patch_embeds, torch.Tensor):
-                patch_embeds = ttnn.from_torch(
-                    patch_embeds,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
+                _kw2 = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+                if _is_mesh:
+                    _kw2["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+                patch_embeds = ttnn.from_torch(patch_embeds, **_kw2)
             if patch_embeds.layout != ttnn.TILE_LAYOUT:
                 patch_embeds = ttnn.to_layout(patch_embeds, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if len(patch_embeds.shape) == 4:

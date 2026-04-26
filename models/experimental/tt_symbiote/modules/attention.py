@@ -34,6 +34,9 @@ def _symbiote_value_as_torch(x):
     if isinstance(x, TorchTTNNTensor):
         return x.to_torch
     if isinstance(x, ttnn.Tensor):
+        dev = x.device()
+        if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+            return ttnn.to_torch(ttnn.get_device_tensors(x)[0])
         return ttnn.to_torch(x)
     return x
 
@@ -1292,13 +1295,23 @@ class LlamaAttention(TTNNModule):
                 cos, sin = _llama_rotary_cos_sin_from_buffers(self._rotary_emb_shim, p_ids, v_ref.dtype)
             # HF RoPE returns CPU torch tensors; TTNNRotaryPositionEmbedding needs device ttnn.Tensor.
             if isinstance(cos, torch.Tensor) and not isinstance(cos, TorchTTNNTensor):
-                cos = ttnn.from_torch(
-                    cos.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-                )
+                _rope_kw = dict(dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+                if (
+                    self.device is not None
+                    and hasattr(self.device, "get_num_devices")
+                    and self.device.get_num_devices() > 1
+                ):
+                    _rope_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+                cos = ttnn.from_torch(cos.to(torch.bfloat16), **_rope_kw)
             if isinstance(sin, torch.Tensor) and not isinstance(sin, TorchTTNNTensor):
-                sin = ttnn.from_torch(
-                    sin.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-                )
+                _rope_kw2 = dict(dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+                if (
+                    self.device is not None
+                    and hasattr(self.device, "get_num_devices")
+                    and self.device.get_num_devices() > 1
+                ):
+                    _rope_kw2["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+                sin = ttnn.from_torch(sin.to(torch.bfloat16), **_rope_kw2)
         else:
             cos, sin = position_embeddings
 
@@ -1331,27 +1344,41 @@ class LlamaAttention(TTNNModule):
                     batch_idx=0,
                 )
             else:
-                sin_torch = ttnn.to_torch(sin) if isinstance(sin, ttnn.Tensor) else sin
-                cos_torch = ttnn.to_torch(cos) if isinstance(cos, ttnn.Tensor) else cos
+                _mesh_dev = (
+                    self.device is not None
+                    and hasattr(self.device, "get_num_devices")
+                    and self.device.get_num_devices() > 1
+                )
+                sin_torch = (
+                    (ttnn.to_torch(ttnn.get_device_tensors(sin)[0]) if _mesh_dev else ttnn.to_torch(sin))
+                    if isinstance(sin, ttnn.Tensor)
+                    else sin
+                )
+                cos_torch = (
+                    (ttnn.to_torch(ttnn.get_device_tensors(cos)[0]) if _mesh_dev else ttnn.to_torch(cos))
+                    if isinstance(cos, ttnn.Tensor)
+                    else cos
+                )
                 cache_kwargs = {"sin": sin_torch, "cos": cos_torch, "cache_position": cache_position}
 
+                _k_raw = _unwrap_ttnn(key_states)
                 k_torch = (
-                    ttnn.to_torch(_unwrap_ttnn(key_states))
-                    if isinstance(_unwrap_ttnn(key_states), ttnn.Tensor)
-                    else _unwrap_ttnn(key_states)
+                    (ttnn.to_torch(ttnn.get_device_tensors(_k_raw)[0]) if _mesh_dev else ttnn.to_torch(_k_raw))
+                    if isinstance(_k_raw, ttnn.Tensor)
+                    else _k_raw
                 )
+                _v_raw = _unwrap_ttnn(value_states)
                 v_torch = (
-                    ttnn.to_torch(_unwrap_ttnn(value_states))
-                    if isinstance(_unwrap_ttnn(value_states), ttnn.Tensor)
-                    else _unwrap_ttnn(value_states)
+                    (ttnn.to_torch(ttnn.get_device_tensors(_v_raw)[0]) if _mesh_dev else ttnn.to_torch(_v_raw))
+                    if isinstance(_v_raw, ttnn.Tensor)
+                    else _v_raw
                 )
                 k_torch, v_torch = past_key_values.update(k_torch, v_torch, self.torch_layer.layer_idx, cache_kwargs)
-                key_states = ttnn.from_torch(
-                    k_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-                )
-                value_states = ttnn.from_torch(
-                    v_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-                )
+                _cache_kw = dict(dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+                if _mesh_dev:
+                    _cache_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+                key_states = ttnn.from_torch(k_torch.to(torch.bfloat16), **_cache_kw)
+                value_states = ttnn.from_torch(v_torch.to(torch.bfloat16), **_cache_kw)
 
         original_q_len = query_states.shape[2]
         kv_len = key_states.shape[2]
@@ -3421,17 +3448,18 @@ class TTNNSAMAttention(TTNNModule):
         ttnn.deallocate(qkv_out)
         attn_bias_tt = None
         if self._use_rel_pos and self._rel_pos_h is not None and self._rel_pos_w is not None:
-            q_t = ttnn.to_torch(q)
+            q_dev = q.device()
+            is_mesh = q_dev is not None and hasattr(q_dev, "get_num_devices") and q_dev.get_num_devices() > 1
+            q_t = ttnn.to_torch(ttnn.get_device_tensors(q)[0]) if is_mesh else ttnn.to_torch(q)
             if q_t.device.type != "cpu":
                 q_t = q_t.cpu()
             attn_bias_torch = compute_sam_attn_bias(q_t, self._rel_pos_h, self._rel_pos_w, (H, W))
-            attn_bias_tt = ttnn.from_torch(
-                attn_bias_torch,
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            from_torch_kwargs = dict(
+                dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            if is_mesh:
+                from_torch_kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+            attn_bias_tt = ttnn.from_torch(attn_bias_torch, **from_torch_kwargs)
         cfg = self._attn_compute_config
         qk = ttnn.matmul(
             q,
@@ -3457,16 +3485,17 @@ class TTNNSAMAttention(TTNNModule):
             )
             ttnn.deallocate(qk)
         except RuntimeError:
-            qk_torch = ttnn.to_torch(qk)
+            qk_dev = qk.device()
+            _is_mesh = qk_dev is not None and hasattr(qk_dev, "get_num_devices") and qk_dev.get_num_devices() > 1
+            qk_torch = ttnn.to_torch(ttnn.get_device_tensors(qk)[0]) if _is_mesh else ttnn.to_torch(qk)
             ttnn.deallocate(qk)
             attn_weights_torch = torch.nn.functional.softmax(qk_torch.float(), dim=-1).to(torch.bfloat16)
-            attn_weights = ttnn.from_torch(
-                attn_weights_torch,
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            _from_kw = dict(
+                dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            if _is_mesh:
+                _from_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+            attn_weights = ttnn.from_torch(attn_weights_torch, **_from_kw)
         attn_out = ttnn.matmul(
             attn_weights,
             v,
@@ -3486,7 +3515,11 @@ class TTNNSAMAttention(TTNNModule):
         """x: (B, H, W, C). Windowed or global attention."""
         x = _unwrap_ttnn(x)
         if isinstance(x, torch.Tensor) and not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            _from_kw = dict(device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            _dev = self.device
+            if _dev is not None and hasattr(_dev, "get_num_devices") and _dev.get_num_devices() > 1:
+                _from_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(_dev)
+            x = ttnn.from_torch(x, **_from_kw)
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self.window_size > 0:
@@ -3590,9 +3623,15 @@ class TTNNNoTPAttention(TTNNModule):
         if self.out_bias is not None:
             ttnn.deallocate(self.out_bias)
 
+    def _is_mesh(self):
+        return self.device is not None and hasattr(self.device, "get_num_devices") and self.device.get_num_devices() > 1
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if isinstance(x, torch.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            _kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            if self._is_mesh():
+                _kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+            x = ttnn.from_torch(x, **_kw)
 
         bsz, seqlen, _ = x.shape
 
@@ -3641,14 +3680,16 @@ class TTNNNoTPAttention(TTNNModule):
             attention_output = ttnn.permute(attention_output, (0, 2, 1, 3))
             attention_output = ttnn.reshape(attention_output, (bsz, seqlen, self.hidden_size))
         except RuntimeError:
-            q_t = ttnn.to_torch(query).float()
-            k_t = ttnn.to_torch(key).float()
-            v_t = ttnn.to_torch(value).float()
+            _mesh = self._is_mesh()
+            q_t = (ttnn.to_torch(ttnn.get_device_tensors(query)[0]) if _mesh else ttnn.to_torch(query)).float()
+            k_t = (ttnn.to_torch(ttnn.get_device_tensors(key)[0]) if _mesh else ttnn.to_torch(key)).float()
+            v_t = (ttnn.to_torch(ttnn.get_device_tensors(value)[0]) if _mesh else ttnn.to_torch(value)).float()
             attn_out = torch.nn.functional.scaled_dot_product_attention(q_t, k_t, v_t, scale=scale).to(torch.bfloat16)
             attn_out = attn_out.permute(0, 2, 1, 3).reshape(bsz, seqlen, self.hidden_size)
-            attention_output = ttnn.from_torch(
-                attn_out, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-            )
+            _from_kw = dict(dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+            if _mesh:
+                _from_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+            attention_output = ttnn.from_torch(attn_out, **_from_kw)
 
         output = ttnn.linear(
             attention_output,

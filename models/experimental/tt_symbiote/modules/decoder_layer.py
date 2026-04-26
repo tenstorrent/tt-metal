@@ -15,7 +15,11 @@ import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import trace_enabled, trace_disabled
 from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention, LlamaAttention
-from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE, TTNNDeepseekV2MoE, TTNNDeepseekV2DenseMLP
+from models.experimental.tt_symbiote.modules.moe import (
+    TTNNBailingMoE,
+    TTNNDeepseekV2MoETraced,
+    TTNNDeepseekV2DenseMLP,
+)
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNRMSNorm
 
 
@@ -152,9 +156,9 @@ class TTNNDeepseekV2DecoderLayer(TTNNModule):
 
     Eliminates 2 host round-trips per layer (one for attention residual,
     one for MoE/MLP residual) by using ttnn.add instead of aten::add.
-    Cannot be @trace_enabled because children (TTNNDeepseekV2MoE, LlamaAttention)
-    perform host operations (CPU routing, RoPE) that are forbidden during trace
-    capture.
+    Cannot be @trace_enabled because LlamaAttention performs host operations
+    (RoPE) that are forbidden during trace capture. MoE layers use
+    TTNNDeepseekV2MoETraced which IS trace-enabled independently.
     """
 
     def __init__(self):
@@ -184,7 +188,7 @@ class TTNNDeepseekV2DecoderLayer(TTNNModule):
         new_layer._is_dense_layer = not is_moe
 
         if is_moe:
-            new_layer.mlp = TTNNDeepseekV2MoE.from_torch(torch_layer.mlp)
+            new_layer.mlp = TTNNDeepseekV2MoETraced.from_torch(torch_layer.mlp)
         else:
             new_layer.mlp = TTNNDeepseekV2DenseMLP.from_torch(torch_layer.mlp)
 
