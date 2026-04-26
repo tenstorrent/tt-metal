@@ -305,7 +305,11 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
-uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
+UV_VENV_ARGS=(--link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}")
+if [[ "$FORCE_OVERWRITE" == "true" ]]; then
+    UV_VENV_ARGS+=(--clear)
+fi
+uv venv "${UV_VENV_ARGS[@]}" "$PYTHON_ENV_DIR"
 
 # Patch activate for POSIX sh (Docker/CI use /bin/sh; relocatable activate uses $BASH_SOURCE)
 # Use 'if' to prevent set -e from exiting on patch failure
