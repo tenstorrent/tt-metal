@@ -53,7 +53,10 @@ def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
     import torch
 
     output_size = (1, 1)
-    return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
+    # ttnn uses NHWC layout; adaptive_avg_pool2d expects NCHW
+    input_nchw = input_tensor.permute(0, 3, 1, 2)
+    output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size)
+    return output_nchw.permute(0, 2, 3, 1)
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
