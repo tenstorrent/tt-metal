@@ -19,10 +19,10 @@ class SdpaReduceTuning:
 SDPA_REDUCE_TUNING_BY_MAX_PAYLOAD_SIZE_BYTES = {
     # Derived from the SDPA reduce perf matrix. Explicit overrides bypass this
     # table for profiling sweeps, but default op setup must use a known tuning.
-    2048: SdpaReduceTuning(num_l_chunks=4, compute_block_size=4),
-    4096: SdpaReduceTuning(num_l_chunks=2, compute_block_size=8),
-    8192: SdpaReduceTuning(num_l_chunks=2, compute_block_size=4),
-    15232: SdpaReduceTuning(num_l_chunks=2, compute_block_size=4),
+    2048: SdpaReduceTuning(num_l_chunks=4, compute_block_size=8),
+    4096: SdpaReduceTuning(num_l_chunks=2, compute_block_size=4),
+    8192: SdpaReduceTuning(num_l_chunks=2, compute_block_size=8),
+    15232: SdpaReduceTuning(num_l_chunks=2, compute_block_size=8),
 }
 
 
