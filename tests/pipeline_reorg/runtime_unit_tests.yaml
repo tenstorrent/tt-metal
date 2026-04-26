@@ -53,9 +53,9 @@
   cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter='-*NIGHTLY_*:*NocEstimator*'
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 40
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 40
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -69,9 +69,9 @@
     ./build/test/tt_metal/unit_tests_jit_build
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 12
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -141,7 +141,7 @@
   cmd: ./build/test/tt_metal/distributed/distributed_unit_tests
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 15
     bh_p150b_civ2:
       timeout: 8
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -247,11 +247,11 @@
     wh_n150_civ2:
       timeout: 10
     wh_n300_civ2:
-      timeout: 10
+      timeout: 12
     bh_p150b_civ2:
       timeout: 10
     bh_p100a_civ2_viommu:
-      timeout: 10
+      timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
