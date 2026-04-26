@@ -4,7 +4,7 @@
 
 """Test: do ttml loss functions work on vocab-sharded tensors?
 
-Tests the sharded_cross_entropy_loss implementation against PyTorch
+Tests the vocab_parallel_cross_entropy_loss implementation against PyTorch
 reference, both forward value and backward gradients.
 
 Supports testing with different mesh shapes including DP configurations:
@@ -14,19 +14,13 @@ Supports testing with different mesh shapes including DP configurations:
   - DP + TP:    --mesh_shape 4 2   (8 devices, 4 DP groups × 2 TP)
 
 Usage:
-    python test_sharded_loss.py --mesh_shape 1 2
-    python test_sharded_loss.py --mesh_shape 1 8
-    python test_sharded_loss.py --mesh_shape 2 4
+    python test_vocab_parallel_loss.py --mesh_shape 1 2
+    python test_vocab_parallel_loss.py --mesh_shape 1 8
+    python test_vocab_parallel_loss.py --mesh_shape 2 4
 """
 
 import argparse
-import os
 import sys
-
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_QWEN3_ROOT = os.path.dirname(_SCRIPT_DIR)
-if _QWEN3_ROOT not in sys.path:
-    sys.path.insert(0, _QWEN3_ROOT)
 
 import numpy as np
 import torch
@@ -35,12 +29,41 @@ import torch.nn.functional as F
 import ttnn
 import ttml
 
-from utils.sharded_loss import sharded_cross_entropy_loss
 
 RTOL = 0.02
 ATOL = 0.15
 
 
+# ---------------------------------------------------------------------------
+# Device setup (inlined from qwen3/utils/device_setup.py)
+# ---------------------------------------------------------------------------
+def setup_device(dp_size: int, tp_size: int, seed: int = 42):
+    """Open a Tenstorrent device (single or mesh) and return ``(ctx, device)``."""
+    distributed = dp_size > 1 or tp_size > 1
+    total_devices = dp_size * tp_size
+
+    if distributed:
+        print(
+            f"\nEnabling distributed mode: DP={dp_size}, TP={tp_size} "
+            f"({total_devices} devices, mesh [{dp_size}, {tp_size}])"
+        )
+        ttml.core.distributed.enable_fabric(total_devices)
+
+    ctx = ttml.autograd.AutoContext.get_instance()
+    if distributed:
+        ctx.open_device([dp_size, tp_size])
+        ctx.initialize_parallelism_context(
+            ttml.autograd.DistributedConfig(enable_ddp=dp_size > 1, enable_tp=tp_size > 1)
+        )
+    else:
+        ctx.open_device()
+    ctx.set_seed(seed)
+    return ctx, ctx.get_device()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def check(name, got, ref, rtol=RTOL, atol=ATOL):
     """Return (passed, message)."""
     if got is None:
@@ -83,7 +106,10 @@ def pytorch_reference(logits_np, targets_np):
     return loss.item(), logits_t.grad.numpy()
 
 
-def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
+# ---------------------------------------------------------------------------
+# Main test runner
+# ---------------------------------------------------------------------------
+def run_test(ctx, device, mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
     dp_size, tp_size = mesh_shape
     total_devices = dp_size * tp_size
     distributed = total_devices > 1
@@ -92,15 +118,10 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
 
     print(f"\n{'=' * 70}")
     print(
-        f"Test: sharded_cross_entropy_loss  (mesh=[{dp_size},{tp_size}], "
+        f"Test: vocab_parallel_cross_entropy_loss  (mesh=[{dp_size},{tp_size}], "
         f"B={batch_size}, S={seq_len}, V={vocab_size}, local_V={raw_local_V})"
     )
     print(f"{'=' * 70}")
-
-    # ---- device setup ----
-    from utils.device_setup import setup_device
-
-    ctx, device = setup_device(dp_size, tp_size)
 
     # ---- random test data ----
     np.random.seed(42)
@@ -128,21 +149,47 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
                 failed += 1
             print(f"  {name}: {msg}")
 
-    # Build per-device logits: [total_devices * B, 1, S, local_V]
-    # Device ordering follows row-major mesh: (dp0,tp0), (dp0,tp1), …, (dp1,tp0), …
     if distributed:
-        per_device_chunks = []
-        for d in range(dp_size):
-            for k in range(tp_size):
-                chunk = logits_np[
-                    d * batch_size : (d + 1) * batch_size,
-                    :,
-                    :,
-                    k * raw_local_V : (k + 1) * raw_local_V,
-                ]
-                per_device_chunks.append(chunk)
-        logits_stacked = np.concatenate(per_device_chunks, axis=0)
-        shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+        # Natural placements for the C++ vocab_parallel_cross_entropy_loss op:
+        #   logits  [dp*B, 1, S, V]  -> Shard(0) on mesh-axis 0 (DP), Shard(3) on mesh-axis 1 (TP)
+        #   targets [dp*B, S]        -> Shard(0) on mesh-axis 0 (DP), Replicate on mesh-axis 1 (TP)
+        # When dp_size == 1 the row placement degrades to Replicate automatically.
+        logits_mapper = ttnn.create_mesh_mapper(
+            device,
+            ttnn.MeshMapperConfig(
+                row_dim=0 if dp_size > 1 else None,
+                col_dim=3,
+            ),
+        )
+        targets_mapper = ttnn.create_mesh_mapper(
+            device,
+            ttnn.MeshMapperConfig(
+                row_dim=0 if dp_size > 1 else None,
+                col_dim=None,
+            ),
+        )
+        # Gradient composer: reassemble the natural [dp*B, 1, S, V] tensor by concatenating
+        # along tensor dim 0 across mesh-axis 0 and along tensor dim 3 across mesh-axis 1.
+        grad_composer = ttnn.create_mesh_composer(
+            device,
+            ttnn.MeshComposerConfig([0, 3]),
+        )
+
+        def make_cpp_targets_tensor():
+            return ttml.autograd.Tensor.from_numpy(
+                targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, targets_mapper
+            )
+
+        def reconstruct_full_grad_from_mesh(grad_tensor):
+            # grad_tensor already has the natural [dp*B, 1, S, V] shape (modulo vocab padding).
+            grad_full = ttnn.to_torch(grad_tensor, mesh_composer=grad_composer).float().numpy()
+            # Trim vocab padding introduced by tile alignment.
+            grad_full = grad_full[:, :, :, :vocab_size]
+            # The C++ op averages loss over B*S within each DP group; the PyTorch reference
+            # averages over the global dp*B*S, so the gradients differ by a factor of dp_size.
+            if dp_size > 1:
+                grad_full = grad_full / dp_size
+            return grad_full
 
     # ==================================================================
     # 1. Baseline: ttml.ops.loss.cross_entropy_loss on FULL tensor
@@ -162,96 +209,59 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
     report("CE full (baseline)", val, err, ref_loss)
 
     # ==================================================================
-    # 2. sharded_cross_entropy_loss — forward value
+    # 2. C++ vocab_parallel_cross_entropy_loss — forward value
     # ==================================================================
     if tp_size > 1:
-        print("\n--- sharded_cross_entropy_loss: forward ---")
+        print("\n--- C++ vocab_parallel_cross_entropy_loss: forward ---")
 
-        def test_dist_ce_forward():
+        def test_cpp_ce_forward():
             ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
             logits = ttml.autograd.Tensor.from_numpy(
-                logits_stacked,
+                logits_np,
                 ttnn.Layout.TILE,
                 ttnn.DataType.BFLOAT16,
-                shard_mapper,
+                logits_mapper,
             )
-            loss = sharded_cross_entropy_loss(
-                logits,
-                targets_np,
-                vocab_size,
-                tp_size,
-                tp_axis=1,
-                dp_size=dp_size,
-            )
+            tgt = make_cpp_targets_tensor()
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(logits, tgt, cluster_axis=1)
             val = extract_loss(loss, device, distributed)
             ctx.reset_graph()
             return val
 
-        val, err = try_op(test_dist_ce_forward)
-        report("sharded CE forward", val, err, ref_loss)
+        val, err = try_op(test_cpp_ce_forward)
+        report("C++ sharded CE forward", val, err, ref_loss)
 
     # ==================================================================
-    # 3. sharded_cross_entropy_loss — backward gradients
-    #    For DP, per-group grads are averaged (1/dp_size) to match the
-    #    global-mean reference, mirroring training's gradient sync.
+    # 3. C++ vocab_parallel_cross_entropy_loss — backward gradients
     # ==================================================================
     if tp_size > 1:
-        print("\n--- sharded_cross_entropy_loss: backward ---")
+        print("\n--- C++ vocab_parallel_cross_entropy_loss: backward ---")
 
-        def test_dist_ce_backward():
+        def test_cpp_ce_backward():
             ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
             logits = ttml.autograd.Tensor.from_numpy(
-                logits_stacked,
+                logits_np,
                 ttnn.Layout.TILE,
                 ttnn.DataType.BFLOAT16,
-                shard_mapper,
+                logits_mapper,
             )
             logits.set_requires_grad(True)
-            loss = sharded_cross_entropy_loss(
-                logits,
-                targets_np,
-                vocab_size,
-                tp_size,
-                tp_axis=1,
-                dp_size=dp_size,
-            )
+            tgt = make_cpp_targets_tensor()
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(logits, tgt, cluster_axis=1)
             loss.backward(False)
 
-            composer = ttml.core.distributed.concat_mesh_to_tensor_composer(
-                device,
-                0,
-            )
-            grad_raw = ttnn.to_torch(logits.get_grad(), mesh_composer=composer).float().numpy()
-
-            # Reconstruct full gradient from per-device shards
-            # grad slabs may be tile-padded wider than raw_local_V
-            grad_full = np.zeros_like(logits_np)
-            for d in range(dp_size):
-                for k in range(tp_size):
-                    dev_idx = d * tp_size + k
-                    slab = grad_raw[dev_idx * batch_size : (dev_idx + 1) * batch_size]
-                    grad_full[
-                        d * batch_size : (d + 1) * batch_size,
-                        :,
-                        :,
-                        k * raw_local_V : (k + 1) * raw_local_V,
-                    ] = slab[:, :, :, :raw_local_V]
-
-            # Average gradients across DP groups to match global mean
-            # (mirrors synchronize_gradients in training)
-            if dp_size > 1:
-                grad_full /= dp_size
+            grad_full = reconstruct_full_grad_from_mesh(logits.get_grad())
 
             max_diff = np.abs(grad_full - ref_grad).max()
             mean_diff = np.abs(grad_full - ref_grad).mean()
             ctx.reset_graph()
             return max_diff, mean_diff
 
-        val, err = try_op(test_dist_ce_backward)
+        val, err = try_op(test_cpp_ce_backward)
         total += 1
         if err is not None:
             failed += 1
-            print(f"  dist CE backward: FAIL (crashed: {err})")
+            print(f"  C++ dist CE backward: FAIL (crashed: {err})")
         else:
             max_diff, mean_diff = val
             ok = max_diff < 0.05
@@ -260,7 +270,7 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
                 passed += 1
             else:
                 failed += 1
-            print(f"  dist CE backward: {tag}  max_diff={max_diff:.6f}  " f"mean_diff={mean_diff:.6f}")
+            print(f"  C++ dist CE backward: {tag}  max_diff={max_diff:.6f}  " f"mean_diff={mean_diff:.6f}")
 
     # ==================================================================
     # Summary
@@ -269,7 +279,6 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
     print(f"Results: {passed} passed, {failed} failed, {total} total")
     print(f"{'=' * 70}")
 
-    ctx.close_device()
     return failed == 0
 
 
@@ -294,10 +303,21 @@ def main():
     )
     args = parser.parse_args()
 
-    all_ok = True
-    for vs in args.vocab_size:
-        ok = run_test(args.mesh_shape, args.batch_size, args.seq_len, vs)
-        all_ok = all_ok and ok
+    ctx, device = setup_device(*args.mesh_shape)
+    try:
+        all_ok = True
+        for vs in args.vocab_size:
+            ok = run_test(
+                ctx,
+                device,
+                args.mesh_shape,
+                args.batch_size,
+                args.seq_len,
+                vs,
+            )
+            all_ok = all_ok and ok
+    finally:
+        ctx.close_device()
     sys.exit(0 if all_ok else 1)
 
 

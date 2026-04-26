@@ -49,6 +49,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
@@ -126,6 +128,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    # Select Target Logit (per-token target-logit selection for distributed cross-entropy forward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/select_target_logit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_program_factory.cpp
+    # Subtract At Target (per-token scalar subtraction at target positions for distributed cross-entropy backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
     # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp

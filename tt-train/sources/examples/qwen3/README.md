@@ -189,7 +189,6 @@ qwen3/
     ├── model_factory.py         # Unified model creation (auto-selects single/distributed)
     ├── param_utils.py           # Weight mapping, permutation transforms
     ├── save_load.py             # Checkpoint save/load, HF export
-    ├── sharded_loss.py          # Distributed cross-entropy (vocab-sharded)
     └── tensor_utils.py          # Tensor creation, padding, mesh gather helpers
 ```
 
@@ -232,7 +231,8 @@ the [Distributed Training documentation](https://github.com/tenstorrent/tt-metal
 
 ## Nice-to-Have TODOs
 
-- **VocabParallelEmbedding & sharded loss** — `_vocab_parallel_embedding`
-  (`utils/distributed_ops.py`) and `sharded_cross_entropy_loss`
-  (`utils/sharded_loss.py`) are composite ops with NumPy host-side logic.
-  Implement as proper device kernels.
+- **VocabParallelEmbedding** — `_vocab_parallel_embedding`
+  (`utils/distributed_ops.py`) is a composite op with NumPy host-side logic.
+  Implement as a proper device kernel.  (Sharded cross-entropy now runs
+  through the C++ `ttml.ops.distributed.vocab_parallel_cross_entropy_loss`
+  op; `--sharded_loss` on `train.py` routes to it when TP is enabled.)
