@@ -20,7 +20,13 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.deepseek_v4_flash.config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v4_flash.cpu_reference import rms_norm, swiglu_expert, v4_router
+from models.demos.deepseek_v4_flash.cpu_reference import (
+    compress_topk_indices,
+    rms_norm,
+    swiglu_expert,
+    v4_router,
+    window_topk_indices,
+)
 from models.demos.deepseek_v4_flash.real_attention_projection_smoke import (
     DEFAULT_ATTENTION_PROJECTION_MAX_BYTES,
     DEFAULT_ATTENTION_PROJECTION_MAX_TENSORS,
@@ -82,7 +88,7 @@ DEFAULT_TRACEABLE_DECODE_MAX_TENSORS = (
     + DEFAULT_SHARED_EXPERT_MAX_TENSORS
     + 3
     + 6 * DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK
-    + 1
+    + 2
 )
 DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
     DEFAULT_ATTENTION_PROJECTION_MAX_BYTES
@@ -90,7 +96,7 @@ DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
     + DEFAULT_KV_PROJECTION_MAX_BYTES
     + DEFAULT_SHARED_EXPERT_MAX_BYTES
     + 64 * 1024 * 1024 * DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK
-    + 4096
+    + 8192
 )
 DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE = 64 * 1024 * 1024
 ATTENTION_OUTPUT_PROJECTION_ATOL = 5e-1
@@ -131,6 +137,7 @@ DEFAULT_TRACEABLE_DECODE_ROPE_POSITION_API = TRACEABLE_DECODE_ROPE_POSITION_STAT
 class TraceableDecodeWeights:
     attention: AttentionProjectionWeights
     kv: KvProjectionWeights
+    attn_sink: torch.Tensor
     attn_norm: torch.Tensor
     ffn_norm: torch.Tensor
     router_gate: torch.Tensor
@@ -399,6 +406,13 @@ class TtTraceableDecodeSubpath:
             dtype=dtype,
             memory_config=memory_config,
         )
+        self.attention_sink = _to_tt_attention_sink(
+            weights.attn_sink,
+            config=config,
+            device=device,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         if self.rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR:
             self.rope_cos_table, self.rope_sin_table, self.rope_trans_mat = _to_tt_rope_embedding_tables(
                 config,
@@ -551,6 +565,7 @@ class TtTraceableDecodeSubpath:
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 rope_trans_mat=self.rope_trans_mat,
+                attention_sink=self.attention_sink,
                 block_size=self.paged_sdpa_block_size,
                 device=self.device,
                 memory_config=self.memory_config,
@@ -1054,6 +1069,9 @@ def load_traceable_decode_subpath_slice(
     attention_keys = layer_attention_projection_keys(index, layer=layer)
     attention_output_keys = _layer_attention_output_projection_keys(index, layer=layer)
     kv_keys = [key for key in layer_kv_projection_keys(index, layer=layer) if key not in attention_keys]
+    attention_sink_keys = [f"layers.{layer}.attn.attn_sink"]
+    for key in attention_sink_keys:
+        index.location(key)
     ffn_norm_keys = [f"layers.{layer}.ffn_norm.weight"]
     for key in ffn_norm_keys:
         index.location(key)
@@ -1066,6 +1084,7 @@ def load_traceable_decode_subpath_slice(
         "attention_query": attention_keys,
         "attention_output": attention_output_keys,
         "kv_projection": kv_keys,
+        "attention_sink": attention_sink_keys,
         "ffn_norm": ffn_norm_keys,
         "router_selector": router_keys,
         "shared_expert": shared_expert_keys,
@@ -1077,6 +1096,7 @@ def load_traceable_decode_subpath_slice(
                 *attention_keys,
                 *attention_output_keys,
                 *kv_keys,
+                *attention_sink_keys,
                 *ffn_norm_keys,
                 *router_keys,
                 *shared_expert_keys,
@@ -1122,6 +1142,14 @@ def decode_traceable_decode_subpath_weights(
         raise ValueError(
             f"Expected {ffn_norm_key} shape {(int(config.hidden_size),)}, " f"got {tuple(tensors[ffn_norm_key].shape)}"
         )
+    attn_sink_key = f"layers.{layer}.attn.attn_sink"
+    if attn_sink_key not in tensors:
+        raise KeyError(f"Missing required attention sink tensor {attn_sink_key!r}")
+    if tuple(tensors[attn_sink_key].shape) != (int(config.num_attention_heads),):
+        raise ValueError(
+            f"Expected {attn_sink_key} shape {(int(config.num_attention_heads),)}, "
+            f"got {tuple(tensors[attn_sink_key].shape)}"
+        )
     shared_expert = decode_real_shared_expert_weights(tensors, config=config, layer=layer)
     routed_experts = {
         int(expert): decode_real_expert_weights(tensors, config=config, layer=layer, expert=int(expert))
@@ -1131,6 +1159,7 @@ def decode_traceable_decode_subpath_weights(
     return TraceableDecodeWeights(
         attention=attention,
         kv=kv,
+        attn_sink=tensors[attn_sink_key].contiguous().to(torch.bfloat16),
         attn_norm=tensors[f"layers.{layer}.attn_norm.weight"].contiguous().to(torch.bfloat16),
         ffn_norm=tensors[ffn_norm_key].contiguous().to(torch.bfloat16),
         router_gate=tensors[f"{prefix}.ffn.gate.weight"].contiguous().to(torch.bfloat16),
@@ -1228,6 +1257,7 @@ def build_torch_traceable_decode_subpath_reference(
             k_cache_unpaged=k_cache_unpaged,
             v_cache_unpaged=v_cache_unpaged,
             cur_pos=int(cache_update_index),
+            attn_sink=weights.attn_sink,
             attention_mode=attention_mode,
             config=config,
             layer=layer,
@@ -2327,13 +2357,23 @@ def _base_result(
         expert for step_route_plan in route_plans for expert in step_route_plan.selected_expert_ids
     )
     router_summary = _router_trace_summary(route_plan, config=config, weights=weights)
+    sparse_attention_summary = _sparse_attention_semantics_summary(
+        snapshot_dir=snapshot_dir,
+        config=config,
+        layer=layer,
+        cache_update_indices=cache_update_indices,
+        attention_read_api=attention_read_api,
+        cache_update_api=cache_update_api,
+        rope_position_api=rope_position_api,
+        uses_paged_sdpa_read=uses_paged_sdpa_read,
+    )
     excluded_from_trace = [
         "true separate DeepSeek V-channel/sparse value semantics; this slice creates explicit K and V cache tensors "
         "from one fused KV projection",
         "dynamic sparse indexer top-k and per-token cache gather",
         (
-            "DeepSeek sparse attention-sink/indexer semantics; paged SDPA dense attention reads contiguous page-table "
-            "rows up to cur_pos_tensor"
+            "DeepSeek sparse indexer selected-row semantics; paged SDPA dense attention reads contiguous page-table "
+            "rows up to cur_pos_tensor while applying the loaded attention sink"
             if uses_paged_sdpa_read
             else "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows"
         ),
@@ -2527,6 +2567,10 @@ def _base_result(
             layer=layer,
             attention_read_api=attention_read_api,
         ),
+        "sparse_attention": sparse_attention_summary,
+        "sparse_indexer_status": sparse_attention_summary["sparse_indexer_status"],
+        "selected_cache_rows_topk_shape": sparse_attention_summary["selected_cache_rows"]["first_step_topk_shape"],
+        "attention_sink_status": sparse_attention_summary["attention_sink_status"],
         "traceability_flags": {
             "attention_mode": attention_mode,
             "kv_source": "device_resident_paged_cache_ready_fused_kv_projection_cache"
@@ -2539,7 +2583,7 @@ def _base_result(
             "attention_output_inverse_rope_in_trace": uses_paged_sdpa_read,
             "compressed_kv_cache_in_trace": False,
             "sparse_indexer_in_trace": False,
-            "attention_sink_in_trace": False,
+            "attention_sink_in_trace": uses_paged_sdpa_read,
             "rope_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "qk_scores_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "softmax_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
@@ -2621,8 +2665,8 @@ def _base_result(
             "rope_position": rope_position_status,
             "production_autoregressive_decode": False,
             "production_autoregressive_decode_blocker": (
-                "DeepSeek sparse/indexer/sink semantics, any separate value-channel semantics beyond the HF fused "
-                "KV vector, dynamic MoE dispatch, embeddings, and logits are still outside this trace slice"
+                "DeepSeek sparse/indexer selected-row semantics, any separate value-channel semantics beyond the HF "
+                "fused KV vector, dynamic MoE dispatch, embeddings, and logits are still outside this trace slice"
                 if uses_paged_sdpa_read
                 else "cache write, cache read/current position, and RoPE/attention position are not all dynamic under one "
                 "captured trace"
@@ -2664,6 +2708,7 @@ def _base_result(
             "attention_query": loaded_groups["attention_query"]["payload_bytes"],
             "attention_output": loaded_groups["attention_output"]["payload_bytes"],
             "kv_projection": loaded_groups["kv_projection"]["payload_bytes"],
+            "attention_sink": loaded_groups["attention_sink"]["payload_bytes"],
             "ffn_norm": loaded_groups["ffn_norm"]["payload_bytes"],
             "router_selector": loaded_groups["router_selector"]["payload_bytes"],
             "shared_expert": loaded_groups["shared_expert"]["payload_bytes"],
@@ -2679,6 +2724,7 @@ def _base_result(
             "wo_b": _tensor_summary(weights.attention.wo_b),
             "wkv": _tensor_summary(weights.kv.wkv),
             "kv_norm": _tensor_summary(weights.kv.kv_norm),
+            "attn_sink": _tensor_summary(weights.attn_sink),
             "kv_cache_initial": _tensor_summary(kv_cache_initial),
             "ffn_norm": _tensor_summary(weights.ffn_norm),
             "router_gate": _tensor_summary(weights.router_gate),
@@ -2779,6 +2825,14 @@ def _base_result(
                     "updates and reads a fixed cache window from this device-resident cache"
                 ),
             },
+            {
+                "name": "attention_sink_host_to_device",
+                "location": "before trace capture",
+                "description": (
+                    "the real layer attention sink tensor is uploaded once; the paged SDPA decode path consumes it "
+                    "inside the protected trace, while the fixed-slice path only reports it as loaded"
+                ),
+            },
             *(
                 [
                     {
@@ -2866,6 +2920,7 @@ def _base_result(
             "router_static_dispatch_preflight",
             "router_decode_row_mask_host_to_device",
             "kv_cache_seed_host_to_device",
+            "attention_sink_host_to_device",
             *(
                 ["paged_sdpa_page_table_host_to_device", "paged_sdpa_cur_pos_host_to_device"]
                 if uses_paged_sdpa_read
@@ -3014,7 +3069,9 @@ def _decode_steps_detail(
                 "true_separate_v_channel": False,
                 "compressed_kv_status": "not_integrated" if uses_paged_sdpa_read else "projected_kv_cache_only",
                 "sparse_indexer_status": "not_integrated",
-                "attention_sink_status": "not_integrated",
+                "attention_sink_status": "used_in_paged_sdpa_decode"
+                if uses_paged_sdpa_read
+                else "loaded_not_integrated_in_fixed_slice_attention",
                 "rope_position_index": rope_position,
                 "rope_position_rows": [rope_position, rope_position + int(seq_len)],
                 "rope_position_dynamic": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
@@ -3221,6 +3278,33 @@ def _to_tt_router_decode_row_mask(
     mask[0, 0, int(decode_token_index), 0] = 1
     return ttnn.from_torch(
         mask,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _to_tt_attention_sink(
+    attn_sink: torch.Tensor,
+    *,
+    config: DeepSeekV4FlashConfig,
+    device,
+    dtype,
+    memory_config,
+):
+    if attn_sink.ndim != 1 or tuple(attn_sink.shape) != (int(config.num_attention_heads),):
+        raise ValueError(
+            f"attention sink must have shape {(int(config.num_attention_heads),)}, got {tuple(attn_sink.shape)}"
+        )
+    padded_heads = _padded_attention_heads(int(config.num_attention_heads))
+    sink = torch.zeros((padded_heads, ttnn.TILE_SIZE), dtype=torch.bfloat16)
+    # TTNN SDPA decode scales the sink logits internally alongside QK scores.
+    # DeepSeek's HF sparse_attn adds attn_sink after QK scaling, so upload sink / scale.
+    scale = float(config.head_dim) ** -0.5
+    sink[: int(config.num_attention_heads), 0] = (attn_sink.float() / scale).to(torch.bfloat16)
+    return ttnn.from_torch(
+        sink,
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -3855,6 +3939,7 @@ def _ttnn_paged_sdpa_decode_attention(
     rope_cos,
     rope_sin,
     rope_trans_mat,
+    attention_sink,
     block_size: int,
     device,
     memory_config,
@@ -3914,6 +3999,7 @@ def _ttnn_paged_sdpa_decode_attention(
         v_cache,
         page_table_tensor=page_table_tensor,
         cur_pos_tensor=cur_pos_tensor,
+        attention_sink=attention_sink,
         scale=head_dim**-0.5,
         program_config=ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=TRACEABLE_DECODE_PAGED_SDPA_GRID_SIZE,
@@ -3966,6 +4052,7 @@ def _torch_paged_sdpa_decode_attention(
     k_cache_unpaged: torch.Tensor,
     v_cache_unpaged: torch.Tensor,
     cur_pos: int,
+    attn_sink: torch.Tensor,
     attention_mode: str,
     config: DeepSeekV4FlashConfig,
     layer: int,
@@ -4029,13 +4116,13 @@ def _torch_paged_sdpa_decode_attention(
             [v_slice[:, head : head + 1, :, :].repeat(1, repeat, 1, 1) for head in range(config.num_key_value_heads)],
             dim=1,
         )
-    paged_attention_output = F.scaled_dot_product_attention(
+    paged_attention_output = _torch_sdpa_with_attention_sink(
         q_slice,
         k_slice,
         v_slice,
         attn_mask=attn_mask[:, :num_heads, :, :],
+        attn_sink=attn_sink,
         scale=head_dim**-0.5,
-        is_causal=False,
     )
     paged_attention_output_heads_rotary = paged_attention_output.squeeze(2).unsqueeze(0).contiguous().to(torch.bfloat16)
     inverse_rope_intermediates = _torch_inverse_deepseek_v4_attention_rope(
@@ -4065,6 +4152,28 @@ def _torch_paged_sdpa_decode_attention(
         **inverse_rope_intermediates,
         "attention_output": attention_output,
     }
+
+
+def _torch_sdpa_with_attention_sink(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    attn_mask: torch.Tensor,
+    attn_sink: torch.Tensor,
+    scale: float,
+) -> torch.Tensor:
+    if attn_sink.ndim != 1:
+        raise ValueError(f"attention sink must have shape [num_heads], got {tuple(attn_sink.shape)}")
+    if int(attn_sink.shape[0]) != int(q.shape[1]):
+        raise ValueError(f"attention sink head count {attn_sink.shape[0]} must match q heads {q.shape[1]}")
+    scores = torch.matmul(q.float(), k.transpose(-2, -1).float()) * float(scale)
+    scores = scores + attn_mask.float()
+    sink_scores = (
+        attn_sink.float().view(1, int(q.shape[1]), 1, 1).expand(int(q.shape[0]), int(q.shape[1]), int(q.shape[2]), 1)
+    )
+    probs = torch.cat([scores, sink_scores], dim=-1).softmax(dim=-1)[..., :-1]
+    return torch.matmul(probs, v.float()).to(q.dtype)
 
 
 def _kv_update_memory_config(*, device, token_rows: int, width: int):
@@ -4315,6 +4424,7 @@ def _traceable_decode_attention_ops(
                 "ttnn.transpose(q_heads_to_sdpa_decode_batch)",
                 "ttnn.to_memory_config(q_heads_decode_height_sharded)",
                 "ttnn.transformer.paged_scaled_dot_product_attention_decode(q,k_cache,v_cache,page_table,cur_pos_tensor)",
+                "ttnn.transformer.paged_scaled_dot_product_attention_decode(attention_sink)",
                 "ttnn.slice(paged_sdpa_output_heads)",
                 "ttnn.slice(paged_sdpa_output_nope/rope)",
                 "ttnn.mul(rope_sin,-1)",
@@ -4478,6 +4588,7 @@ def _traceable_decode_reference_ops(
             "torch.split(kv_output_nope/kv_output_rope)",
             "torch.apply_deepseek_v4_rotary(kv_output_rope)",
             "torch.scaled_dot_product_attention(q,paged_k_cache,paged_v_cache,cur_pos_mask)",
+            "torch.attention_sink_softmax_denominator",
             "torch.apply_deepseek_v4_rotary(attention_output_rope,inverse)",
             "torch.reshape(paged_attention_output_to_attention_output)",
         ]
@@ -4609,7 +4720,8 @@ def _position_dependent_decode_inventory(
             ),
             "required_shape_step": (
                 "next step is replacing contiguous paged SDPA reads with DeepSeek sparse/indexer-selected rows plus "
-                "attention sink; the current path now feeds cache-ready fused KV rows into explicit K and V caches"
+                "compressed cache rows; the current path now feeds cache-ready fused KV rows into explicit K and V "
+                "caches and applies attention sink in paged SDPA"
                 if uses_paged_sdpa_read
                 else "feed SDPA decode-style tensors Q [1,b,nh,dh], K/V caches [b,nkv,s,dh] or paged "
                 "[blocks,nkv,block,dh], with DeepSeek cache-ready KV layout"
@@ -4745,12 +4857,274 @@ def _deepseek_attention_reference_inventory(
         "attention_sink_layout": {
             "key": f"{prefix}.attn_sink",
             "expected_shape": [heads],
-            "trace_status": "not_integrated",
+            "trace_status": "integrated_in_paged_sdpa_decode"
+            if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+            else "loaded_not_integrated_in_fixed_slice_attention",
+            "ttnn_decode_layout": [_padded_attention_heads(heads), ttnn.TILE_SIZE],
+            "ttnn_scaling_note": (
+                "TTNN SDPA decode scales sink logits internally, so the uploaded tensor is attn_sink / "
+                "head_dim**-0.5 to match the HF sparse_attn unscaled sink contribution"
+            ),
         },
         "smallest_next_step": (
-            "replace contiguous paged SDPA rows with sparse/indexer-selected row lists and attn_sink softmax semantics"
+            "replace contiguous paged SDPA rows with sparse/indexer-selected row lists; attention sink is already "
+            "wired into the paged SDPA decode path"
+            if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+            else "replace fixed-window dense softmax with sparse/indexer-selected row lists and attn_sink semantics"
         ),
     }
+
+
+def _sparse_attention_semantics_summary(
+    *,
+    snapshot_dir: Path,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    cache_update_indices: Sequence[int],
+    attention_read_api: str,
+    cache_update_api: str,
+    rope_position_api: str,
+    uses_paged_sdpa_read: bool,
+) -> dict[str, Any]:
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    tensor_inventory = _sparse_attention_tensor_inventory(snapshot_dir, config=config, layer=layer)
+    indexer_expected = compress_ratio == 4
+    indexer_missing = [
+        key for key in tensor_inventory["expected_indexer_keys"] if key not in tensor_inventory["metadata_by_key"]
+    ]
+    if indexer_expected and indexer_missing:
+        sparse_indexer_status = "expected_indexer_tensors_missing"
+    elif indexer_expected:
+        sparse_indexer_status = "real_indexer_tensors_identified_not_executed_or_consumed_by_trace"
+    elif compress_ratio > 0:
+        sparse_indexer_status = f"not_expected_for_compress_ratio_{compress_ratio}; hf_uses_reference_compress_topk"
+    else:
+        sparse_indexer_status = "not_expected_for_uncompressed_layer"
+
+    selected_rows = _sparse_selected_cache_rows_summary(
+        config=config,
+        layer=layer,
+        positions=cache_update_indices,
+        uses_paged_sdpa_read=uses_paged_sdpa_read,
+    )
+    attention_sink_status = (
+        "used_in_paged_sdpa_decode" if uses_paged_sdpa_read else "loaded_not_integrated_in_fixed_slice_attention"
+    )
+    return {
+        "status": "sink_integrated_selected_rows_blocked"
+        if uses_paged_sdpa_read
+        else "inventory_only_fixed_slice_path",
+        "hf_reference_locations": {
+            "attention_forward": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/model.py:501",
+            "indexer_topk": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/model.py:381",
+            "sparse_attn_kernel": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/kernel.py:277",
+            "attention_sink_update": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/kernel.py:346",
+        },
+        "layer": int(layer),
+        "compress_ratio": compress_ratio,
+        "sliding_window": int(config.sliding_window),
+        "index_topk": int(config.index_topk),
+        "sparse_indexer_status": sparse_indexer_status,
+        "selected_cache_rows": selected_rows,
+        "attention_sink_status": attention_sink_status,
+        "attention_sink": {
+            "key": f"layers.{layer}.attn.attn_sink",
+            "metadata": tensor_inventory["metadata_by_key"].get(f"layers.{layer}.attn.attn_sink"),
+            "in_trace": uses_paged_sdpa_read,
+            "ttnn_decode_shape": [_padded_attention_heads(int(config.num_attention_heads)), ttnn.TILE_SIZE]
+            if uses_paged_sdpa_read
+            else None,
+            "ttnn_api": "ttnn.transformer.paged_scaled_dot_product_attention_decode(..., attention_sink=...)"
+            if uses_paged_sdpa_read
+            else None,
+            "scaling_note": (
+                "uploaded as attn_sink / head_dim**-0.5 because TTNN SDPA decode scales sink logits internally"
+                if uses_paged_sdpa_read
+                else "not consumed by the fixed-slice softmax path"
+            ),
+        },
+        "compressor_status": "metadata_identified_not_integrated" if compress_ratio > 0 else "not_expected",
+        "tensor_inventory": tensor_inventory,
+        "attention_read_api": attention_read_api,
+        "cache_update_api": cache_update_api,
+        "rope_position_api": rope_position_api,
+        "dynamic_cache_write": cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+        "dynamic_rope": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
+        "dynamic_current_position": uses_paged_sdpa_read,
+        "k_v_source": "fused_cache_ready_kv_reuse" if uses_paged_sdpa_read else "projected_kv_cache_reuse",
+        "selected_row_attention_blocker": {
+            "ttnn_api": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+            "ttnn_api_location": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.hpp:29",
+            "current_inputs": [
+                "q",
+                "paged K cache",
+                "paged V cache",
+                "page_table_tensor",
+                "cur_pos_tensor",
+                "attention_sink",
+            ]
+            if uses_paged_sdpa_read
+            else ["fixed ttnn.slice cache window", "manual qk softmax"],
+            "missing_capability": (
+                "no topk_idxs or selected-row page-table input that maps HF sparse_attn topk rows to K/V rows per "
+                "decode token under one captured trace"
+            ),
+            "gather_api_location": "ttnn/cpp/ttnn/operations/data_movement/gather/gather.hpp:12",
+            "gather_blocker": (
+                "ttnn.gather can gather tensor elements by an index tensor, but this slice does not have a fused "
+                "gather-to-SDPA path or paged attention page-table format for dynamic per-token top-k selected rows"
+            ),
+        },
+        "smallest_next_step": (
+            "add a selected-row attention bridge: materialize learned indexer topk rows into a traceable device "
+            "index/page-table representation, gather the corresponding cache-ready K/V rows, then feed only those "
+            "rows plus attention_sink into a TTNN sparse decode attention kernel"
+        ),
+        "limitations": [
+            "learned indexer tensors are inventoried but not loaded into the protected traceable decode module",
+            "compressed-KV cache rows are not produced or updated by this paged path",
+            "paged SDPA still reads a contiguous cur_pos/page-table prefix rather than HF sparse_attn topk_idxs rows",
+        ],
+    }
+
+
+def _sparse_attention_tensor_inventory(
+    snapshot_dir: Path,
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+) -> dict[str, Any]:
+    index = RealCheckpointTensorIndex.from_snapshot(snapshot_dir)
+    prefix = f"layers.{layer}.attn"
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    expected_keys = [f"{prefix}.attn_sink"]
+    expected_compressor_keys: list[str] = []
+    expected_indexer_keys: list[str] = []
+    if compress_ratio > 0:
+        expected_compressor_keys = [
+            f"{prefix}.compressor.ape",
+            f"{prefix}.compressor.wkv.weight",
+            f"{prefix}.compressor.wgate.weight",
+            f"{prefix}.compressor.norm.weight",
+        ]
+        expected_keys.extend(expected_compressor_keys)
+        if compress_ratio == 4:
+            expected_indexer_keys = [
+                f"{prefix}.indexer.wq_b.weight",
+                f"{prefix}.indexer.weights_proj.weight",
+                f"{prefix}.indexer.compressor.wkv.weight",
+                f"{prefix}.indexer.compressor.wgate.weight",
+                f"{prefix}.indexer.compressor.ape",
+                f"{prefix}.indexer.compressor.norm.weight",
+            ]
+            expected_keys.extend(expected_indexer_keys)
+
+    present_keys = [key for key in expected_keys if index.has_tensor(key)]
+    metadata = index.metadata_for_keys(present_keys) if present_keys else []
+    return {
+        "expected_keys": expected_keys,
+        "expected_compressor_keys": expected_compressor_keys,
+        "expected_indexer_keys": expected_indexer_keys,
+        "present_keys": present_keys,
+        "missing_keys": [key for key in expected_keys if key not in present_keys],
+        "metadata_by_key": {item.canonical_key: _metadata_summary(item) for item in metadata},
+    }
+
+
+def _sparse_selected_cache_rows_summary(
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    positions: Sequence[int],
+    uses_paged_sdpa_read: bool,
+) -> dict[str, Any]:
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    per_step = [
+        _sparse_selected_cache_rows_for_position(
+            config=config,
+            layer=layer,
+            position=int(position),
+            uses_paged_sdpa_read=uses_paged_sdpa_read,
+        )
+        for position in positions
+    ]
+    return {
+        "source": (
+            "hf_window_topk_plus_reference_compress_topk"
+            if compress_ratio != 4
+            else "hf_window_topk_plus_learned_indexer_topk_inventory"
+        ),
+        "layout": "HF sparse_attn topk rows index into [sliding_window_cache, compressed_kv_cache]",
+        "derived_from_real_indexer": False,
+        "first_step_topk_shape": per_step[0]["runtime_topk_shape"] if per_step else None,
+        "per_step": per_step,
+    }
+
+
+def _sparse_selected_cache_rows_for_position(
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    position: int,
+    uses_paged_sdpa_read: bool,
+) -> dict[str, Any]:
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    window_topk = window_topk_indices(int(config.sliding_window), 1, 1, int(position)).to(torch.int32)
+    window_rows = _valid_int_values(window_topk)
+    compressed_cache_length = (int(position) + 1) // compress_ratio if compress_ratio > 0 else 0
+    compressed_rows: list[int] | None
+    compressed_topk_width: int
+    compressed_source: str
+    if compress_ratio <= 0 or compressed_cache_length <= 0:
+        compressed_rows = []
+        compressed_topk_width = 0
+        compressed_source = "none"
+    elif compress_ratio == 4:
+        compressed_rows = None
+        compressed_topk_width = min(int(config.index_topk), compressed_cache_length)
+        compressed_source = "learned_indexer_topk_required_not_materialized"
+    else:
+        compressed_topk = compress_topk_indices(
+            compress_ratio,
+            1,
+            1,
+            int(position),
+            offset=int(config.sliding_window),
+        ).to(torch.int32)
+        compressed_topk = compressed_topk[:, :, :compressed_cache_length]
+        compressed_rows = _valid_int_values(compressed_topk)
+        compressed_topk_width = int(compressed_topk.shape[-1])
+        compressed_source = "hf_reference_get_compress_topk_idxs"
+    runtime_rows = None if compressed_rows is None else [*window_rows, *compressed_rows]
+    if compressed_rows is None and compress_ratio == 4:
+        blocker = (
+            "learned indexer selected rows require indexer compressor/cache tensors and a TTNN selected-row "
+            "attention API"
+        )
+    else:
+        blocker = (
+            "selected rows are reported but do not drive attention because this slice lacks a TTNN gather-to-SDPA "
+            "or selected-row page-table bridge"
+        )
+    return {
+        "position": int(position),
+        "compress_ratio": compress_ratio,
+        "window_topk_shape": [int(value) for value in window_topk.shape],
+        "window_rows": window_rows,
+        "compressed_cache_length": compressed_cache_length,
+        "compressed_topk_width": compressed_topk_width,
+        "compressed_rows": compressed_rows,
+        "compressed_rows_source": compressed_source,
+        "runtime_topk_shape": [1, 1, int(window_topk.shape[-1]) + compressed_topk_width],
+        "runtime_rows": runtime_rows,
+        "paged_sdpa_dense_rows": _cache_rows_read_for_position(int(position)) if uses_paged_sdpa_read else None,
+        "rows_drive_attention_in_trace": False,
+        "blocker": blocker,
+    }
+
+
+def _valid_int_values(values: torch.Tensor) -> list[int]:
+    return [int(value) for value in values.reshape(-1).tolist() if int(value) >= 0]
 
 
 def _attention_path_summary(
@@ -4914,9 +5288,25 @@ def _attention_path_summary(
             "qk_scores_in_trace": qk_mode,
             "fixed_window_softmax_in_trace": qk_mode and not uses_paged_sdpa_read,
             "paged_sdpa_decode_in_trace": uses_paged_sdpa_read,
-            "attention_sink_softmax_in_trace": False,
+            "attention_sink_softmax_in_trace": uses_paged_sdpa_read,
             "value_reduction_in_trace": qk_mode,
             "context_in_trace": qk_mode,
+        },
+        "attention_sink": {
+            "status": "used_in_paged_sdpa_decode"
+            if uses_paged_sdpa_read
+            else "loaded_not_integrated_in_fixed_slice_attention",
+            "hf_reference": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/kernel.py:346",
+            "ttnn_api": (
+                "ttnn.transformer.paged_scaled_dot_product_attention_decode(..., attention_sink=...)"
+                if uses_paged_sdpa_read
+                else None
+            ),
+            "in_trace": uses_paged_sdpa_read,
+            "shape": [int(config.num_attention_heads)],
+            "ttnn_decode_shape": [_padded_attention_heads(int(config.num_attention_heads)), ttnn.TILE_SIZE]
+            if uses_paged_sdpa_read
+            else None,
         },
         "qk_scores": {
             "produced_in_trace": qk_mode and not uses_paged_sdpa_read,
@@ -4939,11 +5329,14 @@ def _attention_path_summary(
         },
         "exact_sparse_attention_blockers": [
             "dynamic per-token top-k cache gather is still represented by host fallback helpers",
-            "attention-sink semantics over [selected cache rows + sink] are not in this protected path",
             "true separate V projection/channel is not in this trace slice; K and V are explicit tensors but both "
             "derive from the DeepSeek V4 fused KV projection/cache-ready vector",
         ],
     }
+    if not uses_paged_sdpa_read:
+        summary["exact_sparse_attention_blockers"].append(
+            "attention-sink semantics over [selected cache rows + sink] are not in the fixed-window protected path"
+        )
     if not qk_mode:
         summary["exact_sparse_attention_blockers"].append(
             "legacy mode does not compute QK scores, softmax, or value reduction"

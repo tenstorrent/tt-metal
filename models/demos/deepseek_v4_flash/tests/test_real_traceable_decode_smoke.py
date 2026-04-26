@@ -154,7 +154,7 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         snapshot,
         layer=3,
         seq_len=4,
-        max_bytes=16 * 1024,
+        max_bytes=20 * 1024,
         routed_topk_prefix=1,
         cpu_only=True,
     )
@@ -309,6 +309,25 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["traceability_flags"]["kv_split_in_trace"] is True
     assert result["traceability_flags"]["true_kv_split_in_trace"] is False
     assert result["traceability_flags"]["rope_in_trace"] is True
+    assert result["traceability_flags"]["attention_sink_in_trace"] is False
+    assert result["attention_sink_status"] == "loaded_not_integrated_in_fixed_slice_attention"
+    assert result["selected_cache_rows_topk_shape"] == [1, 1, 9]
+    assert result["sparse_attention"]["status"] == "inventory_only_fixed_slice_path"
+    assert result["sparse_attention"]["compress_ratio"] == 4
+    assert result["sparse_attention"]["sparse_indexer_status"] == (
+        "real_indexer_tensors_identified_not_executed_or_consumed_by_trace"
+    )
+    assert result["sparse_attention"]["selected_cache_rows"]["derived_from_real_indexer"] is False
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["compressed_rows"] is None
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["compressed_rows_source"] == (
+        "learned_indexer_topk_required_not_materialized"
+    )
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["rows_drive_attention_in_trace"] is False
+    assert result["sparse_attention"]["attention_sink_status"] == "loaded_not_integrated_in_fixed_slice_attention"
+    assert result["sparse_attention"]["attention_sink"]["in_trace"] is False
+    assert result["sparse_attention"]["dynamic_cache_write"] is False
+    assert result["sparse_attention"]["dynamic_rope"] is False
+    assert result["sparse_attention"]["dynamic_current_position"] is False
     assert result["attention_path"]["sparse_compressed_tokens"]["contributed"] is True
     assert result["attention_path"]["compressed_token_contribution"]["contributed"] is True
     assert result["attention_path"]["softmax"]["qk_scores_in_trace"] is True
@@ -322,21 +341,24 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         "layers.3.attn.wo_b.weight",
     ]
     assert result["loaded_tensor_groups"]["kv_projection"]["count"] == 2
+    assert result["loaded_tensor_groups"]["attention_sink"]["canonical_keys"] == ["layers.3.attn.attn_sink"]
     assert result["loaded_tensor_groups"]["ffn_norm"]["canonical_keys"] == ["layers.3.ffn_norm.weight"]
     assert result["loaded_tensor_groups"]["router_selector"]["count"] == 2
     assert result["loaded_tensor_groups"]["shared_expert"]["count"] == 6
     assert result["loaded_tensor_groups"]["routed_experts"]["count"] == 6
     assert result["payload_bytes"]["attention_output"] == 5120
     assert result["payload_bytes"]["kv_projection"] == 544
+    assert result["payload_bytes"]["attention_sink"] == 16
     assert result["payload_bytes"]["router_selector"] == 272
     assert result["payload_bytes"]["routed_experts"] == 1920
-    assert result["payload_bytes"]["total"] == 16380
+    assert result["payload_bytes"]["total"] == 16396
     assert result["decoded_tensors"]["wq_a"]["shape"] == [16, 32]
     assert result["decoded_tensors"]["wq_b"]["shape"] == [32, 16]
     assert result["decoded_tensors"]["wo_a"]["shape"] == [64, 8]
     assert result["decoded_tensors"]["wo_b"]["shape"] == [32, 64]
     assert result["decoded_tensors"]["wkv"]["shape"] == [8, 32]
     assert result["decoded_tensors"]["kv_norm"]["shape"] == [8]
+    assert result["decoded_tensors"]["attn_sink"]["shape"] == [4]
     assert result["decoded_tensors"]["router_gate"]["shape"] == [4, 32]
     assert result["decoded_tensors"]["routed_experts"]["3"]["w1"]["shape"] == [32, 32]
     assert result["decoded_tensors"]["shared_w1"]["shape"] == [32, 32]
@@ -506,7 +528,27 @@ def test_cpu_traceable_decode_subpath_can_report_paged_sdpa_read_probe(tmp_path:
     assert result["traceability_flags"]["attention_output_inverse_rope_in_trace"] is True
     assert result["traceability_flags"]["compressed_kv_cache_in_trace"] is False
     assert result["traceability_flags"]["sparse_indexer_in_trace"] is False
-    assert result["traceability_flags"]["attention_sink_in_trace"] is False
+    assert result["traceability_flags"]["attention_sink_in_trace"] is True
+    assert result["attention_sink_status"] == "used_in_paged_sdpa_decode"
+    assert result["selected_cache_rows_topk_shape"] == [1, 1, 9]
+    assert result["sparse_attention"]["status"] == "sink_integrated_selected_rows_blocked"
+    assert result["sparse_attention"]["sparse_indexer_status"] == (
+        "real_indexer_tensors_identified_not_executed_or_consumed_by_trace"
+    )
+    assert result["sparse_attention"]["selected_cache_rows"]["derived_from_real_indexer"] is False
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["paged_sdpa_dense_rows"] == {
+        "start": 0,
+        "end_exclusive": 5,
+        "count": 5,
+    }
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["rows_drive_attention_in_trace"] is False
+    assert result["sparse_attention"]["attention_sink_status"] == "used_in_paged_sdpa_decode"
+    assert result["sparse_attention"]["attention_sink"]["in_trace"] is True
+    assert result["sparse_attention"]["dynamic_cache_write"] is True
+    assert result["sparse_attention"]["dynamic_rope"] is True
+    assert result["sparse_attention"]["dynamic_current_position"] is True
+    assert result["attention_path"]["softmax"]["attention_sink_softmax_in_trace"] is True
+    assert result["attention_path"]["attention_sink"]["status"] == "used_in_paged_sdpa_decode"
     assert (
         result["deepseek_attention_reference_inventory"]["v_channel_layout"][
             "true_separate_v_projection_in_hf_reference"
@@ -515,7 +557,9 @@ def test_cpu_traceable_decode_subpath_can_report_paged_sdpa_read_probe(tmp_path:
     )
     assert result["deepseek_attention_reference_inventory"]["v_channel_layout"]["post_attention_inverse_rope"] is True
     assert result["deepseek_attention_reference_inventory"]["compressed_kv_layout"]["trace_status"] == "not_integrated"
-    assert result["deepseek_attention_reference_inventory"]["attention_sink_layout"]["trace_status"] == "not_integrated"
+    assert result["deepseek_attention_reference_inventory"]["attention_sink_layout"]["trace_status"] == (
+        "integrated_in_paged_sdpa_decode"
+    )
     assert result["attention_path_by_step"][0]["cache_window"]["rows"] == [0, 5]
     assert result["attention_path_by_step"][1]["cache_window"]["rows"] == [0, 6]
     assert result["decode_steps_detail"][1]["cache_rows_read"]["count"] == 6
@@ -537,6 +581,10 @@ def test_cpu_traceable_decode_subpath_can_report_paged_sdpa_read_probe(tmp_path:
         in result["traceable_decode_scope"]["inside_trace"]
     )
     assert (
+        "ttnn.transformer.paged_scaled_dot_product_attention_decode(attention_sink)"
+        in result["traceable_decode_scope"]["inside_trace"]
+    )
+    assert (
         "ttnn.experimental.rotary_embedding_llama(kv_update_rope)" in result["traceable_decode_scope"]["inside_trace"]
     )
     assert (
@@ -552,7 +600,7 @@ def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path:
         snapshot,
         layer=3,
         seq_len=4,
-        max_bytes=16 * 1024,
+        max_bytes=20 * 1024,
         routed_topk_prefix=1,
         cpu_only=True,
         attention_mode=TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE,
@@ -632,7 +680,8 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["routed_expert_execution"]["full_topk_executed"] is True
     assert payload["payload_bytes"]["attention_output"] == 5120
     assert payload["payload_bytes"]["routed_experts"] == 3840
-    assert payload["payload_bytes"]["total"] == 18300
+    assert payload["payload_bytes"]["attention_sink"] == 16
+    assert payload["payload_bytes"]["total"] == 18316
     assert payload["decoded_tensors"]["wo_a"]["shape"] == [64, 8]
     assert payload["decoded_tensors"]["routed_experts"]["3"]["w2"]["shape"] == [32, 32]
     assert payload["decoded_tensors"]["routed_experts"]["2"]["w2"]["shape"] == [32, 32]
