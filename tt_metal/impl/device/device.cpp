@@ -679,7 +679,7 @@ void Device::configure_fabric(
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
-void Device::quiesce_and_restart_fabric_workers() {
+void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // Diagnostic: env toggle lets CI / repro runs skip this restart path entirely to isolate
     // whether the Tensix MUX restart is the cause of a post-quiesce hang. When set, we return
     // before any fabric MUX termination. See plan Experiment B.
@@ -1335,6 +1335,42 @@ void Device::quiesce_and_restart_fabric_workers() {
         }
     }
 
+    // FIX AE (#42429): Optionally defer ETH write_launch_msg to allow the mesh-level caller
+    // (quiesce_internal) to sequence MMIO ETH launch before non-MMIO ETH launch.
+    //
+    // Simultaneous ETH handshake deadlock: when two ETH peer channels both start within a
+    // narrow window (~6ms), both initiate the handshake simultaneously, neither responds to
+    // the other's initiation, and both remain stuck at STARTED (0xa0b0c0d0) indefinitely.
+    //
+    // This is observed when Device 4 (non-MMIO, slow relay ~200ms/channel) and Device 5
+    // (non-MMIO, fast relay <1ms/channel via idle MMIO partner) are processed sequentially:
+    // Device 4's last write_launch_msg completes at T, Device 5's corresponding peer channel
+    // write_launch_msg completes at T+6ms — too close for the handshake protocol to avoid
+    // simultaneous initiation.
+    //
+    // Fix: mesh-level caller defers ETH launch (defer_eth_launch=true), then sequences:
+    //   1. MMIO devices ETH launch (fast, direct PCIe) — MMIO peers running first
+    //   2. Non-MMIO devices ETH launch (slow, via relay, sequential) — relay serialization
+    //      creates ~200ms gap between successive non-MMIO device channel starts, breaking
+    //      the simultaneous initiation window.
+    if (defer_eth_launch) {
+        pending_quiesce_newly_dead_eth_chans_ = quiesce_health.newly_dead_channels;
+        pending_eth_launch_ = true;
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3: ETH write_launch_msg deferred "
+            "(defer_eth_launch=true) — call launch_eth_cores_for_quiesce() to complete.",
+            this->id());
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3 complete (ETH deferred) — "
+            "WORKER cores relaunched. ETH ERISC launch pending launch_eth_cores_for_quiesce().",
+            this->id());
+        return;
+    }
+    // ETH write_launch_msg executes inline (defer_eth_launch=false, the default).
+    pending_eth_launch_ = false;
+
     // FIX O (#42429): Re-launch ETH ERISC cores from the fabric program.
     //
     // configure_fabric_cores() only performs soft reset (or skips it for non-MMIO) and
@@ -1480,6 +1516,174 @@ void Device::quiesce_and_restart_fabric_workers() {
         this->is_mmio_capable(),
         (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done",
         (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done");
+}
+
+// FIX AE (#42429): Deferred ETH write_launch_msg for quiesce.
+//
+// This method is the second half of Phase 3 when called with defer_eth_launch=true.
+// It sends write_launch_msg_to_core for all ETH cores in the fabric program, using
+// the newly_dead_channels set stored during configure_fabric_cores() to skip dead channels.
+//
+// The mesh-level caller (quiesce_internal) invokes this in order:
+//   1. MMIO devices launch first (fast, direct PCIe, ~1ms/channel).
+//   2. Non-MMIO devices launch sequentially (slow, via UMD relay, ~200ms/channel).
+//
+// This ordering ensures MMIO peer ERISCs are running before non-MMIO initiates handshake,
+// and creates ~200ms timing asymmetry between successive non-MMIO peer channel starts,
+// preventing simultaneous ETH handshake initiation deadlock (STARTED → STARTED deadlock).
+void Device::launch_eth_cores_for_quiesce() {
+    if (!pending_eth_launch_) {
+        log_info(
+            tt::LogMetal,
+            "launch_eth_cores_for_quiesce: Device {} — no pending ETH launch (Phase 3 was "
+            "skipped or defer_eth_launch was not used). No-op.",
+            this->id());
+        return;
+    }
+    pending_eth_launch_ = false;
+
+    // Mirror the Phase 3 relay-broken guard: if relay is broken for non-MMIO, skip.
+    if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
+        log_warning(
+            tt::LogMetal,
+            "launch_eth_cores_for_quiesce: Device {} — relay path broken, non-MMIO: "
+            "skipping ETH write_launch_msg to prevent indefinite relay hang.",
+            this->id());
+        pending_quiesce_newly_dead_eth_chans_.clear();
+        return;
+    }
+
+    if (!fabric_program_) {
+        log_warning(
+            tt::LogMetal,
+            "launch_eth_cores_for_quiesce: Device {} — fabric_program_ is null, cannot launch ETH cores.",
+            this->id());
+        pending_quiesce_newly_dead_eth_chans_.clear();
+        return;
+    }
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_ctx = fabric_context.get_builder_context();
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    const auto& hal = env_impl.get_hal();
+    const auto& soc_desc_q = env_impl.get_cluster().get_soc_desc(this->id());
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used = fabric_program_->impl().logical_cores();
+    // Take a local copy of the dead channels set so we can clear the member early.
+    const auto newly_dead = std::move(pending_quiesce_newly_dead_eth_chans_);
+    pending_quiesce_newly_dead_eth_chans_.clear();
+
+    log_info(
+        tt::LogMetal,
+        "launch_eth_cores_for_quiesce: Device {} — launching ETH ERISC cores "
+        "(mmio={}, newly_dead_count={}).",
+        this->id(),
+        this->is_mmio_capable(),
+        newly_dead.size());
+
+    for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
+        CoreType core_type = hal.get_core_type(pct_idx);
+        if (core_type != CoreType::ETH) {
+            continue;
+        }
+        for (const auto& logical_core : logical_cores_used[pct_idx]) {
+            // Skip channels that died during configure_fabric_cores() — writing launch
+            // messages through a dead ETH relay hangs indefinitely.
+            if (!newly_dead.empty()) {
+                try {
+                    auto eth_chan = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (newly_dead.count(eth_chan)) {
+                        log_warning(
+                            tt::LogMetal,
+                            "launch_eth_cores_for_quiesce: Device {} skipping "
+                            "write_launch_msg_to_core for dead ETH core ({},{}) channel {}",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan);
+                        continue;
+                    }
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} cannot resolve ETH channel "
+                        "for logical core ({},{}) — skipping write_launch_msg_to_core",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y);
+                    continue;
+                }
+            }
+
+            auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+
+            // Pre-launch status read: confirm ERISC is in TERMINATED (0xA4B4C4D4) or 0x0.
+            {
+                const auto [erisc_sync_addr_pre, unused_pre] =
+                    builder_ctx.get_fabric_router_sync_address_and_status();
+                std::vector<uint32_t> pre_launch_buf(1, 0U);
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
+                } catch (const std::exception& e) {
+                    pre_launch_buf[0] = 0xDEADBEEF;
+                    log_warning(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Phase 3 pre-launch status "
+                        "read threw for ETH logical ({},{}) — proceeding with 0xDEADBEEF: {}",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y,
+                        e.what());
+                } catch (...) {
+                    pre_launch_buf[0] = 0xDEADBEEF;
+                    log_warning(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Phase 3 pre-launch status "
+                        "read threw unknown for ETH logical ({},{})",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y);
+                }
+                log_info(
+                    tt::LogMetal,
+                    "launch_eth_cores_for_quiesce: Device {} Phase 3: "
+                    "write_launch_msg_to_core ETH logical ({},{}) pre_status=0x{:08x}",
+                    this->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    pre_launch_buf[0]);
+            }
+
+            tt::llrt::write_launch_msg_to_core(
+                this->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+
+            log_info(
+                tt::LogMetal,
+                "launch_eth_cores_for_quiesce: Device {} Phase 3: "
+                "write_launch_msg_to_core ETH logical ({},{}) done",
+                this->id(),
+                logical_core.x,
+                logical_core.y);
+        }
+    }
+
+    log_info(
+        tt::LogMetal,
+        "launch_eth_cores_for_quiesce: Device {} complete — all ETH ERISC cores launched.",
+        this->id());
 }
 
 bool Device::phase5b_erisc_health_check(

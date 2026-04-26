@@ -170,7 +170,16 @@ public:
     // Phase 2: wait_for_fabric_workers_ready() — poll for handshake completion + health check.
     // The mesh-level caller MUST run Phase 1 on ALL devices before running Phase 2 on any
     // device, so that sender and receiver ERISCs are both running before the handshake poll.
-    void quiesce_and_restart_fabric_workers();
+    //
+    // FIX AE (#42429): When defer_eth_launch=true, Phase 3 configure_fabric_cores + runtime args
+    // + l1_barrier + WORKER write_launch_msg run normally, but ETH write_launch_msg is skipped.
+    // The mesh-level caller must then invoke launch_eth_cores_for_quiesce() to complete the ETH
+    // launch in the correct cross-device order (MMIO before non-MMIO, then non-MMIO sequentially).
+    void quiesce_and_restart_fabric_workers(bool defer_eth_launch = false);
+    // FIX AE: Completes the deferred ETH write_launch_msg from quiesce_and_restart_fabric_workers.
+    // Must be called after quiesce_and_restart_fabric_workers(defer_eth_launch=true).
+    // No-op if no ETH launch is pending (e.g. Phase 3 was skipped due to relay broken).
+    void launch_eth_cores_for_quiesce();
     void wait_for_fabric_workers_ready();
     // Called by FabricFirmwareInitializer when this device is placed in mmio_dead_peer_devices_.
     void set_fabric_is_mmio_dead_peer_device(bool v) { fabric_is_mmio_dead_peer_device_ = v; }
@@ -344,6 +353,16 @@ private:
     // Must be std::atomic<bool>: read by fd_mesh_command_queue.cpp dispatch thread
     // (FIX Z fast-throw) while quiesce writes it from a different thread.
     std::atomic<bool> fabric_relay_path_broken_{false};
+
+    // FIX AE (#42429): State for deferred ETH ERISC launch during quiesce.
+    // Set by quiesce_and_restart_fabric_workers(defer_eth_launch=true),
+    // consumed and cleared by launch_eth_cores_for_quiesce().
+    // pending_eth_launch_ is true iff configure_fabric_cores completed and ETH
+    // write_launch_msg was skipped — launch_eth_cores_for_quiesce() must be called.
+    // pending_quiesce_newly_dead_eth_chans_: channels that died during configure_fabric_cores;
+    // ETH write_launch_msg is skipped for these to avoid relay hangs on dead cores.
+    bool pending_eth_launch_ = false;
+    std::unordered_set<uint32_t> pending_quiesce_newly_dead_eth_chans_;
 
     // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
     // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which
