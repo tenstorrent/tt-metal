@@ -22,10 +22,10 @@ struct MatmulDeviceOperation {
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<
-        MatmulMeshWorkloadMultiCoreFactory,
-        MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory,
-        MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory,
-        MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory,
+        MatmulMultiCoreProgramFactory,
+        MatmulMultiCoreReuseOptimizedProgramFactory,
+        MatmulMultiCoreReuseMcast1DProgramFactory,
+        MatmulMultiCoreReuseMcast2DProgramFactory,
         MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
         MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>;
 

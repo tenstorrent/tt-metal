@@ -16,6 +16,25 @@
 
 namespace tt::tt_metal {
 
+class IDevice;
+
+// Cached result of split_work_to_cores + grid_to_cores.
+// Use cached_split_work_to_cores() to obtain one — never construct directly.
+struct CachedWorkSplit {
+    uint32_t num_cores = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t units_per_core_group_1 = 0;
+    uint32_t units_per_core_group_2 = 0;
+    std::vector<CoreCoord> cores;
+};
+
+// Returns a cached work split for the given device and units_to_divide.
+// Caches device→grid mapping and (grid, units)→split result per thread.
+// Safe to call from any op's create_descriptor — no per-op boilerplate needed.
+const CachedWorkSplit& cached_split_work_to_cores(IDevice* device, uint32_t units_to_divide, bool row_wise = false);
+
 uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size);
 
 // Given a number of tiles and number of cores available
