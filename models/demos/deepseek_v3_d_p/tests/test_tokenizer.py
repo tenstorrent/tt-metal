@@ -58,24 +58,18 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
 @pytest.mark.parametrize(
     "input_path",
     [
-        # Path("/tmp/r1/pretrained_abc_1k_isl1024_layers61_experts256.pt"),
+        Path("/tmp/r1/pretrained_abc_1k_isl1024_layers61_experts256.pt"),
         Path(
             "/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Reference-prefill/pretrained_abc_1k_isl1024_layers61_experts256.pt"
         ),
         Path(
             "/workspace/ds_output_all_sources_new_/norm_20260415_114721_mesh8x4_isl1024_L61_e256_cf32_gatehost_all_pretrained_abc_1k.pt"
         ),
-        Path(
-            "/tmp/ds_output_all_sources_new_ndshard/norm_20260421_061041_mesh8x4_isl1024_L61_e256_cf32_gatehost_all_pretrained_abc_1k.pt"
-        ),
-        Path(
-            "/tmp/ds_output_all_sources_new_ndshard/norm_20260421_150333_mesh8x4_isl1024_L61_e256_cf32_gatehost_all_pretrained_abc_1k.pt"
-        ),
     ],
 )
 def test_first_token_from_reference(input_path, model_path, config_only, tokenizer):
     # Use weights_only=False since this is a trusted local file with custom objects
-    logger.warning(f"{input_path=}")
+    logger.info(f"{input_path=}")
     if not input_path.exists():
         pytest.skip(f"Reference artifact not found: {input_path}")
     data = torch.load(input_path, weights_only=False)

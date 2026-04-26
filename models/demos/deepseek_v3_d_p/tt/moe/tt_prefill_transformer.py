@@ -13,7 +13,7 @@ but targeting the TT prefill path with SP+TP parallelism.
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 from loguru import logger
@@ -106,6 +106,7 @@ class TtPrefillTransformer(LightweightModule):
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
+        padding_side: str = "right",
         capacity_factor: int = 2,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
@@ -117,6 +118,7 @@ class TtPrefillTransformer(LightweightModule):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
+        self.padding_side = padding_side
 
         # Log environment variables that define reference output cache and TTNN weights cache.
         # This is to prevent accidental cache creation at unusal places and fill disk space.
@@ -206,8 +208,7 @@ class TtPrefillTransformer(LightweightModule):
         )
 
         self.is_balanced = is_balanced
-        if is_balanced:
-            self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
+        self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
@@ -225,10 +226,10 @@ class TtPrefillTransformer(LightweightModule):
         self,
         token_ids: ttnn.Tensor,
         kvpe_cache: ttnn.Tensor,
-        number_of_non_padded_tokens: int,  # update docs
+        number_of_non_padded_tokens: int,
         return_intermediates: bool = False,
         read_profiler: bool = False,
-        temperature: float | list[float] = 0.0,
+        temperature: Union[float, list[float]] = 0.0,
     ):
         """
         Forward pass: embed -> [block x N] -> norm -> lm_head.
@@ -276,11 +277,49 @@ class TtPrefillTransformer(LightweightModule):
             ttnn.synchronize_device(self.mesh_device)
             intermediates["norm"] = self._to_host(h)
 
-        # LM Head: compute logits and sample first token
-        if number_of_non_padded_tokens is not None:
-            global_token_id = number_of_non_padded_tokens - 1  # Last non-padded token for back/right padding
-        else:
-            global_token_id = self.seq_len - 1  # Last token for front/left padding
+        # LM Head: extract logits for last real token
+        logits_host, first_token_logits = self._extract(h, number_of_non_padded_tokens)
+
+        if return_intermediates:
+            intermediates["lm_head"] = logits_host
+
+        # Reorder intermediates if balanced
+        if return_intermediates and self.is_balanced:
+            for key, tensor in intermediates.items():
+                if isinstance(tensor, torch.Tensor):
+                    logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
+                    intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
+                else:
+                    logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
+
+        # Sample token(s) from logits
+        first_token_id, first_token_prob, sweep_results = self._sample(
+            first_token_logits, number_of_non_padded_tokens, temperature
+        )
+
+        if return_intermediates:
+            intermediates["first_token"] = sweep_results
+
+        return first_token_id, first_token_prob, intermediates
+
+    def _extract(
+        self,
+        h: ttnn.Tensor,
+        number_of_non_padded_tokens: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run LM head and extract last-token logits. Topology-aware.
+
+        Args:
+            h: Hidden states after final norm
+            number_of_non_padded_tokens: Count of real tokens in the sequence
+
+        Returns:
+            Tuple of (logits_host, first_token_logits)
+        """
+        if self.padding_side == "right":
+            global_token_id = number_of_non_padded_tokens - 1
+        else:  # "left"
+            global_token_id = self.seq_len - 1
 
         logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
 
@@ -290,23 +329,30 @@ class TtPrefillTransformer(LightweightModule):
         ), f"Expected full vocab {self.lm_head.vocab_size}, got {logits_host.shape[-1]} — TP concat may be broken"
         first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
 
-        if return_intermediates:
-            intermediates["lm_head"] = logits_host
+        logger.debug(f"[TtPrefillTransformer._extract] {logits.shape}")
+        logger.debug(f"[TtPrefillTransformer._extract] {logits_host.shape}")
+        logger.debug(f"[TtPrefillTransformer._extract] {first_token_logits.shape}")
 
-        # reorder tensors if needed
-        if return_intermediates and self.is_balanced:
-            for key, tensor in intermediates.items():
-                if isinstance(tensor, torch.Tensor):
-                    logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
-                    intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
-                    # lm_head is balancing aware; and will only bring tiles (from each chip); to figure out what to do about it. needs partial pcc check
-                else:
-                    logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
+        return logits_host, first_token_logits
 
-        # Handle temperature as float or list
+    def _sample(
+        self,
+        first_token_logits: torch.Tensor,
+        number_of_non_padded_tokens: int,
+        temperature: Union[float, list[float]],
+    ) -> tuple[int, float, list[dict]]:
+        """Sample token(s) from extracted logits with temperature sweep.
+
+        Args:
+            first_token_logits: Logits for the last real token position
+            number_of_non_padded_tokens: Count of real tokens (stored in results)
+            temperature: Temperature for sampling (single float or list for sweep)
+
+        Returns:
+            Tuple of (first_token_id, first_token_prob, sweep_results)
+        """
         temperatures = temperature if isinstance(temperature, list) else [temperature]
 
-        # Sample for all temperatures
         sweep_results = []
         for temp in temperatures:
             token_id, token_prob, top5 = self._sample_token(first_token_logits.clone(), temp)
@@ -316,27 +362,16 @@ class TtPrefillTransformer(LightweightModule):
                     "token_id": token_id,
                     "probability": token_prob,
                     "temperature": temp,
-                    "device_id": device_id,
-                    "token_offset": token_offset,
                     "top5": top5,
                 }
             )
 
-        # Return values are for first temperature
         first_token_id = sweep_results[0]["token_id"]
         first_token_prob = sweep_results[0]["probability"]
 
-        logger.debug(f"[TtPrefillTransformer.forward] {logits.shape}")
-        logger.debug(f"[TtPrefillTransformer.forward] {logits_host.shape}")
-        logger.debug(f"[TtPrefillTransformer.forward] {first_token_logits.shape}")
-        logger.debug(
-            f"[TtPrefillTransformer.forward] {first_token_id=}, {first_token_prob=:.4f} {device_id=}, {token_offset=}"
-        )
+        logger.debug(f"[TtPrefillTransformer._sample] {first_token_id=}, {first_token_prob=:.4f}")
 
-        if return_intermediates:
-            intermediates["first_token"] = sweep_results
-
-        return first_token_id, first_token_prob, intermediates
+        return first_token_id, first_token_prob, sweep_results
 
     def _sample_token(self, logits: torch.Tensor, temperature: float = 1.0) -> tuple[int, float, list]:
         """

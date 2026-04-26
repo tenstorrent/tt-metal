@@ -606,7 +606,30 @@ def load_and_compute_layer_by_layer(
     )
 
 
-def check_reference_cache_exists(cache_key: str) -> bool:
+@dataclass(frozen=True)
+class ReferenceCacheKey:
+    """All parameters that affect reference output identity.
+
+    Changing any field produces a different cache filename, so stale results
+    are never reused silently.
+    """
+
+    weight_type: str  # "pretrained" or "random"
+    input_source: str  # "random", "json_prompts", "abc_1k", or InfiniteBench subset
+    isl_total: int
+    num_layers: int
+    n_routed_experts: int
+    padding_side: str  # "right" or "left"
+
+    def __str__(self) -> str:
+        return (
+            f"{self.weight_type}_{self.input_source}"
+            f"_isl{self.isl_total}_layers{self.num_layers}"
+            f"_experts{self.n_routed_experts}_pad{self.padding_side}"
+        )
+
+
+def check_reference_cache_exists(cache_key: ReferenceCacheKey) -> bool:
     """
     Check if reference output cache exists for the given cache key.
 
@@ -614,7 +637,7 @@ def check_reference_cache_exists(cache_key: str) -> bool:
     This cache is machine-independent and can be generated once and shared.
 
     Args:
-        cache_key: Cache identifier like "pretrained_json_prompts_isl1024_layers24_experts256"
+        cache_key: ReferenceCacheKey encoding all parameters that affect reference outputs
 
     Returns:
         True if cache file exists, False otherwise
@@ -632,7 +655,7 @@ def check_reference_cache_exists(cache_key: str) -> bool:
     return exists
 
 
-def save_reference_cache(cache_key: str, ref_snapshots, ref_kvpe_list):
+def save_reference_cache(cache_key: ReferenceCacheKey, ref_snapshots, ref_kvpe_list):
     """Save reference outputs to cache file."""
     cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
     cache_path = cache_dir / f"{cache_key}.pt"
@@ -642,8 +665,12 @@ def save_reference_cache(cache_key: str, ref_snapshots, ref_kvpe_list):
     logger.info(f"Saved reference to {cache_path} ({len(ref_snapshots)} snapshots, {len(ref_kvpe_list)} KVPE)")
 
 
-def load_reference_cache(cache_key: str) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-    """Load reference outputs from cache file."""
+def load_reference_cache(cache_key: ReferenceCacheKey) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Load reference outputs from cache file.
+
+    Returns:
+        Tuple of (ref_snapshots, ref_kvpe_list)
+    """
     cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
     cache_path = cache_dir / f"{cache_key}.pt"
 
@@ -659,6 +686,25 @@ def load_reference_cache(cache_key: str) -> tuple[list[torch.Tensor], list[torch
     return cached["ref_snapshots"], cached["ref_kvpe_list"]
 
 
+def slice_non_padded(tensor: torch.Tensor, num_real_tokens: int, padding_side: str, seq_dim: int = -2) -> torch.Tensor:
+    """Slice a tensor to keep only the non-padded tokens along the sequence dimension.
+
+    Args:
+        tensor: Input tensor with a sequence dimension
+        num_real_tokens: Number of real (non-padded) tokens
+        padding_side: "right" (padding at end) or "left" (padding at start)
+        seq_dim: Which dimension is the sequence dimension (default: -2)
+
+    Returns:
+        Tensor with only the non-padded tokens along seq_dim
+    """
+    if padding_side == "right":
+        return tensor.narrow(seq_dim, 0, num_real_tokens)
+    else:
+        start = tensor.shape[seq_dim] - num_real_tokens
+        return tensor.narrow(seq_dim, start, num_real_tokens)
+
+
 # --- Tokenization helpers ---
 def tokenize_prompt_to_isl(
     tokenizer, max_isl: int, prompt_text: str = "Capital of France is", debug: bool = False
@@ -669,7 +715,6 @@ def tokenize_prompt_to_isl(
         (input_ids, attention_mask, tokens): input_ids and attention_mask are [1, max_isl] tensors;
         tokens is a list of token strings (only when debug=True, else None).
     """
-    tokenizer.padding_side = "right"  # to move under conftest and tokenizer fixture/creation
     inputs = tokenizer(
         prompt_text,
         return_tensors="pt",  # return PyTorch tensors
