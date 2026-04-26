@@ -68,11 +68,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         formats_array[run].unpack_A_src,
         formats_array[run].unpack_A_dst,
         tile_size); // have to reconfigure unpack kernel data formats_array if they change in this run
-    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
+    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
+        formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
 #ifdef ARCH_BLACKHOLE
     _llk_unpack_tilize_uninit_(formats_array[run].unpack_A_dst, 4, FACE_R_DIM);
 #else

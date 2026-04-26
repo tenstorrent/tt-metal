@@ -56,8 +56,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     UNUSED const std::uint32_t unpack_a_dst_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_src_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_dst_format1 = ckernel::to_underlying(DataFormat::Float16_b);
-    _llk_unpack_reconfig_data_format_srca_impl_<false, false>(unpack_a_src_format1, unpack_a_dst_format1, 128);
-    _llk_unpack_reconfig_data_format_srcb_impl_<false, false>(unpack_b_src_format1, unpack_b_dst_format1, 128);
+    _llk_unpack_reconfig_data_format_srca_impl_<false, p_dim_stride_target::IGNORE, false>(unpack_a_src_format1, unpack_a_dst_format1, 128);
+    _llk_unpack_reconfig_data_format_srcb_impl_<false, p_dim_stride_target::IGNORE, false>(unpack_b_src_format1, unpack_b_dst_format1, 128);
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
@@ -76,8 +76,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     UNUSED const std::uint32_t unpack_a_dst_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_src_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_dst_format2 = ckernel::to_underlying(DataFormat::Float16_b);
-    _llk_unpack_reconfig_data_format_srca_impl_<false, false>(unpack_a_src_format2, unpack_a_dst_format2, 128);
-    _llk_unpack_reconfig_data_format_srcb_impl_<false, false>(unpack_b_src_format2, unpack_b_dst_format2, 128);
+    _llk_unpack_reconfig_data_format_srca_impl_<false, p_dim_stride_target::IGNORE, false>(unpack_a_src_format2, unpack_a_dst_format2, 128);
+    _llk_unpack_reconfig_data_format_srcb_impl_<false, p_dim_stride_target::IGNORE, false>(unpack_b_src_format2, unpack_b_dst_format2, 128);
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
@@ -92,8 +92,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     UNUSED const std::uint32_t unpack_a_dst_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_src_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     UNUSED const std::uint32_t unpack_b_dst_format3 = ckernel::to_underlying(DataFormat::Float16_b);
-    _llk_unpack_reconfig_data_format_srca_impl_<false, false>(unpack_a_src_format3, unpack_a_dst_format3, 128);
-    _llk_unpack_reconfig_data_format_srcb_impl_<false, false>(unpack_b_src_format3, unpack_b_dst_format3, 128);
+    _llk_unpack_reconfig_data_format_srca_impl_<false, p_dim_stride_target::IGNORE, false>(unpack_a_src_format3, unpack_a_dst_format3, 128);
+    _llk_unpack_reconfig_data_format_srcb_impl_<false, p_dim_stride_target::IGNORE, false>(unpack_b_src_format3, unpack_b_dst_format3, 128);
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
     for (std::uint32_t batch = 0; batch < 1; ++batch)

@@ -173,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         // We need to use reconfigure API to avoid race condition between hardware configuration in the second stage and unpacking in the first
                         // stage.
-                        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false /* to_from_int8 */>(
+                        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
                             unpack_src_format, unpack_dst_format, 16 * 16 * 4 /* tile_size */);
                     }
 

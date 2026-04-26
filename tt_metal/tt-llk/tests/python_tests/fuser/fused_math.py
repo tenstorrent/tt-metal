@@ -166,10 +166,10 @@ class ComputePipeline:
             )
         else:
             code = (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, false>(\n"
+                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
                 f"    unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {unpa_tile_size}\n"
                 f");\n"
-                f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
+                f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
                 f"    unpack_b_src_format{stage}, unpack_b_dst_format{stage}, {unpb_tile_size}\n"
                 f");\n"
             )
