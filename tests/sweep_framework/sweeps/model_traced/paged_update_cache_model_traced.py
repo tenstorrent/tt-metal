@@ -14,10 +14,12 @@ from functools import partial
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    replicate_with_topology,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 TIMEOUT = 300
@@ -50,25 +52,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104)
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 def run(
     input_a_shape,
@@ -109,6 +97,9 @@ def run(
         input_d_layout = page_table_kwargs.get("layout") or ttnn.ROW_MAJOR_LAYOUT
         input_d_memory_config = page_table_kwargs.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
 
+    # Extract input_b named tensor info for shape/dtype
+    input_b_tensor_kwargs = extract_named_tensor_kwargs(kwargs, "input_b")
+
     if isinstance(input_a_shape, dict):
         shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
         shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
@@ -124,7 +115,10 @@ def run(
         else:
             shape = input_a_shape
         shape_a = shape
+        # Try multiple sources for input_b shape
         input_b_shape_raw = kwargs.get("input_b_shape", None)
+        if input_b_shape_raw is None and input_b_tensor_kwargs is not None:
+            input_b_shape_raw = input_b_tensor_kwargs["shape"]
         if input_b_shape_raw is not None:
             shape_b = tuple(input_b_shape_raw) if isinstance(input_b_shape_raw, (tuple, list)) else input_b_shape_raw
         else:
@@ -181,21 +175,44 @@ def run(
                 mem_config_a,
                 input_a_tensor_placement,
             )
-            input_tensor_b = create_tensor_on_mesh(
-                torch_input_tensor_b,
-                device,
-                dtype_b,
-                layout_b,
-                mem_config_b,
-                kwargs.get("input_b_tensor_placement", input_a_tensor_placement),
-            )
+            # The update tensor (arg1) is a small per-device tensor (e.g. dim[2]=1
+            # for a single-token update).  The master model creates it per-device so
+            # logical_shape() returns the per-device shape.  create_tensor_on_mesh
+            # would expand+shard it, causing logical_shape() to return the global
+            # shape (e.g. dim[2]=32 instead of 1).  Replicate to match master trace.
+            input_b_placement = kwargs.get("input_b_tensor_placement", input_a_tensor_placement)
+            # The update tensor (arg1) is a small per-device tensor (e.g. dim[2]=1
+            # for a single-token update).  The master model creates it per-device so
+            # logical_shape() returns the per-device shape.  create_tensor_on_mesh
+            # would expand+shard it, causing logical_shape() to return the global
+            # shape (e.g. dim[2]=32 instead of 1).  Replicate when shapes differ to
+            # keep the per-device shape, and restore topology for trace matching.
+            if shape_b != shape_a:
+                input_tensor_b = replicate_with_topology(
+                    torch_input_tensor_b,
+                    device,
+                    dtype_b,
+                    layout_b,
+                    mem_config_b,
+                    input_b_placement,
+                )
+            else:
+                input_tensor_b = create_tensor_on_mesh(
+                    torch_input_tensor_b,
+                    device,
+                    dtype_b,
+                    layout_b,
+                    mem_config_b,
+                    input_b_placement,
+                )
             input_tensor_c = create_tensor_on_mesh(
                 torch_input_tensor_c,
                 device,
                 dtype_c,
                 ttnn.ROW_MAJOR_LAYOUT,
                 mem_config_c,
-                kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
+                kwargs.get("update_idxs_tensor_tensor_placement",
+                           kwargs.get("input_c_tensor_placement", input_a_tensor_placement)),
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -235,7 +252,8 @@ def run(
                     dtype_d,
                     ttnn.ROW_MAJOR_LAYOUT,
                     mem_config_d,
-                    kwargs.get("input_d_tensor_placement", input_a_tensor_placement),
+                    kwargs.get("page_table_tensor_placement",
+                               kwargs.get("input_d_tensor_placement", input_a_tensor_placement)),
                 )
             else:
                 input_tensor_d = ttnn.from_torch(
@@ -253,9 +271,11 @@ def run(
     # Only cache and input are positional, everything else is keyword-only
     # So tensor_a=cache, tensor_b=input, tensor_c=update_idxs_tensor, tensor_d=page_table
     # Note: paged_update_cache may not accept memory_config parameter - it modifies cache_tensor in place
-    # Ensure batch_offset has a default value in op_kwargs
-    if "batch_offset" not in op_kwargs or op_kwargs["batch_offset"] is None:
-        op_kwargs["batch_offset"] = 0
+    # Only pass batch_offset if it was explicitly set to a non-default value in
+    # the master config.  The V2 loader may include batch_offset=0 (default) which
+    # creates an extra_key diff when the master trace never recorded it.
+    if "batch_offset" in op_kwargs and (op_kwargs["batch_offset"] is None or op_kwargs["batch_offset"] == 0):
+        del op_kwargs["batch_offset"]
     try:
         output_tensor = ttnn.experimental.paged_update_cache(
             input_tensor_a,  # cache_tensor (positional)
@@ -279,7 +299,8 @@ def run(
         )
     # paged_update_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)

@@ -62,10 +62,12 @@ from models.tt_transformers.tt.rope import compute_gather_cos_sin
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    _restore_topology,
+    get_mesh_composer,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -110,25 +112,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104)
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 def invalidate_vector(test_vector) -> tuple:
     """
@@ -540,44 +528,75 @@ def run(
         )
 
         # Convert tensors to device as interleaved first, then shard
-        input_tensor_interleaved = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_interleaved = create_tensor_on_mesh(
+                torch_input_tensor, device, input_a_dtype, input_a_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement,
+            )
+        else:
+            input_tensor_interleaved = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_interleaved, shard_mem_config)
 
-        cos_cache_interleaved = ttnn.from_torch(
-            torch_cos_cache,
-            dtype=input_b_dtype,
-            layout=input_b_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+        input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+        input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
+
+        if is_mesh_device and (input_b_tensor_placement or input_a_tensor_placement):
+            cos_cache_interleaved = create_tensor_on_mesh(
+                torch_cos_cache, device, input_b_dtype, input_b_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_b_tensor_placement or input_a_tensor_placement,
+            )
+        else:
+            cos_cache_interleaved = ttnn.from_torch(
+                torch_cos_cache,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         cos_cache_tt = ttnn.interleaved_to_sharded(cos_cache_interleaved, shard_mem_config)
 
-        sin_cache_interleaved = ttnn.from_torch(
-            torch_sin_cache,
-            dtype=input_c_dtype,
-            layout=input_c_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh_device and (input_c_tensor_placement or input_a_tensor_placement):
+            sin_cache_interleaved = create_tensor_on_mesh(
+                torch_sin_cache, device, input_c_dtype, input_c_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_c_tensor_placement or input_a_tensor_placement,
+            )
+        else:
+            sin_cache_interleaved = ttnn.from_torch(
+                torch_sin_cache,
+                dtype=input_c_dtype,
+                layout=input_c_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         sin_cache_tt = ttnn.interleaved_to_sharded(sin_cache_interleaved, shard_mem_config)
 
-        trans_mat_interleaved = ttnn.from_torch(
-            torch_trans_mat,
-            dtype=input_d_dtype,
-            layout=input_d_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh_device and (input_d_tensor_placement or input_a_tensor_placement):
+            trans_mat_interleaved = create_tensor_on_mesh(
+                torch_trans_mat, device, input_d_dtype, input_d_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_d_tensor_placement or input_a_tensor_placement,
+            )
+        else:
+            trans_mat_interleaved = ttnn.from_torch(
+                torch_trans_mat,
+                dtype=input_d_dtype,
+                layout=input_d_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
 
     else:
         # --- Prefill Mode: Use interleaved memory ---
+        input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+        input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+        input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
                 torch_input_tensor,
@@ -588,13 +607,16 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config,
+                input_b_tensor_placement or input_a_tensor_placement,
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config,
+                input_c_tensor_placement or input_a_tensor_placement,
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config,
+                input_d_tensor_placement or input_a_tensor_placement,
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -630,8 +652,14 @@ def run(
     start_time = start_measuring_time()
 
     rope_call_kwargs = {"is_decode_mode": is_decode_mode}
-    if output_memory_config is not None:
-        rope_call_kwargs["memory_config"] = output_memory_config
+    # Only pass memory_config when the master trace actually had it as a kwarg.
+    # build_op_kwargs filters memory_config, so check the raw _kwargs for the key.
+    # If the master trace didn't have memory_config, we must NOT pass it (sweep extra).
+    raw_memory_config = _kwargs.get("memory_config", "__ABSENT__")
+    if raw_memory_config is not None and raw_memory_config != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        rope_call_kwargs["memory_config"] = parse_dict_value("memory_config", raw_memory_config)
     rope_call_kwargs.update(op_kwargs)
     output_tensor = ttnn.experimental.rotary_embedding_llama(
         input_tensor_a,
@@ -641,6 +669,7 @@ def run(
         **rope_call_kwargs,
     )
 
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
 

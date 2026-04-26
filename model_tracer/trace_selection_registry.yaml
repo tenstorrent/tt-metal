@@ -44,6 +44,9 @@ targets:
     - model:
         - deepseek_v3
       trace: [2]
+    - model:
+        - gpt_oss
+      trace: [10]
 
   model_traced:
     - model:
@@ -171,7 +174,7 @@ registry:
     notes: ''
 
   - trace_id: 10
-    status: draft
+    status: active
     models: [gpt_oss]
     hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
     trace_uid: 39637819-20dc-4fc4-a168-b1d3bdf0495f

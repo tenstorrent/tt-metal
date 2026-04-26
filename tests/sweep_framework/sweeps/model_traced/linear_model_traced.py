@@ -10,6 +10,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import V2 master config loader and helpers for traced model configurations
@@ -82,7 +83,7 @@ def run(
     dtype=None,  # Output dtype
     core_grid=None,  # Core grid configuration
     program_config=None,  # Program configuration
-    compute_kernel_config=None,  # Compute kernel configuration
+    compute_kernel_config="__ABSENT__",  # Compute kernel configuration
     activation=None,  # Activation function
     *,
     device,
@@ -107,6 +108,9 @@ def run(
         memory_config = parse_dict_value("memory_config", memory_config)
     if isinstance(core_grid, dict):
         core_grid = parse_dict_value("core_grid", core_grid)
+    has_compute_kernel_config = compute_kernel_config != "__ABSENT__"
+    if compute_kernel_config == "__ABSENT__":
+        compute_kernel_config = None
     if isinstance(compute_kernel_config, dict):
         compute_kernel_config = parse_dict_value("compute_kernel_config", compute_kernel_config)
     if isinstance(dtype, (dict, str)):
@@ -136,6 +140,12 @@ def run(
     # When program_config is None (grid-based configs dropped), the shard_spec in
     # memory configs was computed for the original device and is invalid. Clear sharded
     # configs so ttnn.linear auto-determines compatible settings.
+    # Track whether the original test vector had memory_config and compute_kernel_config.
+    # These may be cleared below for correctness, but we need to pass them to the op
+    # so that the sweep kwargs match the master trace.
+    original_memory_config = memory_config
+    original_compute_kernel_config = compute_kernel_config
+
     if program_config is None:
         if memory_config is not None and "SHARDED" in str(memory_config):
             memory_config = None
@@ -327,9 +337,9 @@ def run(
             except Exception:
                 output_tensor = ttnn.matmul(ttnn_a, ttnn_b)
     else:
-        linear_kwargs = {
-            "bias": ttnn_bias,
-        }
+        linear_kwargs = {}
+        if ttnn_bias is not None:
+            linear_kwargs["bias"] = ttnn_bias
         if transpose_a:
             linear_kwargs["transpose_a"] = transpose_a
         if transpose_b:
@@ -337,6 +347,12 @@ def run(
 
         if memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
+        elif original_memory_config is not None:
+            # The master trace had memory_config (e.g. L1/WIDTH_SHARDED) but it was
+            # cleared because program_config is None.  Pass the original so the
+            # tracer records matching kwargs.  If the op fails with the sharded
+            # config, the fallback path below will retry without it.
+            linear_kwargs["memory_config"] = original_memory_config
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
@@ -348,6 +364,10 @@ def run(
 
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
+        elif has_compute_kernel_config:
+            # Master trace explicitly passed compute_kernel_config=None.
+            # Pass it so the sweep trace matches (the tracer records it).
+            linear_kwargs["compute_kernel_config"] = None
 
         if core_grid is not None:
             linear_kwargs["core_grid"] = core_grid
@@ -366,12 +386,15 @@ def run(
             try:
                 output_tensor = ttnn.linear(ttnn_a, ttnn_b, **fallback_kwargs)
             except Exception:
-                minimal_kwargs = {"bias": ttnn_bias}
+                minimal_kwargs = {}
+                if ttnn_bias is not None:
+                    minimal_kwargs["bias"] = ttnn_bias
                 if dtype is not None:
                     minimal_kwargs["dtype"] = dtype
                 output_tensor = ttnn.linear(ttnn_a, ttnn_b, **minimal_kwargs)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

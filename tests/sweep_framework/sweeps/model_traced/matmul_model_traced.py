@@ -10,10 +10,11 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -51,32 +52,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -107,16 +87,15 @@ def run(
     op_kwargs = build_op_kwargs(kwargs)
 
     # matmul needs memory_config for output placement. build_op_kwargs filters
-    # memory_config by default, so restore the traced memory_config when present,
-    # falling back to output_memory_config.
+    # memory_config by default, so restore the traced memory_config when present.
+    # Only pass memory_config if the master trace actually had it — the sweep may
+    # provide output_memory_config even when the traced config does not include it.
     if "memory_config" not in op_kwargs:
         traced_memory_config = kwargs.get("memory_config")
         if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
             from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
             op_kwargs["memory_config"] = parse_dict_value("memory_config", traced_memory_config)
-        elif output_memory_config is not None:
-            op_kwargs["memory_config"] = output_memory_config
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -264,7 +243,8 @@ def run(
     try:
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
         e2e_perf = stop_measuring_time(start_time)
     except Exception:
         input_tensor_a = ttnn.from_torch(
@@ -285,7 +265,8 @@ def run(
         fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **fallback_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
         e2e_perf = stop_measuring_time(start_time)
 
     # Slice output back to original shape in case tile padding expanded it

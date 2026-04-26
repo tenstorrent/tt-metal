@@ -9,10 +9,11 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -39,25 +40,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104)
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 def run(
     input_a_shape,
@@ -75,6 +62,12 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    # Check kwargs for storage_type — V2 loader provides input_a_storage_type for HOST tensors
+    if storage_type == "StorageType::DEVICE":
+        if "input_a_storage_type" in kwargs:
+            storage_type = kwargs["input_a_storage_type"]
+        elif "storage_type" in kwargs:
+            storage_type = kwargs["storage_type"]
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config
     )  # op_kwargs available but op does not accept extra kwargs
@@ -118,11 +111,27 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+        # HOST tensor — create without placing on device.  On mesh devices the
+        # master trace still records mesh metadata (distribution_shape, mesh_device_shape).
+        # Pass mesh_mapper so the tensor carries the correct topology.
+        if is_mesh_device and input_a_tensor_placement:
+            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
+            # Create on device with replicate topology, then move to host
+            input_tensor_a = replicate_with_topology(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.unsqueeze_to_4D(input_tensor_a)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)

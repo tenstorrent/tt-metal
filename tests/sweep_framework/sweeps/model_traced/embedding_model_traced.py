@@ -12,10 +12,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -55,32 +56,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -127,21 +107,12 @@ def run(
     else:
         raise ValueError("Either input_b_shape or weight_shape must be provided")
 
-    # Squeeze leading dimensions of 1 from weight shape to make it 2D
-    # E.g., (1, 1, 128256, 2048) -> (128256, 2048)
-    if isinstance(weight_shape_actual, (list, tuple)) and len(weight_shape_actual) > 2:
-        # Remove leading 1s
-        squeezed_shape = weight_shape_actual
-        while len(squeezed_shape) > 2 and squeezed_shape[0] == 1:
-            squeezed_shape = squeezed_shape[1:]
-
-        # If still not 2D, there are non-1 leading dims - this is truly invalid
-        if len(squeezed_shape) != 2:
-            raise ValueError(f"Cannot convert weight shape {weight_shape_actual} to 2D - has non-1 leading dimensions")
-
-        weight_shape_actual = squeezed_shape
-
-    num_embeddings = weight_shape_actual[0]
+    # Extract num_embeddings from the weight shape.
+    # The weight shape may be 4D (e.g., (1, 1, 131072, 64)) as traced from the model,
+    # or 2D (e.g., (131072, 64)). We preserve the original shape so that the ttnn tensor
+    # matches the master trace's original_shape, but we need the second-to-last dim for
+    # num_embeddings (the vocabulary size).
+    num_embeddings = weight_shape_actual[-2]
 
     # Generate input indices tensor (random integers in range [0, num_embeddings))
     torch_input_tensor = torch_random(input_shape, 0, num_embeddings, torch.int64)
@@ -153,13 +124,19 @@ def run(
     weight_memory_config_actual = weight_memory_config if weight_memory_config is not None else input_b_memory_config
     weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
 
-    # Generate weight tensor
+    # Generate weight tensor — ttnn.embedding requires a 2D weight [num_embeddings, embedding_dim].
+    # The master trace may record a 4D shape (e.g. [1, 1, 131072, 64]) due to mesh expansion,
+    # so we create the tensor with the traced shape but reshape to 2D for the embedding op.
     torch_weight_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), weight_dtype_actual
     )(weight_shape_actual)
 
+    # Reshape to 2D for embedding op: last 2 dims are [num_embeddings, embedding_dim]
+    embedding_dim = weight_shape_actual[-1]
+    torch_weight_2d = torch_weight_tensor.reshape(num_embeddings, embedding_dim)
+
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_2d).squeeze()
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -215,9 +192,25 @@ def run(
         weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config, **op_kwargs)
+    # Only pass dtype/memory_config when not None — passing None creates extra keys
+    # in the sweep trace that the master doesn't have, causing validation diffs.
+    embedding_kwargs = {}
+    if dtype is not None:
+        embedding_kwargs["dtype"] = dtype
+    if memory_config is not None:
+        embedding_kwargs["memory_config"] = memory_config
+    if layout is not None:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        embedding_kwargs["layout"] = parse_dict_value("layout", layout) if isinstance(layout, dict) else layout
+    embedding_kwargs.update(op_kwargs)
+    # ttnn.embedding requires 2D weight; reshape if 4D from master trace
+    if len(weight_shape_actual) > 2:
+        weight_tensor = ttnn.reshape(weight_tensor, (num_embeddings, embedding_dim))
+    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer).squeeze()
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

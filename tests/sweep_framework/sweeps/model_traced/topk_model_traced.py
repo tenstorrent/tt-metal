@@ -9,14 +9,14 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, extract_named_tensor_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
@@ -41,25 +41,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -133,8 +119,32 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Check for indices_tensor named tensor kwarg (pre-allocated output tensor for indices)
+    indices_tensor_info = extract_named_tensor_kwargs(kwargs, "indices_tensor")
+    if indices_tensor_info is not None and not is_host:
+        # Build the indices output shape: same as input but last dim = k
+        it_shape = tuple(indices_tensor_info["shape"]) if indices_tensor_info["shape"] else list(shape)
+        it_dtype = indices_tensor_info.get("dtype") or input_a_dtype
+        it_layout = indices_tensor_info.get("layout") or input_a_layout
+        it_mem_cfg = indices_tensor_info.get("memory_config") or input_a_memory_config
+        it_dtype = parse_dict_value("indices_tensor_dtype", it_dtype) if isinstance(it_dtype, dict) else it_dtype
+        it_layout = parse_dict_value("indices_tensor_layout", it_layout) if isinstance(it_layout, dict) else it_layout
+        it_mem_cfg = parse_dict_value("indices_tensor_memory_config", it_mem_cfg) if isinstance(it_mem_cfg, dict) else it_mem_cfg
+        it_placement = indices_tensor_info.get("tensor_placement")
+
+        torch_preallocated_indices = torch.zeros(it_shape, dtype=torch.float32)
+        if is_mesh_device and it_placement:
+            preallocated_indices = create_tensor_on_mesh(
+                torch_preallocated_indices, device, it_dtype, it_layout, it_mem_cfg, it_placement,
+            )
+        else:
+            preallocated_indices = ttnn.from_torch(
+                torch_preallocated_indices, dtype=it_dtype, layout=it_layout, device=device, memory_config=it_mem_cfg,
+            )
+        op_kwargs["indices_tensor"] = preallocated_indices
+
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, **op_kwargs)
+    topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

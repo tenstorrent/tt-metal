@@ -10,15 +10,17 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    replicate_with_topology,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs, parse_dict_value
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -90,25 +92,11 @@ def invalidate_vector(test_vector) -> tuple:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -156,6 +144,12 @@ def run(
 
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
+    # The master trace may record attention_sink and sliding_window_size as explicit kwargs
+    # (possibly None). build_op_kwargs filters None values, so add them back when present.
+    for key in ("attention_sink", "sliding_window_size"):
+        if key in kwargs and kwargs[key] is None and key not in op_kwargs:
+            op_kwargs[key] = None
+
     # Clear sharded memory_config from op_kwargs too
 
     # Validate program_config grid fits current device
@@ -170,6 +164,12 @@ def run(
             del op_kwargs["program_config"]
 
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
+    # Also check kwargs for shapes in case they're passed as extra kwargs
+    if input_b_shape is None or input_b_shape == "__ABSENT__":
+        input_b_shape = kwargs.get("input_b_shape", None)
+    if input_c_shape is None or input_c_shape == "__ABSENT__":
+        input_c_shape = kwargs.get("input_c_shape", None)
+
     if isinstance(input_a_shape, dict):
         # Traced configuration with multiple inputs (Q, K, V)
         shape_q = input_a_shape.get("input_a", input_a_shape.get("self"))
@@ -214,20 +214,25 @@ def run(
     torch_k = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_k)(shape_k)
     torch_v = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_v)(shape_v)
 
-    # Handle GQA (Grouped Query Attention) - if K/V have fewer heads, replicate them
+    # Keep original K/V (pre-GQA expansion) for TTNN — the op handles broadcasting.
+    # Only expand for the PyTorch golden reference.
+    torch_k_for_golden = torch_k
+    torch_v_for_golden = torch_v
+
+    # Handle GQA (Grouped Query Attention) - if K/V have fewer heads, replicate for golden
     if num_heads_k < num_heads_q:
         repeat_factor = num_heads_q // num_heads_k
-        torch_k = torch_k.repeat(1, repeat_factor, 1, 1)
+        torch_k_for_golden = torch_k_for_golden.repeat(1, repeat_factor, 1, 1)
         if num_heads_q % num_heads_k != 0:
             remaining = num_heads_q - (repeat_factor * num_heads_k)
-            torch_k = torch.cat([torch_k, torch_k[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1)
+            torch_k_for_golden = torch.cat([torch_k_for_golden, torch_k_for_golden[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1)
 
     if num_heads_v < num_heads_q:
         repeat_factor = num_heads_q // num_heads_v
-        torch_v = torch_v.repeat(1, repeat_factor, 1, 1)
+        torch_v_for_golden = torch_v_for_golden.repeat(1, repeat_factor, 1, 1)
         if num_heads_q % num_heads_v != 0:
             remaining = num_heads_q - (repeat_factor * num_heads_v)
-            torch_v = torch.cat([torch_v, torch_v[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1)
+            torch_v_for_golden = torch.cat([torch_v_for_golden, torch_v_for_golden[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1)
 
     # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
     # Always use DRAM interleaved for the round-trip (safe on any device).
@@ -255,21 +260,63 @@ def run(
     torch_k = _quantize_roundtrip(torch_k, dtype_k, layout_k)
     torch_v = _quantize_roundtrip(torch_v, dtype_v, layout_v)
 
-    # Ensure all tensors have the same dtype for PyTorch SDPA
-    torch_q = torch_q.to(torch.float32)
-    torch_k = torch_k.to(torch.float32)
-    torch_v = torch_v.to(torch.float32)
+    # Also quantize the golden (GQA-expanded) K/V tensors
+    torch_k_for_golden = _quantize_roundtrip(torch_k_for_golden, dtype_k, layout_k)
+    torch_v_for_golden = _quantize_roundtrip(torch_v_for_golden, dtype_v, layout_v)
 
-    # PyTorch reference
+    # Ensure all tensors have the same dtype for PyTorch SDPA
+    torch_q_golden = torch_q.to(torch.float32)
+    torch_k_golden = torch_k_for_golden.to(torch.float32)
+    torch_v_golden = torch_v_for_golden.to(torch.float32)
+
+    # PyTorch reference (uses GQA-expanded K/V)
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
+        torch_q_golden, torch_k_golden, torch_v_golden, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
     )
 
+    # Check for attention_sink named tensor kwarg (pre-allocated tensor)
+    attention_sink_info = extract_named_tensor_kwargs(kwargs, "attention_sink")
+    if attention_sink_info is not None:
+        as_shape = tuple(attention_sink_info["shape"]) if attention_sink_info["shape"] else (1,)
+        as_dtype = attention_sink_info.get("dtype") or dtype_q
+        as_layout = attention_sink_info.get("layout") or layout_q
+        as_mem_cfg = attention_sink_info.get("memory_config") or mem_config_q
+        as_dtype = parse_dict_value("attention_sink_dtype", as_dtype) if isinstance(as_dtype, dict) else as_dtype
+        as_layout = parse_dict_value("attention_sink_layout", as_layout) if isinstance(as_layout, dict) else as_layout
+        as_mem_cfg = parse_dict_value("attention_sink_memory_config", as_mem_cfg) if isinstance(as_mem_cfg, dict) else as_mem_cfg
+        as_placement = attention_sink_info.get("tensor_placement")
+
+        torch_attention_sink = torch.zeros(as_shape, dtype=torch.float32)
+        if is_mesh_device and as_placement:
+            preallocated_attention_sink = create_tensor_on_mesh(
+                torch_attention_sink, device, as_dtype, as_layout, as_mem_cfg, as_placement,
+            )
+        else:
+            preallocated_attention_sink = ttnn.from_torch(
+                torch_attention_sink, dtype=as_dtype, layout=as_layout, device=device, memory_config=as_mem_cfg,
+            )
+        op_kwargs["attention_sink"] = preallocated_attention_sink
+
     # TTNN execution
+    # For GQA K/V tensors (fewer heads than Q), the master model creates them as
+    # replicated per-device tensors so logical_shape() returns the per-device shape.
+    # create_tensor_on_mesh would expand+shard them (per-device → global → shard),
+    # causing logical_shape() to return the global shape (mismatch with master trace).
+    # Fix: replicate K/V with per-device shape to match the master trace exactly.
     if is_mesh_device and input_a_tensor_placement:
         q_tensor = create_tensor_on_mesh(torch_q, device, dtype_q, layout_q, mem_config_q, input_a_tensor_placement)
-        k_tensor = create_tensor_on_mesh(torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement)
-        v_tensor = create_tensor_on_mesh(torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement)
+        if num_heads_k < num_heads_q:
+            k_tensor = replicate_with_topology(
+                torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement,
+            )
+        else:
+            k_tensor = create_tensor_on_mesh(torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement)
+        if num_heads_v < num_heads_q:
+            v_tensor = replicate_with_topology(
+                torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement,
+            )
+        else:
+            v_tensor = create_tensor_on_mesh(torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement)
     else:
         q_tensor = ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q)
         k_tensor = ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k)
@@ -279,7 +326,8 @@ def run(
     output_tensor = ttnn.transformer.scaled_dot_product_attention(
         q_tensor, k_tensor, v_tensor, is_causal=bool(is_causal), **op_kwargs
     )
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Compare raw golden (float32) against TTNN output.

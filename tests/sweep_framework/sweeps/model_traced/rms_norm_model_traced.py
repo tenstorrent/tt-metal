@@ -9,10 +9,11 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -71,25 +72,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -120,14 +107,20 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Use named memory_config for output if output_memory_config not set
-    if output_memory_config is None and "memory_config" in op_kwargs:
-        output_memory_config = op_kwargs.pop("memory_config")
-    # If output_memory_config is explicitly set, remove duplicate memory_config from op_kwargs
-    elif "memory_config" in op_kwargs:
-        op_kwargs.pop("memory_config")
-    if output_memory_config is not None:
-        op_kwargs["memory_config"] = output_memory_config
+    # Only pass memory_config to the op if the master trace actually had it.
+    # The sweep may provide output_memory_config even when the traced config does
+    # not include memory_config — in that case we must not inject it.
+    if "memory_config" in op_kwargs:
+        # build_op_kwargs already parsed it from the traced config; use output_memory_config
+        # as override if available, otherwise keep the parsed value.
+        if output_memory_config is not None:
+            op_kwargs["memory_config"] = output_memory_config
+    elif output_memory_config is not None:
+        # Check whether the master trace actually had memory_config
+        traced_memory_config = kwargs.get("memory_config")
+        if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+            op_kwargs["memory_config"] = output_memory_config
+    # If the master trace did not have memory_config, do NOT inject it
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -221,7 +214,8 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight_tensor, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)

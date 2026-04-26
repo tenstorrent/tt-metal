@@ -9,10 +9,11 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
@@ -40,25 +41,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -81,7 +68,9 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "dtype"}, output_memory_config=output_memory_config)
 
     pos_args = extract_positional_args(kwargs)
-    output_dtype = output_dtype or kwargs.get("dtype", pos_args.get(1, ttnn.float32))
+    # arg1 is the actual positional target dtype passed to ttnn.typecast();
+    # "dtype" is an infrastructure kwarg that may differ — arg1 takes priority.
+    output_dtype = output_dtype or pos_args.get(1) or kwargs.get("dtype") or ttnn.float32
     if isinstance(output_dtype, dict):
         output_dtype = parse_dtype(output_dtype.get("repr", ""))
     elif isinstance(output_dtype, str):
@@ -94,13 +83,6 @@ def run(
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     if input_a_dtype == ttnn.uint16:
-        if is_mesh_device:
-            # ttnn.from_torch(int32, dtype=uint16, mesh_mapper=ReplicateTensorToMesh)
-            # corrupts data on mesh devices — the internal conversion path mangles
-            # uint16 values regardless of input range (PCC drops to 0.1-0.8).
-            # This is a known library limitation.  Skip on mesh; single-device
-            # tests in the same sweep cover uint16 correctness.
-            return [(True, "Skipped: uint16 from_torch broken on mesh devices (known library bug)"), 0]
         # Use torch.int32 for uint16 input — matching the pattern in working unit tests
         # (test_typecast_int.py).  torch.int16 causes sign-extension corruption for
         # values >32767 during from_torch conversion.
@@ -134,11 +116,16 @@ def run(
     is_host = storage_type and "HOST" in str(storage_type)
 
     if not is_host:
-        if is_mesh_device:
-            # Typecast is element-wise: replicate to all devices and compare
-            # device-0 output against the original reference tensor.
-            # Using create_tensor_on_mesh with ShardTensor2dMesh repeats/shards
-            # the input, causing a mismatch when extracting device 0 only.
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        elif is_mesh_device:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -158,12 +145,18 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+
+    # Detect whether the master trace used positional or named args.
+    # If the vector has arg1 (positional dtype), call positionally to match the trace.
+    use_positional = pos_args.get(1) is not None and kwargs.get("dtype") is None
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
-    # Use device-0 extraction (no mesh composer) to get per-device output that
-    # matches the per-device reference tensor.  Typecast is element-wise so each
-    # device's output independently matches the reference.
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    if use_positional:
+        output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
+    else:
+        output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     if output_dtype == ttnn.uint32 or input_a_dtype == ttnn.uint32:
