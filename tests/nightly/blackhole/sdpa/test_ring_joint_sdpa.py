@@ -1007,7 +1007,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
         cols = ["ATTRIBUTES"]
 
         command = (
-            f"pytest tests/nightly/blackhole/ccl/"
+            f"pytest tests/nightly/blackhole/sdpa/"
             f"test_ring_joint_sdpa.py::"
             f"test_ring_joint_attention_sdpa_sweep_perf_impl"
             f"[{config_id}]"
