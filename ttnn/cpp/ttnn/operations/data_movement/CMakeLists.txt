@@ -387,6 +387,7 @@ target_sources(
         fill_rm/fill_rm.cpp
         flip/device/flip_device_operation.cpp
         flip/device/flip_rm_program_factory.cpp
+        flip/device/flip_tiled_program_factory.cpp
         flip/flip.cpp
         fold/device/fold_device_op.cpp
         fold/device/fold_multi_core_dram_program_factory.cpp
