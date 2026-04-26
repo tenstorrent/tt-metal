@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -24,6 +25,13 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, determine_
 
 def get_accuracy_thresholds(model_args, optimizations):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    centralized_targets = resolve_accuracy_targets(
+        model_name=model_args.base_model_name,
+        sku=model_args.device_name,
+    )
+    if centralized_targets and "top1" in centralized_targets and "top5" in centralized_targets:
+        return float(centralized_targets["top1"]), float(centralized_targets["top5"])
+
     # Read PERF.md
     perf_file = Path(__file__).parent.parent / "PERF.md"
     with open(perf_file, "r") as f:

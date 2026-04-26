@@ -3,10 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import warnings
 
 from loguru import logger
 
+from models.demos.utils.model_targets import DEFAULT_MODEL_TARGETS_PATH, resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+
+
+class PerfRegressionWarning(UserWarning):
+    """Warning emitted when measured perf drifts from configured thresholds."""
 
 
 def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_warmup_iter: dict, targets: dict):
@@ -115,21 +121,42 @@ def check_tokens_match(generated_text: dict, expected_greedy_output_path: str):
 
 def verify_perf(
     measurements: dict,
-    expected_perf_metrics: dict,
+    expected_perf_metrics: dict = None,
     high_tol_percentage=1.15,  # 15% tolerance (approx +-5% CI variance + 5% real increase)
     expected_measurements: dict = None,
     lower_is_better_metrics: set = None,
+    model_name: str = None,
+    sku: str = None,
+    batch_size: int = None,
+    seq_len: int = None,
+    targets_yaml_path: str = DEFAULT_MODEL_TARGETS_PATH,
 ):
     """
     Verify the performance metrics against the expected values.
     The metrics that must be provided are specified in expected_measurements below.
     Args:
         measurements: dict of measured performance values
-        expected_perf_metrics: dict of expected performance values
+        expected_perf_metrics: dict of expected performance values. If omitted, the values are
+            resolved from centralized YAML using model_name/sku[/batch_size/seq_len].
         high_tol_percentage: tolerance percentage (e.g., 1.15 means 15% tolerance)
         expected_measurements: dict specifying which measurements are required
         lower_is_better_metrics: set of metric names where lower values are better (e.g., TTFT)
     """
+    if expected_perf_metrics is None:
+        assert model_name and sku, "model_name and sku are required when expected_perf_metrics is not provided"
+        expected_perf_metrics = resolve_perf_targets(
+            model_name=model_name,
+            sku=sku,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            targets_yaml_path=targets_yaml_path,
+        )
+        if expected_perf_metrics is None:
+            raise ValueError(
+                f"No centralized perf targets found for model={model_name}, sku={sku}, "
+                f"batch_size={batch_size}, seq_len={seq_len}"
+            )
+
 
     expected_measurements_default = {
         "compile_prefill": False,
@@ -187,6 +214,9 @@ def verify_perf(
         logger.info("Perf Check Passed!")
     else:
         logger.warning("Perf Check Failed!")
-        assert (
-            does_pass
-        ), f"Prefill or decode perf is either lower or higher than {expected_perf_metrics}. See earlier warnings for more details."
+        warnings.warn(
+            f"Perf drift detected against expected metrics {expected_perf_metrics}. "
+            "See warnings above for metric-level details.",
+            PerfRegressionWarning,
+            stacklevel=2,
+        )

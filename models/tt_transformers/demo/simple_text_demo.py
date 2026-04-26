@@ -18,6 +18,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -74,6 +75,13 @@ class TokenAccuracy:
 
 def get_accuracy_thresholds(model_args):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    centralized_targets = resolve_accuracy_targets(
+        model_name=model_args.base_model_name,
+        sku=model_args.device_name,
+    )
+    if centralized_targets and "top1" in centralized_targets and "top5" in centralized_targets:
+        return float(centralized_targets["top1"]), float(centralized_targets["top5"])
+
     # Read PERF.md
     perf_file = "models/tt_transformers/PERF.md"
     with open(perf_file, "r") as f:
