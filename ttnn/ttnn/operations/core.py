@@ -337,20 +337,38 @@ def from_torch(
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
-    return ttnn.Tensor(
-        tensor=tensor,
-        data_type=dtype,
-        device=device,
-        layout=layout,
-        mem_config=memory_config,
-        tile=tile,
-        cq_id=cq_id,
-        pad_value=pad_value,
-        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
-        preserve_nan_values=preserve_nan_values,
-        col_tilize=col_tilize,
-        enable_bfloat_opt=enable_bfloat_opt,
-    )
+    _mesh_mapper = mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper
+    try:
+        return ttnn.Tensor(
+            tensor=tensor,
+            data_type=dtype,
+            device=device,
+            layout=layout,
+            mem_config=memory_config,
+            tile=tile,
+            cq_id=cq_id,
+            pad_value=pad_value,
+            mesh_mapper=_mesh_mapper,
+            preserve_nan_values=preserve_nan_values,
+            col_tilize=col_tilize,
+            enable_bfloat_opt=enable_bfloat_opt,
+        )
+    except TypeError:
+        # Binary predates enable_bfloat_opt (uses fast_approx instead)
+        return ttnn.Tensor(
+            tensor=tensor,
+            data_type=dtype,
+            device=device,
+            layout=layout,
+            mem_config=memory_config,
+            tile=tile,
+            cq_id=cq_id,
+            pad_value=pad_value,
+            mesh_mapper=_mesh_mapper,
+            preserve_nan_values=preserve_nan_values,
+            col_tilize=col_tilize,
+            fast_approx=enable_bfloat_opt,
+        )
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
