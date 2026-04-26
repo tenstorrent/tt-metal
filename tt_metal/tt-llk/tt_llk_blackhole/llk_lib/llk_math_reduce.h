@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "lltt.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -28,37 +29,115 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+#ifdef LLK_TTSIM_WA_MOVD2B_DEST_32B_LO
+        // BH Issue #449 W/A for ttsim (ttsim asserts on dest_32b_lo=1; HW handles it).
+        // SFPU-staged 2-pass transpose of fp32 face data using only dest_32b_lo=0 paths.
+        //
+        // Face fp32 values occupy two physical DEST rows per logical row via Adj32
+        // mapping: hi16 at DstBits[Adj32(R)], lo16 at DstBits[Adj32(R)+8].
+        //
+        // Phase 1 (SFPU, dbg=1): extract lo16 of each face row to LO16_STAGE scratch
+        //   via SFPLOAD INT32 + SFPSTORE LO16_ONLY. (hi16 does not need staging —
+        //   Phase 2 hi reads it directly from the face.)
+        // Phase 2 hi (MATH, dbg=1): MOVD2B reads hi16 from face via adj_row
+        //   (dst_32bit_addr_en=1 routes Dst16b through Adj32), TRNSPSRCB transposes,
+        //   MOVB2D writes transposed hi16 back to face hi16 rows. Face lo16 is
+        //   zeroed as a side-effect of write_dst32b(adj_row, data<<16).
+        // Phase 2 lo (MATH, dbg=0): transpose LO16_STAGE scratch in place.
+        // Phase 3 (SFPU, dbg=0): SFPLOAD HI16_ONLY from scratch + SFPSTORE HI16_ONLY
+        //   to face lo16 rows via pre-recorded replay templates (slots 0, 2). Dst16b
+        //   half-writes use Adj16=identity so they target single physical rows (face
+        //   lo16 physical rows {8,9,12,13,24,25,28,29} for D=0) without disturbing
+        //   the hi16 Phase 2 hi wrote.
+        //
+        // Fp32_enabled stays at 1 — MOV* use_dst32b path goes through Adj32 regardless
+        // of dbg bit. Assumes D=0: for D≠0 the face lo16 physical rows are at
+        // Adj32(D+R)+8 which doesn't scale linearly; runtime DstRWC setup would be
+        // required for general D. Costs ~+26% vs native dest_32b_lo=1 path.
+        constexpr std::uint32_t LO16_STAGE = 144;
 
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
+        // Phase 1
+        _llk_math_dbg_feature_disable_(); // dst_32bit_addr_en = 1
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+#pragma GCC unroll 4
+        for (std::uint32_t g = 0; g < 4; g++)
+        {
+            const std::uint32_t src_row = g * 4;
+            const std::uint32_t lo_row  = LO16_STAGE + g * 4;
+#pragma GCC unroll 2
+            for (std::uint32_t parity = 0; parity < 4; parity += 2)
+            {
+                TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, src_row + parity);
+                TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, lo_row + parity);
+            }
+        }
+
+        // Phase 2 hi
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
-        // move row D2B again for cases of reducing across multiple tiles
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-        // move hi16 bits B2D
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
+        // _llk_math_dbg_feature_enable_ does tensix_sync internally. If this changes,
+        // need to add proper stalls here to ensure correct ordering.
+        _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+
+        // Phase 2 lo
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
         TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
+
+        // Phase 3 (slot 0: dst_base=8 covering {8,10,12,14}; slot 2: dst_base=16
+        // covering {24,26,28,30}; ADDR_MOD_7 on SFPSTORE advances SFPU DstRWC by 2).
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+#pragma GCC unroll 4
+        for (std::uint32_t i = 0; i < 4; i++)
+        {
+            lltt::replay(0, 2);
+        }
+#pragma GCC unroll 4
+        for (std::uint32_t i = 0; i < 4; i++)
+        {
+            lltt::replay(2, 2);
+        }
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+#else
+        // Native BH HW path: MOVD2B/MOVB2D with dest_32b_lo=1 under Fp32_enabled=0.
+        // Works on silicon; ttsim asserts on this combo and must use the W/A above.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+
+        // Move hi16 bits D2B. Move to rows 16-31 to avoid clobbering SrcB weights.
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // Note: TRNSPSRCB only operates on SrcB rows 16-31.
+        TTI_TRNSPSRCB;
+        // Re-fill SrcB rows 16-31 (for multi-tile reduce).
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        // Move lo16 bits D2B via DEST_32B_LOW (dest_32b_lo=1).
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move lo16 bits B2D
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+#endif
     }
     else
     {
@@ -309,6 +388,30 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
+#ifdef LLK_TTSIM_WA_MOVD2B_DEST_32B_LO
+        // Phase 3 replay setup (ttsim W/A only): advance SFPU DstRWC by 2 per iter via
+        // ADDR_MOD_7 on SFPSTORE. SFPLOAD uses ADDR_MOD_0 (no advance) — both ops in
+        // an iter share the same DstRWC.
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_7);
+
+        // Record two 2-op templates for Phase 3:
+        //   Slot 0: dst base = 8, covers dst={8,10,12,14} (DstRWC 0..6)
+        //   Slot 2: dst base = 16, covers dst={24,26,28,30} (DstRWC 8..14)
+        // SFPLOAD base=LO16_STAGE, DstRWC=0..14 gives src=144..158.
+        constexpr std::uint32_t LO16_STAGE_REPLAY = 144;
+        lltt::record<lltt::NoExec>(0, 2);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE_REPLAY);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, 8);
+
+        lltt::record<lltt::NoExec>(2, 2);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE_REPLAY);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, 16);
+#endif
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
