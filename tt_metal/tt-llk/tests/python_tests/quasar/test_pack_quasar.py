@@ -142,6 +142,7 @@ PACK_FORMATS = input_output_formats(
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int16,
+        DataFormat.MxFp4,
     ]
 )
 
@@ -169,6 +170,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         formats.output_format,
         num_faces=num_faces,
         input_dimensions=input_dimensions,
+        input_format=formats.input_format,
     )
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
@@ -227,6 +229,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        disable_format_inference=(formats.input_format == DataFormat.MxFp4),
     )
 
     res_from_L1 = configuration.run().result

@@ -57,7 +57,8 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
         [
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
-            # DataFormat.Float16_b,
+            DataFormat.MxFp4,
+            DataFormat.Float16_b,
             DataFormat.Float16,
         ],
     ),
@@ -192,5 +193,9 @@ def test_eltwise_binary(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        print_errors=True,
+        print_pcc=True,
     ), "Assert against golden failed"

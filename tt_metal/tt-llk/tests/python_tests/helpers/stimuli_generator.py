@@ -7,8 +7,7 @@ import torch
 
 from .bfp_format_utils import bfp4b_to_float16b
 from .format_config import (
-    MXFP8_E4M3_MAX_NORMAL,
-    MXFP8_E5M2_MAX_NORMAL,
+    MX_FORMAT_MAX_NORMAL,
     DataFormat,
 )
 from .llk_params import format_dict
@@ -67,6 +66,11 @@ def generate_random_face(
     if stimuli_format in [DataFormat.MxFp8R, DataFormat.MxFp8P]:
         # MXFP8 optimized stimuli generation
         return _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu)
+    elif stimuli_format == DataFormat.MxFp4:
+        # MXFP4 optimized stimuli generation
+        return _generate_mxfp4_face(
+            size, const_face, const_value, sfpu, negative_values
+        )
     elif stimuli_format not in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
         if stimuli_format.is_integer():
             if const_face:
@@ -139,11 +143,55 @@ def _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu):
     # Scale factor: use 5% of format's max normal value
     # This ensures values are well within representable range while maintaining diversity
     if stimuli_format == DataFormat.MxFp8R:
-        scale = 0.05 * MXFP8_E5M2_MAX_NORMAL
+        scale = 0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R]
     else:  # MxFp8P
-        scale = 0.05 * MXFP8_E4M3_MAX_NORMAL
+        scale = 0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P]
 
     face_data = torch.randn(size, dtype=torch.bfloat16) * scale
+
+    # Add SFPU-friendly offset if needed
+    if sfpu:
+        face_data += 0.1
+
+    return face_data
+
+
+def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=False):
+    """
+    Generate test data for MXFP4 format (E2M1) using normal distribution scaled to format range.
+
+    MXFP4 E2M1 has a very limited representable range:
+    - Max normal: ±6.0
+    - Min normal: ±1.0
+    - Max/Min subnormal: ±0.5
+
+    Uses conservative scaling (50% of max normal = 3.0) to avoid saturation while creating
+    diverse test data. This larger percentage (vs 5% for FP8) is needed due to FP4's
+    extremely limited range and precision (only 16 possible values).
+
+    Args:
+        size: Number of elements to generate
+        const_face: If True, generate constant values
+        const_value: Value to use if const_face is True
+        sfpu: If True, add SFPU-friendly offset
+        negative_values: If True, include negative values in the distribution
+
+    Returns:
+        torch.Tensor of bfloat16 values suitable for MXFP4 quantization
+    """
+    if const_face:
+        return torch.ones(size, dtype=torch.bfloat16) * const_value
+
+    # Scale factor: use 50% of format's max normal value (6.0)
+    # This gives us a range of approximately [-3.0, 3.0] for normal distribution
+    # which provides good coverage of FP4's representable range without excessive saturation
+    scale = 0.5 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp4]  # 0.5 * 6.0 = 3.0
+
+    face_data = torch.randn(size, dtype=torch.bfloat16) * scale
+
+    # If negative_values is False, use absolute values to keep data positive
+    if not negative_values:
+        face_data = torch.abs(face_data)
 
     # Add SFPU-friendly offset if needed
     if sfpu:
@@ -416,30 +464,47 @@ def _clamp_mx_tensors(
     Returns:
         tuple: (clamped_srcA_tensor, clamped_srcB_tensor)
     """
-    # Clamp inputs if both are different MX formats (use more restrictive MxFp8P)
-    if stimuli_format_A.is_mx_format() and stimuli_format_B.is_mx_format():
-        if stimuli_format_A != stimuli_format_B:
-            srcA_tensor = torch.clamp(
-                srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
-            )
-            srcB_tensor = torch.clamp(
-                srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
-            )
+    # Determine the most restrictive clamp format needed
+    clamp_format = None
 
-    # Clamp inputs based on output format to prevent excessive rounding errors
-    if output_format == DataFormat.MxFp8P:
+    # Check if we need to clamp based on mixed input formats
+    if (
+        stimuli_format_A.is_mx_format()
+        and stimuli_format_B.is_mx_format()
+        and stimuli_format_A != stimuli_format_B
+    ):
+        # Use MxFp4 if either input is MxFp4 (most restrictive: ±6.0)
+        # Otherwise use MxFp8P (±448.0, more restrictive than MxFp8R's ±57344.0)
+        if DataFormat.MxFp4 in [stimuli_format_A, stimuli_format_B]:
+            clamp_format = DataFormat.MxFp4
+        else:
+            clamp_format = DataFormat.MxFp8P
+
+    # Check if output format requires more restrictive clamping
+    if output_format in [DataFormat.MxFp4, DataFormat.MxFp8P, DataFormat.MxFp8R]:
+        if clamp_format is None:
+            clamp_format = output_format
+        else:
+            # Use the most restrictive between input-based and output-based clamping
+            format_priority = {
+                DataFormat.MxFp4: 0,
+                DataFormat.MxFp8P: 1,
+                DataFormat.MxFp8R: 2,
+            }
+            if format_priority[output_format] < format_priority[clamp_format]:
+                clamp_format = output_format
+
+    # Apply clamping once if needed
+    if clamp_format is not None:
         srcA_tensor = torch.clamp(
-            srcA_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
+            srcA_tensor,
+            -MX_FORMAT_MAX_NORMAL[clamp_format],
+            MX_FORMAT_MAX_NORMAL[clamp_format],
         )
         srcB_tensor = torch.clamp(
-            srcB_tensor, -MXFP8_E4M3_MAX_NORMAL, MXFP8_E4M3_MAX_NORMAL
-        )
-    elif output_format == DataFormat.MxFp8R:
-        srcA_tensor = torch.clamp(
-            srcA_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
-        )
-        srcB_tensor = torch.clamp(
-            srcB_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
+            srcB_tensor,
+            -MX_FORMAT_MAX_NORMAL[clamp_format],
+            MX_FORMAT_MAX_NORMAL[clamp_format],
         )
 
     return srcA_tensor, srcB_tensor

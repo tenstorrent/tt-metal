@@ -9,6 +9,7 @@ from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DataCopyType,
@@ -98,6 +99,7 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Int32,
         DataFormat.Int16,
+        DataFormat.MxFp4,
     ],
     same=True,  # Input format and output format are the same
 )
@@ -126,6 +128,8 @@ def test_unpack_tilize_quasar(
 
     generate_golden = get_golden_generator(TilizeGolden)
     golden_src = src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
+    if formats.input_format.is_mx_format():
+        golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
     golden_tensor = generate_golden(
         golden_src, input_dimensions, formats.output_format, num_faces=4
     )
@@ -164,6 +168,8 @@ def test_unpack_tilize_quasar(
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=(formats.input_format.is_mx_format()),
     )
 
     res_from_L1 = configuration.run().result

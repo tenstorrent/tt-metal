@@ -37,6 +37,7 @@ tolerances = {
     DataFormat.Bfp4_b: Tolerance(atol=0.25, rtol=0.3),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
+    DataFormat.MxFp4: Tolerance(atol=0.5, rtol=0.35),
     DataFormat.Fp8_e4m3: Tolerance(atol=0.2, rtol=0.2),
 }
 
@@ -103,7 +104,7 @@ def run_shell_command(
 
 
 def calculate_read_byte_count(format: FormatConfig, array_size: int, sfpu=False) -> int:
-    total_bytes = array_size * format.output_format.size
+    total_bytes = int(array_size * format.output_format.size)
     if format.output_format == DataFormat.Bfp8_b:
         total_bytes += total_bytes // 16
     return total_bytes
@@ -414,6 +415,8 @@ def passed_test(
         target_pcc = pow(0.99, L1_to_L1_iterations)
     elif output_data_format == DataFormat.Bfp4_b:
         target_pcc = 0.98
+    elif output_data_format == DataFormat.MxFp4:
+        target_pcc = 0.95  # MxFp4 E2M1 has very limited precision (only 8 positive and 8 negative representable values)
 
     if custom_pcc_threshold is not None:
         logger.info(

@@ -23,9 +23,9 @@ from helpers.llk_params import (
     format_dict,
     pack_relu_config,
 )
-from helpers.pack import pack_mxfp8p, pack_mxfp8r
+from helpers.pack import pack_mxfp4, pack_mxfp8p, pack_mxfp8r
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.unpack import unpack_mxfp8p, unpack_mxfp8r
+from helpers.unpack import unpack_mxfp4, unpack_mxfp8p, unpack_mxfp8r
 
 from .bfp_format_utils import bfp4b_to_float16b as _bfp4b_to_float16b
 from .bfp_format_utils import bfp8b_to_float16b as _bfp8b_to_float16b
@@ -290,7 +290,7 @@ def quantize_mx_stimuli(
 
     Args:
         tensor: Input tensor (bfloat16 values)
-        data_format: MX format (MxFp8R or MxFp8P)
+        data_format: MX format (MxFp8R, MxFp8P, or MxFp4)
         num_faces: Number of faces (1, 2, or 4)
 
     Returns:
@@ -327,6 +327,9 @@ def quantize_mx_stimuli(
     elif data_format == DataFormat.MxFp8P:
         packed = pack_mxfp8p(tensor, num_faces=num_faces)
         return unpack_mxfp8p(packed, num_faces=num_faces)
+    elif data_format == DataFormat.MxFp4:
+        packed = pack_mxfp4(tensor, num_faces=num_faces)
+        return unpack_mxfp4(packed, num_faces=num_faces)
     else:
         # This should never happen due to validation above, but kept for safety
         raise ValueError(f"Unsupported MX format: {data_format}")
@@ -340,7 +343,7 @@ def quantize_mx_tensor_chunked(
 
     Args:
         tensor: Input tensor (bfloat16 values)
-        data_format: MX format (MxFp8R or MxFp8P)
+        data_format: MX format (MxFp8R, MxFp8P, or MxFp4)
 
     Returns:
         Quantized tensor (bfloat16 values)
@@ -407,6 +410,7 @@ class SrcFormatModel:
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
             DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
             DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
+            DataFormat.MxFp4: SrcFormatModel._mxfp4_to_tf32,
             DataFormat.Fp8_e4m3: SrcFormatModel._fp8_e4m3_to_tf32,
         }
 
@@ -554,6 +558,19 @@ class SrcFormatModel:
         Golden generators work on the original stimuli data (before compression).
         MXFP8P stimuli are generated as torch.bfloat16, so we delegate to Float16_b conversion.
         The pack/unpack functions handle the MXFP8 compression/decompression separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxfp4_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MxFp4 format (MX E2M1 variant).
+
+        Golden generators work on the original stimuli data (before compression).
+        MxFp4 stimuli are generated as torch.bfloat16, so we delegate to Float16_b conversion.
+        The pack/unpack functions handle the MxFp4 compression/decompression separately.
         """
         return SrcFormatModel._fp16b_to_tf32(tensor)
 
@@ -915,20 +932,23 @@ class TransposeGolden:
 @register_golden
 class MatmulGolden(FidelityMasking):
 
-    def __call__(
-        self,
+    MATH_FIDELITY_TO_ITER_COUNT = {
+        MathFidelity.LoFi: 0,
+        MathFidelity.HiFi2: 1,
+        MathFidelity.HiFi3: 2,
+        MathFidelity.HiFi4: 3,
+    }
+
+    @staticmethod
+    def _convert_block_float_inputs(
         operand1,
         operand2,
-        data_format,
-        math_fidelity,
-        input_A_dimensions=None,
-        input_B_dimensions=None,
-        tilize: bool = False,
-        input_A_format: DataFormat = None,
-        input_B_format: DataFormat = None,
+        input_A_format: DataFormat,
+        input_B_format: DataFormat,
+        input_A_dimensions,
+        input_B_dimensions,
+        tilize: bool,
     ):
-        torch_format = format_dict[data_format]
-
         if input_A_format == DataFormat.Bfp8_b:
             dims = input_A_dimensions if tilize else None
             operand1 = _bfp8b_to_float16b(operand1, dims)
@@ -942,108 +962,227 @@ class MatmulGolden(FidelityMasking):
             dims = input_B_dimensions if tilize else None
             operand2 = _bfp4b_to_float16b(operand2, dims)
 
-        t1 = to_tensor(operand1, data_format)
-        t2 = to_tensor(operand2, data_format)
+        return operand1, operand2
+
+    @staticmethod
+    def _resolve_matmul_dimensions(input_A_dimensions, input_B_dimensions):
+        M, K1 = input_A_dimensions[0], input_A_dimensions[1]
+        K2, N = input_B_dimensions[0], input_B_dimensions[1]
+
+        if K1 != K2:
+            raise AssertionError(
+                f"Matrix dimensions incompatible: A[{M},{K1}] × B[{K2},{N}]"
+            )
+
+        return M, K1, K2, N, [M, N]
+
+    def _get_fidelity_iters(self, math_fidelity):
+        fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
+        if fidelity_iter_count == 3:
+            return [None]
+        return list(range(fidelity_iter_count + 1))
+
+    def _prepare_fidelity_operands(
+        self,
+        operand1,
+        operand2,
+        fidelity_format: DataFormat,
+        fidelity_iter: Optional[int],
+    ):
+        t1 = to_tensor(operand1, fidelity_format)
+        t2 = to_tensor(operand2, fidelity_format)
+        if fidelity_iter is not None:
+            t1, t2 = self._apply_fidelity_masking(
+                fidelity_format, t1, t2, fidelity_iter
+            )
+        return t1, t2
+
+    def __call__(
+        self,
+        operand1,
+        operand2,
+        data_format,
+        math_fidelity,
+        input_A_dimensions=None,
+        input_B_dimensions=None,
+        tilize: bool = False,
+        input_A_format: DataFormat = None,
+        input_B_format: DataFormat = None,
+        math_format: Optional[DataFormat] = None,
+        dest_acc: Optional[DestAccumulation] = None,
+    ):
+        if data_format == DataFormat.MxFp4:
+            return self._matmul_mxfp4(
+                operand1,
+                operand2,
+                data_format,
+                math_fidelity,
+                input_A_dimensions,
+                input_B_dimensions,
+                tilize,
+                input_A_format,
+                input_B_format,
+                math_format,
+                dest_acc,
+            )
+
+        return self._matmul_default(
+            operand1,
+            operand2,
+            data_format,
+            math_fidelity,
+            input_A_dimensions,
+            input_B_dimensions,
+            tilize,
+            input_A_format,
+            input_B_format,
+        )
+
+    def _matmul_default(
+        self,
+        operand1,
+        operand2,
+        data_format,
+        math_fidelity,
+        input_A_dimensions,
+        input_B_dimensions,
+        tilize: bool,
+        input_A_format: DataFormat,
+        input_B_format: DataFormat,
+    ):
+        torch_format = format_dict[data_format]
+
+        operand1, operand2 = self._convert_block_float_inputs(
+            operand1,
+            operand2,
+            input_A_format,
+            input_B_format,
+            input_A_dimensions,
+            input_B_dimensions,
+            tilize,
+        )
 
         # Handle multi-tile matmul with different operand dimensions
         if input_A_dimensions is not None and input_B_dimensions is not None:
             # Multi-tile matmul: A[M,K] × B[K,N] = C[M,N]
-            M, K1 = input_A_dimensions[0], input_A_dimensions[1]
-            K2, N = input_B_dimensions[0], input_B_dimensions[1]
+            M, K1, K2, N, output_dimensions = self._resolve_matmul_dimensions(
+                input_A_dimensions, input_B_dimensions
+            )
 
-            # Verify K dimensions match for valid matmul
-            if K1 != K2:
-                raise AssertionError(
-                    f"Matrix dimensions incompatible: A[{M},{K1}] × B[{K2},{N}]"
-                )
+        fidelity_iters = self._get_fidelity_iters(math_fidelity)
+        res: Optional[torch.Tensor] = None
 
-            output_dimensions = [M, N]
-
-        MATH_FIDELITY_TO_ITER_COUNT = {
-            MathFidelity.LoFi: 0,
-            MathFidelity.HiFi2: 1,
-            MathFidelity.HiFi3: 2,
-            MathFidelity.HiFi4: 3,
-        }
-
-        fidelity_iter_count = MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
-
-        res = 0
-
-        if fidelity_iter_count == 0:
-
-            t1, t2 = self._apply_fidelity_masking(data_format, t1, t2, 0)
+        for fidelity_iter in fidelity_iters:
+            t1, t2 = self._prepare_fidelity_operands(
+                operand1, operand2, data_format, fidelity_iter
+            )
             t1, t2 = t1.view(M, K1), t2.view(K2, N)
-            res = (
+            partial = (
                 torch.matmul(t1, t2)
                 .view(output_dimensions[0] * output_dimensions[1])
                 .to(torch_format)
             )
-
-        elif fidelity_iter_count == 1:
-
-            t1, t2 = self._apply_fidelity_masking(data_format, t1, t2, 0)
-            t1, t2 = t1.view(M, K1), t2.view(K2, N)
-            res = (
-                torch.matmul(t1, t2)
-                .view(output_dimensions[0] * output_dimensions[1])
-                .to(torch_format)
-            )
-
-            t1 = to_tensor(operand1, data_format)
-            t2 = to_tensor(operand2, data_format)
-            t1, t2 = self._apply_fidelity_masking(data_format, t1, t2, 1)
-            t1, t2 = t1.view(M, K1), t2.view(K2, N)
-            res += (
-                torch.matmul(t1, t2)
-                .view(output_dimensions[0] * output_dimensions[1])
-                .to(torch_format)
-            )
-
-        elif fidelity_iter_count == 2:
-
-            t1, t2 = self._apply_fidelity_masking(data_format, t1, t2, 0)
-            t1, t2 = t1.view(M, K1), t2.view(K2, N)
-            res = (
-                torch.matmul(t1, t2)
-                .view(output_dimensions[0] * output_dimensions[1])
-                .to(torch_format)
-            )
-
-            t1 = to_tensor(operand1, data_format)
-            t2 = to_tensor(operand2, data_format)
-            t1, t2 = self._apply_fidelity_masking(data_format, t1, t2, 1)
-            t1, t2 = t1.view(M, K1), t2.view(K2, N)
-            res += (
-                torch.matmul(t1, t2)
-                .view(output_dimensions[0] * output_dimensions[1])
-                .to(torch_format)
-            )
-
-            t1 = to_tensor(operand1, data_format)
-            t2 = to_tensor(operand2, data_format)
-            t1, t2 = self._apply_fidelity_masking(data_format, t1, t2, 2)
-            t1, t2 = t1.view(M, K1), t2.view(K2, N)
-            res += (
-                torch.matmul(t1, t2)
-                .view(output_dimensions[0] * output_dimensions[1])
-                .to(torch_format)
-            )
-
-        elif fidelity_iter_count == 3:
-
-            t1, t2 = t1.view(M, K1), t2.view(K2, N)
-            res = (
-                torch.matmul(t1, t2)
-                .view(output_dimensions[0] * output_dimensions[1])
-                .to(torch_format)
-            )
+            if res is None:
+                res = partial
+            else:
+                res += partial
 
         if tilize:
             res = tilize_block(
                 res,
                 dimensions=(input_A_dimensions[0], input_B_dimensions[1]),
                 stimuli_format=data_format,
+            ).flatten()
+        return res
+
+    def _matmul_mxfp4(
+        self,
+        operand1,
+        operand2,
+        data_format,
+        math_fidelity,
+        input_A_dimensions,
+        input_B_dimensions,
+        tilize: bool,
+        input_A_format: DataFormat,
+        input_B_format: DataFormat,
+        math_format: Optional[DataFormat],
+        dest_acc: Optional[DestAccumulation],
+    ):
+        torch_format = format_dict[data_format]
+        math_format = math_format or data_format
+        result_format = math_format if data_format.is_mx_format() else data_format
+        result_torch_format = format_dict[result_format]
+
+        operand1, operand2 = self._convert_block_float_inputs(
+            operand1,
+            operand2,
+            input_A_format,
+            input_B_format,
+            input_A_dimensions,
+            input_B_dimensions,
+            tilize,
+        )
+
+        # Handle multi-tile matmul with different operand dimensions
+        if input_A_dimensions is not None and input_B_dimensions is not None:
+            # Multi-tile matmul: A[M,K] × B[K,N] = C[M,N]
+            M, K1, K2, N, output_dimensions = self._resolve_matmul_dimensions(
+                input_A_dimensions, input_B_dimensions
+            )
+
+        fidelity_iters = self._get_fidelity_iters(math_fidelity)
+
+        math_torch_format = format_dict[math_format]
+        use_fp16_acc = dest_acc == DestAccumulation.No and math_format in (
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        )
+
+        def _matmul_blocked(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+            if not use_fp16_acc:
+                return torch.matmul(a, b).to(result_torch_format)
+
+            # Quasar matmul probably accumulates per KT tile (32 elements), so match KT_DIM chunking
+            # to avoid extra rounding compared to HW.
+            k_tile = TILE_DIM if K1 >= TILE_DIM else K1
+
+            acc = torch.zeros((M, N), dtype=math_torch_format)
+            for k0 in range(0, K1, k_tile):
+                a_block = a[:, k0 : k0 + k_tile].to(math_torch_format)
+                b_block = b[k0 : k0 + k_tile, :].to(math_torch_format)
+                acc += torch.matmul(a_block, b_block)
+            return acc.to(result_torch_format)
+
+        def _accumulate(
+            acc: Optional[torch.Tensor], value: torch.Tensor
+        ) -> torch.Tensor:
+            if acc is None:
+                return value
+            if use_fp16_acc:
+                return (acc + value).to(result_torch_format)
+            return acc + value
+
+        res: Optional[torch.Tensor] = None
+
+        for fidelity_iter in fidelity_iters:
+            t1, t2 = self._prepare_fidelity_operands(
+                operand1, operand2, math_format, fidelity_iter
+            )
+            t1, t2 = t1.view(M, K1), t2.view(K2, N)
+            res = _accumulate(
+                res,
+                _matmul_blocked(t1, t2).view(
+                    output_dimensions[0] * output_dimensions[1]
+                ),
+            )
+
+        if tilize:
+            tilize_format = result_format if data_format.is_mx_format() else data_format
+            res = tilize_block(
+                res,
+                dimensions=(input_A_dimensions[0], input_B_dimensions[1]),
+                stimuli_format=tilize_format,
             ).flatten()
         return res
 
@@ -1076,6 +1215,7 @@ class BroadcastGolden:
         num_faces: int = 4,
         tile_cnt: int = 1,
         face_r_dim: int = 16,
+        input_format: DataFormat = None,
     ):
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
@@ -1088,16 +1228,16 @@ class BroadcastGolden:
         else:
             input_flat = torch.tensor(operand, dtype=torch_format).flatten()
 
-        # For block-floating-point formats, quantize the input tile-by-tile BEFORE
-        # extracting broadcast values.  The hardware unpacks src_B from its block-float
-        # encoding before applying the broadcast, so the shared-exponent quantization
-        # is determined by the original (non-broadcast) 16-element rows of the tile.
-        # If we quantized after broadcasting we would get wrong shared exponents because
-        # all 16 repeated copies of the same value form a trivial block.
-        if data_format == DataFormat.Bfp4_b:
+        # Quantize input tile-by-tile BEFORE extracting broadcast values.
+        # The hardware unpacks src_B from its L1 encoding before applying the broadcast,
+        # so quantization must be based on the original (non-broadcast) tile rows.
+        format_for_quant = input_format or data_format
+        if format_for_quant == DataFormat.Bfp4_b:
             input_flat = _bfp4b_to_float16b(input_flat)
-        elif data_format == DataFormat.Bfp8_b:
+        elif format_for_quant == DataFormat.Bfp8_b:
             input_flat = _bfp8b_to_float16b(input_flat)
+        elif format_for_quant.is_mx_format():
+            input_flat = quantize_mx_tensor_chunked(input_flat, format_for_quant)
 
         # Calculate output size based on variable face dimensions
         elements_per_tile = face_r_dim * FACE_DIM * num_faces
@@ -1203,9 +1343,14 @@ class DataCopyGolden:
     ):
         torch_format = format_dict[data_format]
 
-        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
-        if input_format == DataFormat.Bfp4_b:
-            operand1 = _bfp4b_to_float16b(operand1)
+        # Quantize input to match what hardware actually sees after unpack from L1.
+        if input_format is not None:
+            if input_format == DataFormat.Bfp4_b:
+                operand1 = _bfp4b_to_float16b(operand1)
+            elif input_format == DataFormat.Bfp8_b:
+                operand1 = _bfp8b_to_float16b(operand1)
+            elif input_format.is_mx_format():
+                operand1 = quantize_mx_tensor_chunked(operand1, input_format)
 
         height, width = input_dimensions[0], input_dimensions[1]
 
@@ -1384,7 +1529,10 @@ class PackGolden:
                 torch.tensor(threshold, dtype=torch.float16).view(torch.uint16).item()
             )
         else:
+            # For Float32, Float16_b, and other BF16-compatible formats:
             # Encode as BF16 (upper 16 bits of FP32)
+            # HW requires BF16/FP16 threshold in 16-bit field for both FP16 and FP32 pack_src
+            # For FP32 dest (EN_32BIT_DEST), C++ shifts this left by 16 to reconstruct full FP32 value
             fp32_bits = struct.unpack(">I", struct.pack(">f", threshold))[0]
             return (fp32_bits >> 16) & 0xFFFF
 
@@ -2307,11 +2455,14 @@ class ReduceGolden:
         if reduce_dim not in self.dim_handlers:
             raise ValueError(f"Unsupported reduce dimension: {reduce_dim}")
 
-        # Quantize input to match what hardware actually unpacks from BFP L1 memory
+        # Quantize input to match what hardware actually unpacks from L1 memory
         if input_format == DataFormat.Bfp4_b:
             operand = _bfp4b_to_float16b(operand)
         elif input_format == DataFormat.Bfp8_b:
             operand = _bfp8b_to_float16b(operand)
+        elif input_format is not None and input_format.is_mx_format():
+            # MX formats need to be quantized before reduce
+            operand = quantize_mx_tensor_chunked(operand, input_format)
 
         if reduce_to_one:
             # Accumulate all tiles into a single result
@@ -2489,7 +2640,11 @@ class ReduceGapoolGolden(FidelityMasking):
         reduce_dim,
         math_fidelity=MathFidelity.LoFi,
         tile_cnt=1,
+        input_format=None,
     ):
+        # Quantize MX format inputs to match hardware behavior
+        if input_format is not None and input_format.is_mx_format():
+            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
@@ -2590,13 +2745,25 @@ class ReduceGapoolGolden(FidelityMasking):
 
 @register_golden
 class UntilizeGolden:
-    def __call__(self, operand, data_format, dimensions=[32, 32]):
+    def __call__(
+        self,
+        operand,
+        data_format,
+        dimensions=[32, 32],
+        input_format: Optional[DataFormat] = None,
+    ):
         from helpers.tilize_untilize import untilize_block
+
+        if input_format == DataFormat.MxFp4:
+            # Quantize MXFP4 inputs to match pack/unpack precision before untilize.
+            operand = quantize_mx_tensor_chunked(operand, input_format)
 
         result = untilize_block(
             operand, stimuli_format=data_format, dimensions=dimensions
         )
-        return result.flatten()
+        result = result.flatten()
+
+        return result
 
 
 @register_golden

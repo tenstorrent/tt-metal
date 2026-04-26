@@ -66,6 +66,7 @@ TILE_DIMENSIONS = [32, 32]
             DataFormat.Float16,
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp4,
         ],
     ),
     mathop=[
@@ -100,9 +101,17 @@ def test_eltwise_binary_reuse_dest_quasar(
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("elwadd/elwsub only supports LoFi mode")
 
-    if mathop == MathOperation.Elwmul and formats.input_format.is_mx_format():
+    if mathop == MathOperation.Elwmul and (
+        formats.input_format == DataFormat.MxFp8R
+        or formats.input_format == DataFormat.MxFp8P
+    ):
         pytest.skip(
-            "Elwmul with MX input and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
+            "Elwmul with MxFp8R or MxFp8P input and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
+        )
+
+    if mathop == MathOperation.Elwmul and formats.output_format == DataFormat.MxFp4:
+        pytest.skip(
+            "Elwmul with MxFp4 output and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
         )
 
     # MX formats require implied_math_format=Yes on Quasar; set it and disable_format_inference so golden matches.
@@ -193,6 +202,7 @@ def test_eltwise_binary_reuse_dest_quasar(
         if (mathop == MathOperation.Elwmul and math_fidelity == MathFidelity.LoFi)
         else None
     )
+
     math_format_for_fidelity = (
         (DataFormat.Float16_b if use_mx else formats.output_format)
         if eltwise_golden is not None
@@ -243,8 +253,6 @@ def test_eltwise_binary_reuse_dest_quasar(
                 else:
                     dest = srcA * srcB
 
-        if formats.output_format.is_mx_format():
-            dest = quantize_mx_tensor_chunked(dest, formats.output_format)
         golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
 
     configuration = TestConfig(
@@ -304,6 +312,14 @@ def test_eltwise_binary_reuse_dest_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # Quantize golden tensor if output format is MX format
+    if formats.output_format.is_mx_format():
+        golden_tensor = quantize_mx_tensor_chunked(
+            golden_tensor.to(torch.bfloat16), formats.output_format
+        ).to(torch_format)
+
+    test_passed = passed_test(
+        golden_tensor, res_tensor, formats.output_format, print_errors=False
+    )
+
+    assert test_passed, "Assert against golden failed"

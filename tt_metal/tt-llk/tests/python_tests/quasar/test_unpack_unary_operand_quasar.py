@@ -10,6 +10,7 @@ from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DataCopyType,
@@ -115,6 +116,7 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
+        DataFormat.MxFp4,
     ]
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
@@ -152,6 +154,9 @@ def test_unpack_unary_operand_quasar(
         src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
     )  # use A for UnpA and UnpDest
     if transpose_en == Transpose.Yes:
+        if formats.input_format.is_mx_format():
+            golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
+
         generate_golden = get_golden_generator(TransposeGolden)
         golden_tensor = generate_golden.transpose_faces_multi_tile(
             golden_src,
@@ -174,6 +179,7 @@ def test_unpack_unary_operand_quasar(
             formats.output_format,
             num_faces=num_faces,
             input_dimensions=input_dimensions,
+            input_format=formats.input_format,
         )
 
     configuration = TestConfig(
@@ -213,6 +219,8 @@ def test_unpack_unary_operand_quasar(
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=(formats.input_format.is_mx_format()),
     )
 
     res_from_L1 = configuration.run().result
