@@ -229,6 +229,9 @@ class TTNNSpeechEncoderPrenet:
         *,
         input_length: int,
     ) -> Tuple[ttnn.Tensor, int]:
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
         result = ttnn.conv1d(
             input_tensor=x,
             weight_tensor=params["weight"],
@@ -264,28 +267,62 @@ class TTNNSpeechEncoderPrenet:
         return out_tensor, int(out_length)
 
     def _apply_group_norm(self, x: ttnn.Tensor, norm_params: Dict[str, object], num_groups: int) -> ttnn.Tensor:
-        try:
-            return ttnn.group_norm(
-                x,
-                num_groups=num_groups,
-                input_mask=norm_params["input_mask"],
-                weight=norm_params["weight"],
-                bias=norm_params["bias"],
-                epsilon=self.config.layer_norm_eps,
-                core_grid=norm_params["core_grid"],
-                dtype=ttnn.bfloat16,
-                inplace=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        except TypeError:
-            return ttnn.group_norm(
-                x,
-                num_groups=num_groups,
-                input_mask=norm_params["input_mask"],
-                weight=norm_params["weight"],
-                bias=norm_params["bias"],
-                epsilon=self.config.layer_norm_eps,
-            )
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Try more output blocks first to reduce per-core circular-buffer pressure for long utterances.
+        # Fall back toward 1 block for compatibility.
+        num_out_block_candidates = (64, 32, 16, 8, 4, 2, 1)
+        last_error: Optional[RuntimeError] = None
+
+        for num_out_blocks in num_out_block_candidates:
+            try:
+                out = ttnn.group_norm(
+                    x,
+                    num_groups=num_groups,
+                    input_mask=norm_params["input_mask"],
+                    weight=norm_params["weight"],
+                    bias=norm_params["bias"],
+                    epsilon=self.config.layer_norm_eps,
+                    core_grid=norm_params["core_grid"],
+                    dtype=ttnn.bfloat16,
+                    inplace=False,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    num_out_blocks=num_out_blocks,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+                    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+                return out
+            except TypeError:
+                # Older API may not expose output_layout/num_out_blocks; use compatible call once.
+                out = ttnn.group_norm(
+                    x,
+                    num_groups=num_groups,
+                    input_mask=norm_params["input_mask"],
+                    weight=norm_params["weight"],
+                    bias=norm_params["bias"],
+                    epsilon=self.config.layer_norm_eps,
+                    core_grid=norm_params["core_grid"],
+                    dtype=ttnn.bfloat16,
+                    inplace=False,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+                    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+                return out
+            except RuntimeError as err:
+                last_error = err
+                err_text = str(err)
+                l1_cb_overflow = "circular buffers" in err_text and "max L1 size" in err_text
+                if not l1_cb_overflow:
+                    raise
+                # Keep trying smaller/larger block schedules; raise final error if all fail.
+                continue
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("group_norm failed without a captured runtime error")
 
     def _apply_conv_layer_norm(self, x: ttnn.Tensor, layer_norm_params: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
         return ttnn.layer_norm(
