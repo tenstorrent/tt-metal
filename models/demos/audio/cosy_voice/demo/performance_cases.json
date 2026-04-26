@@ -1,0 +1,12 @@
+[
+  {
+    "name": "zero_shot_long_zh",
+    "mode": "zero_shot",
+    "language": "zh",
+    "text": "收到好友从远方寄来的生日礼物，那份意外的惊喜与深深的祝福让我心中充满了甜蜜的快乐，笑容如花儿般绽放。窗外的风轻轻吹过，仿佛也在分享这份喜悦，让整个下午都变得温暖而明亮。",
+    "prompt_text": "希望你以后能够做的比我还好呦。",
+    "prompt_audio": "asset/zero_shot_prompt.wav",
+    "target_tokens_per_second": 30.0,
+    "target_rtf": 0.5
+  }
+]
