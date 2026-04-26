@@ -158,12 +158,9 @@ Stress tests for the TT-Fabric layer. Ensures TT-Fabric SW and FW is compatible 
 
 **Topology-Specific Scripts:**
 
-The current BH Exabox has two different cluster topologies (both with 4 Galaxies, 128 chips):
-- **8x16** (16×8 mesh topology) - Located in Aisle C - Used for DeepSeek-R1 implementation, machines in cluster:
-  - `bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08`
-  - `bh-glx-c03u02,bh-glx-c03u08,bh-glx-c04u02,bh-glx-c04u08`
-- **4x32** (32×4 mesh topology) - Located in Aisle B - Used for Wan2.2 implementation, machines in cluster:
-  - `bh-glx-c05u02,bh-glx-c05u08,bh-glx-c06u02,bh-glx-c06u08`
+The cabling for individual pods in the BH Exabox is subject to change and latest information can be found in #exabox-infra or in the [cluster](https://docs.google.com/spreadsheets/d/1lg6cG0TovYqwJtn6kkm5Fb1erQHH9p-p8NIUL279V0U/edit?gid=0#gid=0) column of the bh galaxy bringup tracker spreadsheet.
+
+All quad BH galaxy pods (4 Galaxies, 128 chips) are currently cabled as 4x32 (32×4 mesh topology) but this is subject to change.
 
 The mesh shape affects how workloads are distributed across chips. Choose the script matching your cluster topology:
 
