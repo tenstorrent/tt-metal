@@ -144,8 +144,8 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
-    const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
 
     uint32_t ring_index = fused_op_indexer.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
@@ -208,13 +208,29 @@ void kernel_main() {
 
         const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
 
+        // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
+        // (sdpa_ring_v2) paths.
+        //   rix > rid (Case 3): only sender's L half is sent — halve KV count, or extend to
+        //     include the straddle chunk when it crosses the coarse-half boundary (its
+        //     late-half columns are -inf-masked via lw_mask.straddle_*).
+        //   rix < rid && balanced (Case 2): skip first-half (L) Q-chunks.
+        uint32_t iter_num_kv_chunks = num_kv_chunks;
+        if (is_causal && is_balanced && ring_index > ring_id) {
+            if constexpr (has_straddle) {
+                iter_num_kv_chunks = straddle_chunk_id + 1;
+            } else {
+                iter_num_kv_chunks /= 2;
+            }
+        }
+        const bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
+
         if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
                 0,  // Skt — not used for ring
                 DHt,
-                DHt,  // vDHt = DHt for ring
+                vDHt,
                 scale_fp32,
                 qk_subblock_h,
                 qk_subblock_w,
@@ -241,7 +257,8 @@ void kernel_main() {
                 needs_lightweight_mask>(
                 global_q_start,
                 global_q_end,
-                num_kv_chunks,
+                iter_num_kv_chunks,
+                num_q_chunks,
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
@@ -256,22 +273,10 @@ void kernel_main() {
                 acc_state,
                 is_last_ring_iter,
                 q_per_core,
-                lw_mask);
+                lw_mask,
+                skip_first_half_q,
+                use_zigzag_balancing);
         } else {
-            bool is_causal_ring_iter = (ring_iter == 0 ? is_causal : false);
-
-            uint32_t iter_num_kv_chunks = num_kv_chunks;
-            if (is_causal && is_balanced && ring_index > ring_id) {
-                if constexpr (has_straddle) {
-                    // Straddle chunk straddles the coarse-half boundary; extend to include it.
-                    // Its late-half columns are -inf-masked via lw_mask.straddle_* above.
-                    iter_num_kv_chunks = straddle_chunk_id + 1;
-                } else {
-                    iter_num_kv_chunks /= 2;
-                }
-            }
-            bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
-
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
@@ -333,7 +338,7 @@ void kernel_main() {
                 cb_prev_out,
                 cb_out,
                 lw_mask,
-                is_causal_ring_iter,
+                lw_mask.is_causal,
                 skip_first_half_q,
                 is_last_ring_iter,
                 use_zigzag_balancing);
