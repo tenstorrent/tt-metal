@@ -155,11 +155,18 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
+// Counter hooks — defined in counters.h (WC: real, NC: stubs).
+// Called from zone_scoped unconditionally so both builds produce identical codegen.
+__attribute__((noinline)) void _profiler_counter_start(std::uint32_t& zone_out, bool& active_out);
+__attribute__((noinline)) void _profiler_counter_stop(std::uint32_t zone, bool active);
+
 template <std::uint16_t id16>
 class zone_scoped
 {
 private:
-    bool is_opened = false;
+    bool is_opened               = false;
+    std::uint32_t m_counter_zone = 0;
+    bool m_counter_active        = false;
 
 public:
     zone_scoped(const zone_scoped&)            = delete;
@@ -169,6 +176,7 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
+        _profiler_counter_start(m_counter_zone, m_counter_active);
         if (!is_buffer_full())
         {
             is_opened = true;
@@ -184,6 +192,7 @@ public:
             write_entry(EntryType::ZONE_END, id16);
             --open_zone_cnt;
         }
+        _profiler_counter_stop(m_counter_zone, m_counter_active);
     }
 };
 

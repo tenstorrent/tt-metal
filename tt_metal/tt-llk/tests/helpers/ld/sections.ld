@@ -123,6 +123,12 @@ SECTIONS
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
+    /* Performance counter data goes LAST so it doesn't shift profiler/ckernel
+       global variable addresses. Without this, counter data at the start of
+       .ldm_data changes GP-relative offsets for all globals, causing different
+       run_kernel codegen between counter and non-counter builds. */
+    *(.data.perf_counters .data.perf_counters.*)
+    *(.bss.perf_counters .bss.perf_counters.*)
   } > REGION_DATA
 
   .runtime_args (NOLOAD):

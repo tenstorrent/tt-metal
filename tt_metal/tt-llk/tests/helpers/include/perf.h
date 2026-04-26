@@ -9,6 +9,24 @@
 
 #include "ckernel.h"
 
+// ── Per-zone performance counter measurement ──────────────────────────
+// MEASURE_PERF_COUNTERS("INIT") / MEASURE_PERF_COUNTERS("TILE_LOOP")
+// placed BEFORE ZONE_SCOPED in the same scope — counter stops AFTER profiler zone ends.
+// Full counter implementation is in counters.h (included by trisc.cpp).
+// We only need forward declarations + RAII class here to avoid pulling
+// ATINCGET assembly into the test source compilation context.
+
+// Counter hooks are now integrated into profiler.h's zone_scoped class.
+// When PERF_COUNTERS_COMPILED is defined, zone_scoped calls
+// _profiler_counter_start/_stop automatically — no extra RAII objects
+// in run_kernel, so compiler inlining decisions are identical to NC builds.
+//
+// PERF_ZONE_SCOPED is now just an alias for ZONE_SCOPED (kept for compatibility).
+#define PERF_ZONE_SCOPED(marker) ZONE_SCOPED(marker)
+#ifndef MEASURE_PERF_COUNTERS
+#define MEASURE_PERF_COUNTERS(zone_name)
+#endif
+
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
 constexpr std::uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;

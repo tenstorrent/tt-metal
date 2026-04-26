@@ -13,14 +13,29 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
+from .counters import print_counters, read_counters
 from .device import BootMode
 from .format_config import FormatConfig
 from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from .logger import logger
+from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import BuildMode, ProfilerBuild, TestConfig
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+
+
+def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
+    """
+    Return zone names for mapping counter zones to profiler markers.
+
+    Zone 0 = INIT, Zone 1 = TILE_LOOP. This matches the order in which
+    MEASURE_PERF_COUNTERS is called in all perf test source files
+    (get_zone_id allocates sequential IDs on first encounter).
+    """
+    _ = elf_dir
+    return ["INIT", "TILE_LOOP"]  # Counter zone 0 = INIT, zone 1 = TILE_LOOP
+
 
 # Maps each run type to the kernel components whose text section sizes contribute to ELF_SIZE.
 # L1_TO_L1 sums across all three components; isolate run types use their single component.
@@ -199,9 +214,9 @@ def get_unique_base_names(input_dir: Path):
         input_dir.glob("*.master*.csv")
     )
 
-    # Extract base names with regex that handles both patterns
+    # Extract base names with regex that handles all patterns (.csv, .post.csv, .counters.csv)
     unique_bases = {
-        re.sub(r"\.(?:gw\d+|master)(?:\.post)?\.csv$", "", report_file.name)
+        re.sub(r"\.(?:gw\d+|master)(?:\.post|\.counters)?\.csv$", "", report_file.name)
         for report_file in csv_files
     }
 
@@ -236,15 +251,15 @@ def combine_perf_reports():
         if not temp_output_dir.exists():
             temp_output_dir.mkdir(parents=True, exist_ok=True)
 
-        regular_files, post_files = [], []
-        regular_append = regular_files.append
-        post_append = post_files.append
+        regular_files, post_files, counter_files = [], [], []
 
         for f in csv_files:
-            if f.endswith(".post.csv"):
-                post_append(f)
+            if f.endswith(".counters.csv"):
+                counter_files.append(f)
+            elif f.endswith(".post.csv"):
+                post_files.append(f)
             else:
-                regular_append(f)
+                regular_files.append(f)
 
         if regular_files:
             dfs_regular = []
@@ -286,16 +301,32 @@ def combine_perf_reports():
             output_post = os.path.join(temp_output_dir, f"{base_name}.post.csv")
             combined_post.to_csv(output_post, index=False)
 
-        for file in regular_files:
-            Path(file).unlink()
+        if counter_files:
+            dfs_counters = []
+            for file in sorted(counter_files):
+                if os.path.getsize(file) <= 1:
+                    continue
+                df = pd.read_csv(file)
+                dfs_counters.append(df)
 
-        for file in post_files:
+            if dfs_counters:
+                combined_counters = pd.concat(dfs_counters, ignore_index=True)
+                combined_counters = combined_counters.sort_values(
+                    by=combined_counters.columns.tolist()
+                ).reset_index(drop=True)
+                output_counters = os.path.join(
+                    temp_output_dir, f"{base_name}.counters.csv"
+                )
+                combined_counters.to_csv(output_counters, index=False)
+
+        for file in regular_files + post_files + counter_files:
             Path(file).unlink()
 
 
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
+    COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
 
     def __init__(
         self,
@@ -355,6 +386,7 @@ class PerfConfig(TestConfig):
 
     def run(self, perf_report: PerfReport, run_count=2):
         results = []
+        counter_results_list = []
         code_sizes = {}
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
@@ -401,16 +433,33 @@ class PerfConfig(TestConfig):
                 )
 
             variant_raw_data = []
+            variant_counter_results = []
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+                # Counter config is written by BRISC from built-in array (local L1 write).
+                # Python NOC write is skipped to avoid L1 controller state change that
+                # causes ~7 cycle overhead on Float16 unpack operations.
 
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
 
-                # TODO You add additional data collections you want here
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    try:
+                        counter_results = read_counters(
+                            location=TestConfig.TENSIX_LOCATION
+                        )
+                        if counter_results is not None and not counter_results.empty:
+                            counter_results["run_index"] = run_index
+                            variant_counter_results.append(counter_results)
+                            if TestConfig.DUMP_RAW_COUNTERS:
+                                print_counters(counter_results)
+                            if TestConfig.DUMP_RAW_METRICS:
+                                print_metrics(counter_results)
+                    except Exception as e:
+                        logger.warning("Error reading counters: {}", e)
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
@@ -418,6 +467,40 @@ class PerfConfig(TestConfig):
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             results.append(get_stats(ProfilerData.concat(variant_raw_data)))
+
+            if variant_counter_results:
+                all_counters = pd.concat(variant_counter_results, ignore_index=True)
+
+                # Read zone names from ELF .perf_counter_meta section
+                zone_names = read_perf_zone_names_from_elf(
+                    TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+                )
+
+                computed = compute_metrics(all_counters)
+                if TestConfig.DUMP_RAW_METRICS:
+                    print_metrics(all_counters)
+
+                # Export efficiency metrics (percentages only) to the main CSV
+                csv_df = export_metrics(
+                    computed,
+                    run_type_name=run_type.name,
+                    zone_names=zone_names,
+                )
+                if not csv_df.empty:
+                    results.append(csv_df)
+
+                # Export raw counter values to the separate counters CSV
+                if (
+                    TestConfig.DUMP_CSV_COUNTERS
+                    and PerfConfig.COUNTER_REPORT is not None
+                ):
+                    counter_csv_df = export_counters(
+                        all_counters,
+                        run_type_name=run_type.name,
+                        zone_names=zone_names,
+                    )
+                    if not counter_csv_df.empty:
+                        counter_results_list.append(counter_csv_df)
 
         # Merge results with validation
         # how="outer" keeps all markers (some may not appear in all run types)
@@ -466,3 +549,14 @@ class PerfConfig(TestConfig):
         combined = combined[other_cols + text_size_cols]
 
         perf_report.append(combined)
+
+        # Append raw counter data to the separate counter report
+        if counter_results_list and PerfConfig.COUNTER_REPORT is not None:
+            counter_run_results = reduce(
+                lambda left, right: pd.merge(
+                    left, right, on="marker", how="outer", validate="1:1"
+                ),
+                counter_results_list,
+            )
+            counter_combined = sweep.merge(counter_run_results, how="cross")
+            PerfConfig.COUNTER_REPORT.append(counter_combined)

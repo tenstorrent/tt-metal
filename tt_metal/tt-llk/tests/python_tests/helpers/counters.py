@@ -5,15 +5,20 @@
 from typing import Dict, List
 
 import pandas as pd
+from loguru import logger
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 from .test_config import TestConfig
 
+# ============================================================================
+# Constants and Configuration
+# ============================================================================
+
 # Derive all constants from TestConfig (single source of truth)
-COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 86 config slots
+COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 137 config slots
 COUNTER_DATA_WORD_COUNT = (
     TestConfig._PERF_COUNTERS_DATA_WORDS
-)  # 172 data words (86 * 2)
+)  # 274 data words (137 * 2)
 PERF_COUNTERS_STARTER_MASK = 0x3  # 2 bits for thread ID 0-3
 PERF_COUNTERS_STOPPER_MASK = 0x3
 
@@ -110,10 +115,39 @@ COUNTER_NAMES = {
         55: "WAITING_FOR_SFPU_IDLE_0",
         56: "WAITING_FOR_SFPU_IDLE_1",
         57: "WAITING_FOR_SFPU_IDLE_2",
-        # Thread instruction counts (bit 8 set = ID 256+n)
-        256: "THREAD_INSTRUCTIONS_0",
-        257: "THREAD_INSTRUCTIONS_1",
-        258: "THREAD_INSTRUCTIONS_2",
+        # Thread instruction counts (grant counters, bit 8 set = ID 256+n)
+        # CFG instructions issued per thread
+        256: "CFG_INSTRUCTIONS_0",
+        257: "CFG_INSTRUCTIONS_1",
+        258: "CFG_INSTRUCTIONS_2",
+        # SYNC instructions issued per thread
+        259: "SYNC_INSTRUCTIONS_0",
+        260: "SYNC_INSTRUCTIONS_1",
+        261: "SYNC_INSTRUCTIONS_2",
+        # THCON instructions issued per thread
+        262: "THCON_INSTRUCTIONS_0",
+        263: "THCON_INSTRUCTIONS_1",
+        264: "THCON_INSTRUCTIONS_2",
+        # XSEARCH instructions issued per thread
+        265: "XSEARCH_INSTRUCTIONS_0",
+        266: "XSEARCH_INSTRUCTIONS_1",
+        267: "XSEARCH_INSTRUCTIONS_2",
+        # MOVE instructions issued per thread
+        268: "MOVE_INSTRUCTIONS_0",
+        269: "MOVE_INSTRUCTIONS_1",
+        270: "MOVE_INSTRUCTIONS_2",
+        # MATH instructions issued per thread
+        271: "MATH_INSTRUCTIONS_0",
+        272: "MATH_INSTRUCTIONS_1",
+        273: "MATH_INSTRUCTIONS_2",
+        # UNPACK instructions issued per thread
+        274: "UNPACK_INSTRUCTIONS_0",
+        275: "UNPACK_INSTRUCTIONS_1",
+        276: "UNPACK_INSTRUCTIONS_2",
+        # PACK instructions issued per thread
+        277: "PACK_INSTRUCTIONS_0",
+        278: "PACK_INSTRUCTIONS_1",
+        279: "PACK_INSTRUCTIONS_2",
     },
     "FPU": {
         0: "FPU_INSTRUCTION",
@@ -121,7 +155,9 @@ COUNTER_NAMES = {
         257: "FPU_OR_SFPU_INSTRN",  # Combined FPU/SFPU
     },
     "TDMA_UNPACK": {
+        0: "MATH_NOT_BLOCKED_BY_SRC",
         1: "DATA_HAZARD_STALLS_MOVD2A",
+        2: "FIDELITY_PHASE_STALLS",
         3: "MATH_INSTRN_STARTED",
         4: "MATH_INSTRN_AVAILABLE",
         5: "SRCB_WRITE_AVAILABLE",
@@ -130,8 +166,17 @@ COUNTER_NAMES = {
         8: "UNPACK1_BUSY_THREAD0",
         9: "UNPACK0_BUSY_THREAD1",
         10: "UNPACK1_BUSY_THREAD1",
-        259: "SRCB_WRITE",  # Bit 8 set
-        261: "SRCA_WRITE",  # Bit 8 set
+        256: "MATH_NOT_BLOCKED_BY_SRC_GRANT",  # Grant version of counter 0
+        257: "INSTRN_2HF_CYCLES",
+        258: "INSTRN_1HF_CYCLE",
+        259: "SRCB_WRITE",
+        260: "SRCA_WRITE_NOT_BLOCKED_OVERWRITE",
+        261: "SRCA_WRITE",
+        262: "SRCB_WRITE_NOT_BLOCKED_PORT",
+        263: "SRCA_WRITE_THREAD0",
+        264: "SRCB_WRITE_THREAD0",
+        265: "SRCA_WRITE_THREAD1",
+        266: "SRCB_WRITE_THREAD1",
     },
     "L1": {
         # Format: (counter_id, l1_mux) -> name
@@ -153,9 +198,20 @@ COUNTER_NAMES = {
         (7, 1): "TDMA_PACKER_2_WR",
     },
     "TDMA_PACK": {
-        11: "PACKER_DEST_READ_AVAILABLE",
-        18: "PACKER_BUSY",
-        272: "AVAILABLE_MATH",  # Bit 8 set
+        11: "PACKER_DEST_READ_AVAILABLE_0",
+        12: "PACKER_DEST_READ_AVAILABLE_1",
+        13: "PACKER_DEST_READ_AVAILABLE_2",
+        14: "PACKER_DEST_READ_AVAILABLE_3",
+        15: "PACKER_BUSY_0",
+        16: "PACKER_BUSY_1",
+        17: "PACKER_BUSY_2",
+        18: "PACKER_BUSY",  # Any packer engine busy
+        267: "DEST_READ_GRANTED_0",
+        268: "DEST_READ_GRANTED_1",
+        269: "DEST_READ_GRANTED_2",
+        270: "DEST_READ_GRANTED_3",
+        271: "MATH_NOT_STALLED_BY_DEST_PORT",
+        272: "AVAILABLE_MATH",
     },
 }
 
@@ -203,9 +259,8 @@ def _build_all_counters() -> List[Dict]:
 
 
 # Pre-built list of all counters (computed once at module load)
-# Total: 94 counters (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1)
-# Note: L1 has 8 counter IDs × 2 mux settings = 16 entries, but only 8 L1 counters
-# can be active at once (determined by mux setting), so maximum concurrent counters = 86
+# Total: 137 counters (82 INSTRN_THREAD + 3 FPU + 22 TDMA_UNPACK + 14 TDMA_PACK + 16 L1)
+# All Wormhole hardware performance counters are included.
 ALL_COUNTERS = _build_all_counters()
 
 
@@ -213,12 +268,10 @@ def configure_counters(location: str = "0,0") -> None:
     """
     Configure performance counters in the shared buffer for all threads (UNPACK, MATH, PACK, and in Quasar, isolated SFPU).
 
-    Writes counter configuration to L1 memory that all threads access. Configures all 94
-    counter definitions (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1).
-    Note: Only 86 slots are available in hardware; L1 counters (16 defs, 8 active at once)
-    require mux configuration before measurement starts.
+    Writes counter configuration to L1 memory that all threads access. Configures all 137
+    Wormhole hardware counter definitions (82 INSTRN_THREAD + 3 FPU + 22 TDMA_UNPACK + 14 TDMA_PACK + 16 L1).
 
-    The counters are started/stopped by all threads via start_perf_counters()/stop_perf_counters(),
+    The counters are started/stopped by all threads via MEASURE_PERF_COUNTERS("name"),
     but only the last thread to finish (last stopper) reads the hardware and writes results.
 
     Args:
@@ -227,19 +280,17 @@ def configure_counters(location: str = "0,0") -> None:
     # Encode counter configurations
     config_words = []
     for counter in ALL_COUNTERS:
-        bank_id = _BANK_NAME_TO_ID[counter["bank"]]
-        l1_mux = counter.get("l1_mux", 0)
-        counter_id = counter["counter_id"]
-        # Config word format: [valid(31), l1_mux(17), counter_sel(8-16), bank_id(0-7)]
-        config_word = (
-            (1 << 31) | (l1_mux << 17) | (counter_id << 8) | bank_id  # Valid bit
-        )
-        config_words.append(config_word)
+        valid_bit = 1 << 31
+        l1_mux = counter.get("l1_mux", 0) & 0x1
+        l1_mux_shifted = l1_mux << 17
+        counter_id_shifted = (counter["counter_id"] & 0x1FF) << 8
+        bank_id = _BANK_NAME_TO_ID[counter["bank"]] & 0xFF
+        config_words.append(valid_bit | l1_mux_shifted | counter_id_shifted | bank_id)
 
     # Pad config words to full slot count
     config_words.extend([0] * (COUNTER_SLOT_COUNT - len(config_words)))
 
-    # Write config to shared buffer
+    # Write config to the single shared buffer (all threads share one location)
     write_words_to_device(
         location=location, addr=PERF_COUNTERS_CONFIG_ADDR, data=config_words
     )
@@ -260,147 +311,95 @@ def configure_counters(location: str = "0,0") -> None:
     )
 
 
-def read_counters(location: str = "0,0") -> pd.DataFrame:
-    """
-    Read performance counter results from the shared buffer.
-
-    In the shared buffer architecture, whichever thread finishes last (the "last stopper")
-    reads the hardware counters and writes them to the shared buffer. This function returns
-    a single thread's snapshot - the results captured by the last stopper.
-
-    Args:
-        location: Tensix core coordinates (e.g., "0,0").
-
-    Returns:
-        DataFrame containing counter results, with columns:
-        starter_thread, stopper_thread, bank, counter_name, counter_id, cycles, count, l1_mux
-    """
-    all_results = []
-
-    # Read from the single shared buffer (last stopper wrote here)
-    sync_ctrl = read_words_from_device(
-        location=location, addr=PERF_COUNTERS_SYNC_CTRL_ADDR, word_count=3
+def _zone_config_addr(zone: int) -> int:
+    """Compute L1 config address for a given zone (matches counters.h)."""
+    return (
+        TestConfig.PERF_COUNTERS_BASE_ADDR + zone * TestConfig.PERF_COUNTERS_ZONE_SIZE
     )
+
+
+def _zone_data_addr(zone: int) -> int:
+    """Compute L1 data address for a given zone (matches counters.h)."""
+    return _zone_config_addr(zone) + TestConfig._PERF_COUNTERS_CONFIG_WORDS * 4
+
+
+def _zone_sync_ctrl_addr(zone: int) -> int:
+    """Compute L1 sync control address for a given zone (matches counters.h)."""
+    return _zone_config_addr(zone) + TestConfig._PERF_COUNTERS_BUFFER_SIZE
+
+
+# Lightweight sync: SYNC_ZONE_COMPLETE marker (matches counters.h)
+_SYNC_ZONE_COMPLETE = 0xFF
+
+
+def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
+    """
+    Read performance counter results for a single zone from L1.
+
+    Returns list of result dicts, or empty list if zone was not used.
+    """
+    sync_addr = _zone_sync_ctrl_addr(zone)
+    sync_ctrl = read_words_from_device(location=location, addr=sync_addr, word_count=1)
     if not sync_ctrl:
-        raise RuntimeError(
-            "Perf counter sync control word not readable; counters may not have been stopped."
-        )
+        return []
 
     sync_word = sync_ctrl[0]
+    logger.info(
+        f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
+    )
 
-    # Sync control word bit layout (matches counters.h); layout differs for 3 vs 4 TRISCs.
-    thread_count = len(TestConfig.KERNEL_COMPONENTS)
-    SYNC_START_MASK = (1 << thread_count) - 1
-    SYNC_STOP_BIT_SHIFT = thread_count
-    SYNC_STOP_MASK = SYNC_START_MASK << SYNC_STOP_BIT_SHIFT
-    SYNC_STARTED_FLAG = 1 << (2 * thread_count)
-    SYNC_STOPPED_FLAG = 1 << (2 * thread_count + 1)
-    SYNC_STARTER_SHIFT = 2 * thread_count + 2
-    SYNC_STOPPER_SHIFT = SYNC_STARTER_SHIFT + 2
-
+    # Zone was never used (BRISC clears sync to 0 before each run)
     if sync_word == 0:
-        raise RuntimeError(
-            "Perf counter sync word is zero - counters were never started. "
-            "Ensure start_perf_counters() is called in all threads."
+        logger.info(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
+        return []
+
+    # Lightweight stop writes SYNC_ZONE_COMPLETE (0xFF) in low byte + stopper thread ID.
+    if (sync_word & 0xFF) != _SYNC_ZONE_COMPLETE:
+        logger.warning(
+            f"Zone {zone}: unexpected sync word 0x{sync_word:08x} "
+            f"(expected SYNC_ZONE_COMPLETE=0xFF in low byte)"
         )
+        return []
 
-    if not (sync_word & SYNC_STARTED_FLAG):
-        raise RuntimeError(
-            f"Perf counters were never started (global started bit not set); sync_ctrl=0x{sync_word:08x}"
-        )
+    # Extract stopper thread ID
+    thread_count = len(TestConfig.KERNEL_COMPONENTS)
+    stopper_shift = 2 * thread_count + 2 + 2  # SYNC_STOPPER_SHIFT from counters.h
+    stopper_id = (sync_word >> stopper_shift) & PERF_COUNTERS_STOPPER_MASK
+    stopper_thread = PERF_COUNTER_TRISC_NAMES.get(stopper_id, f"UNKNOWN_{stopper_id}")
 
-    # Validate that all threads set their start bits.
-    start_bits = sync_word & SYNC_START_MASK
-    if start_bits != SYNC_START_MASK:
-        missing_threads = []
-        for i in range(thread_count):
-            if not (start_bits & (1 << i)):
-                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
-
-        raise RuntimeError(
-            f"Not all threads set their start bit in sync_ctrl. "
-            f"Missing start from: {', '.join(missing_threads)}. "
-            f"sync_ctrl=0x{sync_word:08x}"
-        )
-
-    if not (sync_word & SYNC_STOPPED_FLAG):
-        stop_bits = (sync_word >> SYNC_STOP_BIT_SHIFT) & SYNC_START_MASK
-        missing_threads = []
-        for i in range(thread_count):
-            if not (stop_bits & (1 << i)):
-                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
-
-        raise RuntimeError(
-            f"Perf counters were not stopped properly (global stopped bit not set). "
-            f"Missing stop_perf_counters() call from: {', '.join(missing_threads)}. "
-            f"sync_ctrl=0x{sync_word:08x}"
-        )
-
-    # Check that all threads set their stop bits
-    stop_bits = (sync_word >> SYNC_STOP_BIT_SHIFT) & SYNC_START_MASK
-    if stop_bits != SYNC_START_MASK:
-        missing_threads = []
-        for i in range(thread_count):
-            if not (stop_bits & (1 << i)):
-                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
-
-        raise RuntimeError(
-            f"Not all threads called stop_perf_counters(). "
-            f"Missing stop from: {', '.join(missing_threads)}. "
-            f"sync_ctrl=0x{sync_word:08x}"
-        )
-
-    starter_id = (sync_word >> SYNC_STARTER_SHIFT) & PERF_COUNTERS_STARTER_MASK
-    stopper_id = (sync_word >> SYNC_STOPPER_SHIFT) & PERF_COUNTERS_STOPPER_MASK
-
-    if starter_id not in PERF_COUNTER_TRISC_NAMES:
-        raise RuntimeError(
-            f"Invalid starter id {starter_id}; sync_ctrl=0x{sync_word:08x}"
-        )
-    if stopper_id not in PERF_COUNTER_TRISC_NAMES:
-        raise RuntimeError(
-            f"Invalid stopper id {stopper_id}; sync_ctrl=0x{sync_word:08x}"
-        )
-
-    starter_thread = PERF_COUNTER_TRISC_NAMES[starter_id]
-    stopper_thread = PERF_COUNTER_TRISC_NAMES[stopper_id]
-
-    # Read metadata from shared buffer
+    # Read config from this zone's L1 buffer
+    config_addr = _zone_config_addr(zone)
     metadata = read_words_from_device(
-        location=location, addr=PERF_COUNTERS_CONFIG_ADDR, word_count=COUNTER_SLOT_COUNT
+        location=location, addr=config_addr, word_count=COUNTER_SLOT_COUNT
     )
-
     if not metadata:
-        return pd.DataFrame(all_results)
+        return []
 
-    # Count valid configs (check bit 31)
     valid_count = sum(1 for m in metadata if (m & 0x80000000) != 0)
-
     if valid_count == 0:
-        return pd.DataFrame(all_results)
+        return []
 
-    # Read ONLY data for valid counters from shared buffer
+    # Read data from this zone's L1 buffer
+    data_addr = _zone_data_addr(zone)
     data = read_words_from_device(
-        location=location, addr=PERF_COUNTERS_DATA_ADDR, word_count=valid_count * 2
+        location=location, addr=data_addr, word_count=valid_count * 2
     )
-
     if not data or len(data) < valid_count * 2:
-        return pd.DataFrame(all_results)
+        return []
 
+    results = []
     data_idx = 0
     for i in range(COUNTER_SLOT_COUNT):
         config_word = metadata[i]
-        if (config_word & 0x80000000) == 0:  # Check valid bit
-            continue  # Unused slot
+        if (config_word & 0x80000000) == 0:
+            continue
 
-        # Decode metadata: [valid(31), l1_mux(17), counter_id(8-16), bank(0-7)]
         bank_id = config_word & 0xFF
-        counter_id = (config_word >> 8) & 0x1FF  # 9 bits for counter_id
+        counter_id = (config_word >> 8) & 0x1FF
         l1_mux = (config_word >> 17) & 0x1
 
         bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
 
-        # Get counter name
         if bank_name == "L1":
             counter_name = COUNTER_NAMES["L1"].get(
                 (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
@@ -410,14 +409,14 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
                 counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
             )
 
-        # Extract results using data_idx
         cycles = data[data_idx * 2]
         count = data[data_idx * 2 + 1]
         data_idx += 1
 
-        all_results.append(
+        results.append(
             {
-                "starter_thread": starter_thread,
+                "zone": zone_name,
+                "starter_thread": "N/A",
                 "stopper_thread": stopper_thread,
                 "bank": bank_name,
                 "counter_name": counter_name,
@@ -428,32 +427,58 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
             }
         )
 
+    return results
+
+
+def read_counters(location: str = "0,0") -> pd.DataFrame:
+    """
+    Read performance counter results from all zones.
+
+    Iterates over zone 0 (INIT) and zone 1 (TILE_LOOP), reading from
+    per-zone L1 buffers. Zones that were never used are skipped silently.
+
+    Args:
+        location: Tensix core coordinates (e.g., "0,0").
+
+    Returns:
+        DataFrame containing counter results with columns:
+        zone, starter_thread, stopper_thread, bank, counter_name, counter_id, cycles, count, l1_mux
+    """
+    all_results = []
+
+    for zone_idx in range(2):  # INIT (0) and TILE_LOOP (1)
+        zone_name = f"ZONE_{zone_idx}"
+        zone_results = _read_zone_counters(location, zone_idx, zone_name)
+        all_results.extend(zone_results)
+
     return pd.DataFrame(all_results)
 
 
 def print_counters(results: pd.DataFrame) -> None:
     """
-    Print all counter results to console in a readable format.
+    Log all counter results in a readable format.
 
     Args:
         results: DataFrame with counter results (from read_counters).
     """
     if results.empty:
-        print("No counter results to display.")
+        logger.info("No counter results to display.")
         return
 
-    print("\n" + "=" * 100)
-    print("PERFORMANCE COUNTER RESULTS")
-    print("=" * 100)
+    if "zone" in results.columns:
+        zones = results["zone"].unique()
+        for zone in zones:
+            zone_results = results[results["zone"] == zone]
+            logger.info("\n{}\nZONE: {}\n{}", "═" * 100, zone, "═" * 100)
+            _print_zone_counters(zone_results)
+    else:
+        logger.info("\n{}\nPERFORMANCE COUNTER RESULTS\n{}", "=" * 100, "=" * 100)
+        _print_zone_counters(results)
 
-    # Get starter and stopper from first row (same for all)
-    if not results.empty:
-        starter = results["starter_thread"].iloc[0]
-        stopper = results["stopper_thread"].iloc[0]
-        print(f"\n{'─' * 100}")
-        print(f"  Hardware started by: {starter} thread")
-        print(f"  Hardware stopped by: {stopper} thread")
-        print(f"{'─' * 100}")
+
+def _print_zone_counters(results: pd.DataFrame) -> None:
+    """Helper to log counters for a single zone."""
+    lines = []
 
     for bank in ["INSTRN_THREAD", "FPU", "TDMA_UNPACK", "L1", "TDMA_PACK"]:
         bank_df = results[results["bank"] == bank]
@@ -462,22 +487,22 @@ def print_counters(results: pd.DataFrame) -> None:
 
         cycles = bank_df["cycles"].iloc[0] if len(bank_df) > 0 else 0
 
-        print(f"\n  ┌─ {bank} (cycles: {cycles:,})")
-        print(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
-        print(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
+        lines.append(f"\n  ┌─ {bank} (cycles: {cycles:,})")
+        lines.append(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
+        lines.append(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
 
         for _, row in bank_df.iterrows():
             name = row["counter_name"]
-            # Add mux info for L1 counters
             if pd.notna(row["l1_mux"]):
                 name = f"{name} (mux{int(row['l1_mux'])})"
             count = row["count"]
             rate = (count / cycles) if cycles else 0.0
-            print(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
+            lines.append(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
 
-        print(f"  └{'─' * 70}")
+        lines.append(f"  └{'─' * 70}")
 
-    print("\n" + "=" * 100 + "\n")
+    if lines:
+        logger.info("\n".join(lines))
 
 
 def export_counters(

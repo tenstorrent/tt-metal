@@ -13,6 +13,8 @@
 #include "ckernel_helper.h" // Only for WH/BH
 #endif
 #include "boot.h"
+#include "counters.h"
+#line 16
 #include "profiler.h"
 
 #ifdef LLK_PROFILER
@@ -57,6 +59,22 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
+// Custom memset — overrides libc_a-memset.o.
+// Without this, libc's memset is placed AFTER .text.zzz_perf_counters in the
+// linker output. Counter code size changes between NC and WC shift memset's
+// address, causing different icache state during profiler init and a consistent
+// 2-6% overhead on tight pack loops. Placing memset here (in trisc.o's .text)
+// keeps it before .text.zzz_perf_counters, at a fixed address in both builds.
+extern "C" __attribute__((used, optimize("no-tree-loop-distribute-patterns"))) void* memset(void* s, int c, std::size_t n)
+{
+    auto* dst = static_cast<std::uint8_t*>(s);
+    while (n--)
+    {
+        *dst++ = static_cast<std::uint8_t>(c);
+    }
+    return s;
+}
+
 int main(void)
 {
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
@@ -86,7 +104,7 @@ int main(void)
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif
-
+#line 90
     {
         ZONE_SCOPED("KERNEL")
 
