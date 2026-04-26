@@ -1,0 +1,1324 @@
+Running main() from gmock_main.cc
+[==========] Running 3 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 3 tests from Cluster
+[ RUN      ] Cluster.ReportIntermeshLinks
+[90m2026-01-24 14:36:52.528[0m | info     | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.2.0[0m [90m(topology_discovery.cpp:368)[0m
+[90m2026-01-24 14:36:52.555[0m | info     | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:223)[0m
+[90m2026-01-24 14:36:52.633[0m | info     | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.2.0[0m [90m(topology_discovery.cpp:368)[0m
+[90m2026-01-24 14:36:52.911[0m | info     | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.2.0[0m [90m(topology_discovery.cpp:368)[0m
+[90m2026-01-24 14:36:52.929[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 31 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.070[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 30 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.077[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 29 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.085[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 12 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.092[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 11 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.100[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 10 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.107[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 9 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.114[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 8 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.121[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.128[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.136[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.143[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.150[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.158[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.165[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.172[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.179[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 13 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.187[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 14 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.194[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 15 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.201[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 16 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.208[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 17 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.215[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 18 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.222[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 19 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.229[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 20 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.237[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 21 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.244[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 22 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.251[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 23 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.258[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 24 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.265[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 25 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.272[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 26 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.279[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 27 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.286[0m | info     | [35m            UMD[0m | [37mHarvesting masks for chip 28 tensix: 0x0 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0[0m [90m(cluster.cpp:339)[0m
+[90m2026-01-24 14:36:53.293[0m | info     | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[26, 10, 4, 14, 28, 20, 19, 1, 29, 11, 18, 3, 31, 21, 5, 2, 8, 16, 23, 25, 9, 6, 22, 24, 30, 13, 7, 0, 27, 12, 17, 15] and remote chip ids {}[0m [90m(cluster.cpp:186)[0m
+[90m2026-01-24 14:36:53.293[0m | info     | [35m            UMD[0m | [37mIOMMU: disabled[0m [90m(cluster.cpp:161)[0m
+[90m2026-01-24 14:36:53.293[0m | info     | [35m            UMD[0m | [37mKMD version: 2.5.0[0m [90m(cluster.cpp:164)[0m
+[90m2026-01-24 14:36:53.313[0m | info     | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:965)[0m
+[90m2026-01-24 14:36:53.313[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x1c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.314[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x780000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.315[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x6c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.316[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x880000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.317[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x4c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.318[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x900000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.319[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x500000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.320[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x440000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.321[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x640000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.322[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x480000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.323[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x800000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.324[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x7c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.324[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x940000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.325[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x200000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.326[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x240000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.327[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x540000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.328[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x180000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.329[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x400000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.329[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x300000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.330[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x740000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.331[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x280000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.332[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x5c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.333[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x600000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.333[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x3c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.334[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x840000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.335[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x580000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.336[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x340000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.337[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x8c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.337[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x2c0000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.338[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x680000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.339[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x700000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.340[0m | info     | [35m            UMD[0m | [37mMapped hugepage 0x380000000 to NOC address 0x800000000[0m [90m(silicon_sysmem_manager.cpp:207)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mIntermesh Link Configuration Report[0m [90m(test_system_health.cpp:218)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m===================================[0m [90m(test_system_health.cpp:219)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mTotal chips with intermesh links: 16[0m [90m(test_system_health.cpp:231)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mTotal intermesh links: 64[0m [90m(test_system_health.cpp:232)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m[0m [90m(test_system_health.cpp:233)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 0 Tray: 2 N1 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 1 Tray: 1 N1 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 2 Tray: 3 N1 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 3 Tray: 4 N1 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 4 Tray: 2 N2 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 5 Tray: 1 N2 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 6 Tray: 3 N2 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 7 Tray: 4 N2 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 8 Tray: 2 N3 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 9 Tray: 1 N3 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 10 Tray: 3 N3 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 11 Tray: 4 N3 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 12 Tray: 2 N4 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 13 Tray: 1 N4 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 14 Tray: 3 N4 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37mChip 15 Tray: 4 N4 : 4 inter-mesh ethernet links[0m [90m(test_system_health.cpp:244)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 3 at (x=0,y=3)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 2 at (x=0,y=2)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 1 at (x=0,y=1)[0m [90m(test_system_health.cpp:248)[0m
+[90m2026-01-24 14:36:53.588[0m | info     | [35m           Test[0m | [37m  Channel 0 at (x=0,y=0)[0m [90m(test_system_health.cpp:248)[0m
+[       OK ] Cluster.ReportIntermeshLinks (1187 ms)
+[ RUN      ] Cluster.ReportSystemHealth
+[90m2026-01-24 14:36:53.593[0m | info     | [35m           Test[0m | [37mFound 32 chips in cluster:
+Chip: 31 PCIe: 15 Unique ID: 835323230303144 Tray: 4 N8
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 28 Tray: 2 N8 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x6 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 28 Tray: 2 N8 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 28 Tray: 2 N8 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 28 Tray: 2 N8 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 30 Tray: 3 N8 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x3db Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 30 Tray: 3 N8 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 30 Tray: 3 N8 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x5 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 30 Tray: 3 N8 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 30 PCIe: 17 Unique ID: 835323230303136 Tray: 3 N8
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 29 Tray: 1 N8 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 29 Tray: 1 N8 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 29 Tray: 1 N8 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 29 Tray: 1 N8 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 31 Tray: 4 N8 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x5 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 31 Tray: 4 N8 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 31 Tray: 4 N8 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 31 Tray: 4 N8 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xf Uncorrected Codewords: 0x0
+
+Chip: 29 PCIe: 12 Unique ID: 835323230303048 Tray: 1 N8
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 30 Tray: 3 N8 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 30 Tray: 3 N8 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 30 Tray: 3 N8 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x21 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 30 Tray: 3 N8 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 28 Tray: 2 N8 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xc Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 28 Tray: 2 N8 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x6 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 28 Tray: 2 N8 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 28 Tray: 2 N8 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x17 Uncorrected Codewords: 0x0
+
+Chip: 12 PCIe: 31 Unique ID: 435323130303154 Tray: 2 N4
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 435323130303042 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 435323130303042 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 435323130303042 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 435323130303042 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 15 Tray: 4 N4 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 15 Tray: 4 N4 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 15 Tray: 4 N4 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 15 Tray: 4 N4 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 11 PCIe: 3 Unique ID: 335323230303144 Tray: 4 N3
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 33532313030304b core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 33532313030304b core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 33532313030304b core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 33532313030304b core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 15 Tray: 4 N4 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 10 PCIe: 18 Unique ID: 335323230303136 Tray: 3 N3
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x5
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x7 Uncorrected Codewords: 0x8
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x3
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 14 Tray: 3 N4 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 9 PCIe: 11 Unique ID: 335323230303048 Tray: 1 N3
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 33532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 33532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 33532363030314c core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 33532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x3 Uncorrected Codewords: 0x3
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 13 Tray: 1 N4 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 8 PCIe: 29 Unique ID: 335323130303154 Tray: 2 N3
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 335323130303042 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 335323130303042 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 335323130303042 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 335323130303042 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 7 PCIe: 1 Unique ID: 235323230303144 Tray: 4 N2
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 23532313030304b core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 23532313030304b core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 23532313030304b core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 23532313030304b core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 6 PCIe: 19 Unique ID: 235323230303136 Tray: 3 N2
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 235333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x5
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 235333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x5
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 235333130303048 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 235333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0xf Uncorrected Codewords: 0x4
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 5 PCIe: 20 Unique ID: 235323230303048 Tray: 1 N2
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x3
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x7 Uncorrected Codewords: 0x3
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x3 Uncorrected Codewords: 0x1
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x7 Uncorrected Codewords: 0x5
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 4 PCIe: 28 Unique ID: 235323130303154 Tray: 2 N2
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 235323130303042 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 235323130303042 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 235323130303042 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 235323130303042 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 3 PCIe: 14 Unique ID: 135323230303144 Tray: 4 N1
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 13532313030304b core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 13532313030304b core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 13532313030304b core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 13532313030304b core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 0 Tray: 2 N1 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 0 Tray: 2 N1 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 0 Tray: 2 N1 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 0 Tray: 2 N1 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 2 PCIe: 4 Unique ID: 135323230303136 Tray: 3 N1
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x5
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x8 Uncorrected Codewords: 0x3
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 1 Tray: 1 N1 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 1 Tray: 1 N1 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 1 Tray: 1 N1 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 1 Tray: 1 N1 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 1 PCIe: 10 Unique ID: 135323230303048 Tray: 1 N1
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x4
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x5
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0xb Uncorrected Codewords: 0x4
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 2 Tray: 3 N1 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 2 Tray: 3 N1 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 2 Tray: 3 N1 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 2 Tray: 3 N1 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 0 PCIe: 26 Unique ID: 135323130303154 Tray: 2 N1
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 135323130303042 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 135323130303042 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 135323130303042 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 135323130303042 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 3 Tray: 4 N1 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 3 Tray: 4 N1 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 3 Tray: 4 N1 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 3 Tray: 4 N1 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 13 PCIe: 21 Unique ID: 435323230303048 Tray: 1 N4
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x6 Uncorrected Codewords: 0x4
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x3
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0xb Uncorrected Codewords: 0x7
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 14 Tray: 3 N4 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 14 Tray: 3 N4 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 14 Tray: 3 N4 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 14 Tray: 3 N4 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xca Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 14 PCIe: 5 Unique ID: 435323230303136 Tray: 3 N4
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x5 Uncorrected Codewords: 0x5
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x3
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 13 Tray: 1 N4 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 13 Tray: 1 N4 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 13 Tray: 1 N4 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 13 Tray: 1 N4 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x7177e Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 15 PCIe: 2 Unique ID: 435323230303144 Tray: 4 N4
+ eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 43532313030304b core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 43532313030304b core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 43532313030304b core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 43532313030304b core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 12 Tray: 2 N4 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x63ae96 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 12 Tray: 2 N4 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 12 Tray: 2 N4 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 12 Tray: 2 N4 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=0)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=1)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=2)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=3)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 16 PCIe: 8 Unique ID: 535323130303154 Tray: 2 N5
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 0 Tray: 2 N1 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 19 Tray: 4 N5 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 19 Tray: 4 N5 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 19 Tray: 4 N5 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 19 Tray: 4 N5 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 17 Tray: 1 N5 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 17 Tray: 1 N5 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 17 Tray: 1 N5 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xe Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 17 Tray: 1 N5 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x0
+
+Chip: 17 PCIe: 16 Unique ID: 535323230303048 Tray: 1 N5
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 1 Tray: 1 N1 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 18 Tray: 3 N5 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 18 Tray: 3 N5 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 18 Tray: 3 N5 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 18 Tray: 3 N5 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 16 Tray: 2 N5 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x12 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 16 Tray: 2 N5 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 16 Tray: 2 N5 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xb Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 16 Tray: 2 N5 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+
+Chip: 18 PCIe: 23 Unique ID: 535323230303136 Tray: 3 N5
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 2 Tray: 3 N1 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 17 Tray: 1 N5 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 17 Tray: 1 N5 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 17 Tray: 1 N5 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 17 Tray: 1 N5 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 19 Tray: 4 N5 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 19 Tray: 4 N5 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 19 Tray: 4 N5 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 19 Tray: 4 N5 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x3 Uncorrected Codewords: 0x0
+
+Chip: 19 PCIe: 25 Unique ID: 535323230303144 Tray: 4 N5
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 3 Tray: 4 N1 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (QSFP), connected to Chip 16 Tray: 2 N5 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (QSFP), connected to Chip 16 Tray: 2 N5 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (QSFP), connected to Chip 16 Tray: 2 N5 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x6 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (QSFP), connected to Chip 16 Tray: 2 N5 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 18 Tray: 3 N5 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 18 Tray: 3 N5 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 18 Tray: 3 N5 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 18 Tray: 3 N5 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 20 PCIe: 9 Unique ID: 635323130303154 Tray: 2 N6
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 4 Tray: 2 N2 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 16 Tray: 2 N5 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 21 Tray: 1 N6 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 21 Tray: 1 N6 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 21 Tray: 1 N6 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x3c Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 21 Tray: 1 N6 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x36 Uncorrected Codewords: 0x0
+
+Chip: 21 PCIe: 6 Unique ID: 635323230303048 Tray: 1 N6
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 5 Tray: 1 N2 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 17 Tray: 1 N5 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 25 Tray: 1 N7 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 20 Tray: 2 N6 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x22 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 20 Tray: 2 N6 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 20 Tray: 2 N6 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2b Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 20 Tray: 2 N6 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 22 PCIe: 22 Unique ID: 635323230303136 Tray: 3 N6
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 6 Tray: 3 N2 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 18 Tray: 3 N5 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 26 Tray: 3 N7 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 23 Tray: 4 N6 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x25 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 23 Tray: 4 N6 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 23 Tray: 4 N6 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 23 Tray: 4 N6 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x7 Uncorrected Codewords: 0x0
+
+Chip: 23 PCIe: 24 Unique ID: 635323230303144 Tray: 4 N6
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 7 Tray: 4 N2 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 19 Tray: 4 N5 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 27 Tray: 4 N7 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 1 type A), connected to Chip 22 Tray: 3 N6 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 1 type A), connected to Chip 22 Tray: 3 N6 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x36 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 1 type A), connected to Chip 22 Tray: 3 N6 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x14 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 1 type A), connected to Chip 22 Tray: 3 N6 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 24 PCIe: 30 Unique ID: 735323130303154 Tray: 2 N7
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 8 Tray: 2 N3 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 20 Tray: 2 N6 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 28 Tray: 2 N8 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 25 Tray: 1 N7 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 25 Tray: 1 N7 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 25 Tray: 1 N7 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 25 Tray: 1 N7 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 25 PCIe: 13 Unique ID: 735323230303048 Tray: 1 N7
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 9 Tray: 1 N3 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 21 Tray: 1 N6 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 29 Tray: 1 N8 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 24 Tray: 2 N7 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 24 Tray: 2 N7 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 24 Tray: 2 N7 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 24 Tray: 2 N7 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x9b Uncorrected Codewords: 0x0
+
+Chip: 26 PCIe: 7 Unique ID: 735323230303136 Tray: 3 N7
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 10 Tray: 3 N3 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 22 Tray: 3 N6 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 30 Tray: 3 N8 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 27 Tray: 4 N7 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x20 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 27 Tray: 4 N7 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 27 Tray: 4 N7 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xf Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 27 Tray: 4 N7 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 27 PCIe: 0 Unique ID: 735323230303144 Tray: 4 N7
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 11 Tray: 4 N3 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 23 Tray: 4 N6 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=4)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=5)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=6)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (internal trace), connected to Chip 31 Tray: 4 N8 core (x=0,y=7)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 26 Tray: 3 N7 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 26 Tray: 3 N7 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 26 Tray: 3 N7 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 26 Tray: 3 N7 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+
+Chip: 28 PCIe: 27 Unique ID: 835323130303154 Tray: 2 N8
+ eth channel 0 core (x=0,y=0) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 1 core (x=0,y=1) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 2 core (x=0,y=2) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 3 core (x=0,y=3) link UP (internal trace), connected to Chip 12 Tray: 2 N4 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 4 core (x=0,y=4) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 5 core (x=0,y=5) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 6 core (x=0,y=6) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 7 core (x=0,y=7) link UP (internal trace), connected to Chip 24 Tray: 2 N7 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 8 core (x=0,y=8) link UP (linking board 3 type B), connected to Chip 31 Tray: 4 N8 core (x=0,y=8)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 9 core (x=0,y=9) link UP (linking board 3 type B), connected to Chip 31 Tray: 4 N8 core (x=0,y=9)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 10 core (x=0,y=10) link UP (linking board 3 type B), connected to Chip 31 Tray: 4 N8 core (x=0,y=10)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0xc Uncorrected Codewords: 0x0
+ eth channel 11 core (x=0,y=11) link UP (linking board 3 type B), connected to Chip 31 Tray: 4 N8 core (x=0,y=11)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0
+ eth channel 12 core (x=0,y=12) link UP (linking board 2 type A), connected to Chip 29 Tray: 1 N8 core (x=0,y=12)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x8 Uncorrected Codewords: 0x0
+ eth channel 13 core (x=0,y=13) link UP (linking board 2 type A), connected to Chip 29 Tray: 1 N8 core (x=0,y=13)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x0
+ eth channel 14 core (x=0,y=14) link UP (linking board 2 type A), connected to Chip 29 Tray: 1 N8 core (x=0,y=14)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x20 Uncorrected Codewords: 0x0
+ eth channel 15 core (x=0,y=15) link UP (linking board 2 type A), connected to Chip 29 Tray: 1 N8 core (x=0,y=15)
+	Retrain count: 0 CRC Errors: 0x0 Corrected Codewords: 0x13 Uncorrected Codewords: 0x0
+
+[0m [90m(test_system_health.cpp:354)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 10 PCIe: 18 Unique ID: 335323230303136 Tray: 3 N3 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 10 PCIe: 18 Unique ID: 335323230303136 Tray: 3 N3 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x5[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 10 PCIe: 18 Unique ID: 335323230303136 Tray: 3 N3 eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x7 Uncorrected Codewords: 0x8[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 10 PCIe: 18 Unique ID: 335323230303136 Tray: 3 N3 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 335333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x3[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 9 PCIe: 11 Unique ID: 335323230303048 Tray: 1 N3 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 33532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 9 PCIe: 11 Unique ID: 335323230303048 Tray: 1 N3 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 33532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 9 PCIe: 11 Unique ID: 335323230303048 Tray: 1 N3 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 33532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x3 Uncorrected Codewords: 0x3[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 6 PCIe: 19 Unique ID: 235323230303136 Tray: 3 N2 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 235333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x5[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 6 PCIe: 19 Unique ID: 235323230303136 Tray: 3 N2 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 235333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x1 Uncorrected Codewords: 0x5[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 6 PCIe: 19 Unique ID: 235323230303136 Tray: 3 N2 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 235333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0xf Uncorrected Codewords: 0x4[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 5 PCIe: 20 Unique ID: 235323230303048 Tray: 1 N2 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x3[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 5 PCIe: 20 Unique ID: 235323230303048 Tray: 1 N2 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x7 Uncorrected Codewords: 0x3[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 5 PCIe: 20 Unique ID: 235323230303048 Tray: 1 N2 eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x3 Uncorrected Codewords: 0x1[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 5 PCIe: 20 Unique ID: 235323230303048 Tray: 1 N2 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 23532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x7 Uncorrected Codewords: 0x5[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 2 PCIe: 4 Unique ID: 135323230303136 Tray: 3 N1 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 2 PCIe: 4 Unique ID: 135323230303136 Tray: 3 N1 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x5[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 2 PCIe: 4 Unique ID: 135323230303136 Tray: 3 N1 eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x8 Uncorrected Codewords: 0x3[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 2 PCIe: 4 Unique ID: 135323230303136 Tray: 3 N1 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 135333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 1 PCIe: 10 Unique ID: 135323230303048 Tray: 1 N1 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 1 PCIe: 10 Unique ID: 135323230303048 Tray: 1 N1 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x4[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 1 PCIe: 10 Unique ID: 135323230303048 Tray: 1 N1 eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x4 Uncorrected Codewords: 0x5[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 1 PCIe: 10 Unique ID: 135323230303048 Tray: 1 N1 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 13532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0xb Uncorrected Codewords: 0x4[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 13 PCIe: 21 Unique ID: 435323230303048 Tray: 1 N4 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x6 Uncorrected Codewords: 0x4[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 13 PCIe: 21 Unique ID: 435323230303048 Tray: 1 N4 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 13 PCIe: 21 Unique ID: 435323230303048 Tray: 1 N4 eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x3[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 13 PCIe: 21 Unique ID: 435323230303048 Tray: 1 N4 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 43532363030314c core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0xb Uncorrected Codewords: 0x7[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 14 PCIe: 5 Unique ID: 435323230303136 Tray: 3 N4 eth channel 0 core (x=0,y=0) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=0)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 14 PCIe: 5 Unique ID: 435323230303136 Tray: 3 N4 eth channel 1 core (x=0,y=1) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=1)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x5 Uncorrected Codewords: 0x5[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 14 PCIe: 5 Unique ID: 435323230303136 Tray: 3 N4 eth channel 2 core (x=0,y=2) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=2)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x2 Uncorrected Codewords: 0x3[0m [90m(test_system_health.cpp:358)[0m
+[90m2026-01-24 14:36:53.593[0m | warning  | [35m           Test[0m | [37mChip: 14 PCIe: 5 Unique ID: 435323230303136 Tray: 3 N4 eth channel 3 core (x=0,y=3) link UP (QSFP), connected to Unique ID: 435333130303048 core (x=0,y=3)
+	Retrain count: 1 CRC Errors: 0x0 Corrected Codewords: 0x0 Uncorrected Codewords: 0x0[0m [90m(test_system_health.cpp:358)[0m
+[       OK ] Cluster.ReportSystemHealth (4 ms)
+[ RUN      ] Cluster.TestMeshFullConnectivity
+[       OK ] Cluster.TestMeshFullConnectivity (0 ms)
+[----------] 3 tests from Cluster (1192 ms total)
+
+[----------] Global test environment tear-down
+[==========] 3 tests from 1 test suite ran. (1193 ms total)
+[  PASSED  ] 3 tests.
+[90m2026-01-24 14:36:53.593[0m | info     | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:472)[0m
+[90m2026-01-24 14:36:53.593[0m | info     | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:976)[0m
