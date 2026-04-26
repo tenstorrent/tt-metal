@@ -13,7 +13,10 @@ std::vector<uint8_t> serialize_intermesh_connections_to_bytes(const AnnotatedInt
     tt::fabric::proto::ConnectionsTable proto_table;
 
     // Create connection pairs
-    for (const auto& [first_pair, second_pair] : connections) {
+    for (const auto& connection : connections) {
+        const auto& first_pair = std::get<0>(connection);
+        const auto& second_pair = std::get<1>(connection);
+        const auto& connection_hash = std::get<2>(connection);
         auto* connection_pair = proto_table.add_connections();
 
         // Set first endpoint
@@ -27,6 +30,10 @@ std::vector<uint8_t> serialize_intermesh_connections_to_bytes(const AnnotatedInt
         second_endpoint->set_id(second_pair.first);
         second_endpoint->set_port_direction(static_cast<uint32_t>(second_pair.second.first));  // RoutingDirection
         second_endpoint->set_port_channel(second_pair.second.second);                          // Channel
+
+        // Symmetric hash of the physical cable. Used by every host to deterministically
+        // map this broadcast connection back to its local (chip, chan, peer) cable record.
+        connection_pair->set_connection_hash(static_cast<uint64_t>(connection_hash));
     }
 
     // Serialize to bytes
@@ -70,7 +77,8 @@ AnnotatedIntermeshConnections deserialize_intermesh_connections_from_bytes(const
                 connection_pair.second().port_channel()};
         }
 
-        result.emplace_back(first_endpoint, second_endpoint);
+        result.emplace_back(
+            first_endpoint, second_endpoint, static_cast<std::size_t>(connection_pair.connection_hash()));
     }
 
     return result;
