@@ -45,6 +45,21 @@ on:
         required: false
         type: boolean
         default: false
+      test-group-name:
+        required: false
+        default: ""
+        type: string
+        description: "If set, only run the test group matching this name. Empty runs all groups (after nightly filter)."
+      gtest-shard-total:
+        required: false
+        default: 1
+        type: number
+        description: "Total number of gtest shards (>=1). Sets GTEST_TOTAL_SHARDS."
+      gtest-shard-index:
+        required: false
+        default: 0
+        type: number
+        description: "0-based gtest shard index (must be < gtest-shard-total). Sets GTEST_SHARD_INDEX."
 jobs:
   define-cpp-tests:
     runs-on: ubuntu-latest
@@ -56,6 +71,7 @@ jobs:
           [[
             { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true, hang-detection-timeout: 10.0 },
             { name: "Nightly TTNN university lab examples", cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary && ./build/test/ttnn/lab_examples/test_lab_multicast', nightly: true, auto-triage: true },
+            { name: "llk", cmd: './build/test/tt_metal/unit_tests_llk --gtest_filter=$GTEST_FILTER', nightly: false, auto-triage: true },
           ]]
     steps:
       - name: Compute tests
@@ -71,6 +87,13 @@ jobs:
 
           requested_cpp_tests=$(jq --argjson nightly_run "${{ inputs.nightly-run }}" '[.[] | select(.nightly == $nightly_run)]' <<< "$requested_cpp_tests")
           echo "[info] after filtering for requested workflow tests: $requested_cpp_tests"
+
+          # Optionally narrow to a single named test group (e.g. when the PR gate calls us just for 'llk').
+          FILTER_NAME="${{ inputs.test-group-name }}"
+          if [ -n "$FILTER_NAME" ]; then
+            requested_cpp_tests=$(jq --arg name "$FILTER_NAME" '[.[] | select(.name == $name)]' <<< "$requested_cpp_tests")
+            echo "[info] after filtering by test-group-name='$FILTER_NAME': $requested_cpp_tests"
+          fi
 
           # If a test needs to run in merge-gate, filter will be added to include only those tests here
 
@@ -88,7 +111,10 @@ jobs:
       matrix:
         os: ["ubuntu-22.04"]
         test-group: ${{ fromJSON(needs.define-cpp-tests.outputs.cpp-tests) }}
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: >-
+      ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}${{
+        inputs.gtest-shard-total > 1 && format(' shard {0}/{1}', inputs.gtest-shard-index, inputs.gtest-shard-total) || ''
+      }}
     container:
       image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -98,6 +124,10 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+        # gtest's built-in sharding: each shard runs ~1/N of the test cases.
+        # When gtest-shard-total <= 1 these have no effect (gtest treats the run as unsharded).
+        GTEST_TOTAL_SHARDS: ${{ inputs.gtest-shard-total }}
+        GTEST_SHARD_INDEX: ${{ inputs.gtest-shard-index }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -109,6 +139,7 @@ jobs:
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100a') && fromJSON(format('["in-service", "cloud-virtual-machine", "P100"]'))
+        || (inputs.runner-label == 'p150b') && 'tt-ubuntu-2204-p150b-stable'
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:

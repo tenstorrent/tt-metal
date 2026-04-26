@@ -25,7 +25,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -279,7 +279,7 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
 
 }  // namespace unit_tests::compute::sfpu::dropout
 
-TEST_F(MeshDeviceFixture, TensixComputeDropout) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
     srand(0);
     int num_tests = 5;
     float fill_constant = 9.0;

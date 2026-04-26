@@ -39,6 +39,11 @@ on:
         default: "*"
         type: string
         description: "Filter for gtest"
+      test-group-name:
+        required: false
+        default: ""
+        type: string
+        description: "If set, only run the test group matching this name. Empty runs all groups."
 jobs:
   cpp-unit-tests-slow-dispatch:
     strategy:
@@ -84,6 +89,7 @@ jobs:
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || (inputs.runner-label == 'p150b') && 'tt-ubuntu-2204-p150b-stable'
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
@@ -105,12 +111,17 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: Skip non-matching test group
+        if: ${{ inputs.test-group-name != '' && inputs.test-group-name != matrix.test-group.name }}
+        run: echo "Skipping ${{ matrix.test-group.name }} (filter='${{ inputs.test-group-name }}')"
       - name: 🧬 Checkout Repository
+        if: ${{ inputs.test-group-name == '' || inputs.test-group-name == matrix.test-group.name }}
         uses: actions/checkout@v4
         with:
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
+        if: ${{ inputs.test-group-name == '' || inputs.test-group-name == matrix.test-group.name }}
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
@@ -122,6 +133,7 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
       - name: ${{ matrix.test-group.name }} tests
+        if: ${{ inputs.test-group-name == '' || inputs.test-group-name == matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
@@ -129,9 +141,9 @@ jobs:
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test-group-name == '' || inputs.test-group-name == matrix.test-group.name) }}
         with:
           prefix: "test_reports_"
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+        if: ${{ failure() && (inputs.test-group-name == '' || inputs.test-group-name == matrix.test-group.name) }}

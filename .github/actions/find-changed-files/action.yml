@@ -44,6 +44,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.llk-quasar-changed }}
   llk-tests-changed:
     value: ${{ steps.find-changed-files.outputs.llk-tests-changed }}
+  llk-unit-tests-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-unit-tests-changed }}
   llk-perf-changed:
     value: ${{ steps.find-changed-files.outputs.llk-perf-changed }}
   llk-ci-changed:

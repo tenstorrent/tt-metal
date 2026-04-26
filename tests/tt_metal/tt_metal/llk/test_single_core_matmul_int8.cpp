@@ -22,7 +22,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -231,7 +231,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
 
 }  // namespace unit_tests::compute::matmul
 
-TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
     ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }
 
