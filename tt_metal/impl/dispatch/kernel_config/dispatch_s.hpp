@@ -16,6 +16,7 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> cb_log_page_size;
     std::optional<uint32_t> cb_size;
     std::optional<uint32_t> my_dispatch_cb_sem_id;
+    std::optional<uint32_t> dispatch_d_shutdown_sem_id;
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
 
     std::optional<uint32_t> mcast_go_signal_addr;

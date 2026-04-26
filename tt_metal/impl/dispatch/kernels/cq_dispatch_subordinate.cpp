@@ -29,6 +29,7 @@ constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
 constexpr uint32_t cb_size = CB_SIZE;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
@@ -123,6 +124,89 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
         false   // posted
     );
     WAYPOINT("NWID");
+}
+
+FORCE_INLINE
+uint32_t snapshot_dispatch_d_shutdown_semaphore() {
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+    uint32_t shutdown_sem_start = *shutdown_sem_addr;
+
+    DEVICE_PRINT(
+        "DBG18881 dispatch_s: snapshot at start my_noc_index={} shutdown_sem_start={} reads={} "
+        "nonposted_writes={} nonposted_writes_acked={} nonposted_atomics_acked={} posted_writes={}\n",
+        (uint32_t)my_noc_index,
+        shutdown_sem_start,
+        noc_reads_num_issued[my_noc_index],
+        noc_nonposted_writes_num_issued[my_noc_index],
+        noc_nonposted_writes_acked[my_noc_index],
+        noc_nonposted_atomics_acked[my_noc_index],
+        noc_posted_writes_num_issued[my_noc_index]);
+    return shutdown_sem_start;
+}
+
+FORCE_INLINE
+void merge_dispatch_d_noc_counter_deltas(uint32_t shutdown_sem_start) {
+    // Issue #18881: dispatch_d (BRISC, on this same core) issues transactions on our NOC (NOC 1)
+    // that we never count locally. Wait for dispatch_d to publish its NOC 1 deltas into dispatch_d's
+    // normal counter slots, then merge any non-zero deltas into our local counters before the barrier.
+    constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
+    {
+        const uint32_t pre_local = noc_nonposted_atomics_acked[my_noc_index];
+        const uint32_t pre_niu = NOC_STATUS_READ_REG(my_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
+        DEVICE_PRINT(
+            "DBG18881 dispatch_s: pre-handoff local_atomics_acked={} my_noc_index={} niu_atomic_resp={}\n",
+            pre_local,
+            (uint32_t)my_noc_index,
+            pre_niu);
+    }
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+    noc_semaphore_wait_min(shutdown_sem_addr, shutdown_sem_start + 1);
+    DEVICE_PRINT("DBG18881 dispatch_s: received shutdown semaphore signal, sem_val={}\n", *shutdown_sem_addr);
+    invalidate_l1_cache();
+    const uint32_t reads_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::READS_NUM_ISSUED>(my_noc_index);
+    const uint32_t nonposted_writes_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(my_noc_index);
+    const uint32_t nonposted_writes_acked_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(my_noc_index);
+    const uint32_t nonposted_atomics_acked_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index);
+    const uint32_t posted_writes_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(my_noc_index);
+
+    if (reads_delta != 0) {
+        noc_reads_num_issued[my_noc_index] += reads_delta;
+    }
+    if (nonposted_writes_delta != 0) {
+        noc_nonposted_writes_num_issued[my_noc_index] += nonposted_writes_delta;
+    }
+    if (nonposted_writes_acked_delta != 0) {
+        noc_nonposted_writes_acked[my_noc_index] += nonposted_writes_acked_delta;
+    }
+    if (nonposted_atomics_acked_delta != 0) {
+        noc_nonposted_atomics_acked[my_noc_index] += nonposted_atomics_acked_delta;
+    }
+    if (posted_writes_delta != 0) {
+        noc_posted_writes_num_issued[my_noc_index] += posted_writes_delta;
+    }
+    {
+        DEVICE_PRINT(
+            "DBG18881 dispatch_s: merged deltas reads={} nonposted_writes={} nonposted_writes_acked={} "
+            "nonposted_atomics_acked={} posted_writes={} merged_reads={} merged_nonposted_writes={} "
+            "merged_nonposted_writes_acked={} merged_nonposted_atomics_acked={} merged_posted_writes={}\n",
+            reads_delta,
+            nonposted_writes_delta,
+            nonposted_writes_acked_delta,
+            nonposted_atomics_acked_delta,
+            posted_writes_delta,
+            noc_reads_num_issued[my_noc_index],
+            noc_nonposted_writes_num_issued[my_noc_index],
+            noc_nonposted_writes_acked[my_noc_index],
+            noc_nonposted_atomics_acked[my_noc_index],
+            noc_posted_writes_num_issued[my_noc_index]);
+    }
 }
 
 FORCE_INLINE
@@ -332,6 +416,11 @@ void kernel_main() {
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
+
+    uint32_t dispatch_d_shutdown_sem_start = 0;
+    if constexpr (!distributed_dispatcher) {
+        dispatch_d_shutdown_sem_start = snapshot_dispatch_d_shutdown_semaphore();
+    }
     if constexpr (distributed_dispatcher) {
         for (size_t i = 0; i < max_num_worker_sems; i++) {
             uint32_t index = i + first_stream_used;
@@ -377,16 +466,13 @@ void kernel_main() {
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
-#ifdef COMPILE_FOR_IDLE_ERISC
-    // Wait for all transactions to complete, to avoid hitting the asserts in
-    // idle_erisck.cc if there are outstanding transactions. These barriers
-    // don't work on worker cores, because there cq_dispatch is on the same core
-    // and shares use of this noc, but doesn't update this risc's transaction
-    // counts. However, we don't have the barrier checks in brisck.cc, so we can
-    // skip this for now.
+
+    if constexpr (!distributed_dispatcher) {
+        merge_dispatch_d_noc_counter_deltas(dispatch_d_shutdown_sem_start);
+    }
+
     noc_async_full_barrier();
-#endif
-    DPRINT << "dispatch_s : done" << ENDL();
+
     DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();
 }
