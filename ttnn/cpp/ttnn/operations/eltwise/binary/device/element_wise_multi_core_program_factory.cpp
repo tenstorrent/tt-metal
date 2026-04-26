@@ -161,7 +161,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::ElementWiseMultiCore::cre
     // ---- Kernel compile-time args and defines ----
 
     std::map<std::string, std::string> reader_defines;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_or_width_sharded};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(std::uint32_t)block_or_width_sharded};
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
     } else {
@@ -178,7 +178,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::ElementWiseMultiCore::cre
         writer_defines["OUT_SHARDED"] = "1";
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     bool fp32_dest_acc_en = dst_cb_data_format == tt::DataFormat::UInt32 ||

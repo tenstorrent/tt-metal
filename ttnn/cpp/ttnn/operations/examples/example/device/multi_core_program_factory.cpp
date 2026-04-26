@@ -61,7 +61,7 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
     });
 
     // Reader kernel
-    std::vector<uint32_t> reader_compile_time_args;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
@@ -73,7 +73,7 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
     reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer kernel
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;

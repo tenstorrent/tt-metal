@@ -157,7 +157,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightAndWidthMu
     // ---- Kernel compile-time args and defines ----
 
     std::map<std::string, std::string> reader_defines;
-    std::vector<uint32_t> reader_compile_time_args;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
@@ -169,24 +169,26 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightAndWidthMu
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     }
 
+    static constexpr const char* READER_HW_INTERLEAVED =
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+        "reader_bcast_hw_interleaved_partitioned.cpp";
+    static constexpr const char* READER_SCALAR_INTERLEAVED =
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+        "reader_bcast_scalar_interleaved_partitioned.cpp";
     std::string reader_kernel_path;
     if (src1_buffer != nullptr) {
         TT_FATAL(src1_buffer->buffer_layout() == TensorMemoryLayout::INTERLEAVED, "src1_buffer must be interleaved");
         TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
-        reader_kernel_path =
-            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
-            "reader_bcast_hw_interleaved_partitioned.cpp";
+        reader_kernel_path = READER_HW_INTERLEAVED;
     } else {
-        reader_kernel_path =
-            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
-            "reader_bcast_scalar_interleaved_partitioned.cpp";
+        reader_kernel_path = READER_SCALAR_INTERLEAVED;
     }
 
     std::map<std::string, std::string> writer_defines;
     if (output_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // ---- Reader kernel ----

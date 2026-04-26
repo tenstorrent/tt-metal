@@ -339,6 +339,64 @@ Both must succeed with zero errors.
 
 ---
 
+## Performance best practices
+
+The ProgramDescriptor path calls `create_descriptor` on **every dispatch** (cache hit or miss).
+Everything built inside it — CBDescriptors, KernelDescriptors, CoreRangeSet copies,
+runtime arg vectors — is allocation overhead. Follow these patterns to keep it fast.
+
+### Prefer constexpr kernel paths
+
+Prefer `static constexpr const char*` over runtime string concatenation for kernel paths.
+`kernel_source` is `std::string`, so each assignment copies — but starting from constexpr
+storage avoids the CPU + heap cost of formatting/concatenating the path per dispatch:
+
+```cpp
+// BAD — formats/concatenates a new std::string every dispatch
+const std::string kernels_dir = "ttnn/cpp/ttnn/operations/my_op/device/kernels/";
+reader_desc.kernel_source = kernels_dir + "reader.cpp";
+
+// GOOD — path data lives in read-only storage; only one copy into the descriptor
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/my_op/device/kernels/reader.cpp";
+reader_desc.kernel_source = READER_KERNEL_PATH;
+```
+
+### Use KernelDescriptor type aliases for args
+
+Use `KernelDescriptor::CompileTimeArgs` and `KernelDescriptor::CoreRuntimeArgs` instead of
+`std::vector<uint32_t>`. These are `SmallVector` types that avoid heap allocation for small ops:
+
+```cpp
+// BAD
+std::vector<uint32_t> compile_time_args{cb_id};
+
+// GOOD
+KernelDescriptor::CompileTimeArgs compile_time_args{cb_id};
+```
+
+### Use cached_split_work_to_cores instead of manual grid/split calls
+
+Never call `device->compute_with_storage_grid_size()`, `split_work_to_cores()`, and
+`grid_to_cores()` separately. Use the framework cache instead — it caches the device grid
+(which never changes) and the work split result per thread:
+
+```cpp
+// BAD — recomputes grid + split + cores on every dispatch
+auto grid = device->compute_with_storage_grid_size();
+auto [num_cores, all_cores, cg1, cg2, upcg1, upcg2] = split_work_to_cores(grid, units);
+auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+
+// GOOD — one call, cached per thread
+const auto& ws = cached_split_work_to_cores(device, units_to_divide);
+// ws.num_cores, ws.all_cores, ws.core_group_1, ws.core_group_2,
+// ws.units_per_core_group_1, ws.units_per_core_group_2, ws.cores
+```
+
+See `ttnn/cpp/ttnn/operations/randn/device/randn_program_factory.cpp` for usage.
+
+---
+
 ## Common pitfalls
 
 1. **Namespace resolution after moving factories.** If factories move to a different
