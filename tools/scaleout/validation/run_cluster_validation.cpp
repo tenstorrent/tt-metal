@@ -406,9 +406,7 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     if (links_reset) {
-        // Return and ask user to run again, otherwise some incorrect HW states might persist and cause hangs
-        log_output_rank0("Ethernet Links were Retrained. Please run the validation tool again to issue traffic.");
-        return 0;
+        cluster.rediscover_ethernet_links();
     }
 
     ConnectivityValidationConfig validation_config{
