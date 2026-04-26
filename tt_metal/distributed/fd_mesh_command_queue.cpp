@@ -1020,7 +1020,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
     auto lock = lock_api_function_();
     in_use_ = true;
-    auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
+    auto trace_inst = mesh_device_->impl().get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
