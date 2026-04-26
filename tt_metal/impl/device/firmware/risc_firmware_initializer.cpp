@@ -287,6 +287,17 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 }
             }
             // Give MMIO ERISCs time to reboot from ROM and load UMD base relay firmware.
+            // TODO: Replace with a per-core polled readiness check once the ETH heartbeat
+            // address is confirmed stable across all supported architectures.
+            // Blocker: Wormhole does not support ETH_MAILBOX_API
+            // (hal_.get_dispatch_feature_enabled(DispatchFeature::ETH_MAILBOX_API) == false),
+            // so get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT) returns 0 on WH and cannot
+            // be used to detect liveness.  On Blackhole and Quasar, the HEARTBEAT register at
+            // MEM_SYSENG_ETH_HEARTBEAT increments in 0xABCDxxxx format once base firmware is
+            // running, and cluster_.read_reg() on MMIO cores goes through PCIe (safe even with
+            // a broken relay).  When WH support for ETH_MAILBOX_API is added, replace this
+            // sleep with a per-core loop: read HEARTBEAT via cluster_.read_reg(), break when
+            // (val >> 16) == 0xABCD, warn+continue after ~1s of attempts.
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channels rebooted; relay should be restored.");
         }
@@ -396,6 +407,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             }
             // Give timeout-reset MMIO ERISCs time to reboot before ~Cluster destroys
             // the driver.
+            // TODO: Replace with a polled readiness check once ETH heartbeat address is
+            // confirmed stable across all supported architectures.  Same blocker as the
+            // 500ms sleep in Step 2: Wormhole has ETH_MAILBOX_API == false, so
+            // get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT) == 0 and cannot be used.
+            // On Blackhole/Quasar, poll cluster_.read_reg() for (val >> 16) == 0xABCD
+            // on each reset MMIO ETH core (PCIe-direct; relay intact in this path).
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channel reset complete.");
         }

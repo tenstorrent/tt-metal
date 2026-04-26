@@ -310,17 +310,29 @@ private:
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
+    // SERIALIZATION INVARIANT (non-atomic fabric state fields):
+    // The fields below are NOT protected by a mutex and are NOT atomic.  They are safe under
+    // the following invariant: the mesh-level caller (MeshDevice / DeviceManager) guarantees
+    // that configure_fabric() / configure_and_compile_fabric() completes on all devices before
+    // any quiesce_and_restart_fabric_workers() / wait_for_fabric_workers_ready() call begins.
+    //
+    // Concretely:
+    //   WRITE phase (configure):   fabric_pre_dead_channels_, fabric_is_mmio_dead_peer_device_
+    //                              are written during configure_fabric().
+    //   READ phase (quiesce/wait): same fields are read during Phase 5b of
+    //                              wait_for_fabric_workers_ready().
+    //   WRITE+READ (quiesce):      pending_eth_launch_, pending_quiesce_newly_dead_eth_chans_,
+    //                              pending_phase25_force_reset_chans_ are written by
+    //                              quiesce_and_restart_fabric_workers() and read+cleared by
+    //                              launch_eth_cores_for_quiesce() — both called sequentially
+    //                              from the same mesh-level orchestration thread.
+    //
+    // Future refactors that parallelize configure and quiesce phases MUST either maintain this
+    // serialization ordering or protect every field listed above with a mutex.
+
     // FIX P2 (#42429): ETH channel IDs confirmed dead during configure_fabric() — no firmware
     // was loaded for these channels, so Phase 5 of quiesce_and_restart_fabric_workers must not
     // expect them to reach READY_FOR_TRAFFIC.
-    //
-    // THREAD-SAFETY NOTE: This field is NOT thread-safe (no mutex, not atomic).
-    // It is written during configure_fabric() and read during Phase 5b of
-    // wait_for_fabric_workers_ready().  This is currently safe because the mesh-level caller
-    // (MeshDevice / DeviceManager) serializes configure_fabric() and
-    // wait_for_fabric_workers_ready() — configure always completes before any quiesce
-    // restart begins.  Future refactors that parallelize these calls MUST maintain this
-    // serialization invariant or protect this field with a mutex.
     std::unordered_set<uint32_t> fabric_pre_dead_channels_;
     // FIX I2 (#42429): True when this MMIO device's master ETH channel connects to a
     // dead-relay peer.  Firmware was loaded on this device but the peer will never complete
@@ -372,6 +384,7 @@ private:
     std::atomic<bool> fabric_channels_not_ready_for_traffic_{false};
 
     // FIX AE (#42429): State for deferred ETH ERISC launch during quiesce.
+    // (See SERIALIZATION INVARIANT block above — these fields are non-atomic/non-mutex.)
     // Set by quiesce_and_restart_fabric_workers(defer_eth_launch=true),
     // consumed and cleared by launch_eth_cores_for_quiesce().
     // pending_eth_launch_ is true iff configure_fabric_cores completed and ETH

@@ -1169,6 +1169,61 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     return {std::move(probe_dead_channels), relay_broken, std::move(base_umd_channels)};
 }
 
+// Quiesce/Teardown Phase Protocol
+// ================================
+// T3K fabric shutdown follows a strict phase ordering to safely drain
+// in-flight commands and terminate ERISC firmware without hanging.
+// The same phases run for normal init, but quiesce mode adds Phases 3-5.
+// Phases 1-2 live in this file; Phases 3-6 live in device.cpp.
+//
+// PHASE 1 - Dead Channel Detection  [compile_and_configure_fabric → terminate_stale_erisc_routers]
+//   Probe each active ETH channel via relay read to find already-dead channels before
+//   attempting firmware writes that would hang waiting on a dead peer.
+//   Outcome sets:
+//     probe_dead_channels  — relay read timed out (channel unresponsive)
+//     relay_broken         — 3+ timeouts on a single device (entire relay path gone)
+//     base_umd_channels    — reads back 0x49706550 (base UMD firmware sentinel)
+//   FIX E2: any non-MMIO device with probe_dead → added to dead_relay_devices_ (skip dispatch init)
+//   FIX H:  once relay_broken for an MMIO host, skip probing all non-MMIO devices behind it
+//
+// PHASE 2 - Fabric Configure  [configure_fabric / configure_fabric_cores]
+//   Write EDM firmware to active ETH channels; dead channels identified in Phase 1 are skipped.
+//   FIX M:   skip soft-reset for base_umd channels (BRISC halt kills the relay needed for UMD comms)
+//   FIX C:   skip WriteRuntimeArgs / ConfigureDeviceWithProgram for dead ETH cores
+//
+// PHASE 2.5 - Post-configure Dead Channel Catch
+//   If configure_fabric throws for a non-MMIO device, set fabric_relay_path_broken_ (FIX AN).
+//   FIX AO/AP: skip all further relay-dependent ops for broken-relay non-MMIO devices so that
+//              subsequent phases (teardown writes, sync polls) do not hang on a dead relay.
+//
+// PHASE 3 - ETH Launch  [device.cpp]
+//   Launch the quiesce (or init) kernel on each ETH channel and poll for a STARTED heartbeat.
+//   Quiesce path: 3-pass launch per FIX AE (non-MMIO first, then MMIO, then drain confirm).
+//   FIX AF: poll STARTED between non-MMIO and MMIO launches to catch partial-mesh failures early.
+//   FIX AD: skip MMIO ETH soft-reset in quiesce mode (already performed in Phase 2).
+//
+// PHASE 4 - Router Sync  [wait_for_fabric_router_sync]
+//   Poll all devices for EDM_STATUS_STARTED to confirm firmware is live before traffic.
+//   Skip dead_relay_devices_ (FIX G). TT_THROW on timeout for non-MMIO devices only.
+//
+// PHASE 5 - AllGather  [quiesce mode only, device.cpp]
+//   Run AllGather op to drain the dispatch queue before teardown.
+//   Failure here is fatal — quiesce guarantees a clean state or it is an error.
+//
+// PHASE 5b - ETH Health Verification  [verify_all_fabric_channels_healthy]
+//   Read edm_status from each active ETH channel to confirm healthy firmware.
+//   Skip dead_relay_devices_ (FIX G).
+//   FIX AK:  non-fatal for partial-mesh configs (not all channels required).
+//   FIX W/AK: channels reading 0xDEADECE7 / 0xDEAD5B5B → all-dead clean return.
+//   FIX AM:  set fabric_channels_not_ready_for_traffic_ on health check failure so callers
+//            can skip dispatch rather than hanging on a non-functional fabric.
+//
+// PHASE 6 - Teardown  [device.cpp]
+//   Poll ETH channels for TERMINATED status; force-reset any that do not respond in time.
+//   FIX AI:   force-reset targets all RISCs (not just ERISC) on the unresponsive channel.
+//   FIX F5a:  unconditional force-reset on timeout — do not leave firmware in an unknown state.
+//   FIX AP/AO: skip relay-dependent teardown writes for fabric_relay_path_broken_ devices.
+//   FIX F2.5: force-reset unresponsive ERISC before overwriting its L1 region.
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // Snapshot the compile seam once at function entry.  In production (no test override),
     // s_compile_fn_for_testing_ is an empty std::function and we fall back to
@@ -1258,10 +1313,15 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // FIX: Run ALL probe reads FIRST (while relay is still base UMD firmware), then run
     // ALL configure_fabric() calls.  This eliminates the race entirely.
     //
-    // FIX H (#42429): Once any non-MMIO device confirms its relay is broken, all subsequent
-    // non-MMIO devices share the same fate — on T3K the relay path to all remote chips routes
-    // through the same MMIO-device ETH relay ERISCs.  Rather than paying 3×15s probe timeouts
-    // per additional non-MMIO device, track whether any relay broke and fast-path the rest.
+    // FIX H (#42429): Once a non-MMIO device confirms its relay is broken, all subsequent
+    // non-MMIO devices behind the SAME MMIO host share the same fate — the relay path to
+    // those remote chips routes through that MMIO device's ETH relay ERISCs.  Rather than
+    // paying 3×15s probe timeouts per additional non-MMIO device, track which MMIO hosts
+    // have a confirmed broken relay and fast-path non-MMIO devices behind them.
+    //
+    // Galaxy note: Galaxy has multiple MMIO chips, each with its own relay path.  A broken
+    // relay on one MMIO chip does NOT imply the relay behind other MMIO chips is broken.
+    // The per-MMIO-host set below correctly scopes the fast-path to the affected MMIO host.
 
     // PHASE 1: Probe ALL devices FIRST before any configure_fabric() call.
     // At this point all ETH relay ERISCs are still running base UMD firmware and can service
@@ -1270,10 +1330,13 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // FIX M (#42429): channels with base-UMD relay firmware (0x49706550) — configure_fabric_cores()
     // must skip soft reset for these to avoid killing the ETH relay endpoint.
     std::unordered_map<ChipId, std::unordered_set<uint32_t>> base_umd_channels_map;
-    bool any_relay_broken = false;
+    // relay_broken_mmio_hosts: set of MMIO chip IDs whose relay path is confirmed broken.
+    // Non-MMIO devices behind a broken MMIO host are fast-pathed (FIX H) without probing.
+    std::unordered_set<ChipId> relay_broken_mmio_hosts;
     for (auto* dev : compiled_devices) {
         if (dev) {
             const bool is_non_mmio = (cluster_.get_associated_mmio_device(dev->id()) != dev->id());
+            const ChipId mmio_host = cluster_.get_associated_mmio_device(dev->id());
 
             // Fix A: probe for stale ERISC firmware on all active channels BEFORE
             // configure_fabric_cores() clears L1 and loads the new firmware image.
@@ -1297,13 +1360,14 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             std::unordered_set<uint32_t> probe_dead_channels;
             bool relay_broken = false;
 
-            if (any_relay_broken && is_non_mmio) {
-                // FIX H: relay already confirmed broken by a prior non-MMIO device — skip the
-                // 3×15s probe timeout sequence entirely.  Mark ALL active ETH channels dead so
-                // configure_fabric() skips every relay-routed write (ETH reset, runtime args,
-                // ConfigureDeviceWithProgram, l1_barrier).  This cuts ~135s off the hang path
-                // (3 skipped devices × 3 timeouts × 15s) when the relay ERISCs were left in a
-                // corrupt mid-handshake state by a prior abrupt process termination (#42429).
+            if (is_non_mmio && relay_broken_mmio_hosts.count(mmio_host)) {
+                // FIX H: relay already confirmed broken for MMIO host {} — skip the
+                // 3×15s probe timeout sequence entirely for non-MMIO devices behind that host.
+                // Mark ALL active ETH channels dead so configure_fabric() skips every
+                // relay-routed write (ETH reset, runtime args, ConfigureDeviceWithProgram,
+                // l1_barrier).  This cuts ~135s off the hang path (3 skipped devices × 3
+                // timeouts × 15s) when the relay ERISCs were left in a corrupt mid-handshake
+                // state by a prior abrupt process termination (#42429).
                 relay_broken = true;
                 const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
                 const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
@@ -1312,10 +1376,11 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 }
                 log_warning(
                     tt::LogMetal,
-                    "compile_and_configure_fabric: Device {} non-MMIO ETH relay already confirmed "
-                    "broken by prior device — skipping terminate_stale_erisc_routers() probe "
+                    "compile_and_configure_fabric: Device {} non-MMIO ETH relay confirmed broken "
+                    "via MMIO host {} — skipping terminate_stale_erisc_routers() probe "
                     "(FIX H #42429). Marking all {} ETH channel(s) as dead.",
                     dev->id(),
+                    mmio_host,
                     probe_dead_channels.size());
             } else {
                 auto result = terminate_stale_erisc_routers(dev, builder_context);
@@ -1339,7 +1404,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                     relay_broken,
                     probe_dead_channels.size());
                 if (relay_broken) {
-                    any_relay_broken = true;
+                    relay_broken_mmio_hosts.insert(mmio_host);
                 }
             }
 
