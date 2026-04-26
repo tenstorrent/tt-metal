@@ -1,48 +1,118 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) Bug Escape Detection / Verify"
 
 on:
   workflow_dispatch:
+    inputs:
+      # --- Verification mode (fill these to skip detection and verify a specific escape) ---
+      fix-commit-sha:
+        description: "Verify mode: fix commit SHA (leave blank for detection mode)"
+        type: string
+        default: ""
+      verify-test-pipeline:
+        description: "Verify mode: workflow file path (e.g. .github/workflows/t3000-perf-tests.yaml)"
+        type: string
+        default: ""
+      verify-test-job:
+        description: "Verify mode: job display name"
+        type: string
+        default: ""
+      verify-test-name:
+        description: "Verify mode: full pytest path"
+        type: string
+        default: ""
+      verify-expected-failure-sig:
+        description: "Verify mode: expected failure signature (for AI classification)"
+        type: string
+        default: ""
+      poll-interval-seconds:
+        description: "Verify mode: seconds between status checks"
+        type: string
+        default: "30"
+      start-wait-minutes:
+        description: "Verify mode: max minutes to wait for run to start (leave queued)"
+        type: string
+        default: "240"
+      finish-wait-minutes:
+        description: "Verify mode: max minutes to wait for run to finish once started"
+        type: string
+        default: "120"
+      # --- LLM backend ---
+      llm-backend:
+        description: "LLM backend for agent-driven steps: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
+      # --- Detection mode (used when fix-commit-sha is blank) ---
+      max-phase:
+        description: "Detection mode: stop after this phase (0-4)"
+        type: string
+        default: "4"
+      test-workflows:
+        description: "Detection mode: comma-separated workflow paths (empty = all)"
+        type: string
+        default: ""
+      consecutive-runs:
+        description: "Detection mode: consecutive failing runs required"
+        type: string
+        default: "3"
+      lookback-days:
+        description: "Detection mode: days to look back for failures"
+        type: string
+        default: "14"
+      incremental-days:
+        description: "Detection mode: only include escapes whose fix transition happened in the last N days (0 = no filter)"
+        type: string
+        default: "0"
+      auto-verify:
+        description: "Detection mode: if 'true', run autonomous verification after detection"
+        type: string
+        default: "false"
+      verify-budget-hours:
+        description: "Detection mode: max hours to spend dispatching verification runs (auto-verify=true only)"
+        type: string
+        default: "6"
+      mock-verify:
+        description: "Detection mode: if 'true', verification writes mock results without dispatching real CI runs (for testing)"
+        type: string
+        default: "false"
 
 permissions:
-  contents: read
+  contents: write
+  actions: write
 
 jobs:
-  cursor-cli-smoke-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  detect:
+    if: inputs.fix-commit-sha == ''
+    uses: tenstorrent/tt-auto-triage/.github/workflows/bug-escapes-ci.yaml@ebanerjee/bug-escapes
+    with:
+      llm-backend: ${{ inputs.llm-backend }}
+      max-phase: ${{ inputs.max-phase }}
+      test-workflows: ${{ inputs.test-workflows }}
+      consecutive-runs: ${{ inputs.consecutive-runs }}
+      lookback-days: ${{ inputs.lookback-days }}
+      incremental-days: ${{ inputs.incremental-days }}
+      auto-verify: ${{ inputs.auto-verify }}
+      verify-budget-hours: ${{ inputs.verify-budget-hours }}
+      mock-verify: ${{ inputs.mock-verify }}
+    secrets:
+      GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+      GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
 
-      - name: Ensure CURSOR_API_KEY is configured
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
-            exit 1
-          fi
-
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
+  verify:
+    if: inputs.fix-commit-sha != ''
+    uses: tenstorrent/tt-auto-triage/.github/workflows/verify-bug-escape-ci.yaml@ebanerjee/bug-escapes
+    with:
+      llm-backend: ${{ inputs.llm-backend }}
+      fix-commit-sha: ${{ inputs.fix-commit-sha }}
+      test-pipeline: ${{ inputs.verify-test-pipeline }}
+      test-job: ${{ inputs.verify-test-job }}
+      test-name: ${{ inputs.verify-test-name }}
+      expected-failure-sig: ${{ inputs.verify-expected-failure-sig }}
+      poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
+      start-wait-minutes: ${{ inputs.start-wait-minutes }}
+      finish-wait-minutes: ${{ inputs.finish-wait-minutes }}
+    secrets:
+      GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
