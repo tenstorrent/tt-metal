@@ -7,29 +7,11 @@
 #include <algorithm>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "device_print.h"
 #include "internal/risc_attribs.h"
 #include "risc_common.h"
 
 namespace device_print_dispatch {
-
-struct NocLocationInputInfo {
-    uint16_t x : 6;
-    uint16_t y : 6;
-    uint64_t rw_ptr_addr : 52;
-    uint16_t buf_offset;
-    uint16_t buf_size;
-} __attribute__((packed, aligned(4)));
-
-static_assert(sizeof(NocLocationInputInfo) == 12, "NocLocationInputInfo must be 12 bytes");
-static_assert(sizeof(NocLocationInputInfo) % 4 == 0, "NocLocationInputInfo must be 4-byte aligned");
-
-struct DramStreamMessageHeader {
-    uint16_t x : 6;
-    uint16_t y : 6;
-    uint16_t align : 6;
-    uint16_t buffer_wrapped : 1;
-    uint16_t length : 13;
-};
 
 #if defined(ARCH_WORMHOLE)
 constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS = 8 * 10    // Tensix cores
@@ -70,6 +52,11 @@ public:
         uint32_t noc_locations_count,
         uint32_t l1_cache_buffer_address,
         uint32_t l1_cache_buffer_size,
+        uint16_t dram_x,
+        uint16_t dram_y,
+        uint64_t dram_rw_pointers,
+        uint64_t dram_buffer_start,
+        uint32_t dram_buffer_size,
         uint64_t cycles_for_stall_detection,
         uint64_t cycles_for_full_dispatch) {
         noc_locations = (volatile tt_l1_ptr device_print_dispatch::NocLocationInputInfo*)noc_locations_ptr;
@@ -79,6 +66,9 @@ public:
         this->cycles_for_stall_detection = cycles_for_stall_detection;
         this->cycles_for_full_dispatch = cycles_for_full_dispatch;
         num_noc_locations_to_process = 0;
+        noc_dram_rw_pointers = get_noc_addr64(dram_x, dram_y, dram_rw_pointers);
+        noc_dram_buffer_start = get_noc_addr64(dram_x, dram_y, dram_buffer_start);
+        this->dram_buffer_size = dram_buffer_size;
 
         // Align the start of rw pointers buffer
         l1_rw_pointers_buffer_start = l1_align(l1_cache_buffer_address);
@@ -269,9 +259,6 @@ private:
                 // Issue writes to NOC locations to update read pointers.
                 update_read_pointers(next_index_to_dispatch, i);
 
-                // Wait for NOC writes to finish.
-                noc_async_write_barrier();
-
                 // Update next index to dispatch.
                 next_index_to_dispatch = i;
 
@@ -315,7 +302,7 @@ private:
                 } else {
                     rw_pointers = (volatile tt_l1_ptr uint16_t*)(current_l1_buffer_address + buffer_l1_alignment +
                                                                  remote_buffer_size);
-                    remote_buffer_size += sizeof(device_print_dispatch::DramStreamMessageHeader);
+                    remote_buffer_size += rw_pointers_size;
                 }
                 rw_pointers[0] = write_position;
                 rw_pointers[1] = read_position;
@@ -328,17 +315,16 @@ private:
             current_l1_buffer_address += dram_align(buffer_l1_alignment + remote_buffer_size);
         }
 
-        // Wait for all NOC read transfers to finish.
-        noc_async_read_barrier();
+        if (next_index_to_dispatch < num_noc_locations_to_process) {
+            // Wait for all NOC read transfers to finish.
+            noc_async_read_barrier();
 
-        // Push data to DRAM before processing next buffers.
-        push_data_to_dram(current_l1_buffer_address - l1_device_print_buffer_start);
+            // Push data to DRAM before processing next buffers.
+            push_data_to_dram(current_l1_buffer_address - l1_device_print_buffer_start);
 
-        // Issue writes to NOC locations to update read pointers.
-        update_read_pointers(next_index_to_dispatch, num_noc_locations_to_process);
-
-        // Wait for NOC writes to finish.
-        noc_async_write_barrier();
+            // Issue writes to NOC locations to update read pointers.
+            update_read_pointers(next_index_to_dispatch, num_noc_locations_to_process);
+        }
     }
 
     void push_data_to_dram(uint32_t buffer_size) {
@@ -415,6 +401,9 @@ private:
                 remote_l1_address + sizeof(uint32_t),
                 sizeof(uint32_t));
         }
+
+        // Wait for NOC writes to finish.
+        noc_async_write_barrier();
     }
 
     static uint32_t l1_align(uint32_t address) {

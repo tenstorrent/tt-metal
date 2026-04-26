@@ -140,7 +140,7 @@ struct dp_typed_array_t {
 
 #define DEVICE_PRINT(format, ...)                                                                                  \
     {                                                                                                              \
-        auto device_print_info_address = device_print_detail::invoke_by_value(                                     \
+        auto _device_print_info_address = device_print_detail::invoke_by_value(                                    \
             [](auto&&... args) __attribute__((always_inline)) {                                                    \
                 /* Validate format string syntax */                                                                \
                 static_assert(                                                                                     \
@@ -171,20 +171,20 @@ struct dp_typed_array_t {
                 constexpr auto updated_format =                                                                    \
                     device_print_detail::formatting::update_format_string_from_args(format, args...);              \
                 /* Store updated format string in a special section for device_print */                            \
-                DEVICE_PRINT_GET_STRING_INFO_ADDRESS(device_print_info_address, updated_format);                   \
-                return device_print_info_address;                                                                  \
+                DEVICE_PRINT_GET_STRING_INFO_ADDRESS(_device_print_info_address, updated_format);                  \
+                return _device_print_info_address;                                                                 \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
-        auto header = device_print_detail::invoke_by_value(                                                        \
+        auto _device_print_header = device_print_detail::invoke_by_value(                                          \
             [](auto&&... args) __attribute__((always_inline)) {                                                    \
                 /* Generate device_print message header */                                                         \
                 constexpr auto message_size = device_print_detail::serialization::get_total_message_size(args...); \
-                device_print_detail::structures::DevicePrintHeader header = {};                                    \
-                header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                                         \
-                header.risc_id = PROCESSOR_INDEX;                                                                  \
-                header.message_payload =                                                                           \
-                    message_size - sizeof(header); /* Payload size does not include header itself */               \
-                return header;                                                                                     \
+                device_print_detail::structures::DevicePrintHeader _device_print_header = {};                      \
+                _device_print_header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                           \
+                _device_print_header.risc_id = PROCESSOR_INDEX;                                                    \
+                _device_print_header.message_payload =                                                             \
+                    message_size - sizeof(_device_print_header); /* Payload size does not include header itself */ \
+                return _device_print_header;                                                                       \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
         /* Get buffer lock, since we are using a single buffer per L1 instead of per risc */                       \
@@ -192,14 +192,15 @@ struct dp_typed_array_t {
         /* Wait for enough space in the buffer (if reader needs to catch up). */                                   \
         /* Update message header with string info index */                                                         \
         /* Serialize message header */                                                                             \
-        auto write_position = device_print_detail::begin_message_write(header, device_print_info_address);         \
+        auto _device_print_write_position =                                                                        \
+            device_print_detail::begin_message_write(_device_print_header, _device_print_info_address);            \
         /* Serialize arguments */                                                                                  \
         device_print_detail::invoke_by_value(                                                                      \
-            [write_position](auto&&... args) __attribute__((always_inline)) {                                      \
+            [_device_print_write_position](auto&&... args) __attribute__((always_inline)) {                        \
                 /* Get device_print buffer*/                                                                       \
-                volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();       \
-                auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;                   \
-                device_print_detail::serialization::serialize_arguments(device_print_buffer_ptr, args...);         \
+                volatile tt_l1_ptr DevicePrintMemoryLayout* _device_print_buffer = get_device_print_buffer();      \
+                auto _device_print_buffer_ptr = &(_device_print_buffer->data[0]) + _device_print_write_position;   \
+                device_print_detail::serialization::serialize_arguments(_device_print_buffer_ptr, args...);        \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
         /* Update write pointer and release buffer lock */                                                         \
