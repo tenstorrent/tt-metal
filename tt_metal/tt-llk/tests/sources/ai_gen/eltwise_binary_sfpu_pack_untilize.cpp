@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
     // SFPU unary on result in dest
     _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();
-    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC>(0);
+    _llk_math_eltwise_unary_sfpu_start_(0);
 
     test_utils::call_sfpu_operation_32(SFPU_UNARY_OPERATION);
 

@@ -77,6 +77,11 @@ class BinarySfpu(Sfpu):
 
         return golden_tensor
 
+    def _format_arg(self, stage: int) -> str:
+        if self.operation == MathOperation.SfpuAddTopRow:
+            return "0"
+        return f"math_format{stage}"
+
     def init(
         self,
         operation: FusedOperation,
@@ -85,10 +90,14 @@ class BinarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
+        op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
+        approx_mode = self.approx_mode.cpp_enum_value
+        iterations = self.iterations
+        format = self._format_arg(stage)
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
-            f"    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();\n"
+            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
         )
 
     def calculate(
@@ -101,20 +110,18 @@ class BinarySfpu(Sfpu):
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
         dst = self.dst_index_out
-
-        if self.operation == MathOperation.SfpuAddTopRow:
-            format = "0"
-        else:
-            format = f"math_format{stage}"
+        format = self._format_arg(stage)
 
         return (
-            f"    _llk_math_eltwise_binary_sfpu_start_<dest_sync{stage}>(0);\n"
-            f"    test_utils::call_binary_sfpu_operation<{approx_mode}, {op}, {iterations}, {format}>({src1}, {src2}, {dst});\n"
-            f"    _llk_math_eltwise_binary_sfpu_done_();\n"
+            f"    test_utils::call_binary_sfpu_operation<"
+            f"dest_sync{stage}, {dest_acc}, "
+            f"{approx_mode}, {op}, {iterations}, {format}"
+            f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
         )
 
     def __str__(self) -> str:
