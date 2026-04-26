@@ -166,10 +166,6 @@ inline constexpr std::uint32_t _sfpu_sfpmem_type_()
     {
         return ckernel::p_sfpu::sfpmem::UINT8;
     }
-    else if constexpr (FMT == DataFormat::UInt16)
-    {
-        return ckernel::p_sfpu::sfpmem::UINT16;
-    }
     else
     {
         static_assert(
@@ -200,8 +196,6 @@ inline std::uint32_t _sfpu_sfpmem_type_(DataFormat fmt)
             return ckernel::p_sfpu::sfpmem::INT32;
         case DataFormat::UInt8:
             return ckernel::p_sfpu::sfpmem::UINT8;
-        case DataFormat::UInt16:
-            return ckernel::p_sfpu::sfpmem::UINT16;
         default:
             return ckernel::p_sfpu::sfpmem::DEFAULT;
     }

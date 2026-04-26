@@ -57,6 +57,7 @@
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 /**
  * Please refer to documentation for any_init.
  */
@@ -970,5 +971,7 @@ ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_spe
 ALWI void store_compute_special_value_flags_to_l1(uint32_t l1_addr) {
     MATH((llk_math_store_compute_special_value_flags_to_l1(l1_addr)));
 }
+
+#endif
 
 }  // namespace ckernel
