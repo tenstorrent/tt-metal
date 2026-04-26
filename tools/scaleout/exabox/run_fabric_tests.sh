@@ -231,4 +231,15 @@ echo ""
 echo "=========================================="
 echo "Tests completed at $(date)"
 echo "Results logged to: $LOG_FILE"
+
+# Copy any pairwise-validation reports written by test_tt_fabric (only rank 0
+# writes them, and only when a hang is detected) into the user's --output dir
+# so all artifacts for this run live in one place.
+REPORT_SRC_DIR="${TT_METAL_HOME:-.}/generated/fabric"
+for report in pairwise_validation_summary.log pairwise_validation_detailed.log; do
+    if [[ -f "$REPORT_SRC_DIR/$report" ]]; then
+        cp "$REPORT_SRC_DIR/$report" "$OUTPUT_DIR/"
+        echo "Copied report: $OUTPUT_DIR/$report"
+    fi
+done
 echo "=========================================="
