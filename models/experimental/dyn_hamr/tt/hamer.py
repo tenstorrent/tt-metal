@@ -197,20 +197,13 @@ class TtHamer:
             self._vit_params = None
             self._head_params = None
 
-    def _forward_device(self, image: torch.Tensor) -> Optional[torch.Tensor]:
+    def _forward_device(self, image: torch.Tensor, ptr: int = None) -> Optional[torch.Tensor]:
         """NPU forward: ViT on device, MANO head on CPU (head port is still
         code-only).  Returns ``None`` if the device path isn't available.
+        ptr is pre-computed by __call__ when the inline cache check missed.
         """
-        # Ultra-fast path: after trace capture, same image → cached host tensor.
-        # x_init is a model constant; KV is image-constant → output is deterministic.
-        # Use data_ptr() (int) for the output cache key — avoids tuple(shape) allocation
-        # on every hot-path call.  Full (ptr, shape) key retained for the patch_cache
-        # which must distinguish same-address-different-shape tensors.
-        ptr = image.data_ptr()
-        if self._trace is not None:
-            cached_out = self._output_cache.get(ptr)
-            if cached_out is not None:
-                return cached_out
+        if ptr is None:
+            ptr = image.data_ptr()
 
         if self.device is None or self._vit_params is None:
             return None
@@ -311,7 +304,13 @@ class TtHamer:
             self._trace = None
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:
-        tt_out = self._forward_device(image)
+        # Inline output cache check to avoid _forward_device call on hot path.
+        ptr = image.data_ptr()
+        if self._trace is not None:
+            cached_out = self._output_cache.get(ptr)
+            if cached_out is not None:
+                return cached_out
+        tt_out = self._forward_device(image, ptr)
         if tt_out is not None:
             return tt_out
         with torch.no_grad():
