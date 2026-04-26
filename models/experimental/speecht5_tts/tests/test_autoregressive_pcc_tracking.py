@@ -34,6 +34,7 @@ Usage:
 """
 
 import sys
+import os
 import re
 from pathlib import Path
 import torch
@@ -69,6 +70,32 @@ from models.experimental.speecht5_tts.reference import (
 
 
 DEFAULT_CHUNK_SIZE = 150
+
+
+def _get_env_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return int(raw_value)
+
+
+def _get_env_float(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return float(raw_value)
+
+
+def _get_env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value for {name}: {raw_value}")
 
 
 def chunk_text(text, max_chunk_size=DEFAULT_CHUNK_SIZE, processor=None):
@@ -159,6 +186,57 @@ def compute_pcc(tensor1, tensor2):
         return pcc if not np.isnan(pcc) else 0.0
     except:
         return 0.0
+
+
+def _assert_multi_step_history(
+    pcc_history,
+    decoder_threshold: float,
+    mel_pre_threshold: float,
+    mel_post_threshold: float,
+    stop_threshold: float,
+):
+    required_keys = ("decoder", "mel_pre", "mel_post", "stop")
+    for key in required_keys:
+        assert key in pcc_history, f"multi-step: missing key '{key}' in PCC history"
+        assert len(pcc_history[key]) > 0, f"multi-step: PCC history for '{key}' is empty"
+        assert np.all(np.isfinite(pcc_history[key])), f"multi-step: non-finite values in '{key}' PCC history"
+
+    total_steps = len(pcc_history["decoder"])
+    assert (
+        len(pcc_history["mel_pre"]) == total_steps
+    ), "multi-step: mel_pre history length does not match decoder length"
+    assert (
+        len(pcc_history["mel_post"]) == total_steps
+    ), "multi-step: mel_post history length does not match decoder length"
+    assert len(pcc_history["stop"]) == total_steps, "multi-step: stop history length does not match decoder length"
+
+    min_decoder = float(np.min(pcc_history["decoder"]))
+    min_mel_pre = float(np.min(pcc_history["mel_pre"]))
+    min_mel_post = float(np.min(pcc_history["mel_post"]))
+    min_stop = float(np.min(pcc_history["stop"]))
+
+    assert (
+        min_decoder >= decoder_threshold
+    ), f"multi-step: decoder min PCC {min_decoder:.6f} is below threshold {decoder_threshold:.6f}"
+    assert (
+        min_mel_pre >= mel_pre_threshold
+    ), f"multi-step: mel_pre min PCC {min_mel_pre:.6f} is below threshold {mel_pre_threshold:.6f}"
+    assert (
+        min_mel_post >= mel_post_threshold
+    ), f"multi-step: mel_post min PCC {min_mel_post:.6f} is below threshold {mel_post_threshold:.6f}"
+    assert (
+        min_stop >= stop_threshold
+    ), f"multi-step: stop min PCC {min_stop:.6f} is below threshold {stop_threshold:.6f}"
+
+
+def _assert_true_ar_history(pcc_history, mel_seq_threshold: float):
+    assert len(pcc_history) > 0, "true-autoregressive: mel-sequence PCC history is empty"
+    assert np.all(np.isfinite(pcc_history)), "true-autoregressive: non-finite mel-sequence PCC values detected"
+
+    min_mel_seq = float(np.min(pcc_history))
+    assert min_mel_seq >= mel_seq_threshold, (
+        f"true-autoregressive: mel-sequence min PCC {min_mel_seq:.6f} " f"is below threshold {mel_seq_threshold:.6f}"
+    )
 
 
 def _run_multi_step_pcc_chunk(
@@ -694,6 +772,53 @@ def run_true_autoregressive_test(text, num_steps=20, disable_dropout=True, max_c
 
     ttnn.close_device(device)
     return all_pcc_history
+
+
+def test_autoregressive_pcc_tracking_multistep():
+    text = os.getenv("SPEECHT5_AR_TRACKING_TEXT", "Hello world")
+    num_steps = _get_env_int("SPEECHT5_AR_TRACKING_MULTI_STEPS", 5)
+    max_chunk_size = _get_env_int("SPEECHT5_AR_TRACKING_MAX_CHUNK_SIZE", DEFAULT_CHUNK_SIZE)
+    disable_dropout = _get_env_bool("SPEECHT5_AR_TRACKING_DISABLE_DROPOUT", True)
+
+    decoder_threshold = _get_env_float("SPEECHT5_AR_TRACKING_MULTI_DECODER_MIN", -1.0)
+    mel_pre_threshold = _get_env_float("SPEECHT5_AR_TRACKING_MULTI_MEL_PRE_MIN", -1.0)
+    mel_post_threshold = _get_env_float("SPEECHT5_AR_TRACKING_MULTI_MEL_POST_MIN", -1.0)
+    stop_threshold = _get_env_float("SPEECHT5_AR_TRACKING_MULTI_STOP_MIN", -1.0)
+
+    pcc_history = run_multi_step_pcc_test(
+        text=text,
+        num_steps=num_steps,
+        disable_dropout=disable_dropout,
+        max_chunk_size=max_chunk_size,
+    )
+
+    _assert_multi_step_history(
+        pcc_history=pcc_history,
+        decoder_threshold=decoder_threshold,
+        mel_pre_threshold=mel_pre_threshold,
+        mel_post_threshold=mel_post_threshold,
+        stop_threshold=stop_threshold,
+    )
+
+
+def test_autoregressive_pcc_tracking_true_autoregressive():
+    text = os.getenv("SPEECHT5_AR_TRACKING_TEXT", "Hello world")
+    num_steps = _get_env_int("SPEECHT5_AR_TRACKING_TRUE_AR_STEPS", 5)
+    max_chunk_size = _get_env_int("SPEECHT5_AR_TRACKING_MAX_CHUNK_SIZE", DEFAULT_CHUNK_SIZE)
+    disable_dropout = _get_env_bool("SPEECHT5_AR_TRACKING_DISABLE_DROPOUT", True)
+    mel_seq_threshold = _get_env_float("SPEECHT5_AR_TRACKING_TRUE_AR_MEL_SEQ_MIN", -1.0)
+
+    pcc_history = run_true_autoregressive_test(
+        text=text,
+        num_steps=num_steps,
+        disable_dropout=disable_dropout,
+        max_chunk_size=max_chunk_size,
+    )
+
+    _assert_true_ar_history(
+        pcc_history=pcc_history,
+        mel_seq_threshold=mel_seq_threshold,
+    )
 
 
 def main():
