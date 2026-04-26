@@ -21,6 +21,7 @@ from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
     TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
     TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE,
+    TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV,
     TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
     TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
     TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
@@ -657,6 +658,62 @@ def test_cpu_traceable_decode_subpath_can_report_selected_rows_dense_attention(t
     assert result["decode_steps_detail"][0]["compact_window_shape"] == [1, 1, 6, 8]
     assert "ttnn.embedding(selected_row_idxs,kv_cache_table)" in result["traceable_decode_scope"]["inside_trace"]
     assert "ttnn.concat(selected_qk_scores,attention_sink_logits)" in result["traceable_decode_scope"]["inside_trace"]
+
+
+def test_cpu_traceable_decode_subpath_can_report_selected_rows_compressed_kv_attention(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=3,
+        seq_len=4,
+        max_bytes=64 * 1024,
+        routed_topk_prefix=1,
+        cpu_only=True,
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV,
+    )
+
+    assert result["passed"] is True
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV
+    assert result["sparse_attention"]["status"] == (
+        "real_indexer_rows_consumed_by_selected_rows_compressed_kv_attention"
+    )
+    assert result["sparse_attention"]["sparse_indexer_status"] == (
+        "real_indexer_topk_materialized_outside_trace_consumed_by_selected_rows_compressed_kv_attention"
+    )
+    assert result["sparse_attention"]["attention_sink_status"] == ("used_in_selected_rows_compressed_kv_attention")
+    assert result["sparse_attention"]["k_v_source"] == "selected_rows_from_compressed_kv_sparse_cache_reuse"
+    assert result["sparse_attention"]["selected_cache_rows"]["selected_rows_consumed_by_attention"] is True
+    assert result["sparse_attention"]["selected_cache_rows"]["selected_row_ids_source"] == "static_host_preflight"
+    assert result["sparse_attention"]["selected_cache_rows"]["first_step_runtime_rows"] == [0, 1, 2, 3, 4, 8]
+    assert result["sparse_attention"]["selected_cache_rows"]["compact_window_shape"] == [1, 1, 6, 8]
+    assert result["sparse_attention"]["selected_row_attention_blocker"] is None
+    assert result["sparse_attention"]["selected_row_attention_proof"]["kv_source"] == (
+        "selected_rows_from_compressed_kv_sparse_cache"
+    )
+    assert result["sparse_attention"]["compressed_kv_cache"]["enabled"] is True
+    assert result["sparse_attention"]["compressed_kv_cache"]["compress_ratio"] == 4
+    assert result["sparse_attention"]["compressed_kv_cache"]["sparse_cache_shape"] == [1, 1, 10, 8]
+    assert result["sparse_attention"]["compressed_kv_cache"]["compressed_cache_shape"] == [1, 1, 2, 8]
+    assert result["sparse_attention"]["compressed_kv_cache"]["decode_update_rows"] == [9]
+    assert result["traceability_flags"]["compressed_kv_cache_in_trace"] is True
+    assert result["attention_path"]["selected_rows"]["consumed_by_attention"] is True
+    assert result["attention_path"]["selected_rows"]["ids"] == [0, 1, 2, 3, 4, 8]
+    assert result["attention_path"]["selected_rows"]["compact_window_shape"] == [1, 1, 6, 8]
+    assert result["attention_path"]["kv_source"]["key_source"] == "static_selected_rows_compressed_kv_sparse_cache"
+    assert result["attention_path"]["softmax"]["selected_rows_compressed_kv_attention_in_trace"] is True
+    assert result["reference"]["selected_attention_cache_window"]["shape"] == [1, 1, 6, 8]
+    assert result["reference"]["sparse_kv_cache"]["shape"] == [1, 1, 10, 8]
+    assert result["reference"]["compressed_kv_cache"]["shape"] == [1, 1, 2, 8]
+    assert result["decode_steps_detail"][0]["selected_cache_rows"] == [0, 1, 2, 3, 4, 8]
+    assert result["decode_steps_detail"][0]["kv_source"] == (
+        "selected_rows_compressed_kv_sparse_cache_reused_for_explicit_k_and_v"
+    )
+    assert result["decode_steps_detail"][0]["compressed_kv_status"] == (
+        "selected_rows_use_real_compressor_seeded_sparse_cache_with_decode_sized_update"
+    )
+    assert "ttnn.embedding(selected_row_idxs,sparse_kv_cache_table)" in result["traceable_decode_scope"]["inside_trace"]
+    assert "ttnn.update_cache(sparse_kv_cache_compressed_row)" in result["traceable_decode_scope"]["inside_trace"]
 
 
 def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path: Path) -> None:
