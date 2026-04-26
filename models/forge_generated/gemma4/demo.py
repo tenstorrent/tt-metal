@@ -78,9 +78,7 @@ def run(prompt: str) -> tuple[int, str]:
     _override_token_ids(runtime, ids, device)
 
     hf = gw.load_hf_weights()
-    layer_table = gemma4.LAYER_TABLE_PREFILL
-    max_norm_slot = max(max(t.get("q_norm_input", 0), t.get("k_norm_input", 0)) for t in layer_table.values())
-    n_slots = max(max(runtime) + 1, max_norm_slot + 1)
+    n_slots = max(runtime) + 1
     input_list = [None] * n_slots
     for slot, t in runtime.items():
         input_list[slot] = t

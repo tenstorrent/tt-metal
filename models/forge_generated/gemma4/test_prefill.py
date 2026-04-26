@@ -10,7 +10,6 @@ import gemma4
 import pytest
 import torch
 from gemma4 import weights as gw
-from gemma4.layer_table import LAYER_TABLE_PREFILL
 
 import ttnn
 
@@ -28,10 +27,7 @@ def test_prefill_pcc(mesh_device):
     runtime inputs."""
     hf = gw.load_hf_weights()
     runtime = gemma4.synthesize_prefill_inputs(mesh_device)
-    layer_table = LAYER_TABLE_PREFILL
-
-    max_norm_slot = max(max(t.get("q_norm_input", 0), t.get("k_norm_input", 0)) for t in layer_table.values())
-    n_slots = max(max(runtime) + 1, max_norm_slot + 1)
+    n_slots = max(runtime) + 1
     input_list = [None] * n_slots
     for slot, t in runtime.items():
         input_list[slot] = t
