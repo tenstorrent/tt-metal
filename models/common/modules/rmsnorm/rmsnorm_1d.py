@@ -394,7 +394,7 @@ class RMSNorm1D(LightweightModule):
 
         # Get compute kernel config (e.g., fp32_dest_acc_en for Qwen models)
         fp32_dest_acc_en = True
-        if hasattr(args, "base_model_name") and args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
+        if hasattr(args, "base_model_name") and args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"):
             fp32_dest_acc_en = False
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(

@@ -26,20 +26,18 @@ from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
-def create_tt_page_table(paged_attention_config, tt_model_args):
+def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config):
     if paged_attention_config is None:
         return None
 
-    # Implied shuffling of blocks
     permutation = torch.randperm(paged_attention_config.max_num_blocks)
-    # Page table which maps virtual blocks to physical
-    reverse_permutation = torch.argsort(permutation)
-    return reverse_permutation.reshape(
-        tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
-    )
+    reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
+    batch_per_dp = global_batch_size // data_parallel
+    return reverse_permutation.reshape(global_batch_size, paged_attention_config.max_num_blocks // batch_per_dp)
 
 
 def create_tt_model(
@@ -51,6 +49,7 @@ def create_tt_model(
     page_params,
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
+    state_dict=None,
 ):
     tt_model_args = ModelArgs(
         mesh_device,
@@ -59,7 +58,8 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    state_dict = tt_model_args.load_state_dict()
+    if state_dict is None:
+        state_dict = tt_model_args.load_state_dict()
 
     paged_attention_config = (
         PagedAttentionConfig(
@@ -81,7 +81,52 @@ def create_tt_model(
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
 
-    return tt_model_args, model, paged_attention_config, tt_kv_cache
+    return tt_model_args, model, paged_attention_config, tt_kv_cache, state_dict
+
+
+def prepare_generator_args(
+    data_parallel,
+    mesh_device,
+    instruct,
+    batch_size,
+    optimizations,
+    max_seq_len,
+    page_params,
+    dtype=ttnn.bfloat8_b,
+    use_paged_kv_cache=False,
+):
+    """Create model instances for data-parallel execution on Galaxy or single-device T3K."""
+    global_batch_size = batch_size * data_parallel
+    submesh_devices = create_submeshes(mesh_device, data_parallel)
+    state_dict = None
+
+    model_args_list = []
+    model_list = []
+    tt_kv_cache_list = []
+
+    for submesh in submesh_devices:
+        tt_model_args, model, paged_attention_config, tt_kv_cache, state_dict = create_tt_model(
+            submesh,
+            instruct=instruct,
+            max_batch_size=batch_size,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+            page_params=page_params,
+            dtype=dtype,
+            use_paged_kv_cache=use_paged_kv_cache,
+            state_dict=state_dict,
+        )
+        model_args_list.append(tt_model_args)
+        model_list.append(model)
+        tt_kv_cache_list.append(tt_kv_cache)
+
+    page_table = create_tt_page_table(
+        global_batch_size=global_batch_size,
+        data_parallel=data_parallel,
+        paged_attention_config=paged_attention_config,
+    )
+
+    return model_args_list, model_list, paged_attention_config, tt_kv_cache_list, page_table
 
 
 # List of supported Parameters for demo.py
@@ -90,17 +135,18 @@ def create_tt_model(
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
 # max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
-# batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
+# batch_size (int): Number of users per DP group (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
+# data_parallel (int): Number of data parallel groups (1 for T3K, 4 for Galaxy with 128 total batch)
 #
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/qwen25_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
@@ -114,6 +160,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,  # data_parallel
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompts
             "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
@@ -127,6 +174,21 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,  # data_parallel
+        ),
+        (  # DP-4-b32 Galaxy run (Throughput) - 4 instances × 32 users = 128 global batch
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
+            True,  # instruct mode
+            1,  # repeat_batches
+            4096,  # max_seq_len, allow for image tokens
+            32,  # batch_size per DP group
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            4,  # data_parallel
         ),
         (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/test_bert_score.json",
@@ -140,6 +202,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
+            1,  # data_parallel
         ),
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
@@ -153,6 +216,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
+            1,  # data_parallel
         ),
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -166,6 +230,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,  # data_parallel
         ),
         (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -179,6 +244,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,  # data_parallel
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -192,6 +258,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,  # data_parallel
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -205,11 +272,13 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
+            1,  # data_parallel
         ),
     ],
     ids=[
         "batch-1",  # latency
         "batch-32",  # 32 users (special because it fills tile size)
+        "DP-4-b32",  # Galaxy: 4 instances × 32 users = 128 global batch
         "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
         "long-context-16k",  # real-world test for 300DPI scanned document with 16k long context
@@ -256,6 +325,7 @@ def test_demo(
     mesh_device,
     is_ci_env,
     ci_only,
+    data_parallel,
     reset_seeds,
     request,
 ):
@@ -268,11 +338,18 @@ def test_demo(
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
 
-    # TODO: Remove this once all batch sizes are supported on TG
+    num_devices = mesh_device.get_num_devices()
+
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    if mesh_device.get_num_devices() == 1 and "Qwen2.5-VL-7B" in os.environ.get("HF_MODEL", ""):
+    if data_parallel > 1 and (data_parallel > num_devices or num_devices % data_parallel != 0):
+        pytest.skip(f"Invalid DP={data_parallel} for {num_devices} devices")
+
+    if data_parallel > 1 and num_devices != 32:
+        pytest.skip(f"DP={data_parallel} requires Galaxy (32 devices), got {num_devices}")
+
+    if num_devices == 1 and "Qwen2.5-VL-7B" in os.environ.get("HF_MODEL", ""):
         pytest.skip("Qwen2.5-VL-7B does not support running on N150")
 
     logger.info(f"mesh_device: {mesh_device}")
@@ -291,6 +368,7 @@ def test_demo(
     max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    data_parallel = request.config.getoption("--data_parallel") or data_parallel
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
@@ -306,6 +384,8 @@ def test_demo(
     else:
         optimizations = request.config.getoption("--optimizations") or optimizations
 
+    global_batch_size = batch_size * data_parallel
+
     if paged_attention:
         page_cache_max_seq_len = page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size
         assert (
@@ -316,7 +396,6 @@ def test_demo(
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
 
     if print_to_file:
-        # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_directory = "models/demos/qwen25_vl/demo/output"
         os.makedirs(output_directory, exist_ok=True)
@@ -328,28 +407,26 @@ def test_demo(
     profiler = BenchmarkProfiler()
     profiler.start("run")
 
-    logger.info(f"Reading inputs...")
+    logger.info(f"Reading inputs... (global_batch_size={global_batch_size}, DP={data_parallel})")
     profiler.start("loading_inputs")
-    input_prompts = load_inputs(input_prompts, batch_size)
+    input_prompts = load_inputs(input_prompts, global_batch_size)
     profiler.end("loading_inputs")
     assert (
-        len(input_prompts) >= batch_size
-    ), f"Loaded {len(input_prompts)} input prompts, expected at least {batch_size}"
-    if len(input_prompts) > batch_size:
-        input_prompts = input_prompts[:batch_size]
-    logger.info(f"Loaded {batch_size} input prompts")
+        len(input_prompts) >= global_batch_size
+    ), f"Loaded {len(input_prompts)} input prompts, expected at least {global_batch_size}"
+    if len(input_prompts) > global_batch_size:
+        input_prompts = input_prompts[:global_batch_size]
+    logger.info(f"Loaded {global_batch_size} input prompts")
 
-    # To simulate a deployment environment, the demo supports repeating batched prompts.
-    # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
-    # If batch_size=1, the same prompt is repeated for each batch
     repeat_batch_prompts = []
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, paged_attention_config, tt_kv_cache = create_tt_model(
-        mesh_device,
+    model_args_list, model_list, paged_attention_config, tt_kv_cache_list, page_table = prepare_generator_args(
+        data_parallel=data_parallel,
+        mesh_device=mesh_device,
         instruct=instruct,
-        max_batch_size=batch_size,
+        batch_size=batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         page_params=page_params,
@@ -357,34 +434,33 @@ def test_demo(
         use_paged_kv_cache=paged_attention,
     )
 
+    model_args = model_args_list[0]
     processor = model_args.processor
     tokenizer = model_args.tokenizer
 
-    # NOTE: For qwen 2.5 vl, we do not use QK fused ops
-    model_args.use_qk_fused = False
-    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    for m_args in model_args_list:
+        m_args.use_qk_fused = False
+    generator = Generator(model_list, model_args_list, mesh_device, processor=processor, tokenizer=tokenizer)
 
-    # Load vision model and processor
-    # reduce the number of layers to 1 for fast ci runs (also useful for debugging)
     from transformers import logging as transformers_logging
 
-    # Set logging level to ERROR to suppress warnings about unexpected keys
-    ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
+    ref_model_name = model_args.CKPT_DIR
     transformers_logging.set_verbosity_error()
     config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
     )
     if use_tt_vision:
-        # Create the TorchVisionTransformer wrapper using the original vision model as reference
+        # For DP, use the first submesh for the vision model
+        vision_mesh = model_list[0].mesh_device if data_parallel > 1 else mesh_device
         vision_model_args = VisionModelArgs(
-            mesh_device,
+            vision_mesh,
             max_batch_size=batch_size,
             max_seq_len=max_seq_len,
             optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
+        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)
     else:
         visual_model = reference_model.visual
     processor = AutoProcessor.from_pretrained(ref_model_name)
@@ -397,14 +473,11 @@ def test_demo(
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
 
-        # Create new page table for each batch
-        page_table = create_tt_page_table(paged_attention_config, model_args)
-
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
         inputs = processor(
-            text=text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
+            text=text,
             images=image_inputs,
             videos=video_inputs,
             padding=True,
@@ -412,11 +485,12 @@ def test_demo(
         )
         if image_inputs:
             merge_length = processor.image_processor.merge_size**2
-            num_image_tokens.append([inputs.image_grid_thw[i].prod().item() // merge_length for i in range(batch_size)])
+            num_image_tokens.append(
+                [inputs.image_grid_thw[i].prod().item() // merge_length for i in range(global_batch_size)]
+            )
             logger.info(f"num_image_tokens: {num_image_tokens[-1]}")
         else:
-            # text-only
-            num_image_tokens.append([0] * batch_size)
+            num_image_tokens.append([0] * global_batch_size)
 
         # Vision prefill
         logger.info(f"Vision model prefill batch {batch_idx}")
@@ -428,9 +502,7 @@ def test_demo(
         )
         profiler.end(f"vision_model_prefill", iteration=batch_idx)
 
-        # Prepare text + vision inputs for decoder model
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
-        # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config)
         pad_token_id = tokenizer.pad_token_id
@@ -439,7 +511,7 @@ def test_demo(
         ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max(len(x) for x in input_embeds)}) + max generated tokens ({max_generated_tokens})"
         (
             input_prefill_pt,
-            decoding_pos,  # Position where decoding should start for each user
+            decoding_pos,
             prefill_lens,
         ) = preprocess_inputs_prefill(
             input_embeds,
@@ -447,7 +519,6 @@ def test_demo(
             inputs.attention_mask,
             pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
-        # Get user-specific rotary position embeddings
         cos, sin, rope_deltas = multimodal_rope_from_hf(
             inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id
         )
@@ -455,12 +526,11 @@ def test_demo(
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
-        # [INFO] prefill_forward_text is read-only of the cos/sin matrices
         logits = generator.prefill_forward_text(
-            input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+            input_prefill_pt[0].unsqueeze(0),
             rot_mats=(cos, sin),
             page_table=page_table,
-            kv_cache=tt_kv_cache,
+            kv_cache=tt_kv_cache_list,
             prompt_lens=decoding_pos,
         )
         profiler.end(f"compile_prefill", iteration=batch_idx)
@@ -472,22 +542,19 @@ def test_demo(
             input_prefill_pt,
             rot_mats=(cos, sin),
             page_table=page_table,
-            kv_cache=tt_kv_cache,
+            kv_cache=tt_kv_cache_list,
             prompt_lens=decoding_pos,
         )
-        # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
         generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
-        # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
-        # Initial positions continuing from prefill, no need to offset by rope_deltas
-        current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+        current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
 
         # Start decoding
         iteration = 0
-        argmax_on_device = model._supports_on_device_sampling
+        argmax_on_device = model_list[0]._supports_on_device_sampling
         if argmax_on_device:
             logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
@@ -498,12 +565,9 @@ def test_demo(
             device_sampling_params = None
 
         users_decoding = True
-        user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
-        # Keep track of generated outputs to print out every iteration
-        all_outputs = [
-            [] for _ in range(batch_size)
-        ]  # we don't know how much of the prompt was prefilled because some will be image tokens
-        for user in range(batch_size):
+        user_done = [False] * global_batch_size
+        all_outputs = [[] for _ in range(global_batch_size)]
+        for user in range(global_batch_size):
             user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
 
@@ -511,29 +575,25 @@ def test_demo(
 
         logger.info(f"Starting decode loop...")
 
-        # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding:
-            if iteration == 0:  # First iteration also accounts for compile time
+            if iteration == 0:
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Run decode forward
             logits, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
-                kv_cache=tt_kv_cache,
+                kv_cache=tt_kv_cache_list,
                 sampling_params=device_sampling_params,
             )
 
-            # Get the next token
             if argmax_on_device:
                 out_tok = logits.unsqueeze(1)
             else:
-                # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
                     logits,
                     None,
@@ -542,32 +602,26 @@ def test_demo(
                     on_host=True,
                 )
 
-            if iteration == 0:  # First iteration will account the compile time
+            if iteration == 0:
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
             else:
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
             logger.info(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
             current_pos += 1
 
-            # Save output token to print out later
-            for user in range(batch_size):
+            for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
-                if (
-                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                if user_tok not in tokenizer.stop_tokens and user_done[user] == False:
                     all_outputs[user].append(user_tok)
                 else:
-                    if (
-                        stop_at_eos
-                    ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                    if stop_at_eos:
                         user_done[user] = True
                         logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
@@ -575,9 +629,8 @@ def test_demo(
                     else:
                         all_outputs[user].append(user_tok)
 
-            # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
-                for user in range(batch_size):
+                for user in range(global_batch_size):
                     text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:
                         text = "..." + text[-97:]
@@ -586,11 +639,9 @@ def test_demo(
 
             iteration += 1
 
-            # Upper limit of generated tokens for each user
             if iteration >= max_generated_tokens:
                 users_decoding = False
 
-            # Final print
             if not users_decoding:
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
@@ -606,7 +657,6 @@ def test_demo(
                                 f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
                             )
                     else:
-                        # Strip leading newlines from output when sent to terminal
                         short_prompt = (
                             (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
                             if len(prompt) > 200
@@ -619,17 +669,17 @@ def test_demo(
 
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
-        num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
+        num_tokens_generated_decode.append(iteration)
 
         profiler.end(f"inference_decode", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         logger.info("KV cache reset after warmup to prevent interference between users")
         if batch_idx != 0:
-            for layer in model.layers:
-                k_cache, v_cache = layer.attention.layer_past
-                k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            for model_inst in model_list:
+                for layer in model_inst.layers:
+                    k_cache, v_cache = layer.attention.layer_past
+                    k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                    v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         text_outputs.append(text_after_prompt)
 
@@ -665,7 +715,7 @@ def test_demo(
         )
         for i, (p, r, f) in enumerate(zip(P0, R0, F10)):
             logger.debug(
-                f"BERTScore (rescaled) P/R/F1 for sample {i % batch_size} of batch {i // batch_size}: "
+                f"BERTScore (rescaled) P/R/F1 for sample {i % global_batch_size} of batch {i // global_batch_size}: "
                 f"{p.item():.3f}/{r.item():.3f}/{f.item():.3f}"
             )
         logger.info(f"Mean BERTScore F1 (raw): {F10.mean().item():.3f}")
@@ -680,21 +730,17 @@ def test_demo(
     for i in range(1, iteration):  # i == 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
 
-    # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / batch_size
-    # Average decode time per batch iteration
+    avg_time_to_first_token = total_inference_prefill_time / global_batch_size
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * batch_size
-    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
-    decode_tok_s = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
-    )  # Remove the compile time
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
+    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time
+    decode_tok_s = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size
 
     vision_model_time = profiler.get_duration("vision_model_prefill", iteration=batch_idx)
-    vision_model_time_per_user = vision_model_time / batch_size
+    vision_model_time_per_user = vision_model_time / global_batch_size
     vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time
-    vision_model_t_u_s = vision_model_t_s / batch_size
+    vision_model_t_u_s = vision_model_t_s / global_batch_size
 
     measurements = {
         # Required measurements
@@ -732,19 +778,19 @@ def test_demo(
     logger.info("")
     logger.info(f"=== Performance metrics ===")
     logger.info(
-        f"1st token decode time: {tok_1_perf*1000:.2f}ms [{round(1/tok_1_perf, 2)} t/s/u, {round((1/tok_1_perf)*batch_size, 2)} t/s]"
+        f"1st token decode time: {tok_1_perf*1000:.2f}ms [{round(1/tok_1_perf, 2)} t/s/u, {round((1/tok_1_perf)*global_batch_size, 2)} t/s]"
     )
     if tok_128_perf > 0:
         logger.info(
-            f"128th token decode time: {tok_128_perf*1000:.2f}ms [{round(1/tok_128_perf, 2)} t/s/u, {round((1/tok_128_perf)*batch_size, 2)} t/s]"
+            f"128th token decode time: {tok_128_perf*1000:.2f}ms [{round(1/tok_128_perf, 2)} t/s/u, {round((1/tok_128_perf)*global_batch_size, 2)} t/s]"
         )
     if tok_1024_perf > 0:
         logger.info(
-            f"1024th token decode time: {tok_1024_perf*1000:.2f}ms [{round(1/tok_1024_perf, 2)} t/s/u, {round((1/tok_1024_perf)*batch_size, 2)} t/s]"
+            f"1024th token decode time: {tok_1024_perf*1000:.2f}ms [{round(1/tok_1024_perf, 2)} t/s/u, {round((1/tok_1024_perf)*global_batch_size, 2)} t/s]"
         )
     if tok_4096_perf > 0:
         logger.info(
-            f"4096th token decode time: {tok_4096_perf*1000:.2f}ms [{round(1/tok_4096_perf, 2)} t/s/u, {round((1/tok_4096_perf)*batch_size, 2)} t/s]"
+            f"4096th token decode time: {tok_4096_perf*1000:.2f}ms [{round(1/tok_4096_perf, 2)} t/s/u, {round((1/tok_4096_perf)*global_batch_size, 2)} t/s]"
         )
 
     # Print some of the perf metrics
@@ -777,7 +823,7 @@ def test_demo(
         # Set the target decode timesfor every combination of device and model
         target_decode_tok_s_u = {}[f"{tt_device_name}_{model_args.base_model_name}"]
 
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
+        target_decode_tok_s = target_decode_tok_s_u * global_batch_size
         targets = {
             "prefill_t/s": target_prefill_tok_s,
             "decode_t/s": target_decode_tok_s,
@@ -825,8 +871,11 @@ def test_demo(
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
             num_layers=model_args.n_layers,
-            batch_size=batch_size,
-            config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
+            batch_size=global_batch_size,
+            config_params={
+                "data_parallel": data_parallel,
+                "tensor_parallel": mesh_device.get_num_devices() // data_parallel,
+            },
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )

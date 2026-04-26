@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
+import time
 from types import SimpleNamespace
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional, Sequence, Union
 
 import torch
 from loguru import logger
@@ -19,33 +19,55 @@ from vllm.model_executor.models.qwen2_5_vl import (
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
+try:
+    import vllm.envs as envs
+
+    _VLLM_USE_V1 = envs.VLLM_USE_V1
+except (ImportError, AttributeError):
+    _VLLM_USE_V1 = True
+
+if not _VLLM_USE_V1:
+    from vllm.multimodal.inputs import (
+        MultiModalDataDict,
+        MultiModalFieldConfig,
+        MultiModalInputs,
+        MultiModalKwargs,
+    )
+    from vllm.multimodal.parse import MultiModalDataItems
+    from vllm.multimodal.processing import BaseMultiModalProcessor, PromptUpdate
+    from vllm.multimodal.profiling import BaseDummyInputsBuilder
+
 import ttnn
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
-    for layer_idx in range(num_layers):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    kv_cache = []
+    for mesh_idx, model_inst in enumerate(dp_model):
+        model_args_inst = model_inst.args
+        for layer_idx in range(num_layers):
+            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
 
-        model.layers[layer_idx].attention.layer_past = [
-            ttnn.as_tensor(
-                cache_kv,
-                device=model.mesh_device,
-                dtype=ttnn.bfloat8_b,
-                layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-                # Separate cache files for K and V to avoid collision.
-                cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
-            )
-            for kv in ["k", "v"]
-        ]
+            model_inst.layers[layer_idx].attention.layer_past = [
+                ttnn.as_tensor(
+                    cache_kv,
+                    device=model_inst.mesh_device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=model_args_inst.model_config["ATTN_W_LAYOUT_TILE"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(model_inst.mesh_device),
+                    cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
+                )
+                for kv in ["k", "v"]
+            ]
 
-    return [l.attention.layer_past for l in model.layers]
+        kv_cache.append([l.attention.layer_past for l in model_inst.layers])
+    return kv_cache
 
 
 def get_platform_specific_optimizations(model_name):
@@ -58,38 +80,46 @@ def get_platform_specific_optimizations(model_name):
 
 def initialize_vllm_text_transformer(
     hf_config,
+    tt_data_parallel,
     mesh_device,
     max_batch_size,
     max_seq_len,
     dtype=ttnn.bfloat8_b,
     optimizations=None,
 ):
-    # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
     hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
-    tt_model_args = ModelArgs(
-        mesh_device,
-        instruct=("Instruct" in hf_model_id),
-        max_batch_size=max_batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-    )
-    tt_model_args.use_qk_fused = False  # Qwen2.5-VL doesn't use qk fused ops
-    assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
-        "-", ""
-    ), f"The model specified in vLLM ({hf_model_id}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
-    state_dict = tt_model_args.load_state_dict()
+    model_args = []
+    for submesh in submesh_devices:
+        tt_model_args = ModelArgs(
+            submesh,
+            instruct=("Instruct" in hf_model_id),
+            max_batch_size=max_batch_size // tt_data_parallel,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+        )
+        tt_model_args.use_qk_fused = False
+        assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
+            "-", ""
+        ), f"The model specified in vLLM ({hf_model_id}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
+        model_args.append(tt_model_args)
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        use_paged_kv_cache=True,  # [INFO] use paged kv cache provided by this generator
-    )
+    state_dict = model_args[0].load_state_dict()
 
-    return tt_model_args, model
+    tt_model = []
+    for i, submesh in enumerate(submesh_devices):
+        model_i = Transformer(
+            args=model_args[i],
+            mesh_device=submesh,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args[i].weight_cache_path(dtype),
+            use_paged_kv_cache=True,
+        )
+        tt_model.append(model_i)
+
+    return tt_model, model_args
 
 
 class CustomNamespace(SimpleNamespace):
@@ -102,10 +132,84 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
+if not _VLLM_USE_V1:
+
+    class _V0DummyInputsBuilder(BaseDummyInputsBuilder):
+        """Stub for V0 — profiling is not used on TT hardware."""
+
+        def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
+            raise NotImplementedError
+
+        def get_dummy_mm_data(self, seq_len: int, mm_counts: Mapping[str, int]) -> MultiModalDataDict:
+            raise NotImplementedError
+
+    class _V0MultiModalProcessor(BaseMultiModalProcessor):
+        """V0 multi-modal processor that bypasses vLLM image processing
+        and passes images directly to the TT model."""
+
+        def _get_mm_fields_config(
+            self,
+            hf_inputs,
+            hf_processor_mm_kwargs: Mapping[str, object],
+        ) -> Mapping[str, "MultiModalFieldConfig"]:
+            raise NotImplementedError
+
+        def _get_prompt_updates(
+            self,
+            mm_items: "MultiModalDataItems",
+            hf_processor_mm_kwargs: Mapping[str, object],
+            out_mm_kwargs: "MultiModalKwargs",
+        ) -> Sequence["PromptUpdate"]:
+            raise NotImplementedError
+
+        def apply(
+            self,
+            prompt: Union[str, list[int]],
+            mm_data: "MultiModalDataDict",
+            hf_processor_mm_kwargs: Mapping[str, object],
+            tokenization_kwargs: Optional[Mapping[str, object]] = None,
+            return_mm_hashes: bool = False,
+        ) -> "MultiModalInputs":
+            input_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
+
+            if isinstance(prompt, list) and prompt and isinstance(prompt[0], int):
+                tokenizer = (
+                    getattr(input_processor, "tokenizer") if hasattr(input_processor, "tokenizer") else input_processor
+                )
+                text_prompt = tokenizer.decode(prompt, skip_special_tokens=False)
+                logger.warning(
+                    f"Applied workaround: decoded {len(prompt)} tokens back to text for processor compatibility"
+                )
+            else:
+                text_prompt = prompt
+
+            processed_inputs = input_processor(
+                text=text_prompt,
+                images=mm_data["image"] if mm_data else None,
+                videos=None,
+                return_tensors="pt",
+            )
+
+            assert (
+                processed_inputs.input_ids.shape[0] == 1
+            ), "Expected to process one input prompt at a time in processor"
+            prompt_token_ids = processed_inputs.input_ids[0].tolist()
+
+            mm_inputs = MultiModalInputs(
+                type="multimodal",
+                prompt=prompt,
+                prompt_token_ids=prompt_token_ids,
+                mm_kwargs={"image": processed_inputs},
+                mm_hashes={},
+                mm_placeholders={},
+            )
+            return mm_inputs
+
+
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen2_5_VLMultiModalProcessor,
+    Qwen2_5_VLMultiModalProcessor if _VLLM_USE_V1 else _V0MultiModalProcessor,
     info=TT_Qwen2_5_VLProcessingInfo,
-    dummy_inputs=Qwen2_5_VLDummyInputsBuilder,
+    dummy_inputs=Qwen2_5_VLDummyInputsBuilder if _VLLM_USE_V1 else _V0DummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     # Class-level capabilities
@@ -121,6 +225,9 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             self.reference_model is not None and self.visual_model is not None
         ), "Reference model and visual model must be provided for vLLM"
 
+        self._decode_iteration = 0
+        self._rope_delta_cache = {}
+
         super().__init__(*args, **kwargs)
 
     @classmethod
@@ -128,7 +235,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
         hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
         optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_model_id)
         if max_seq_len > max_seq_len_native:
@@ -136,8 +242,9 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 f"max_seq_len {max_seq_len} is not supported for {hf_model_id}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
-        model_args, model = initialize_vllm_text_transformer(
+        tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
+            tt_data_parallel,
             mesh_device,
             max_batch_size,
             max_seq_len=max_seq_len,
@@ -145,27 +252,27 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=optimizations,
         )
 
-        ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
+        ref_model_name = model_args[0].CKPT_DIR
         config = Ref_Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-        # config.vision_config.depth = 1 # [INFO] useful for debugging
         reference_model = Ref_Qwen2_5_VLForConditionalGeneration.from_pretrained(
             ref_model_name, config=config, torch_dtype="auto", device_map="auto"
         )
-        # Create the TorchVisionTransformer wrapper using the original vision model as reference
+
+        vision_mesh = tt_model[0].mesh_device if tt_data_parallel > 1 else mesh_device
         vision_model_args = VisionModelArgs(
-            mesh_device,
-            max_batch_size=model_args.max_batch_size,
-            max_seq_len=model_args.max_seq_len,
+            vision_mesh,
+            max_batch_size=model_args[0].max_batch_size,
+            max_seq_len=model_args[0].max_seq_len,
             optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
 
         return cls(
-            model,
+            tt_model,
             model_args,
             mesh_device,
-            tokenizer=model_args.tokenizer,
+            tokenizer=model_args[0].tokenizer,
             reference_model=reference_model,
             visual_model=visual_model,
         )
@@ -176,7 +283,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(
-            *args, **kwargs, model=self.model, model_args=self.model_args, tt_cache_path=self.cache_path
+            *args, **kwargs, dp_model=self._ttt_generator.model, tt_cache_path=self.cache_path
         )
 
     def prefill_forward(
@@ -186,15 +293,14 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
         enable_trace,
-        **kwargs,  # pixel_values and image_grid_thw
+        **kwargs,  # V1: pixel_values and image_grid_thw; V0: images
     ):
+        empty_slots = kwargs.pop("empty_slots", None)
         start_pos = kwargs.get("start_pos", None)
         assert (start_pos is None) or all(
             x == 0 for x in start_pos
         ), f"Prefix caching is not supported for Qwen2_5_VL, got start_pos: {start_pos}"
-        # Must add this so that vLLM can call without errors
-        enable_trace = False
-        logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
+        # enable_trace is passed through from vLLM
 
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
@@ -204,48 +310,80 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
-        # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
-        # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
-        inputs.attention_mask = torch.zeros(
-            (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
-        )
-        for i, plen in enumerate(prompt_lens):
-            inputs.attention_mask[i, :plen] = 1
-
-        if (
-            "pixel_values" in kwargs
-            and len(kwargs["pixel_values"]) > 0
-            and kwargs["pixel_values"][0] is not None
-            # kwargs["pixel_values"] is a list,
-            # each element is a list of images for one user
-            # We only check if the first user's pixel_values is not None
-            # as we currently do not support mixed inputs of text-only
-            # users and text-image users
-        ):
-            inputs.pixel_values = torch.concat(
-                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
+        if _VLLM_USE_V1:
+            inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
+            inputs.attention_mask = torch.zeros(
+                (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
             )
-            assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
-            _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
-            # vLLM Qwen2.5-VL provides per-image `image_grid_thw` as a length-3
-            # 1D tensor (t, h, w). Stack into (num_images, 3).
-            assert _grid_items and all(
-                im is not None for im in _grid_items
-            ), "Expected non-empty image_grid_thw for image inputs."
-            for g in _grid_items:
-                assert (
-                    torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
-                ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
-            inputs.image_grid_thw = torch.stack(
-                [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
+            for i, plen in enumerate(prompt_lens):
+                inputs.attention_mask[i, :plen] = 1
+
+            if "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None:
+                inputs.pixel_values = torch.concat(
+                    [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
+                )
+                assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
+                _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
+                assert _grid_items and all(
+                    im is not None for im in _grid_items
+                ), "Expected non-empty image_grid_thw for image inputs."
+                for g in _grid_items:
+                    assert (
+                        torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
+                    ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
+                inputs.image_grid_thw = torch.stack(
+                    [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
+                    dim=0,
+                )
+                vision_start = time.perf_counter()
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                vision_time = time.perf_counter() - vision_start
+                batch_size = tokens.shape[0]
+                logger.info(
+                    f"[PERF] Vision prefill: {vision_time*1000:.2f}ms " f"({vision_time/batch_size*1000:.2f}ms/user)"
+                )
+            else:
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+        else:  # V0
+            if (
+                "images" in kwargs
+                and isinstance(kwargs["images"], list)
+                and len(kwargs["images"]) > 0
+                and kwargs["images"][0] is not None
+                and "attention_mask" in kwargs["images"][0]
+            ):
+                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
+            else:
+                inputs.input_ids = tokens
+
+            inputs.attention_mask = torch.concat(
+                [
+                    torch.nn.functional.pad(
+                        im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0
+                    )
+                    if im is not None
+                    else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
+                    for i, im in enumerate(kwargs["images"])
+                ],
                 dim=0,
             )
-            # Vision prefill
-            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-        else:
-            # text-only users
-            image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+            images_with_pixels = [
+                im for im in kwargs.get("images", []) if im is not None and hasattr(im, "pixel_values")
+            ]
+            if images_with_pixels:
+                inputs.pixel_values = torch.concat([im.pixel_values for im in images_with_pixels], dim=0)
+                inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images_with_pixels], dim=0)
+
+                vision_start = time.perf_counter()
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                vision_time = time.perf_counter() - vision_start
+                batch_size = tokens.shape[0]
+                logger.info(
+                    f"[PERF] Vision prefill (V0): {vision_time*1000:.2f}ms "
+                    f"({vision_time/batch_size*1000:.2f}ms/user)"
+                )
+            else:
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
@@ -267,20 +405,106 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         )
         rot_mats = (cos, sin)
 
+        prefill_start = time.perf_counter()
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
             page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
+            enable_trace=enable_trace,
+            empty_slots=empty_slots,
         )
+        prefill_time = time.perf_counter() - prefill_start
+        batch_size = tokens.shape[0]
+        avg_ttft = prefill_time / batch_size
+        prefill_tok_s = _prefill_lens[0] / prefill_time * batch_size if prefill_time > 0 else 0
+        logger.info(
+            f"[PERF] Text prefill (TTFT): {prefill_time*1000:.2f}ms "
+            f"({avg_ttft*1000:.2f}ms/user) @ {prefill_tok_s:.1f} tok/s"
+        )
+
+        # Cache M-RoPE deltas keyed by the user's first page-table entry.
+        # The page key is stable between prefill (sequential indices 0..N-1)
+        # and decode (user may sit at any global batch slot).
+        if rope_deltas is not None and page_table is not None:
+            flat_deltas = rope_deltas.flatten()
+            for idx in range(len(flat_deltas)):
+                page_key = int(page_table[idx, 0].item())
+                self._rope_delta_cache[page_key] = flat_deltas[idx].item()
+
+        self._decode_iteration = 0
         return logits, rope_deltas
 
-    def decode_forward(self, *args, **kwargs):
-        rope_deltas_list: list = kwargs.pop(
-            "rope_deltas_all_users", None
-        )  # [INFO] update the cos/sin matrices for the current users in the batch
-        if rope_deltas_list is not None:
-            super().update_rope_deltas(rope_deltas_list)
+    def _apply_cached_rope_deltas(self, page_table, start_pos):
+        """Apply cached M-RoPE deltas to each model instance's rope_setup
+        using the decode batch's page_table to identify users.
 
-        return super().decode_forward(*args, **kwargs)
+        Only runs when the page_table changes (new prefill / user eviction),
+        which is the only time the base generator re-reads host-side
+        rope_deltas (reset_inputs=True).  On trace-replay steps the device
+        already holds the correct values.
+        """
+        if not self._rope_delta_cache or page_table is None:
+            return
+
+        page_table_id = id(page_table)
+        if getattr(self, "_prev_page_table_id", None) == page_table_id:
+            return
+        self._prev_page_table_id = page_table_id
+
+        max_bsz = self._ttt_generator.model_args[0].max_batch_size
+        dp = self._ttt_generator.data_parallel
+        page_keys = page_table[:, 0].tolist()
+        cache = self._rope_delta_cache
+        for model_id in range(dp):
+            start = model_id * max_bsz
+            end = start + max_bsz
+            deltas = self._ttt_generator.model[model_id].rope_setup.rope_deltas
+            for local_slot, page_key in enumerate(page_keys[start:end]):
+                delta = cache.get(page_key)
+                if delta is not None:
+                    deltas[local_slot] = delta
+
+    def decode_forward(self, *args, **kwargs):
+        kwargs.pop("rope_deltas_all_users", None)
+
+        page_table = kwargs.get("page_table", None)
+        start_pos = kwargs.get("start_pos", None)
+        self._apply_cached_rope_deltas(page_table, start_pos)
+
+        decode_start = time.perf_counter()
+        result = super().decode_forward(*args, **kwargs)
+        decode_time = time.perf_counter() - decode_start
+
+        self._decode_iteration += 1
+        batch_size = 1
+        tokens_tensor = args[0] if len(args) > 0 else kwargs.get("tokens", None)
+        if isinstance(tokens_tensor, torch.Tensor) and tokens_tensor.ndim > 0:
+            batch_size = tokens_tensor.shape[0]
+
+        # Step-to-step time gives the real per-iteration latency including
+        # device compute, D2H read, host processing, and vLLM scheduling.
+        # The dispatch-only time (decode_time) is misleading when
+        # read_from_device=False since it only measures async launch.
+        step_time = None
+        if hasattr(self, "_prev_decode_start"):
+            step_time = decode_start - self._prev_decode_start
+        self._prev_decode_start = decode_start
+
+        dispatch_tok_s = 1.0 / decode_time * batch_size if decode_time > 0 else 0
+        if step_time and step_time > 0 and self._decode_iteration > 2:
+            real_tok_s_user = 1.0 / step_time
+            real_tok_s = real_tok_s_user * batch_size
+            logger.info(
+                f"[PERF] Decode iteration {self._decode_iteration}: "
+                f"step={step_time*1000:.0f}ms dispatch={decode_time*1000:.0f}ms | "
+                f"{real_tok_s_user:.1f} tok/s/user, {real_tok_s:.1f} tok/s throughput (batch={batch_size})"
+            )
+        else:
+            logger.info(
+                f"[PERF] Decode iteration {self._decode_iteration}: "
+                f"dispatch={decode_time*1000:.0f}ms (batch={batch_size})"
+            )
+
+        return result

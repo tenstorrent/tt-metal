@@ -120,7 +120,14 @@ class Generator(WarmupForwardMixin):
 
         return ret
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device=None,
+        non_greedy_decoding_on_device=None,
+        sampling_params=None,
+    ):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
