@@ -132,7 +132,15 @@ def prepare_gpt_oss_generator_args(
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
             use_deepseek_prefill=use_throughput,  # Use DeepSeek prefill ops when throughput experts enabled
-            prefill_seq_len=128 * int(os.environ.get("GPT_OSS_USERS_PER_ROW", 1)),
+            prefill_seq_len=min(
+                2048,
+                int(os.environ.get("GPT_OSS_FORCE_SEQ_LEN", 128))
+                * int(
+                    os.environ.get(
+                        "GPT_OSS_USERS_PER_ROW", 8 if int(os.environ.get("GPT_OSS_FORCE_SEQ_LEN", 128)) <= 128 else 1
+                    )
+                ),
+            ),
             num_layers=int(os.environ.get("GPT_OSS_NUM_LAYERS", 0)) or None,
         )
         model_args.append(model_args_i)
@@ -612,6 +620,18 @@ def test_gpt_oss_demo(
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info(f"Input prompt: {input_prompts_batch[0]}")
+        force_sl = int(os.environ.get("GPT_OSS_FORCE_SEQ_LEN", 0))
+        if force_sl > 0:
+            cur = input_tokens_prefill_pt.shape[-1]
+            if cur < force_sl:
+                pad = torch.zeros(input_tokens_prefill_pt.shape[0], force_sl - cur, dtype=input_tokens_prefill_pt.dtype)
+                input_tokens_prefill_pt = torch.cat([input_tokens_prefill_pt, pad], dim=-1)
+            elif cur > force_sl:
+                input_tokens_prefill_pt = input_tokens_prefill_pt[:, :force_sl].contiguous()
+            for i in range(len(decoding_pos)):
+                decoding_pos[i] = force_sl
+                prefill_lens[i] = force_sl
+            logger.info(f"GPT_OSS_FORCE_SEQ_LEN={force_sl}: overrode prompt len (was {cur})")
         logger.info(f"Encoded length: {prefill_lens[0]} tokens")
 
         # Clear KV caches for repeat batches (like tt-transformers)
@@ -758,6 +778,12 @@ def test_gpt_oss_demo(
             logger.info(f"Prefill finished")
 
         logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
+
+        if os.environ.get("GPT_OSS_SKIP_DECODE", "0") == "1":
+            logger.warning("GPT_OSS_SKIP_DECODE=1: returning after prefill (no decode loop)")
+            compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
+            logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+            return
 
         # Initialize generation state like tt_transformers
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
