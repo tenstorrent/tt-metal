@@ -256,23 +256,23 @@ struct CreateQHeads {
             volatile tt_l1_ptr uint32_t* rope_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)args.rope_semaphore_addr;
 
             if (args.num_nope_senders > 0) {
+                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 noc_semaphore_wait(phase1_semaphore_ptr, args.num_nope_senders);
                 noc_semaphore_set(phase1_semaphore_ptr, 0);
-                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 cb_push_back(args.receiver_in_cb, args.nope_tiles);
             }
 
             if (args.num_nope_senders > 0) {
+                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 noc_semaphore_wait(phase2_semaphore_ptr, args.num_nope_senders);
                 noc_semaphore_set(phase2_semaphore_ptr, 0);
-                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 cb_push_back(args.receiver_in_cb, args.nope_tiles);
             }
 
             if (args.num_rope_senders > 0) {
+                cb_reserve_back(args.receiver_in_cb, args.rope_tiles);
                 noc_semaphore_wait(rope_semaphore_ptr, args.num_rope_senders);
                 noc_semaphore_set(rope_semaphore_ptr, 0);
-                cb_reserve_back(args.receiver_in_cb, args.rope_tiles);
                 cb_push_back(args.receiver_in_cb, args.rope_tiles);
             }
             if constexpr (is_sender_same_risc) {
