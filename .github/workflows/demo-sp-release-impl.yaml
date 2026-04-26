@@ -140,6 +140,15 @@ jobs:
 
           echo "$CMD"
           eval "$CMD"
+      - name: Publish PCC summary
+        if: ${{ !cancelled() }}
+        run: |
+          PCC_DIR="/tmp/pcc_summaries"
+          if [ -d "$PCC_DIR" ]; then
+            for f in "$PCC_DIR"/pcc_summary_*.md; do
+              [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() && matrix.test-group.save-perf-data }}
