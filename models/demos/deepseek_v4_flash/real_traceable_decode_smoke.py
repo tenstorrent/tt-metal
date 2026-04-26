@@ -1748,6 +1748,11 @@ def run_traceable_decode_subpath_smoke(
     pcc: float = 0.99,
     rtol: float = 8e-2,
     atol: float = 8e-2,
+    activation: torch.Tensor | None = None,
+    step_activations: Sequence[torch.Tensor] | None = None,
+    step_replay_activations: Sequence[torch.Tensor] | None = None,
+    activation_source: str = "deterministic_attention_activation",
+    include_private_tensors: bool = False,
 ) -> dict[str, Any]:
     """Load real weights and optionally trace/replay the protected TTNN decode subpath."""
 
@@ -1848,7 +1853,12 @@ def run_traceable_decode_subpath_smoke(
         max_bytes=max_bytes,
     )
     weights = decode_traceable_decode_subpath_weights(tensors, config=config, layer=layer)
-    activation = deterministic_attention_activation(hidden_size=int(config.hidden_size), seq_len=seq_len)
+    activation = _resolve_traceable_activation(
+        activation,
+        config=config,
+        seq_len=seq_len,
+        label="activation",
+    )
     kv_cache_initial = deterministic_traceable_kv_cache_seed(
         cache_len=cache_len,
         kv_output_dim=_kv_output_dim(config),
@@ -1856,8 +1866,22 @@ def run_traceable_decode_subpath_smoke(
         seq_len=seq_len,
         decode_steps=decode_steps,
     )
-    activations = tuple(_decode_step_activation(activation, step) for step in range(int(decode_steps)))
-    replay_activations = tuple(_replay_activation(step_activation) for step_activation in activations)
+    activations = _resolve_traceable_step_activations(
+        step_activations,
+        activation=activation,
+        config=config,
+        seq_len=seq_len,
+        decode_steps=decode_steps,
+        label="step_activations",
+    )
+    replay_activations = _resolve_traceable_replay_activations(
+        step_replay_activations,
+        activations=activations,
+        config=config,
+        seq_len=seq_len,
+        decode_steps=decode_steps,
+        label="step_replay_activations",
+    )
     cache_update_indices = tuple(int(cache_update_index) + step for step in range(int(decode_steps)))
     static_attention_index = int(cache_update_indices[0])
     attention_window_indices = (
@@ -2143,6 +2167,7 @@ def run_traceable_decode_subpath_smoke(
         max_bytes=max_bytes,
         trace_region_size=trace_region_size,
     )
+    result["activation_source"] = str(activation_source)
     _annotate_boundary_trace_variants(
         result,
         config=config,
@@ -2178,6 +2203,9 @@ def run_traceable_decode_subpath_smoke(
             step_detail["accuracy"] = result["accuracy_by_step"][step_detail["step"]]["accuracy"]
         result["per_step_accuracy_summary"] = _per_step_trace_accuracy_summary(result["accuracy_by_step"])
         result["passed"] = True
+        if include_private_tensors:
+            result["_reference_tensors_by_step"] = references
+            result["_replay_reference_tensors_by_step"] = replay_references
         return result
 
     if seq_len % SHARED_EXPERT_TTNN_TILE_MULTIPLE != 0:
@@ -2423,6 +2451,10 @@ def run_traceable_decode_subpath_smoke(
             if bool(item.get("required_for_pass", True))
         )
     )
+    if include_private_tensors:
+        result["_reference_tensors_by_step"] = references
+        result["_replay_reference_tensors_by_step"] = replay_references
+        result["_ttnn_tensors_by_step"] = ttnn_outputs_by_step
     return result
 
 
@@ -11501,6 +11533,70 @@ def _decode_step_activation(activation: torch.Tensor, step: int) -> torch.Tensor
     token_scale = torch.linspace(0.97, 1.03, steps=activation.shape[-2], dtype=torch.float32).reshape(1, 1, -1, 1)
     shifted = activation.float().roll(shifts=int(step), dims=-2)
     return (shifted * token_scale + (0.015625 * int(step))).to(torch.bfloat16).contiguous()
+
+
+def _resolve_traceable_activation(
+    activation: torch.Tensor | None,
+    *,
+    config: DeepSeekV4FlashConfig,
+    seq_len: int,
+    label: str,
+) -> torch.Tensor:
+    if activation is None:
+        return deterministic_attention_activation(hidden_size=int(config.hidden_size), seq_len=seq_len)
+    resolved = activation.contiguous().to(torch.bfloat16)
+    _validate_traceable_activation_override(resolved, config=config, seq_len=seq_len, label=label)
+    return resolved
+
+
+def _resolve_traceable_step_activations(
+    step_activations: Sequence[torch.Tensor] | None,
+    *,
+    activation: torch.Tensor,
+    config: DeepSeekV4FlashConfig,
+    seq_len: int,
+    decode_steps: int,
+    label: str,
+) -> tuple[torch.Tensor, ...]:
+    if step_activations is None:
+        return tuple(_decode_step_activation(activation, step) for step in range(int(decode_steps)))
+    if len(step_activations) != int(decode_steps):
+        raise ValueError(f"{label} must contain {decode_steps} tensors, got {len(step_activations)}")
+    resolved = tuple(value.contiguous().to(torch.bfloat16) for value in step_activations)
+    for step, value in enumerate(resolved):
+        _validate_traceable_activation_override(value, config=config, seq_len=seq_len, label=f"{label}[{step}]")
+    return resolved
+
+
+def _resolve_traceable_replay_activations(
+    step_replay_activations: Sequence[torch.Tensor] | None,
+    *,
+    activations: Sequence[torch.Tensor],
+    config: DeepSeekV4FlashConfig,
+    seq_len: int,
+    decode_steps: int,
+    label: str,
+) -> tuple[torch.Tensor, ...]:
+    if step_replay_activations is None:
+        return tuple(_replay_activation(step_activation) for step_activation in activations)
+    if len(step_replay_activations) != int(decode_steps):
+        raise ValueError(f"{label} must contain {decode_steps} tensors, got {len(step_replay_activations)}")
+    resolved = tuple(value.contiguous().to(torch.bfloat16) for value in step_replay_activations)
+    for step, value in enumerate(resolved):
+        _validate_traceable_activation_override(value, config=config, seq_len=seq_len, label=f"{label}[{step}]")
+    return resolved
+
+
+def _validate_traceable_activation_override(
+    activation: torch.Tensor,
+    *,
+    config: DeepSeekV4FlashConfig,
+    seq_len: int,
+    label: str,
+) -> None:
+    expected = (1, 1, int(seq_len), int(config.hidden_size))
+    if tuple(activation.shape) != expected:
+        raise ValueError(f"{label} must have shape {expected}, got {tuple(activation.shape)}")
 
 
 def deterministic_traceable_kv_cache_seed(
