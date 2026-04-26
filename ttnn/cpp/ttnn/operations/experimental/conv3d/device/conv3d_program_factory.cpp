@@ -346,6 +346,29 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // On the worker core, it is a valid bit indicating the worker can continue.
     auto semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
 
+    // Trid-ring depth for gather_rows_to_shard.  Per-shape autotune from
+    // conv3d_trid_pipeline_findings.md: the ring wins on DRAM-streaming shapes and loses on
+    // compute-bound shapes.  The discriminator is reader bytes per matmul tile op:
+    //
+    //   intensity = (T_shard * H_shard * W_shard * C_in_block_bytes) / (M_t * K_t * N_t)
+    //
+    // Above the cutoff, enable the ring (N_TRIDS=8).  Below, disable (N_TRIDS=0 → kernel
+    // takes the original issue-all + single-trailing-barrier path, all ring code is
+    // constexpr-elided).
+    const uint32_t k_T = operation_attributes.kernel_size[0];
+    const uint32_t k_H = operation_attributes.kernel_size[1];
+    const uint32_t k_W = operation_attributes.kernel_size[2];
+    const uint32_t T_shard = (config.T_out_block - 1) * operation_attributes.stride[0] + k_T;
+    const uint32_t H_shard = (config.H_out_block - 1) * operation_attributes.stride[1] + k_H;
+    const uint32_t W_shard = (config.W_out_block - 1) * operation_attributes.stride[2] + k_W;
+    const uint64_t reader_bytes_per_block = static_cast<uint64_t>(T_shard) * H_shard * W_shard * C_in_block_bytes;
+    const uint64_t matmul_tiles = static_cast<uint64_t>(matmul_M_t) * matmul_K_t * matmul_N_t;
+    const uint64_t bytes_per_tile = matmul_tiles == 0 ? 0 : (reader_bytes_per_block / matmul_tiles);
+    constexpr uint64_t kIntensityCutoff = 128;  // bytes per matmul tile op
+    constexpr uint32_t kRingDepthOn = 8;        // §6.2 sweep winner
+    const uint32_t gather_trids = (bytes_per_tile >= kIntensityCutoff) ? kRingDepthOn : 0u;
+    log_debug(tt::LogOp, "gather trid ring: bytes_per_tile={}, gather_trids={}", bytes_per_tile, gather_trids);
+
     std::vector<uint32_t> reader_compile_time_args = {
         cb_vol2col_rm_id,
         N,
@@ -382,7 +405,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         T_shard_max,
         H_shard_max,
         W_shard_max,
-        patch_pad_bytes};
+        patch_pad_bytes,
+        gather_trids};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(

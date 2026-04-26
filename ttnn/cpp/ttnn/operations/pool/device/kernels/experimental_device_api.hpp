@@ -74,6 +74,18 @@ FORCE_INLINE void read_with_state(Noc noc, const Dst& dst, uint32_t src_addr) {
     noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), {});
 }
 
+// Set the active transaction id (NOC_PACKET_TAG) for subsequent async_read* calls on this
+// Noc's read cmd_buf.  Trid persists across set_read_state / read_with_state (those write
+// different cmd_buf registers).  Pair with async_read_barrier_with_trid to wait on just
+// this batch of reads.  Pass trid=0 to clear (untagged reads = no per-trid accounting).
+FORCE_INLINE void set_read_trid(Noc noc, uint32_t trid) { noc_async_read_set_trid(trid, noc.get_noc_id()); }
+
+// Block until reads tagged `trid` on this noc are flushed.  Other in-flight reads with
+// different trids continue independently.
+FORCE_INLINE void async_read_barrier_with_trid(Noc noc, uint32_t trid) {
+    noc.template async_read_barrier<Noc::BarrierMode::TXN_ID>(trid);
+}
+
 #endif
 
 }  // namespace experimental

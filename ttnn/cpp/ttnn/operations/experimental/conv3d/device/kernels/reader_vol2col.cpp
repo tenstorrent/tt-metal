@@ -237,6 +237,17 @@ void shift_retained_w_columns(
 // Gather rows from DRAM into the L1 shard buffer.
 // When check_padding=false, all positions are known to be in-bounds — skip per-position
 // boundary checks and clamp/zeroPad logic (~3-6 RISC-V cycles saved per position).
+//
+// Trid pipeline: each issued read is tagged with `trid = (issued % N_TRIDS) + 1`.  Once
+// `issued >= N_TRIDS`, issuing read `i` first blocks on trid `((i - N_TRIDS) % N_TRIDS) + 1`
+// to free that slot.  After the loop, drain by barriering on each in-flight trid.  This
+// bounds NoC outstanding reads to N_TRIDS and replaces the single trailing barrier with
+// per-trid waits so later reads continue while earlier ones drain.
+//
+// Small bursts (`total_reads_estimate < 2 * N_TRIDS`) take a fast path: issue all reads
+// untagged + single trailing global barrier (the original behavior).  In that regime the
+// ring overhead would dominate.  trid is reset to 0 before returning so callers (vol2col
+// uses untagged reads) see clean cmd_buf state.
 template <
     uint32_t C_in_block_bytes,
     bool is_padding_zeros,
@@ -248,6 +259,7 @@ template <
     uint32_t H_in_W_in,
     uint32_t in_row_size_bytes,
     bool check_padding,
+    uint32_t N_TRIDS = 4,
     typename Reader,
     typename ShardCB>
 void gather_rows_to_shard(
@@ -264,6 +276,21 @@ void gather_rows_to_shard(
     int32_t w_shard_start,
     uint32_t w_col_start,
     uint32_t w_count) {
+    // N_TRIDS == 0 is a compile-time sentinel: the host-side classifier disabled the trid
+    // ring for this shape (compute-bound regime — see conv3d_program_factory.cpp).  In that
+    // case all ring code is constexpr-elided and the function reduces to issue-all + single
+    // trailing barrier.
+    static_assert(N_TRIDS <= 8, "N_TRIDS out of range (max 8)");
+    auto trid_for = [](uint32_t i) -> uint32_t {
+        if constexpr (N_TRIDS == 0) {
+            return 0;  // unused
+        } else {
+            return (i % N_TRIDS) + 1;
+        }
+    };
+    const uint32_t total_reads_estimate = T_shard_cur * (h_end - h_start) * w_count;
+    [[maybe_unused]] const bool use_ring = (N_TRIDS != 0) && (total_reads_estimate >= 2 * N_TRIDS);
+    [[maybe_unused]] uint32_t issued = 0;
     for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
         const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
         [[maybe_unused]] const bool t_outside = check_padding && (t_in < 0 || t_in >= static_cast<int32_t>(T_in));
@@ -278,6 +305,18 @@ void gather_rows_to_shard(
                 (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_col_start) * C_in_block_bytes;
             for (uint32_t w_idx = 0; w_idx < w_count; w_idx++) {
                 const int32_t w_in = w_shard_start + static_cast<int32_t>(w_col_start + w_idx);
+                // Trid ring: free this slot if it's been used N_TRIDS reads ago, then tag the
+                // upcoming read with this iteration's trid.  Both N_TRIDS==0 (host-disabled)
+                // and use_ring=false (small-burst fallback) bypass; the constexpr branch keeps
+                // the disabled binary clean.
+                if constexpr (N_TRIDS != 0) {
+                    if (use_ring) {
+                        if (issued >= N_TRIDS) {
+                            experimental::async_read_barrier_with_trid(noc, trid_for(issued - N_TRIDS));
+                        }
+                        experimental::set_read_trid(noc, trid_for(issued));
+                    }
+                }
                 if constexpr (check_padding) {
                     const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
                     const bool in_padding = t_outside || h_outside || w_outside;
@@ -326,40 +365,65 @@ void gather_rows_to_shard(
                         shard_offset,
                         C_in_block_bytes);
                 }
+                if constexpr (N_TRIDS != 0) {
+                    if (use_ring) {
+                        issued++;
+                    }
+                }
                 shard_offset += C_in_block_bytes;
             }
         }
     }
-    noc.async_read_barrier();
+    if constexpr (N_TRIDS != 0) {
+        if (use_ring) {
+            // Drain the in-flight trids in issue order.  After the loop, the most recently
+            // issued read used trid_for(issued-1), and the oldest still in flight used
+            // trid_for(issued - to_drain).
+            const uint32_t to_drain = issued < N_TRIDS ? issued : N_TRIDS;
+            for (uint32_t k = 0; k < to_drain; k++) {
+                experimental::async_read_barrier_with_trid(noc, trid_for(issued - to_drain + k));
+            }
+            // Restore untagged state so vol2col / pre_zero / shift reads (which use trid 0)
+            // don't get accounted against a stale per-trid counter.
+            experimental::set_read_trid(noc, 0);
+        } else {
+            noc.async_read_barrier();
+        }
+    } else {
+        noc.async_read_barrier();
+    }
 }
 
 // Dispatch to fast or slow gather based on runtime bounds check.
-#define GATHER_ROWS(all_in_bounds, ...)  \
-    do {                                 \
-        if (all_in_bounds)               \
-            gather_rows_to_shard<        \
-                C_in_block_bytes,        \
-                is_padding_zeros,        \
-                H_shard_max_W_shard_max, \
-                W_shard_max,             \
-                T_in,                    \
-                H_in,                    \
-                W_in,                    \
-                H_in_W_in,               \
-                in_row_size_bytes,       \
-                false>(__VA_ARGS__);     \
-        else                             \
-            gather_rows_to_shard<        \
-                C_in_block_bytes,        \
-                is_padding_zeros,        \
-                H_shard_max_W_shard_max, \
-                W_shard_max,             \
-                T_in,                    \
-                H_in,                    \
-                W_in,                    \
-                H_in_W_in,               \
-                in_row_size_bytes,       \
-                true>(__VA_ARGS__);      \
+// Threads `gather_trids` (a compile-time arg in kernel scope) into the trid-ring depth.
+#define GATHER_ROWS(all_in_bounds, ...)     \
+    do {                                    \
+        if (all_in_bounds)                  \
+            gather_rows_to_shard<           \
+                C_in_block_bytes,           \
+                is_padding_zeros,           \
+                H_shard_max_W_shard_max,    \
+                W_shard_max,                \
+                T_in,                       \
+                H_in,                       \
+                W_in,                       \
+                H_in_W_in,                  \
+                in_row_size_bytes,          \
+                false,                      \
+                gather_trids>(__VA_ARGS__); \
+        else                                \
+            gather_rows_to_shard<           \
+                C_in_block_bytes,           \
+                is_padding_zeros,           \
+                H_shard_max_W_shard_max,    \
+                W_shard_max,                \
+                T_in,                       \
+                H_in,                       \
+                W_in,                       \
+                H_in_W_in,                  \
+                in_row_size_bytes,          \
+                true,                       \
+                gather_trids>(__VA_ARGS__); \
     } while (0)
 
 void kernel_main() {
@@ -402,6 +466,8 @@ void kernel_main() {
 
     // Padding bytes to append after each patch row to reach tile-aligned CB page width
     constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
+    // Trid-ring depth for gather_rows_to_shard.  See plan in conv3d_gather_trid_pipeline_plan.md.
+    constexpr uint32_t gather_trids = get_compile_time_arg_val(36);
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
     // Load input/output addresses and range parameters
@@ -419,7 +485,7 @@ void kernel_main() {
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<36>();
+    constexpr auto in_args = TensorAccessorArgs<37>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
 
     experimental::Noc noc;
