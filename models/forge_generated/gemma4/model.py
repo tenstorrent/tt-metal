@@ -39,13 +39,27 @@ class Gemma4ForCausalLM:
     `is_decode` is fixed at construction time.
     """
 
-    def __init__(self, *, is_decode, scaled_embedding, layers, lm_head, shared, cached_main, input_overrides):
+    def __init__(
+        self,
+        *,
+        is_decode,
+        scaled_embedding,
+        layers,
+        lm_head,
+        shared,
+        cached_main,
+        input_overrides,
+        sliding_prelude,
+        full_prelude,
+    ):
         self._is_decode = is_decode
         self.scaled_embedding = scaled_embedding
         self.layers = layers
         self.lm_head = lm_head
+        self.sliding_prelude = sliding_prelude
+        self.full_prelude = full_prelude
         self.shared = shared  # dict of var_184..var_193 device tensors
-        self.cached_main = cached_main  # transitional: feeds prelude + L58/L59 specials
+        self.cached_main = cached_main  # transitional: feeds L58/L59 specials only
         # Per-layer q_norm/k_norm tensors that the L58/L59 special methods
         # still read from input slots. Applied to the runtime input list
         # at call time. Goes away when L58/L59 are unified.
@@ -172,6 +186,15 @@ class Gemma4ForCausalLM:
                 "var_193": cached_main["main_const_eval_338"][0],
             }
 
+        # Preludes: bind cached_main once at construction; runtime calls
+        # don't pass it.
+        if is_decode:
+            sliding_prelude = gemma4.SlidingPreludeDecode(cached_main)
+            full_prelude = gemma4.FullPreludeDecode(cached_main)
+        else:
+            sliding_prelude = gemma4.SlidingPreludePrefill(cached_main)
+            full_prelude = gemma4.FullPreludePrefill(cached_main)
+
         return cls(
             is_decode=is_decode,
             scaled_embedding=scaled_embedding,
@@ -180,6 +203,8 @@ class Gemma4ForCausalLM:
             shared=shared,
             cached_main=cached_main,
             input_overrides=input_overrides,
+            sliding_prelude=sliding_prelude,
+            full_prelude=full_prelude,
         )
 
     def _call_decode(self, input):
@@ -420,8 +445,7 @@ class Gemma4ForCausalLM:
             ttnn_reshape_18,
             ttnn_to_layout_11,
             ttnn_typecast_11,
-        ) = gemma4.SlidingPreludeDecode.from_consteval(cached_main)(
-            cached_main=cached_main,
+        ) = self.sliding_prelude(
             input=input,
             ttnn_to_layout_0=ttnn_to_layout_0,
             ttnn_add_0=ttnn_add_0,
@@ -430,8 +454,7 @@ class Gemma4ForCausalLM:
             ttnn_typecast_35,
             ttnn_typecast_36,
             ttnn_typecast_39,
-        ) = gemma4.FullPreludeDecode.from_consteval(cached_main)(
-            cached_main=cached_main,
+        ) = self.full_prelude(
             input=input,
             ttnn_reshape_0=ttnn_reshape_0,
             ttnn_reshape_3=ttnn_reshape_3,
@@ -965,8 +988,7 @@ class Gemma4ForCausalLM:
             ttnn_reshape_18,
             ttnn_to_layout_11,
             ttnn_typecast_11,
-        ) = gemma4.SlidingPreludePrefill.from_consteval(cached_main)(
-            cached_main=cached_main,
+        ) = self.sliding_prelude(
             input=input,
             ttnn_to_layout_0=ttnn_to_layout_0,
         )
@@ -982,8 +1004,7 @@ class Gemma4ForCausalLM:
             ttnn_reshape_104,
             ttnn_reshape_105,
             ttnn_typecast_39,
-        ) = gemma4.FullPreludePrefill.from_consteval(cached_main)(
-            cached_main=cached_main,
+        ) = self.full_prelude(
             input=input,
             ttnn_reshape_0=ttnn_reshape_0,
             ttnn_reshape_3=ttnn_reshape_3,
