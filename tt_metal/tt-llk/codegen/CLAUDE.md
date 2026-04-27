@@ -467,15 +467,16 @@ If tests FAIL, return to the debug→test loop (Step 3c/3e) for the failing phas
 
 ### Step 5: Optimize (SFPU kernels only)
 
-After the final regression passes, check if the Blackhole reference uses replay buffers:
+After the final regression passes, always run the optimizer. It will look at multiple optimization strategies (replay buffer, algebraic identity rewrites, instruction scheduling, init/main factoring, …) and apply whichever ones survive correctness verification. Replay buffer is one of several strategies, not a precondition for running the step.
 
-```bash
-grep -c "replay\|load_replay_buf" tt_llk_blackhole/{kernel_path}
-```
-
-If the count is > 0, first snapshot the pre-optimization kernel for comparison:
+First snapshot the pre-optimization kernel for comparison:
 ```bash
 cp tt_llk_{target_arch}/{kernel_path} {LOG_DIR}/pre_opt_$(basename tt_llk_{target_arch}/{kernel_path})
+```
+
+As an input hint for the optimizer, capture whether the Blackhole reference uses replay buffers:
+```bash
+BH_USES_REPLAY=$(grep -c "replay\|load_replay_buf" tt_llk_blackhole/{kernel_path} 2>/dev/null || echo 0)
 ```
 
 Then spawn the optimizer agent:
@@ -491,23 +492,26 @@ Agent tool:
     Kernel type: {kernel_type}
     Target architecture: {target_arch}
 
-    The kernel already compiles and passes all tests. Your job is to optimize
-    it with replay buffers without breaking correctness.
+    The kernel already compiles and passes all tests. Your job is to improve its
+    performance without breaking correctness — apply any combination of the
+    strategies in llk-optimizer.md ("Optimization Strategies") that you can
+    justify, one at a time, verifying compile + tests after each.
 
-    If optimization fails, revert to the pre-optimization version.
+    Hint: the Blackhole reference uses replay buffers = {BH_USES_REPLAY > 0 ? "yes" : "no"}.
+    This is a hint, not a gate — also consider algebraic identity rewrites,
+    instruction scheduling for latency hiding, and init/main factoring.
+
+    If a strategy fails verification, revert that strategy from snapshot and
+    move on. If no strategies survive, leave the kernel unchanged.
 
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for completion. The optimizer will either:
-- Return an optimized kernel (compile + test verified) → set `"optimized": true`
-- Revert to the original (optimization failed) → set `"optimized": false`
-
-If the Blackhole reference does NOT use replay buffers, skip this step and set `"optimized": false`.
+Wait for completion. The optimizer will report the strategies it tried, which were kept, and which were reverted.
 
 **Metrics**: Record in the run JSON:
-- `"optimized": true/false` — whether optimization was applied
-- `"optimization_type": "replay|none"` — what was optimized
+- `"optimized": true/false` — whether at least one optimization strategy was applied and survived verification
+- `"optimization_strategies": ["replay", "scheduling", ...]` — the list of strategies that were kept (empty list if none)
 
 ### Steps 6–9: Prettifier (DISABLED)
 
@@ -582,7 +586,7 @@ LINES_GENERATED=$(wc -l < tt_llk_{target_arch}/{kernel_path})
   "prettified": false,
   "formatted": true,
   "optimized": false,
-  "optimization_type": "none",
+  "optimization_strategies": [],
   "formats_tested": ["Float16", "Float16_b", "Float32"],
   "formats_excluded": {"Int32": "requires instr_mod1=0, not implemented"},
   "status": "success",
