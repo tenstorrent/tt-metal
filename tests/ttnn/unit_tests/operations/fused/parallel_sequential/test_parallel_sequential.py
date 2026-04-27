@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 
 
 def stress_test_program_cache(fn):
@@ -448,6 +448,7 @@ class TestShardedExecution:
         golden = rms_norm_golden(sh_ln_golden(torch_input, weight=torch_w), torch_w)
         check_pcc(golden, out, label=f"sharded {shard_type}")
 
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     @stress_test_program_cache
     def test_sharded_three_phase(self, device):
@@ -711,6 +712,7 @@ class TestMatmulFusion:
         golden = torch_rms_norm(torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float(), torch_w.float())
         check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_rms", [2, 3, 4])
     @stress_test_program_cache
@@ -1391,7 +1393,7 @@ class TestCrossOpCompilation:
         "matmul": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         "batchnorm": "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
         "untilize": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
-        "eltwise_sfpu": "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp",
+        "eltwise_sfpu": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         "typecast": "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
     }
 
@@ -1763,7 +1765,7 @@ class TestDeepSeekV3:
             )
 
     def test_q_kv_rms_norm_profile(self, device):
-        """Profile fused-inline vs fused-persistent vs unfused (100 trials × 100 iters)."""
+        """Profile fused-inline vs fused-persistent vs unfused (n trials × n iters)."""
         import statistics
         import time
 
@@ -1771,8 +1773,10 @@ class TestDeepSeekV3:
         from models.experimental.ops.descriptors.normalization import rms_norm
 
         s = self._setup_mla_norm_configs(device)
-        N_TRIALS = 100
-        N_ITERS = 100
+        # Number of trials and iterations reduced to 1 for CI efficiency.
+        # For reasonable perf estimates, increase these to e.g. 100.
+        N_TRIALS = 1
+        N_ITERS = 1
 
         torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
         torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)

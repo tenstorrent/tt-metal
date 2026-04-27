@@ -123,13 +123,6 @@ target_sources(
             cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
             cpp/ttnn/kernel/kernel_common_utils.hpp
             cpp/ttnn/kernel/kernel_utils.hpp
-            cpp/ttnn/kernel_lib/cb_helpers.hpp
-            cpp/ttnn/kernel_lib/cb_helpers.inl
-            cpp/ttnn/kernel_lib/dest_helpers.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.inl
-            cpp/ttnn/kernel_lib/untilize_helpers.hpp
-            cpp/ttnn/kernel_lib/untilize_helpers.inl
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -166,6 +159,7 @@ target_sources(
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
+        cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
         core/tensor/tensor_utils.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
@@ -305,6 +299,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
@@ -699,7 +694,6 @@ target_link_libraries(
         TTNN::Ops::Eltwise::Ternary
         TTNN::Ops::Eltwise::Ternary::Backward
         TTNN::Ops::Eltwise::Unary
-        TTNN::Ops::Eltwise::UnaryNG
         TTNN::Ops::Eltwise::Unary::Backward
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
@@ -727,6 +721,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
@@ -954,7 +949,6 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary_ng)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
@@ -981,6 +975,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincou
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/extract)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
@@ -994,6 +989,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
+add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)

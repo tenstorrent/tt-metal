@@ -78,6 +78,9 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
+#ifdef GENERATE_HASH_LOG
+#include <fstream>
+#endif
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -150,19 +153,6 @@ using detail::ProgramImpl;
 
 namespace {
 
-void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    // ZoneScoped;
-    // const std::string tracyPrefix = "GenerateBinaries_";
-    // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
-    try {
-        jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
-        kernel->generate_binaries(device, build_options);
-    } catch (std::runtime_error& ex) {
-        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-    }
-}
-
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
@@ -194,7 +184,6 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.gpp = build_env.build_env.get_gpp();
     static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
     desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
-    desc.output_dir = build_options.path;
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
@@ -211,7 +200,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // watcher/dprint enabled are accounted for in the build key.
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     hasher.update(build_key);
     hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
     hasher.update(kernel->compute_hash());
@@ -228,6 +217,40 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     }
 #endif
     return compile_hash;
+}
+
+std::string ensure_kernel_binaries(
+    const std::shared_ptr<Kernel>& kernel,
+    IDevice* device,
+    JitBuildOptions& build_options,
+    const DeviceBuildEnv& build_env,
+    size_t kernel_hash) {
+    if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
+        if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
+            log_debug(
+                tt::LogBuildKernels,
+                "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
+                kernel->name(),
+                kernel_hash,
+                precompiled_config->precompiled_dir);
+            return precompiled_config->precompiled_dir;
+        }
+
+        if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::FallbackPolicy::Error) {
+            throw experimental::PrecompiledKernelNotFoundError(
+                kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
+        }
+    }
+
+    jit_build_once(kernel_hash, [&] {
+        try {
+            jit_build_genfiles_descriptors(build_env.build_env, build_options);
+            kernel->generate_binaries(device, build_options);
+        } catch (std::runtime_error& ex) {
+            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+        }
+    });
+    return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
 
@@ -479,15 +502,11 @@ uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const 
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(
-    const KernelSpecName& name,
-    const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
-    size_t num_common_runtime_args) {
+void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(
-        name, KernelRTASchema{num_runtime_args_per_node, num_common_runtime_args});
+    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(name, schema);
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 
@@ -1292,6 +1311,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::optional<DeviceAddr> lowest_address =
         device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
+    const auto& allocator = device->allocator_impl();
+    const bool hybrid_mode = allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
+
+    // In HYBRID mode, per-core allocations live on each per-device allocator (not the mesh
+    // allocator). Collect the physical allocators we must consult so we can see per-core state.
+    std::vector<AllocatorImpl*> physical_allocators;
+    if (hybrid_mode) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                physical_allocators.push_back(dev->allocator_impl().get());
+            }
+        } else {
+            physical_allocators.push_back(allocator.get());
+        }
+    }
 
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
@@ -1305,6 +1339,23 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_allocator.core_range.str(),
                 cb_region_end,
                 max_l1_size);
+        }
+        if (hybrid_mode) {
+            // Per-core allocations (experimental_set_per_core_allocation) can land at different
+            // addresses per core, so query only the banks this CB covers on each physical allocator.
+            // Prevents per-core tensors on unrelated cores from spuriously tightening this CB's
+            // budget, and lets us see per-core state that lives on per-device (not mesh) allocators.
+            lowest_address = std::nullopt;
+            for (const auto& core : cb_allocator.core_range) {
+                for (auto* phys_alloc : physical_allocators) {
+                    auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
+                    if (addr.has_value()) {
+                        lowest_address =
+                            lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
+                    }
+                }
+            }
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
             TT_THROW(
@@ -1867,6 +1918,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
+        // TODO: precompiled kernel is not supported in remote mode
         auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
         TT_FATAL(
             !endpoints.empty(),
@@ -1880,8 +1932,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                kernel->register_kernel_elf_paths_with_watcher(*device);
-
                 generate_kernel_source_files(device, build_options, kernel);
                 auto desc = build_kernel_descriptor(device, kernel, build_options, kernel_hash);
                 coordinator.submit(std::move(desc));
@@ -1891,7 +1941,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         coordinator.finish();
 
+        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
+            kernel->read_binaries(device, binary_root);
+            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
         }
     } else {
@@ -1904,8 +1957,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
 
                         if (!is_mock) {
-                            kernel->register_kernel_elf_paths_with_watcher(*device);
-                            jit_build_once(kernel_hash, [&] { GenerateBinaries(device, build_options, kernel); });
+                            const std::string binary_root =
+                                ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                            kernel->read_binaries(device, binary_root);
+                            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         } else {
                             // Create empty stub binaries for mock devices
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
@@ -1914,17 +1969,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                     },
                     events);
-            }
-        }
-        sync_build_steps(events);
-    }
-
-    // Mock/emulated devices don't have binaries to read.
-    if (!is_mock) {
-        for (const auto& kernels : kernels_) {
-            for (const auto& pair : kernels) {
-                const auto& kernel = pair.second;
-                launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
             }
         }
         sync_build_steps(events);
