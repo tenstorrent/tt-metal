@@ -28,7 +28,7 @@ constexpr auto kDbAccCbIndex = tt::CBIndex::c_2;
 
 // Scalar/constant CBs
 constexpr auto kScalerCbIndex = tt::CBIndex::c_3;
-// c_4 is unused (eps is now passed as a compute runtime arg and applied via add_unary_tile).
+constexpr auto kMatmulReduceCbIndex = tt::CBIndex::c_4;
 constexpr auto kOneCbIndex = tt::CBIndex::c_5;
 constexpr auto kW0CbIndex = tt::CBIndex::c_6;
 constexpr auto kW1CbIndex = tt::CBIndex::c_7;
@@ -54,7 +54,7 @@ constexpr auto kCoeff1CbIndex = tt::CBIndex::c_18;
 constexpr auto kCoeff2CbIndex = tt::CBIndex::c_19;
 constexpr auto kCoeff3CbIndex = tt::CBIndex::c_20;
 
-// Preweighted inv_rms (three 1-tile bfloat16 CBs) — one per polynomial branch:
+// Preweighted inv_rms (three 1-tile Float32 CBs with UnpackToDestFp32) - one per polynomial branch:
 //   c_24 = w2 * inv_rms_x    (linear)
 //   c_25 = w1 * inv_rms_x2   (quadratic)
 //   c_26 = w0 * inv_rms_x3   (cubic)
@@ -174,7 +174,8 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     // Scalar/constant CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    // cb_eps removed: eps is now a compute runtime arg applied via add_unary_tile.
+    [[maybe_unused]] auto cb_matmul_reduce = create_circular_buffer(
+        program, all_cores, kMatmulReduceCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_one = create_circular_buffer(
         program, all_cores, kOneCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w0 =
@@ -216,14 +217,13 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     [[maybe_unused]] auto cb_coeff_3 =
         create_circular_buffer(program, all_cores, kCoeff3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
 
-    // Preweighted inv_rms tiles (bfloat16, one per branch) used by Pass-2 emit_output_for_row().
-    // See kernel comment in compute/polynorm_bw_kernel.cpp for the bf16 precision trade-off.
+    // Preweighted inv_rms tiles (Float32 + UnpackToDestFp32, one per branch).
     [[maybe_unused]] auto cb_weighted_inv_rms_x = create_circular_buffer(
-        program, all_cores, kWeightedInvRmsXCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+        program, all_cores, kWeightedInvRmsXCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_weighted_inv_rms_x2 = create_circular_buffer(
-        program, all_cores, kWeightedInvRmsX2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+        program, all_cores, kWeightedInvRmsX2CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_weighted_inv_rms_x3 = create_circular_buffer(
-        program, all_cores, kWeightedInvRmsX3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+        program, all_cores, kWeightedInvRmsX3CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
 
     // Output CBs
     [[maybe_unused]] auto cb_output =
@@ -279,13 +279,37 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     kernels.dL_dx_writer =
         create_writer_kernel(program, all_cores, dL_dx_writer_compile_time_args, defines, kDLdxWriterKernelPath);
 
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    unpack_to_dest_mode[kWeightedInvRmsXCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[kWeightedInvRmsX2CbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[kWeightedInvRmsX3CbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+
     std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size};
-    kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, true);
+    kernels.compute_group_1 = tt::tt_metal::CreateKernel(
+        program,
+        kComputeKernelPath,
+        core_group_1,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .math_approx_mode = false,
+            .compile_args = compute_group_1_args,
+            .defines = defines});
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {num_rows_per_core_group_2, block_size};
-        kernels.compute_group_2 =
-            create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, true);
+        kernels.compute_group_2 = tt::tt_metal::CreateKernel(
+            program,
+            kComputeKernelPath,
+            core_group_2,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .math_approx_mode = false,
+                .compile_args = compute_group_2_args,
+                .defines = defines});
     }
 
     const uint32_t scaler_fp32_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(input.logical_shape()[-1]));

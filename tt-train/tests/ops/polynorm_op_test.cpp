@@ -40,13 +40,12 @@ protected:
 namespace {
 constexpr float kForwardRtol = 2.5e-2F;
 constexpr float kForwardAtol = 2.5e-2F;
-// Backward tolerance accommodates the bf16 intermediate introduced by the PolyNorm BW
-// preweighting optimization (cb_weighted_inv_rms_* stores w*inv_rms as a bf16 tile,
-// costing one extra bf16 rounding vs the original fused-into-DEST path). Worst-case
-// absolute error stays under ~0.08 on very narrow shapes ({1,1,1,32}).
-// See PRECISION NOTE in polynorm_bw/device/kernels/compute/polynorm_bw_kernel.cpp.
-constexpr float kBackwardRtol = 8.0e-2F;
-constexpr float kBackwardAtol = 8.0e-2F;
+constexpr float kBackwardRtol = 5.0e-2F;
+constexpr float kBackwardAtol = 5.0e-2F;
+// Very-short rows can produce larger-magnitude dL/dx values where final BF16 output
+// quantization alone exceeds 5e-2. Keep the relaxed tolerance scoped to that coverage.
+constexpr float kRemainderBackwardRtol = 8.0e-2F;
+constexpr float kRemainderBackwardAtol = 8.0e-2F;
 
 struct PolyNormCaseData {
     xt::xarray<float> input;
@@ -254,7 +253,11 @@ void expect_allclose_with_metrics(
                           << " max_abs_diff=" << max_abs_diff;
 }
 
-void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float epsilon = 1e-5F) {
+void CompareKernelVsReferenceWithShape(
+    const std::vector<uint32_t>& shape,
+    float epsilon = 1e-5F,
+    float backward_rtol = kBackwardRtol,
+    float backward_atol = kBackwardAtol) {
     using namespace ttml;
     const auto data = make_case_data(shape);
     auto* device = &autograd::ctx().get_device();
@@ -291,11 +294,11 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     EXPECT_TRUE(xt::all(xt::isfinite(grad_w_autograd))) << "autograd fused grad_w has non-finite values";
     EXPECT_TRUE(xt::all(xt::isfinite(grad_b_autograd))) << "autograd fused grad_b has non-finite values";
     expect_allclose_with_metrics(
-        grad_x_autograd, grad_x_ref, kBackwardRtol, kBackwardAtol, "autograd_fused_backward_grad_x_vs_xt_reference");
+        grad_x_autograd, grad_x_ref, backward_rtol, backward_atol, "autograd_fused_backward_grad_x_vs_xt_reference");
     expect_allclose_with_metrics(
-        grad_w_autograd, grad_w_ref, kBackwardRtol, kBackwardAtol, "autograd_fused_backward_grad_w_vs_xt_reference");
+        grad_w_autograd, grad_w_ref, backward_rtol, backward_atol, "autograd_fused_backward_grad_w_vs_xt_reference");
     expect_allclose_with_metrics(
-        grad_b_autograd, grad_b_ref, kBackwardRtol, kBackwardAtol, "autograd_fused_backward_grad_b_vs_xt_reference");
+        grad_b_autograd, grad_b_ref, backward_rtol, backward_atol, "autograd_fused_backward_grad_b_vs_xt_reference");
 
     autograd::ctx().reset_graph();
 
@@ -312,11 +315,11 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
         EXPECT_TRUE(xt::all(xt::isfinite(grad_w))) << variant_name << " grad_w has non-finite values";
         EXPECT_TRUE(xt::all(xt::isfinite(grad_b))) << variant_name << " grad_b has non-finite values";
         expect_allclose_with_metrics(
-            grad_x, grad_x_ref, kBackwardRtol, kBackwardAtol, variant_name + "_backward_grad_x_vs_xt_reference");
+            grad_x, grad_x_ref, backward_rtol, backward_atol, variant_name + "_backward_grad_x_vs_xt_reference");
         expect_allclose_with_metrics(
-            grad_w, grad_w_ref, kBackwardRtol, kBackwardAtol, variant_name + "_backward_grad_w_vs_xt_reference");
+            grad_w, grad_w_ref, backward_rtol, backward_atol, variant_name + "_backward_grad_w_vs_xt_reference");
         expect_allclose_with_metrics(
-            grad_b, grad_b_ref, kBackwardRtol, kBackwardAtol, variant_name + "_backward_grad_b_vs_xt_reference");
+            grad_b, grad_b_ref, backward_rtol, backward_atol, variant_name + "_backward_grad_b_vs_xt_reference");
     }
 
     autograd::ctx().reset_graph();
@@ -363,10 +366,14 @@ TEST_F(PolyNormOpTest, PolyNorm_Compare_FusedVsCompositeForward_Small) {
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_Compare_BlockSizeRemainders) {
-    CompareKernelVsReferenceWithShape({1, 1, 1, 32});   // Wt=1, Wt%4=1
-    CompareKernelVsReferenceWithShape({1, 1, 1, 64});   // Wt=2, Wt%4=2
-    CompareKernelVsReferenceWithShape({1, 1, 1, 96});   // Wt=3, Wt%4=3
-    CompareKernelVsReferenceWithShape({1, 1, 1, 128});  // Wt=4, Wt%4=0
+    CompareKernelVsReferenceWithShape(
+        {1, 1, 1, 32}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=1, Wt%4=1
+    CompareKernelVsReferenceWithShape(
+        {1, 1, 1, 64}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=2, Wt%4=2
+    CompareKernelVsReferenceWithShape(
+        {1, 1, 1, 96}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=3, Wt%4=3
+    CompareKernelVsReferenceWithShape(
+        {1, 1, 1, 128}, 1e-5F, kRemainderBackwardRtol, kRemainderBackwardAtol);  // Wt=4, Wt%4=0
 }
 
 TEST_F(PolyNormOpTest, PolyNorm_Compare_EpsilonVariants) {

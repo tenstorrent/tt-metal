@@ -39,6 +39,7 @@ void kernel_main() {
     constexpr auto cb_x = tt::CBIndex::c_0;
     constexpr auto cb_dout = tt::CBIndex::c_1;
     constexpr auto cb_scaler = tt::CBIndex::c_3;
+    constexpr auto cb_matmul_reduce = tt::CBIndex::c_4;
     constexpr auto cb_one = tt::CBIndex::c_5;
     constexpr auto cb_w0 = tt::CBIndex::c_6;
     constexpr auto cb_w1 = tt::CBIndex::c_7;
@@ -58,6 +59,7 @@ void kernel_main() {
 
     // Generate constant tiles (consumed once by compute kernel at startup)
     generate_tile_with_uint32_value(cb_scaler, scaler_fp32_bits);
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);
     generate_tile_with_uint32_value(cb_one, 0x3F800000U);
 
     // Read weight scalars directly from the weight tensor on DRAM (no host roundtrip)
