@@ -2,15 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-MLA device-perf tests approximating glx 8x4 from LB (8-chip) proxy.
-
-- `test_deepseek_v3_mla_perf_loudbox`: runs 2x4 proxy on loudbox, validates against
-  its own perf baseline, and computes the approximate 8x4 galaxy total. SDPA time
-  is scaled by 4 (SP 2→8 = 4x, TP 4→4 = 1x) while other ops are added as-is.
-- `test_deepseek_v3_mla_perf_galaxy`: 8x4 ground truth (skipped off-glx).
-"""
-
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
@@ -28,9 +19,8 @@ _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-rando
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_loudbox():
     """
-    Run 2x4 proxy on loudbox (BH-LoudBox, 8xP150).
-    Validates proxy against its own baseline AND computes the approximate
-    8x4 galaxy total: SDPA × 4 + other ops.
+    Measures perf on LB in 2x4 mesh shape, validates against its own perf baseline, and computes the approximate Galaxy perf.
+    SDPA time is scaled by 4 (SP 2→8 = 4x, TP 4→4 = 1x) while other ops are added as-is.
     """
     run_mla_perf_with_approximation(
         command_2x4=_CMD_2X4,
@@ -44,7 +34,6 @@ def test_deepseek_v3_mla_perf_loudbox():
 
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_galaxy():
-    """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
     run_model_device_perf_test_with_merge(
