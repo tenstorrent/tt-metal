@@ -33,6 +33,7 @@ def test_decode_pcc(mesh_device):
         input_list[slot] = t
 
     model = gemma4.Gemma4ForCausalLM.from_state_dict(hf, mesh_device)
+    model.reset_kv_caches()
     logits = model(input_list, mode="decode")
 
     logits_host = ttnn.from_device(logits)

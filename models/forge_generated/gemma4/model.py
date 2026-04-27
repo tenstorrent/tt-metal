@@ -110,10 +110,9 @@ class Gemma4ForCausalLM:
         self.l59.v_cache = self.caches.v_caches[self.l59.layer_idx]
 
     def __call__(self, input, *, mode, current_pos=0):
-        # Phase 2 temporary: reset on every call so single-shot PCC tests
-        # see the same zero initial state as the legacy input-slot path.
-        # Phase 5 will move this responsibility to the Generator.
-        self.reset_kv_caches()
+        # Phase 5: reset is the caller's job (Generator does it once at
+        # the start of a session). Independent single-shot callers
+        # (PCC tests) call reset_kv_caches() explicitly before model().
         # Phase 3: build the per-call position scalar internally and inject
         # it at every input slot that historically held an int32 [1] zero.
         # The runtime_inputs synthesizer no longer allocates these slots,

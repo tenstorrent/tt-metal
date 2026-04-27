@@ -1,13 +1,11 @@
 """Gemma4-31B-it multi-token generation demo.
 
-Runs prefill in a loop: at each step the prompt + tokens-generated-so-far
-are padded to seq_len, fed through the prefill model, and the logits at
-the last "real" position give the next token. The generated tokens
-accumulate until either max_new_tokens is reached or seq_len fills up.
-
-This uses prefill-only (the codegen prefill body is what we have a
-verified PCC for). True decode-mode continuation would need KV-cache
-handoff between prefill and decode — out of scope for this demo.
+Wraps `gemma4.Generator` around a Gemma4ForCausalLM and a HF tokenizer.
+The generator currently runs prefill-loop sampling: at each step the
+prompt + tokens-so-far are padded to seq_len and fed through the
+prefill body; argmax of the last-real-position logits is the next
+token. The fast prefill→decode path (one prefill + N decodes) is the
+follow-up that depends on sliding-attention KV cache writes.
 
 Usage:
     python -m gemma4.demo "What is your favorite city?"
@@ -16,11 +14,8 @@ Usage:
 import argparse
 
 import gemma4
-import torch
 from gemma4 import weights as gw
 from transformers import AutoTokenizer
-
-import ttnn
 
 
 def _tokenize_prompt(prompt: str, tokenizer) -> list[int]:
@@ -37,42 +32,11 @@ def _tokenize_prompt(prompt: str, tokenizer) -> list[int]:
     return enc["input_ids"][0].tolist()
 
 
-def _build_token_slot(ids: list[int], seq_len: int, pad_id: int, device):
-    """Pad/truncate `ids` to length `seq_len` and build the ttnn.Tensor
-    for runtime input slot 7 (shape [1, seq_len], INT32, ROW_MAJOR,
-    replicated across the (1,4) mesh).
-    """
-    if len(ids) > seq_len:
-        ids = ids[:seq_len]
-    elif len(ids) < seq_len:
-        ids = ids + [pad_id] * (seq_len - len(ids))
-    user_tokens = torch.tensor(ids, dtype=torch.int32).reshape(1, seq_len)
-    return ttnn.as_tensor(
-        user_tokens,
-        dtype=ttnn.DataType.INT32,
-        layout=ttnn.Layout.ROW_MAJOR,
-        device=device,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
-
-
-def _logits_to_torch(logits, device):
-    """Bring the device-side logits back to CPU as a [1, seq_len, vocab]
-    float tensor (concatenating shards along the vocab dim)."""
-    host = ttnn.from_device(logits)
-    return ttnn.to_torch(
-        host,
-        mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
-    )[:1, :, :].float()
-
-
 def run(prompt: str, *, seq_len: int = 64, max_new_tokens: int = 32) -> tuple[list[int], str]:
     print(f"\n>>> Prompt: {prompt!r}")
     print(f"    seq_len={seq_len}, max_new_tokens={max_new_tokens}\n")
 
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-4-31B-it")
-    pad_id = tokenizer.pad_token_id or 0
     prompt_ids = _tokenize_prompt(prompt, tokenizer)
     if len(prompt_ids) >= seq_len:
         print(
@@ -85,53 +49,26 @@ def run(prompt: str, *, seq_len: int = 64, max_new_tokens: int = 32) -> tuple[li
 
     device = gemma4.utils.DeviceGetter.get_device((1, 4))
 
-    # Build the model once at the chosen seq_len. Re-running prefill at
-    # different seq_lens would mean rebuilding (preludes / scalar tensors
-    # bake the seq_len in at construction time).
-    print("\nLoading HF weights and building prefill model...")
+    print("\nLoading HF weights and building model...")
     hf = gw.load_hf_weights()
-    model = gemma4.Gemma4ForCausalLM.from_state_dict(
-        hf,
-        device,
-        seq_len=seq_len,
-    )
+    model = gemma4.Gemma4ForCausalLM.from_state_dict(hf, device, seq_len=seq_len)
+    generator = gemma4.Generator(model, tokenizer, seq_len=seq_len)
 
-    sequence = list(prompt_ids)
-    generated = []
     cap = min(max_new_tokens, seq_len - len(prompt_ids))
     if cap < max_new_tokens:
         print(f"[info] capping max_new_tokens at {cap} (seq_len - prompt_len).")
 
     print(f"\nGenerating up to {cap} tokens...")
-    for step in range(cap):
-        # Fresh runtime inputs each step — the KV caches start from zeros
-        # and prefill writes them in-place. Override slot 7 with the
-        # current sequence padded to seq_len.
-        runtime = gemma4.synthesize_prefill_inputs(device, seq_len=seq_len)
-        runtime[7] = _build_token_slot(sequence, seq_len, pad_id, device)
 
-        n_slots = max(runtime) + 1
-        input_list = [None] * n_slots
-        for slot, t in runtime.items():
-            input_list[slot] = t
+    step_counter = {"i": 0}
 
-        logits = model(input_list, mode="prefill")
-        logits_torch = _logits_to_torch(logits, device)
+    def on_token(tok_id):
+        i = step_counter["i"]
+        text = tokenizer.decode([tok_id])
+        print(f"  step {i:>2}: id={tok_id:>6}  text={text!r}")
+        step_counter["i"] = i + 1
 
-        # The next-token prediction is the logits at the position of the
-        # last real token: index len(sequence) - 1 (positions [len:seq_len]
-        # contain pad tokens; under causal masking they don't influence
-        # the position-(len-1) logits).
-        last_real = len(sequence) - 1
-        next_id = int(logits_torch[0, last_real].argmax().item())
-        next_text = tokenizer.decode([next_id])
-        sequence.append(next_id)
-        generated.append(next_id)
-        print(f"  step {step:>2}: id={next_id:>6}  text={next_text!r}")
-
-        if next_id == tokenizer.eos_token_id:
-            print("  [eos reached]")
-            break
+    generated = generator.generate(prompt_ids, max_new_tokens=cap, on_token=on_token)
 
     completion = tokenizer.decode(generated)
     print(f"\n<<< Generated ({len(generated)} tokens): {completion!r}\n")

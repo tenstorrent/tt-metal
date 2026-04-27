@@ -27,6 +27,7 @@ from gemma4.runtime_inputs import (
 from gemma4.layer_table import LAYER_TABLE_PREFILL, LAYER_TABLE_DECODE
 from gemma4.caches import Gemma4Caches
 from gemma4.model import Gemma4ForCausalLM
+from gemma4.generator import Generator
 
 __all__ = [
     "RMSNorm",
@@ -47,4 +48,5 @@ __all__ = [
     "LAYER_TABLE_DECODE",
     "Gemma4Caches",
     "Gemma4ForCausalLM",
+    "Generator",
 ]
