@@ -19,7 +19,14 @@ operands:
     format: "Float16_b"
   - name: "output_B"
     dims: [32, 32]
-    format: "Float16"
+    format: "Bfp8_b"
+
+  - name: "input_E"
+    dims: [32, 32]
+    format: "Bfp8_b"
+  - name: "output_C"
+    dims: [32, 32]
+    format: "Float32"
 
 operations:
   - math:
@@ -72,4 +79,15 @@ operations:
         math_fidelity: "LoFi"
     packer: "Packer"
     output: "output_B"
+    block_size: [32, 32]
+
+  - math:
+      - type: "Fpu"
+        src_a: "input_D"
+        src_b: "output_A"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "LoFi"
+    packer: "Packer"
+    output: "output_C"
     block_size: [32, 32]

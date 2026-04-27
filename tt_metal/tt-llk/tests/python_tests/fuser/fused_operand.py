@@ -335,14 +335,11 @@ class OperandRegistry:
             torch_format = format_dict[output_format]
             tilized_tensor = torch.tensor(res_from_l1, dtype=torch_format)
 
-            if output_format != DataFormat.Bfp8_b and output_dimensions is not None:
-                raw_tensor = untilize_block(
-                    tilized_tensor,
-                    stimuli_format=output_format,
-                    dimensions=output_dimensions,
-                )
-            else:
-                raw_tensor = tilized_tensor
+            raw_tensor = untilize_block(
+                tilized_tensor,
+                stimuli_format=output_format,
+                dimensions=output_dimensions,
+            )
 
             output._raw_data = raw_tensor
 
