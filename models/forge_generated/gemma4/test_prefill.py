@@ -32,12 +32,8 @@ def test_prefill_pcc(mesh_device):
     for slot, t in runtime.items():
         input_list[slot] = t
 
-    model = gemma4.Gemma4ForCausalLM.from_state_dict(
-        hf,
-        mesh_device,
-        is_decode=False,
-    )
-    logits = model(input_list)
+    model = gemma4.Gemma4ForCausalLM.from_state_dict(hf, mesh_device)
+    logits = model(input_list, mode="prefill")
 
     logits_host = ttnn.from_device(logits)
     logits_torch = ttnn.to_torch(

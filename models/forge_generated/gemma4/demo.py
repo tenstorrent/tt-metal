@@ -93,7 +93,6 @@ def run(prompt: str, *, seq_len: int = 64, max_new_tokens: int = 32) -> tuple[li
     model = gemma4.Gemma4ForCausalLM.from_state_dict(
         hf,
         device,
-        is_decode=False,
         seq_len=seq_len,
     )
 
@@ -116,7 +115,7 @@ def run(prompt: str, *, seq_len: int = 64, max_new_tokens: int = 32) -> tuple[li
         for slot, t in runtime.items():
             input_list[slot] = t
 
-        logits = model(input_list)
+        logits = model(input_list, mode="prefill")
         logits_torch = _logits_to_torch(logits, device)
 
         # The next-token prediction is the logits at the position of the

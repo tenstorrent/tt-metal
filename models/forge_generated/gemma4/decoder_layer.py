@@ -9,9 +9,10 @@ Composition (for both kinds):
   residual_add → RMSNorm(pre_ff_ln) → FeedForward →
   RMSNorm(post_ff_ln) → residual_add → multiply(layer_scalar)
 
-`is_decode` is fixed at construction time; sliding-vs-full at the
-class level. Runtime tensors (KV caches, position-id helpers, prelude
-outputs, shared scalars) flow in per-call.
+Sliding-vs-full is fixed at the class level. `is_decode` is supplied
+per call (Phase 4) — the same layer instance serves both modes.
+Runtime tensors (KV caches, position-id helpers, prelude outputs,
+shared scalars) flow in per-call.
 """
 import torch
 from gemma4.attention import Attention
@@ -81,7 +82,6 @@ class SlidingDecoderLayer:
         self,
         *,
         layer_idx,
-        is_decode,
         runtime_slots,
         k_cache,
         v_cache,
@@ -94,7 +94,6 @@ class SlidingDecoderLayer:
         layer_scalar,
     ):
         self.layer_idx = layer_idx
-        self._is_decode = is_decode
         # runtime_slots is (k, v, pos) historically; only the pos slot is read
         # now — K and V flow through self.k_cache / self.v_cache.
         self.runtime_slots = runtime_slots
@@ -108,11 +107,11 @@ class SlidingDecoderLayer:
         self.post_feedforward_layernorm = post_feedforward_layernorm
         self.layer_scalar = layer_scalar
 
-    def __call__(self, hidden_state, *, sliding_state, full_state, input, shared):
+    def __call__(self, hidden_state, *, is_decode, sliding_state, full_state, input, shared):
         del full_state
         pos_slot = self.runtime_slots[2]
         kv = (self.k_cache, self.v_cache, input[pos_slot])
-        if self._is_decode:
+        if is_decode:
             return self._decode_body(hidden_state, kv=kv, shared=shared, **sliding_state)
         else:
             return self._prefill_body(hidden_state, kv=kv, shared=shared, **sliding_state)
@@ -124,7 +123,6 @@ class SlidingDecoderLayer:
         layer_idx,
         mesh_device,
         *,
-        is_decode,
         runtime_slots,
         k_cache,
         v_cache,
@@ -146,7 +144,6 @@ class SlidingDecoderLayer:
         layer_scalar = _load_layer_scalar(state_dict, layer_idx, mesh_device)
         return cls(
             layer_idx=layer_idx,
-            is_decode=is_decode,
             runtime_slots=runtime_slots,
             k_cache=k_cache,
             v_cache=v_cache,
@@ -309,7 +306,6 @@ class FullDecoderLayer:
         self,
         *,
         layer_idx,
-        is_decode,
         runtime_slots,
         update_idxs_slot,
         k_cache,
@@ -324,12 +320,13 @@ class FullDecoderLayer:
         is_terminal=False,
     ):
         self.layer_idx = layer_idx
-        self._is_decode = is_decode
         # runtime_slots historically held (k, v, pos) (or (k, v) for L59).
         # K and V now flow through self.k_cache / self.v_cache; only the
         # pos slot is still read from input (regular full layer only).
         self.runtime_slots = runtime_slots
-        self.update_idxs_slot = update_idxs_slot  # decode-only: previous sliding layer's pos_ids slot
+        # update_idxs_slot is the previous sliding layer's pos slot;
+        # consumed by paged_update_cache in decode mode only.
+        self.update_idxs_slot = update_idxs_slot
         self.k_cache = k_cache
         self.v_cache = v_cache
         self.attention = attention
@@ -341,14 +338,14 @@ class FullDecoderLayer:
         self.layer_scalar = layer_scalar
         self.is_terminal = is_terminal
 
-    def __call__(self, hidden_state, *, sliding_state, full_state, input, shared):
+    def __call__(self, hidden_state, *, is_decode, sliding_state, full_state, input, shared):
         del sliding_state
         if self.is_terminal:
             kv = (self.k_cache, self.v_cache, None)
         else:
             pos_slot = self.runtime_slots[2]
             kv = (self.k_cache, self.v_cache, input[pos_slot])
-        if self._is_decode:
+        if is_decode:
             update_idxs = input[self.update_idxs_slot] if self.update_idxs_slot is not None else None
             return self._decode_body(hidden_state, kv=kv, update_idxs=update_idxs, shared=shared, **full_state)
         else:
@@ -361,7 +358,6 @@ class FullDecoderLayer:
         layer_idx,
         mesh_device,
         *,
-        is_decode,
         runtime_slots,
         update_idxs_slot,
         k_cache,
@@ -385,7 +381,6 @@ class FullDecoderLayer:
         layer_scalar = _load_layer_scalar(state_dict, layer_idx, mesh_device)
         return cls(
             layer_idx=layer_idx,
-            is_decode=is_decode,
             runtime_slots=runtime_slots,
             update_idxs_slot=update_idxs_slot,
             k_cache=k_cache,
