@@ -69,7 +69,7 @@ def test_ds_mla_forward(
     if perf_mode_enabled:
         logger.info(f"[{DEVICE_PERF_ENV_VAR}] MLA perf mode enabled")
 
-    batch_size_per_row = USERS_PER_ROW if mode == "decode" else 1
+    batch_size_per_row = USERS_PER_ROW
     run_test_forward_pass_mla2d(
         layer_idx=0,
         mode=mode,
