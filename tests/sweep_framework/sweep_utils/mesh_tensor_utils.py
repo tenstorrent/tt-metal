@@ -190,7 +190,7 @@ def _restore_topology(
         dist_shape = ttnn.MeshShape(*dist_parsed[:2])
 
         placements = []
-        for entry in (placement_entries or []):
+        for entry in placement_entries or []:
             shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
             if shard_match:
                 placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
@@ -217,7 +217,7 @@ def _restore_topology(
             dist_shape = ttnn.MeshShape(*mesh_shape_tuple)
 
         placements = []
-        for entry in (placement_entries or []):
+        for entry in placement_entries or []:
             shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
             if shard_match:
                 placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
@@ -457,7 +457,7 @@ def create_tensor_on_mesh(
 
 def get_mesh_shape() -> Optional[Tuple[int, int]]:
     """
-    Get mesh shape from environment variable.
+    Get mesh shape from environment variable or auto-detect from hardware.
 
     Returns:
         Tuple of (rows, cols) or None if using single device
@@ -465,22 +465,35 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     Environment variable format:
         MESH_DEVICE_SHAPE="1x2" -> (1, 2)
         MESH_DEVICE_SHAPE="2x4" -> (2, 4)
-        Not set -> None (use single device)
+        Not set -> auto-detect from available hardware
     """
     mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
 
-    if not mesh_env:
+    if mesh_env:
+        # Parse "NxM" format
+        if "x" in mesh_env.lower():
+            try:
+                parts = mesh_env.lower().split("x")
+                rows, cols = int(parts[0]), int(parts[1])
+                return (rows, cols)
+            except (ValueError, IndexError):
+                print(f"⚠️ Invalid MESH_DEVICE_SHAPE format: {mesh_env}, expected NxM (e.g., 1x2)")
+                return None
         return None
 
-    # Parse "NxM" format
-    if "x" in mesh_env.lower():
-        try:
-            parts = mesh_env.lower().split("x")
-            rows, cols = int(parts[0]), int(parts[1])
-            return (rows, cols)
-        except (ValueError, IndexError):
-            print(f"⚠️ Invalid MESH_DEVICE_SHAPE format: {mesh_env}, expected NxM (e.g., 1x2)")
-            return None
+    # Auto-detect mesh shape from available hardware when env var not set.
+    # Model-traced sweeps need the correct mesh topology to reproduce the
+    # tensor placement metadata recorded during model tracing.
+    try:
+        num_devices = ttnn.get_num_devices()
+        if num_devices >= 32:
+            return (4, 8)  # Galaxy (32 Wormhole devices)
+        elif num_devices >= 8:
+            return (1, 8)  # T3000 (8 devices)
+        elif num_devices >= 2:
+            return (1, num_devices)
+    except Exception:
+        pass
 
     return None
 
