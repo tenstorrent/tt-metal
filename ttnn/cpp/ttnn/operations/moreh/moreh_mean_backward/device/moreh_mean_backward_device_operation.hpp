@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <variant>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
