@@ -145,7 +145,7 @@ ProgramDescriptor MorehClipGradNormStep2Operation::create_descriptor(
     compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = std::move(core_set);
-    compute_desc.compile_time_args = {static_cast<uint32_t>(num_tiles)};
+    // Compute kernel reads num_tiles via runtime args; no compile-time args needed.
     compute_desc.config = ComputeConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
@@ -158,7 +158,7 @@ ProgramDescriptor MorehClipGradNormStep2Operation::create_descriptor(
     reader_desc.runtime_args.emplace_back(
         single_core,
         KernelDescriptor::CoreRuntimeArgs{
-            input_addr, static_cast<uint32_t>(num_tiles), *reinterpret_cast<uint32_t*>(&decimal)});
+            input_addr, static_cast<uint32_t>(num_tiles), std::bit_cast<uint32_t>(decimal)});
 
     // writer
     writer_desc.runtime_args.emplace_back(single_core, KernelDescriptor::CoreRuntimeArgs{output_addr});
