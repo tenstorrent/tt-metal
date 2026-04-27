@@ -53,7 +53,7 @@ void kernel_main() {
     // Phase A: zero-fill this core's slice of the T-front output region.
     // Covers all H positions (interior + H-halo) at T < t_front_pad.
     for (uint32_t s = 0; s < zero_fill_count; ++s) {
-        uint64_t dst_noc_addr = get_noc_addr(zero_fill_start + s, dst_accessor);
+        uint64_t dst_noc_addr = dst_accessor.get_noc_addr(zero_fill_start + s);
         zeroWrite<stick_size>(dst_noc_addr);
         noc_async_write_barrier();
     }
