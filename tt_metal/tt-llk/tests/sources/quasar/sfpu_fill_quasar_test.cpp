@@ -78,16 +78,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-
     _llk_math_eltwise_unary_sfpu_init_();
 
-    // Fill constant: 5.0f in IEEE 754 = 0x40A00000
-    constexpr std::uint32_t FILL_CONST_BITS = 0x40A00000U;
+    constexpr float FILL_CONST        = 5.0f;
+    constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
 
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_, params.DST_INDEX + i, num_sfpu_iterations, FILL_CONST_BITS);
+        _llk_math_eltwise_unary_sfpu_params_([](float v) { _calculate_fill_<num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_CONST);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

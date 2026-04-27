@@ -34,53 +34,6 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-def _is_invalid_quasar_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Check if format combination is invalid for Quasar SFPU fill test.
-
-    SFPU tests use unpack_to_dest=True, so only bit-width-matched combinations
-    are valid: non-32-bit with dest_acc=No, 32-bit with dest_acc=Yes.
-
-    Args:
-        fmt: Format configuration with input and output formats
-        dest_acc: Destination accumulation mode
-
-    Returns:
-        True if the combination is invalid, False otherwise
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
-
-    # SFPU unpack_to_dest: bit-width of input must match Dest mode
-    # Non-32-bit formats must use dest_acc=No; 32-bit formats must use dest_acc=Yes
-    if in_fmt.is_32_bit() != (dest_acc == DestAccumulation.Yes):
-        return True
-
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Integer and float formats cannot be mixed in input/output
-    if in_fmt.is_integer() != out_fmt.is_integer():
-        return True
-
-    return False
-
-
 def generate_sfpu_fill_combinations(
     formats_list: List[FormatConfig],
 ):
@@ -89,7 +42,6 @@ def generate_sfpu_fill_combinations(
 
     fill is a universal op: it writes a constant to every element of Dest,
     independent of the current values. The format matrix covers float formats.
-    MX formats require implied_math_format=Yes.
 
     Args: Input-output format pairs
 
@@ -102,26 +54,21 @@ def generate_sfpu_fill_combinations(
 
         # SFPU unpack_to_dest requires bit-width match: 32-bit formats pair with
         # dest_acc=Yes, non-32-bit formats pair with dest_acc=No.
-        dest_acc_modes = (
-            (DestAccumulation.Yes,) if in_fmt.is_32_bit() else (DestAccumulation.No,)
-        )
+        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
 
-        for dest_acc in dest_acc_modes:
-            if _is_invalid_quasar_combination(fmt, dest_acc):
-                continue
+        # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
+        if (
+            in_fmt != DataFormat.Float32
+            and fmt.output_format == DataFormat.Float32
+            and dest_acc == DestAccumulation.No
+        ):
+            continue
 
-            for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-                # MX formats require implied_math_format=Yes
-                if (
-                    in_fmt.is_mx_format()
-                    and implied_math_format == ImpliedMathFormat.No
-                ):
-                    continue
-
-                for input_dimensions in [[32, 32], [64, 64]]:
-                    combinations.append(
-                        (fmt, dest_acc, implied_math_format, input_dimensions)
-                    )
+        for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
+            for input_dimensions in [[32, 32], [64, 64]]:
+                combinations.append(
+                    (fmt, dest_acc, implied_math_format, input_dimensions)
+                )
 
     return combinations
 

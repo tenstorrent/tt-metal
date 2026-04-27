@@ -27,10 +27,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    // Int32 dest: disable FP32 math, enable INT32 math. `is_fp32_dest_acc_en`
-    // tracks 32-bit dest mode generically (used for pack/unpack), but the math
-    // hw_configure template wants the specific Float32-vs-Int32 split.
-    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*EN_FP32_MATH_FORMAT*/, true /*EN_INT32_MATH_FORMAT*/>();
+    // is_fp32_dest_acc_en is true for Int32 (32-bit dest) and false for UInt16
+    // (16-bit dest), which maps exactly to EN_INT32_MATH_FORMAT for these two formats.
+    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*EN_FP32_MATH_FORMAT*/, is_fp32_dest_acc_en /*EN_INT32_MATH_FORMAT*/>();
 
     buffer_descriptor_u bd_val = {0};
 
@@ -78,20 +77,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // fill always uses unpack_to_dest path
     set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
-    DataFormat src_format = static_cast<DataFormat>(formats.math);
-    // Same FP32/INT32 split as the unpack-side hw_configure.
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*EN_FP32_MATH_FORMAT*/, true /*EN_INT32_MATH_FORMAT*/>(src_format, src_format);
+    DataFormat math_format = static_cast<DataFormat>(formats.math);
+    // is_fp32_dest_acc_en mirrors EN_INT32_MATH_FORMAT for Int32 (true) and 16/8-bit formats (false).
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*EN_FP32_MATH_FORMAT*/, is_fp32_dest_acc_en /*EN_INT32_MATH_FORMAT*/>(math_format, math_format);
 
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
+    constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
 
     _llk_math_eltwise_unary_sfpu_init_();
 
-    // Integer fill constant: 5 as int32
     constexpr std::uint32_t FILL_INT_VALUE = 5;
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_int_<DataFormat::Int32>, params.DST_INDEX + i, num_sfpu_iterations, FILL_INT_VALUE);
+        _llk_math_eltwise_unary_sfpu_params_(
+            [](std::uint32_t v) { ckernel::sfpu::_calculate_fill_int_<FILL_INT_FORMAT, num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_INT_VALUE);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

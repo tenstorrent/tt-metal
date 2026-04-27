@@ -21,6 +21,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    FILL_INT_FORMAT,
     IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_FACES,
@@ -34,10 +35,16 @@ from helpers.utils import passed_test
 FILL_INT_VALUE = 5
 
 
-# Int32 is the only format exercised here. _calculate_fill_int_ also supports UInt16,
-# but one mode is sufficient to cover the explicit-store path; UInt16 would need a
-# separate dispatcher since the SFPMEM_MODE is a compile-time template parameter.
-SFPU_FILL_INT_FORMATS = input_output_formats([DataFormat.Int32])
+# Quasar integer formats and their SFPMEM store modes:
+#   Int32  → sfpmem::INT32  (32-bit sign-magnitude)
+#   Int16  → sfpmem::UINT16 (INT16 = Quasar hardware code 9, maps to SFPMEM::UINT16)
+#   Int8   → sfpmem::UINT8  (8-bit)
+#   UInt8  → sfpmem::UINT8  (8-bit unsigned)
+# Note: UInt16 (Quasar code 130) is invalid on Quasar; Int16 (code 9) is the correct
+# 16-bit integer format. FILL_INT_FORMAT bakes the format into each compiled variant.
+SFPU_FILL_INT_FORMATS = input_output_formats(
+    [DataFormat.Int32, DataFormat.Int16, DataFormat.Int8, DataFormat.UInt8], same=True
+)
 
 
 @pytest.mark.quasar
@@ -47,16 +54,23 @@ SFPU_FILL_INT_FORMATS = input_output_formats([DataFormat.Int32])
 )
 def test_sfpu_fill_int_quasar(input_dimensions, formats):
     """
-    Test _calculate_fill_int_<DataFormat::Int32> on Quasar.
+    Test _calculate_fill_int_ for Int32, Int16, Int8, and UInt8 on Quasar.
 
-    The kernel writes FILL_INT_VALUE to every Int32 element of Dest via
-    SFPLOADI + SFPSTORE(sfpmem::INT32); the golden is a tensor of the same
-    shape filled with FILL_INT_VALUE. Stimuli content is irrelevant — fill
-    ignores inputs — but Int32 stimuli are still generated so the unpack
-    path sees a valid Int32 buffer.
+    Each variant is compiled with FILL_INT_FORMAT baked in as a constexpr, so
+    _calculate_fill_int_<FILL_INT_FORMAT> selects the correct SFPMEM store mode
+    at compile time with no runtime dispatch.
+
+    The kernel writes FILL_INT_VALUE to every element of Dest via SFPLOADI +
+    SFPSTORE; the store mode is selected by FILL_INT_FORMAT.
+    Stimuli content is irrelevant — fill ignores inputs — but typed stimuli
+    are still generated so the unpack path sees a valid buffer.
     """
-    # Int32 inputs are 32-bit, so dest_acc must be Yes (bit-width match rule).
-    dest_acc = DestAccumulation.Yes
+    # Int32 is 32-bit → dest_acc Yes; Int16/Int8/UInt8 are 16-bit → dest_acc No.
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.output_format.is_32_bit()
+        else DestAccumulation.No
+    )
     implied_math_format = ImpliedMathFormat.No
 
     torch.manual_seed(42)
@@ -85,6 +99,7 @@ def test_sfpu_fill_int_quasar(input_dimensions, formats):
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            FILL_INT_FORMAT(formats.input_format),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
