@@ -101,23 +101,20 @@ struct DeepseekMoeGate {
             // ================================================================
             if constexpr (CTArgs::wait_for_output) {
                 cb_wait_front(CTArgs::output_indices_cb, 1);
-                cb_wait_front(CTArgs::output_cb, 1);
             }
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC: Compute gate logic
             // ================================================================
-
+            compute_kernel_hw_startup(CTArgs::input_cb, CTArgs::bias_cb, CTArgs::output_cb);
             // Input indices CB should have the same tile shape as the input CB
-            reconfig_data_format<false, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
+            reconfig_data_format<false, true>(CTArgs::input_indices_cb, CTArgs::input_indices_cb);
             // Output indices CB should have the same tile shape as the output CB
-            pack_reconfig_data_format<true>(CTArgs::output_cb);
+            pack_reconfig_data_format<true>(CTArgs::output_indices_cb);
 
             // Init portion
             cb_wait_front(CTArgs::input_indices_cb, 1);
-            cb_wait_front(CTArgs::bias_cb, 1);
-
             // Compute portion
             copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
 
@@ -126,25 +123,12 @@ struct DeepseekMoeGate {
             // Copy indices (already transposed to cols)
             copy_tile(CTArgs::input_indices_cb, 0, 1);
 
-            reconfig_data_format_srca(CTArgs::input_cb);  // Assumes same tile shape as input indices CB
-            deepseek_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-            cb_wait_front(CTArgs::input_cb, 1);
-            deepseek_moe_gate<CTArgs::enable_sigmoid>(
-                CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
-            // Pop input tile
-            cb_pop_front(CTArgs::input_cb, 1);
-
             tile_regs_commit();
 
-            cb_reserve_back(CTArgs::output_cb, 1);
             cb_reserve_back(CTArgs::output_indices_cb, 1);
 
             tile_regs_wait();
 
-            pack_tile(0, CTArgs::output_cb);
-            cb_push_back(CTArgs::output_cb, 1);
-
-            pack_reconfig_data_format(CTArgs::output_indices_cb);  // Assumes same tile shape as output CB
             pack_tile(1, CTArgs::output_indices_cb);
             cb_push_back(CTArgs::output_indices_cb, 1);
 
