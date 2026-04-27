@@ -86,6 +86,14 @@ class MathOperation(Enum):
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
+    # Swiglu is technically a binary SFPU op (gate+up → out), but because
+    # Quasar lacks the llk_math_eltwise_binary_sfpu_* dispatcher, its test
+    # harness runs through the unary SFPU path. We therefore register it as
+    # SFPU_UNARY for the test-dispatch constant (SfpuType::swiglu). The
+    # actual binary semantics are implemented by the C++ test source which
+    # unpacks two input tiles into Dest and calls _calculate_swiglu_ with
+    # three offsets directly.
+    SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
     ReluMax = OpSpec(
