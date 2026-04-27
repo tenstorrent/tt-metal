@@ -488,11 +488,15 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
             min_k_tiles_fc2=1,
         )
 
+        # num_channels (K) is typically small (e.g. 2-16); height-sharding
+        # with such a narrow K dimension causes excessive zero-padding and
+        # matmul program-config mismatches, so disable it here.
         if use_gated_attn:
             self.gate = TtPatchTSMixerGatedAttention(
                 device=device,
                 base_address=f"{self.base}.gate",
                 parameters=parameters,
+                use_height_sharding=False,
             )
 
     def __call__(self, x):
