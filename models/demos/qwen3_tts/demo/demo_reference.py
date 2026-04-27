@@ -42,6 +42,22 @@ from models.demos.qwen3_tts.reference.functional import (
 )
 
 
+def _optional_hf_cache_dir(cache_dir: Optional[str]) -> Optional[str]:
+    if cache_dir is None:
+        return None
+    p = Path(cache_dir).expanduser()
+    if ".." in p.parts:
+        raise ValueError("cache_dir must not contain '..' path components")
+    return str(p.resolve())
+
+
+def _cli_filesystem_path(path: str) -> Path:
+    p = Path(path).expanduser()
+    if ".." in p.parts:
+        raise ValueError("Path must not contain '..' path components")
+    return p.resolve()
+
+
 def speech_tokenizer_decoder_forward_debug(
     token_ids: torch.Tensor,
     weights: dict,
@@ -100,7 +116,7 @@ def speech_tokenizer_decoder_forward_debug(
     print(f"  [DEBUG] pre_transformer_weights: {len(pre_transformer_weights)} keys")
 
     if pre_transformer_weights:
-        hidden_states = pre_transformer_forward(embeddings, pre_transformer_weights, config, skip_output_proj=True)
+        hidden_states = pre_transformer_forward(embeddings, pre_transformer_weights, config)
     else:
         hidden_states = embeddings
 
@@ -206,12 +222,14 @@ def load_hf_weights(model_id: str, cache_dir: Optional[str] = None) -> dict:
     print(f"Loading model from HuggingFace: {model_id}")
     start_time = time.time()
 
-    model_path = snapshot_download(
-        model_id,
-        cache_dir=cache_dir,
-        allow_patterns=["*.safetensors", "*.json"],
-    )
-    model_path = Path(model_path)
+    safe_cache = _optional_hf_cache_dir(cache_dir)
+    model_path = Path(
+        snapshot_download(
+            model_id,
+            cache_dir=safe_cache,
+            allow_patterns=["*.safetensors", "*.json"],
+        )
+    ).resolve()
 
     state_dict = {}
     for safetensor_file in model_path.glob("*.safetensors"):
@@ -235,12 +253,14 @@ def load_speech_tokenizer_weights(model_id: str, cache_dir: Optional[str] = None
 
     print(f"Loading speech tokenizer weights from: {model_id}")
 
-    model_path = snapshot_download(
-        model_id,
-        cache_dir=cache_dir,
-        allow_patterns=["speech_tokenizer/*.safetensors"],
-    )
-    model_path = Path(model_path)
+    safe_cache = _optional_hf_cache_dir(cache_dir)
+    model_path = Path(
+        snapshot_download(
+            model_id,
+            cache_dir=safe_cache,
+            allow_patterns=["speech_tokenizer/*.safetensors"],
+        )
+    ).resolve()
 
     speech_tokenizer_path = model_path / "speech_tokenizer" / "model.safetensors"
     if not speech_tokenizer_path.exists():
@@ -271,8 +291,9 @@ def save_audio(audio: torch.Tensor, output_path: str, sample_rate: int = 24000):
     audio = audio.detach().cpu().float().numpy()
     audio = (audio * 32767).astype("int16")
 
-    wavfile.write(output_path, sample_rate, audio)
-    print(f"Audio saved to: {output_path}")
+    out_path = _cli_filesystem_path(output_path)
+    wavfile.write(str(out_path), sample_rate, audio)
+    print(f"Audio saved to: {out_path}")
 
 
 def talker_forward_reference(
@@ -477,7 +498,7 @@ def run_reference_demo(
 
     if text is not None:
         # Real TTS mode - tokenize text input
-        print(f"\n*** REAL TTS MODE (Reference) ***")
+        print("\n*** REAL TTS MODE (Reference) ***")
         print(f"Text: {text}")
         from transformers import AutoProcessor
 
