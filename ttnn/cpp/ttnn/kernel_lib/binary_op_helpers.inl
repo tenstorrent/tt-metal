@@ -18,6 +18,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 namespace compute_kernel_lib {
@@ -56,6 +57,28 @@ constexpr bool pops_caller_managed(BinaryInputPolicy p) { return p == BinaryInpu
 constexpr bool output_per_tile(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::PerTile; }
 constexpr bool output_per_chunk(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::PerChunk; }
 constexpr bool output_bulk(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::Bulk; }
+
+template <BinaryInputPolicy input_policy>
+ALWI void assert_binary_input_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
+    if constexpr (waits_per_tile(input_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= 1);
+    } else if constexpr (waits_per_chunk(input_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+    } else if constexpr (waits_upfront(input_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+    }
+}
+
+template <BinaryOutputPolicy output_policy>
+ALWI void assert_binary_output_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
+    if constexpr (output_per_tile(output_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= 1);
+    } else if constexpr (output_per_chunk(output_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+    } else {  // Bulk
+        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+    }
+}
 
 template <BinaryOpType op_type>
 constexpr EltwiseBinaryType map_to_eltwise_type() {
@@ -96,13 +119,18 @@ ALWI constexpr uint32_t get_binary_dst_index(AccumT accum) {
 // Unified LLK Calls - Single Init and Exec for All Broadcast Modes
 // =============================================================================
 
+template <BinaryOpType op_type>
+constexpr bool uses_fpu_mul() {
+    return op_type == BinaryOpType::MUL || op_type == BinaryOpType::SQUARE;
+}
+
 template <BinaryOpType op_type, BroadcastDim bcast_dim>
 ALWI void binary_init(uint32_t icb_a, uint32_t icb_b) {
     constexpr EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
     constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
 
-    // MUL uses configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
-    if constexpr (op_type == BinaryOpType::MUL) {
+    // MUL/SQUARE use configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
+    if constexpr (uses_fpu_mul<op_type>()) {
         MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MATH_FIDELITY>(icb_a, icb_b)));
     } else {
         MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MathFidelity::LoFi>(icb_a, icb_b)));
@@ -116,7 +144,7 @@ ALWI void binary_exec(uint32_t icb_a, uint32_t icb_b, uint32_t itile_a, uint32_t
     constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
 
     UNPACK((llk_unpack_AB<bcast_type>(icb_a, icb_b, itile_a, itile_b)));
-    if constexpr (op_type == BinaryOpType::MUL) {
+    if constexpr (uses_fpu_mul<op_type>()) {
         MATH((llk_math_eltwise_binary<elt_type, bcast_type, DST_ACCUM_MODE, MATH_FIDELITY,
                                       EltwiseBinaryReuseDestType::NONE>(icb_a, icb_b, idst, true)));
     } else {
@@ -146,14 +174,52 @@ ALWI void binary_op(
     BinaryInputBlockShape shape,
     PostOp post_op,
     AccumT accum) {
+    // Static assertions (compile-time validation)
+    static_assert(
+        std::is_invocable_v<PostOp, uint32_t>,
+        "PostOp must be callable with a uint32_t argument");
+    static_assert(
+        !(bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) ||
+            !(waits_per_tile(input_b_policy) || waits_per_chunk(input_b_policy)),
+        "ROW and SCALAR broadcast require all B tiles available upfront. "
+        "Use WaitUpfrontNoPop, WaitUpfrontPopAtEnd, NoWaitNoPop, or NoWaitPopAtEnd for input_b_policy.");
+
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
+
+    // Parameter validation
+    ASSERT(icb_a < NUM_CIRCULAR_BUFFERS);
+    if constexpr (!is_square) {
+        ASSERT(icb_b < NUM_CIRCULAR_BUFFERS);
+    }
+    ASSERT(ocb < NUM_CIRCULAR_BUFFERS);
+    ASSERT(icb_a != ocb);
+    if constexpr (!is_square) {
+        ASSERT(icb_b != ocb);
+    }
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_a, (DataFormat)unpack_src_format[icb_a])));
+    if constexpr (!is_square) {
+        UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
+    }
+    PACK(ASSERT(is_valid_cb_tile_page_size(ocb, (DataFormat)pack_dst_format[ocb])));
+    if constexpr (is_accumulator_enabled<AccumT>()) {
+        ASSERT(accum.cb_accumulator < NUM_CIRCULAR_BUFFERS);
+    }
+    ASSERT(shape.rows > 0);
+    ASSERT(shape.cols > 0);
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
     const uint32_t total_tiles_a = Ht * Wt;
     const uint32_t b_tile_count = get_b_tile_count<bcast_dim>(Ht, Wt);
+
+    // CB size validation
+    UNPACK((assert_binary_input_cb_size<input_a_policy>(icb_a, dest_limit, total_tiles_a)));
+    if constexpr (!is_square) {
+        UNPACK((assert_binary_input_cb_size<input_b_policy>(icb_b, dest_limit, b_tile_count)));
+    }
+    PACK((assert_binary_output_cb_size<output_policy>(ocb, dest_limit, total_tiles_a)));
 
     // Data format reconfiguration
     if constexpr (reconfig_input(reconfig)) {
@@ -173,15 +239,9 @@ ALWI void binary_op(
         cb_wait_front(icb_a, total_tiles_a);
     }
 
-    // B policy: ROW and SCALAR always wait upfront
-    if constexpr (!is_square) {
-        if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
-            if constexpr (!waits_caller_managed(input_b_policy)) {
-                cb_wait_front(icb_b, b_tile_count);
-            }
-        } else if constexpr (waits_upfront(input_b_policy)) {
-            cb_wait_front(icb_b, b_tile_count);
-        }
+    // B upfront waits (ROW/SCALAR require upfront — enforced by static_assert above)
+    if constexpr (!is_square && waits_upfront(input_b_policy)) {
+        cb_wait_front(icb_b, b_tile_count);
     }
 
     // Upfront output reserve
@@ -377,16 +437,6 @@ ALWI void binary_op(
     if constexpr (!is_square && pops_at_end(input_b_policy)) {
         cb_pop_front(icb_b, b_tile_count);
     }
-
-    // B pop for ROW/SCALAR (unless caller-managed, never, or already popped at end)
-    if constexpr (!is_square) {
-        if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
-            if constexpr (
-                !pops_caller_managed(input_b_policy) && !pops_never(input_b_policy) && !pops_at_end(input_b_policy)) {
-                cb_pop_front(icb_b, b_tile_count);
-            }
-        }
-    }
 }
 
 // =============================================================================
@@ -500,6 +550,235 @@ ALWI void square(
         init,
         PostOp,
         AccumT>(icb, icb, ocb, shape, post_op, accum);
+}
+
+// =============================================================================
+// In-Place Binary Operation
+// =============================================================================
+
+template <
+    BinaryOpType op_type,
+    BroadcastDim bcast_dim,
+    BinaryInputPolicy input_b_policy,
+    BinaryDataFormatReconfig reconfig,
+    bool init,
+    typename PostOp>
+ALWI void binary_op_in_place(
+    uint32_t cb_a,
+    uint32_t icb_b,
+    BinaryInputBlockShape shape,
+    PostOp post_op) {
+    // Static assertions (compile-time validation)
+    static_assert(
+        std::is_invocable_v<PostOp, uint32_t>,
+        "PostOp must be callable with a uint32_t argument");
+    static_assert(
+        !(bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) ||
+            !(waits_per_tile(input_b_policy) || waits_per_chunk(input_b_policy)),
+        "ROW and SCALAR broadcast require all B tiles available upfront. "
+        "Use WaitUpfrontNoPop, WaitUpfrontPopAtEnd, NoWaitNoPop, or NoWaitPopAtEnd for input_b_policy.");
+
+    constexpr uint32_t onetile = 1;
+    constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
+
+    // Parameter validation
+    ASSERT(cb_a < NUM_CIRCULAR_BUFFERS);
+    if constexpr (!is_square) {
+        ASSERT(icb_b < NUM_CIRCULAR_BUFFERS);
+        ASSERT(cb_a != icb_b);
+    }
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(cb_a, (DataFormat)unpack_src_format[cb_a])));
+    if constexpr (!is_square) {
+        UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
+    }
+    PACK(ASSERT(is_valid_cb_tile_page_size(cb_a, (DataFormat)pack_dst_format[cb_a])));
+    ASSERT(shape.rows > 0);
+    ASSERT(shape.cols > 0);
+
+    const uint32_t Ht = shape.rows;
+    const uint32_t Wt = shape.cols;
+    const uint32_t b_tile_count = get_b_tile_count<bcast_dim>(Ht, Wt);
+
+    // CB size validation — in-place requires all A tiles present
+    UNPACK(ASSERT(get_cb_num_pages(cb_a) >= Ht * Wt));
+    if constexpr (!is_square) {
+        UNPACK((assert_binary_input_cb_size<input_b_policy>(icb_b, 1, b_tile_count)));
+    }
+
+    // --- Data format reconfiguration ---
+    // Switches unpacker to (cb_a, icb_b) and packer to cb_a.
+    // Essential for mixed precision and when transitioning from a prior phase.
+    // For SQUARE, icb_b == cb_a so both unpack slots get the same format.
+    if constexpr (reconfig_input(reconfig)) {
+        reconfig_data_format(cb_a, icb_b);
+    }
+    if constexpr (reconfig_output(reconfig)) {
+        pack_reconfig_data_format(cb_a);
+    }
+
+    // --- Op-specific math + unpack init ---
+    if constexpr (init) {
+        binary_init<op_type, bcast_dim>(cb_a, icb_b);
+    }
+
+    // --- B synchronization (skipped for SQUARE — both inputs come from cb_a) ---
+    // ROW/SCALAR require upfront — enforced by static_assert above
+    if constexpr (!is_square && waits_upfront(input_b_policy)) {
+        cb_wait_front(icb_b, b_tile_count);
+    }
+
+    // --- Main tile loop: pop-before-pack cycle ---
+    // Invariant: cb_a tile count is constant across iterations.
+    // Each iteration pops one tile (freeing a slot), computes into DEST[0],
+    // then packs back into the freed slot. The write pointer chases the read
+    // pointer, so modified tiles land in their original slots.
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        if constexpr (!is_square && bcast_dim == BroadcastDim::COL && waits_per_chunk(input_b_policy)) {
+            cb_wait_front(icb_b, onetile);
+        }
+
+        for (uint32_t wt = 0; wt < Wt; ++wt) {
+            cb_wait_front(cb_a, onetile);
+
+            // Per-tile B waits (skipped for SQUARE)
+            if constexpr (!is_square && waits_per_tile(input_b_policy)) {
+                if constexpr (bcast_dim == BroadcastDim::NONE || bcast_dim == BroadcastDim::COL) {
+                    cb_wait_front(icb_b, onetile);
+                }
+            }
+
+            // B tile index — for SQUARE, tile_b == 0 (same tile as A)
+            uint32_t tile_b;
+            if constexpr (is_square) {
+                tile_b = 0;
+            } else if constexpr (bcast_dim == BroadcastDim::SCALAR) {
+                tile_b = 0;
+            } else if constexpr (bcast_dim == BroadcastDim::ROW) {
+                tile_b = wt;
+            } else if constexpr (bcast_dim == BroadcastDim::COL) {
+                if constexpr (waits_per_tile(input_b_policy) || waits_per_chunk(input_b_policy)) {
+                    tile_b = 0;
+                } else {
+                    tile_b = ht;
+                }
+            } else {  // NONE
+                if constexpr (waits_per_tile(input_b_policy)) {
+                    tile_b = 0;
+                } else if constexpr (waits_per_chunk(input_b_policy)) {
+                    tile_b = wt;
+                } else {
+                    tile_b = ht * Wt + wt;
+                }
+            }
+
+            tile_regs_acquire();
+
+            // Unpack A[0] and B[tile_b] (for SQUARE: both from cb_a[0]), compute into DEST[0]
+            binary_exec<op_type, bcast_dim>(cb_a, icb_b, 0, tile_b, 0);
+
+            post_op(0);
+
+            // Pop B per-tile (NONE broadcast only; COL pops once per row below; skipped for SQUARE)
+            if constexpr (!is_square && pops_per_tile(input_b_policy)) {
+                if constexpr (bcast_dim == BroadcastDim::NONE) {
+                    cb_pop_front(icb_b, onetile);
+                }
+            }
+
+            // Pop A BEFORE packing — data is safely in DEST, free the CB slot
+            cb_pop_front(cb_a, onetile);
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            // Pack DEST[0] back into cb_a (reuses the slot freed by pop above)
+            cb_reserve_back(cb_a, onetile);
+            pack_tile(0, cb_a);
+            cb_push_back(cb_a, onetile);
+
+            tile_regs_release();
+        }
+
+        // COL broadcast: pop B once per row (skipped for SQUARE)
+        if constexpr (!is_square && bcast_dim == BroadcastDim::COL) {
+            if constexpr (pops_per_tile(input_b_policy) || pops_per_chunk(input_b_policy)) {
+                cb_pop_front(icb_b, onetile);
+            }
+        }
+    }
+
+    // --- End-of-operation B cleanup (skipped for SQUARE) ---
+    if constexpr (!is_square && pops_at_end(input_b_policy)) {
+        cb_pop_front(icb_b, b_tile_count);
+    }
+}
+
+// =============================================================================
+// In-Place Convenience Aliases
+// =============================================================================
+
+template <
+    BroadcastDim bcast_dim,
+    BinaryInputPolicy input_b_policy,
+    BinaryDataFormatReconfig reconfig,
+    bool init,
+    typename PostOp>
+ALWI void add_in_place(
+    uint32_t cb_a,
+    uint32_t icb_b,
+    BinaryInputBlockShape shape,
+    PostOp post_op) {
+    binary_op_in_place<BinaryOpType::ADD, bcast_dim, input_b_policy, reconfig, init, PostOp>(
+        cb_a, icb_b, shape, post_op);
+}
+
+template <
+    BroadcastDim bcast_dim,
+    BinaryInputPolicy input_b_policy,
+    BinaryDataFormatReconfig reconfig,
+    bool init,
+    typename PostOp>
+ALWI void sub_in_place(
+    uint32_t cb_a,
+    uint32_t icb_b,
+    BinaryInputBlockShape shape,
+    PostOp post_op) {
+    binary_op_in_place<BinaryOpType::SUB, bcast_dim, input_b_policy, reconfig, init, PostOp>(
+        cb_a, icb_b, shape, post_op);
+}
+
+template <
+    BroadcastDim bcast_dim,
+    BinaryInputPolicy input_b_policy,
+    BinaryDataFormatReconfig reconfig,
+    bool init,
+    typename PostOp>
+ALWI void mul_in_place(
+    uint32_t cb_a,
+    uint32_t icb_b,
+    BinaryInputBlockShape shape,
+    PostOp post_op) {
+    binary_op_in_place<BinaryOpType::MUL, bcast_dim, input_b_policy, reconfig, init, PostOp>(
+        cb_a, icb_b, shape, post_op);
+}
+
+template <
+    BinaryDataFormatReconfig reconfig,
+    bool init,
+    typename PostOp>
+ALWI void square_in_place(
+    uint32_t cb_a,
+    BinaryInputBlockShape shape,
+    PostOp post_op) {
+    // SQUARE passes cb_a as both inputs — no separate B operand.
+    // input_b_policy is irrelevant (all B sync is skipped for SQUARE).
+    binary_op_in_place<
+        BinaryOpType::SQUARE,
+        BroadcastDim::NONE,
+        BinaryInputPolicy::WaitAndPopPerTile,
+        reconfig,
+        init,
+        PostOp>(cb_a, cb_a, shape, post_op);
 }
 
 }  // namespace compute_kernel_lib
