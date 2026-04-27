@@ -288,7 +288,7 @@ trainer = GRPOTrainer(..., callbacks=[GRPOMonitor(output_dir)])
 | Hook | Signature | When |
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | Before the first batch. |
-| `on_step_end` | `(trainer, step, **kwargs)` | Every `logging_steps` optimizer steps. Keyword args include `reward_mean`, `reward_std`, `mean_completion_len`, and `lr`. |
+| `on_step_end` | `(trainer, step, **kwargs)` | Every `logging_steps` optimizer steps. Keyword args include `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `step_time_s`, and `generation_time_s`. |
 | `on_before_optimizer_step` | `(trainer)` | After gradient accumulation, before `optimizer.step()`. |
 | `on_save` | `(trainer, step, path)` | After a checkpoint is saved. `path` is the checkpoint directory. |
 | `on_train_end` | `(trainer)` | After the final batch. |

@@ -454,13 +454,22 @@ class GRPOTrainer:
                     num_steps += 1
                     all_rewards = np.concatenate(accum_rewards)
                     mean_reward = float(all_rewards.mean())
-                    mean_completion_len = sum(accum_completion_lens) / max(len(accum_completion_lens), 1)
+                    if accum_completion_lens:
+                        mean_completion_len = sum(accum_completion_lens) / len(accum_completion_lens)
+                        min_completion_len = min(accum_completion_lens)
+                        max_completion_len = max(accum_completion_lens)
+                    else:
+                        mean_completion_len = 0.0
+                        min_completion_len = 0
+                        max_completion_len = 0
 
                     if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
                         step_metrics = {
                             "reward_mean": mean_reward,
                             "reward_std": float(all_rewards.std()),
                             "mean_completion_len": mean_completion_len,
+                            "min_completion_len": min_completion_len,
+                            "max_completion_len": max_completion_len,
                             "lr": base_lr * warmup_factor,
                             "step_time_s": step_time_s,
                             "generation_time_s": generation_time_s_for_step,
