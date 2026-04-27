@@ -2171,6 +2171,8 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
     const auto start = std::chrono::steady_clock::now();
     int64_t last_log_ms = -1;
     constexpr uint32_t kLogIntervalMs = 100;
+    constexpr uint32_t kSpinsBetweenSleeps = 64;
+    uint32_t launch_spin = 0U;
 
     while (!pending.empty()) {
         const auto elapsed_ms =
@@ -2243,6 +2245,12 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
                     now_ms,
                     pending.size(),
                     eth_cores.size());
+            }
+            if (++launch_spin >= kSpinsBetweenSleeps) {
+                launch_spin = 0U;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            } else {
+                ttsl::pause();
             }
         }
     }
@@ -2442,6 +2450,8 @@ bool Device::phase5b_erisc_health_check(
         if (++hc_spin >= kSpinLimit) {
             hc_spin = 0U;
             std::this_thread::sleep_for(std::chrono::microseconds(100));
+        } else {
+            ttsl::pause();
         }
     }
 
@@ -2947,6 +2957,8 @@ void Device::wait_for_fabric_workers_ready() {
                 if (++sync_spin >= kSpinLimit) {
                     sync_spin = 0U;
                     std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
                 }
             }
 
