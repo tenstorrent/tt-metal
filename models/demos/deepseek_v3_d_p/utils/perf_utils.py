@@ -39,13 +39,8 @@ TP_OPS = {
     "InterleavedToShardedDeviceOperation",  # 2x4=8x4=0.002ms
 }
 
-# SDPA ops: scale by 4 when extrapolating from 2x4 to 8x4 (SP 2→8 = 4x, TP 4→4 = 1x)
-SDPA_OPS = {
-    "ScaledDotProductAttentionDecode",
-    "SDPAProgramConfig",
-    "ScaledDotProductAttention",
-    "RingJointSDPADeviceOperation",
-}
+# SDPA op: scale by 4 when extrapolating from 2x4 to 8x4 (SP 2→8 = 4x, TP 4→4 = 1x)
+SDPA_OP = "RingJointSDPADeviceOperation"
 
 
 def _is_galaxy_env() -> bool:
@@ -142,7 +137,7 @@ def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str = None, use_avg: bool
     rows = []
     for op in sorted(all_ops):
         base_ns = ops_2x4.get(op, 0)
-        if any(sdpa_op in op for sdpa_op in SDPA_OPS):
+        if SDPA_OP in op:
             src = "2x4 (×4)"
             approx_ns = base_ns * 4
         else:
@@ -357,15 +352,7 @@ def run_mla_perf_with_approximation(
     margin: float = 0.03,
     comments_2x4: str = "",
 ):
-    """
-    Run 2x4 MLA proxy on loudbox, perf-validate against baseline,
-    and compute the approximated 8x4 galaxy total.
-
-    To estimate time on one galaxy column (8x4):
-    - SDPA time is multiplied by 4 (SP 2→8 = 4x, TP 4→4 = 1x, total 4x)
-    - All other ops are added as-is (no scaling)
-    """
-    logger.info("=== 2x4 proxy: MLA on loudbox ===")
+    logger.info("=== 2x4 MLA perf test on LB ===")
     run_model_device_perf_test_with_merge(
         command=command_2x4,
         expected_device_perf_ns_per_iteration=expected_ns_2x4,
@@ -379,6 +366,6 @@ def run_mla_perf_with_approximation(
     csv_2x4 = get_latest_ops_log_filename(subdir)
     logger.info(f"2x4 CSV: {csv_2x4}")
 
-    logger.info("=== Approximating 8x4 galaxy total from 2x4 (SDPA × 4 + other ops) ===")
+    logger.info("=== Approximating 8x4 Galaxy total from 2x4 ===")
     df_approx = approximate_mla_galaxy_perf(csv_2x4=csv_2x4)
     logger.info(f"\n{df_approx.to_string(index=False)}")
