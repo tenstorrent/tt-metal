@@ -18,8 +18,10 @@ from models.tt_transformers.tt.model_config import (
     HfAttentionWrapper,
     HfDecoderWrapper,
     HfModelWrapper,
+    MathFidelitySetting,
 )
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.model_config import ModelOptimizations, OpGroup
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # file names for performance and accuracy mode override files
@@ -107,6 +109,18 @@ class ModelArgs(TTModelArgs):
         self.padded_vocab_size = 262400
         # Raise the per-device cap so on-device sampling is enabled for Gemma3's 131200-wide shard.
         self.device_sampling_max_per_device_vocab = 192 * 1024
+        self._force_sdpa_decode_hifi2_na()
+
+    def _force_sdpa_decode_hifi2_na(self):
+        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness."""
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            op_fidelity[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2_NA
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
