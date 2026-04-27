@@ -17,6 +17,7 @@ Requirements:
 """
 
 import argparse
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -35,20 +36,38 @@ from models.demos.qwen3_tts.tt.speech_tokenizer import (
 )
 
 
-def _optional_hf_cache_dir(cache_dir: Optional[str]) -> Optional[str]:
-    if cache_dir is None:
-        return None
-    p = Path(cache_dir).expanduser()
+def _safe_hf_cache_root(cache_dir: Optional[str]) -> Path:
+    if cache_dir is not None:
+        p = Path(cache_dir).expanduser()
+    else:
+        # Use Hugging Face default cache root when not explicitly provided.
+        hf_home = os.environ.get("HF_HOME")
+        p = Path(hf_home).expanduser() if hf_home else (Path.home() / ".cache" / "huggingface")
+
     if ".." in p.parts:
         raise ValueError("cache_dir must not contain '..' path components")
-    return str(p.resolve())
-
-
-def _cli_filesystem_path(path: str) -> Path:
-    p = Path(path).expanduser()
-    if ".." in p.parts:
-        raise ValueError("Path must not contain '..' path components")
     return p.resolve()
+
+
+def _resolve_download_path(download_path: str, cache_root: Path) -> Path:
+    resolved = Path(download_path).resolve()
+    try:
+        resolved.relative_to(cache_root)
+    except ValueError as exc:
+        raise ValueError(f"Downloaded path must be under cache root: {cache_root}") from exc
+    return resolved
+
+
+def _cli_filesystem_path(path: str, base_dir: Optional[Path] = None) -> Path:
+    base = (base_dir or Path.cwd()).resolve()
+    raw = Path(path).expanduser()
+    candidate = raw if raw.is_absolute() else (base / raw)
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"Path must resolve under base directory: {base}") from exc
+    return resolved
 
 
 def load_hf_weights(model_id: str, cache_dir: Optional[str] = None) -> dict:
@@ -73,14 +92,13 @@ def load_hf_weights(model_id: str, cache_dir: Optional[str] = None) -> dict:
     # Download model files
     from huggingface_hub import snapshot_download
 
-    safe_cache = _optional_hf_cache_dir(cache_dir)
-    model_path = Path(
-        snapshot_download(
-            model_id,
-            cache_dir=safe_cache,
-            allow_patterns=["*.safetensors", "*.json"],
-        )
-    ).resolve()
+    cache_root = _safe_hf_cache_root(cache_dir)
+    downloaded_path = snapshot_download(
+        model_id,
+        cache_dir=str(cache_root),
+        allow_patterns=["*.safetensors", "*.json"],
+    )
+    model_path = _resolve_download_path(downloaded_path, cache_root)
 
     # Load safetensors
     state_dict = {}
@@ -114,14 +132,13 @@ def load_speech_tokenizer_weights(model_id: str, cache_dir: Optional[str] = None
 
     print(f"Loading speech tokenizer weights from: {model_id}")
 
-    safe_cache = _optional_hf_cache_dir(cache_dir)
-    model_path = Path(
-        snapshot_download(
-            model_id,
-            cache_dir=safe_cache,
-            allow_patterns=["speech_tokenizer/*.safetensors"],
-        )
-    ).resolve()
+    cache_root = _safe_hf_cache_root(cache_dir)
+    downloaded_path = snapshot_download(
+        model_id,
+        cache_dir=str(cache_root),
+        allow_patterns=["speech_tokenizer/*.safetensors"],
+    )
+    model_path = _resolve_download_path(downloaded_path, cache_root)
 
     speech_tokenizer_path = model_path / "speech_tokenizer" / "model.safetensors"
     if not speech_tokenizer_path.exists():
@@ -439,9 +456,10 @@ def run_demo(
 
             # PREFILL (TTFT measurement)
             # Traced prefill only for codec-embedding mode; text embedding falls back to non-traced.
+            use_traced_prefill = use_trace and not use_text_embedding
             if use_trace and use_text_embedding:
                 print("  Warning: Tracing not yet supported with text embedding, using non-traced mode")
-            if use_trace and not use_text_embedding:
+            if use_traced_prefill:
                 logits_list, prefill_time = run_prefill_traced(generator, input_ids, device)
             else:
                 logits_list, prefill_time = run_prefill(

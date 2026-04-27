@@ -60,7 +60,7 @@ def main():
     main_dict = {k: v.float() for k, v in main_dict.items()}
     print(f"  Loaded {len(main_dict)} weights")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
     from models.demos.qwen3_tts.reference.functional import (
         Qwen3TTSConfig,
@@ -87,8 +87,6 @@ def main():
         ref_audio=ref_audio_path,
         ref_text=ref_text,
     )
-    prompt_item = prompt_items[0] if isinstance(prompt_items, list) else prompt_items
-
     # =========================================================================
     # Get official input embeddings by hooking
     # =========================================================================
@@ -116,21 +114,11 @@ def main():
     print("  Running official generation with max_new_tokens=50...")
 
     # Patch the talker to capture intermediate states during generation
-    official_tokens = []
-    official_logits = []
     official_hiddens = []
 
     original_forward = talker.model.forward
 
     captured_step_embeds = []
-    captured_tokens = []
-
-    # Hook to capture generated tokens
-    original_sample = None
-    try:
-        original_sample = talker.generate.__wrapped__
-    except:
-        pass
 
     def patched_forward(*args, **kwargs):
         # Log what's being passed to the forward

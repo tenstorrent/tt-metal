@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -42,20 +43,37 @@ from models.demos.qwen3_tts.reference.functional import (
 )
 
 
-def _optional_hf_cache_dir(cache_dir: Optional[str]) -> Optional[str]:
-    if cache_dir is None:
-        return None
-    p = Path(cache_dir).expanduser()
+def _safe_hf_cache_root(cache_dir: Optional[str]) -> Path:
+    if cache_dir is not None:
+        p = Path(cache_dir).expanduser()
+    else:
+        hf_home = os.environ.get("HF_HOME")
+        p = Path(hf_home).expanduser() if hf_home else (Path.home() / ".cache" / "huggingface")
+
     if ".." in p.parts:
         raise ValueError("cache_dir must not contain '..' path components")
-    return str(p.resolve())
-
-
-def _cli_filesystem_path(path: str) -> Path:
-    p = Path(path).expanduser()
-    if ".." in p.parts:
-        raise ValueError("Path must not contain '..' path components")
     return p.resolve()
+
+
+def _resolve_download_path(download_path: str, cache_root: Path) -> Path:
+    resolved = Path(download_path).resolve()
+    try:
+        resolved.relative_to(cache_root)
+    except ValueError as exc:
+        raise ValueError(f"Downloaded path must be under cache root: {cache_root}") from exc
+    return resolved
+
+
+def _cli_filesystem_path(path: str, base_dir: Optional[Path] = None) -> Path:
+    base = (base_dir or Path.cwd()).resolve()
+    raw = Path(path).expanduser()
+    candidate = raw if raw.is_absolute() else (base / raw)
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"Path must resolve under base directory: {base}") from exc
+    return resolved
 
 
 def speech_tokenizer_decoder_forward_debug(
@@ -109,23 +127,16 @@ def speech_tokenizer_decoder_forward_debug(
 
     print(f"  [DEBUG] After codebook lookup: {embeddings.shape}")
 
-    # 2. Pre-transformer
+    # 2. Pre-transformer weights
     pre_transformer_weights = {
         k.replace("pre_transformer.", ""): v for k, v in weights.items() if k.startswith("pre_transformer.")
     }
     print(f"  [DEBUG] pre_transformer_weights: {len(pre_transformer_weights)} keys")
 
-    if pre_transformer_weights:
-        hidden_states = pre_transformer_forward(embeddings, pre_transformer_weights, config)
-    else:
-        hidden_states = embeddings
-
-    print(f"  [DEBUG] After pre_transformer: {hidden_states.shape}")
-
-    # 3. Pre-conv
+    # 3. Pre-conv (channels-first)
     if "pre_conv.conv.weight" in weights:
         print(f"  [DEBUG] pre_conv weight: {weights['pre_conv.conv.weight'].shape}")
-        hidden_states = hidden_states.transpose(1, 2)
+        hidden_states = embeddings
         hidden_states = F.conv1d(
             hidden_states,
             weights["pre_conv.conv.weight"],
@@ -133,11 +144,18 @@ def speech_tokenizer_decoder_forward_debug(
             padding=weights["pre_conv.conv.weight"].shape[-1] // 2,
         )
     else:
-        hidden_states = hidden_states.transpose(1, 2)
+        hidden_states = embeddings
 
     print(f"  [DEBUG] After pre_conv: {hidden_states.shape}")
 
-    # 4. Upsampler (ConvNeXt blocks)
+    # 4. Pre-transformer expects [batch, seq_len, hidden]
+    hidden_states = hidden_states.transpose(1, 2)
+    if pre_transformer_weights:
+        hidden_states = pre_transformer_forward(hidden_states, pre_transformer_weights, config)
+    print(f"  [DEBUG] After pre_transformer: {hidden_states.shape}")
+    hidden_states = hidden_states.transpose(1, 2)
+
+    # 5. Upsampler (ConvNeXt blocks)
     for i, ratio in enumerate(config.upsampling_ratios):
         upsample_prefix = f"upsample.{i}."
         conv_weight = weights.get(f"{upsample_prefix}0.conv.weight")
@@ -222,14 +240,13 @@ def load_hf_weights(model_id: str, cache_dir: Optional[str] = None) -> dict:
     print(f"Loading model from HuggingFace: {model_id}")
     start_time = time.time()
 
-    safe_cache = _optional_hf_cache_dir(cache_dir)
-    model_path = Path(
-        snapshot_download(
-            model_id,
-            cache_dir=safe_cache,
-            allow_patterns=["*.safetensors", "*.json"],
-        )
-    ).resolve()
+    cache_root = _safe_hf_cache_root(cache_dir)
+    downloaded_path = snapshot_download(
+        model_id,
+        cache_dir=str(cache_root),
+        allow_patterns=["*.safetensors", "*.json"],
+    )
+    model_path = _resolve_download_path(downloaded_path, cache_root)
 
     state_dict = {}
     for safetensor_file in model_path.glob("*.safetensors"):
@@ -253,14 +270,13 @@ def load_speech_tokenizer_weights(model_id: str, cache_dir: Optional[str] = None
 
     print(f"Loading speech tokenizer weights from: {model_id}")
 
-    safe_cache = _optional_hf_cache_dir(cache_dir)
-    model_path = Path(
-        snapshot_download(
-            model_id,
-            cache_dir=safe_cache,
-            allow_patterns=["speech_tokenizer/*.safetensors"],
-        )
-    ).resolve()
+    cache_root = _safe_hf_cache_root(cache_dir)
+    downloaded_path = snapshot_download(
+        model_id,
+        cache_dir=str(cache_root),
+        allow_patterns=["speech_tokenizer/*.safetensors"],
+    )
+    model_path = _resolve_download_path(downloaded_path, cache_root)
 
     speech_tokenizer_path = model_path / "speech_tokenizer" / "model.safetensors"
     if not speech_tokenizer_path.exists():
