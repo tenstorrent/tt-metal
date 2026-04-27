@@ -213,6 +213,113 @@ class TextModel(LightweightModule):
         embeddings = ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
         return embeddings
 
+    def _hidden_state_to_torch(self, x: ttnn.Tensor) -> torch.Tensor:
+        """Convert TT hidden state tensor to torch [B, S, H]."""
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        if is_mesh_device:
+            x_torch = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            # Hidden states are replicated across mesh devices in this path.
+            # ConcatMeshToTensor(dim=0) can return a leading device axis:
+            #   [num_devices, S, H] or [num_devices, 1, S, H].
+            # Keep only one replica to match HF batch shape [1, S, H].
+            if x_torch.shape[0] == self.mesh_device.get_num_devices():
+                x_torch = x_torch[0]
+                if x_torch.dim() == 2:
+                    x_torch = x_torch.unsqueeze(0)
+        else:
+            x_torch = ttnn.to_torch(x)
+
+        # [1, 1, S, H] -> [1, S, H]
+        if x_torch.dim() == 4 and x_torch.shape[1] == 1:
+            x_torch = x_torch.squeeze(1)
+        return x_torch
+
+    def forward_collect_hidden_states_torch(
+        self,
+        input_ids: torch.Tensor,
+        start_pos: int = 0,
+        attn_mask: Optional[ttnn.Tensor] = None,
+    ) -> List[torch.Tensor]:
+        """
+        Run the text stack on TT and return hidden states as torch tensors.
+
+        Returns 38 tensors for 36 layers:
+            [0]  embed output
+            [1..36] output after each block
+            [37] output after final ln_f
+        """
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+
+        input_ids_ttnn = ttnn.from_torch(
+            input_ids,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        x = self.embed_tokens(input_ids_ttnn)
+        ttnn.deallocate(input_ids_ttnn)
+
+        seq_len = int(x.shape[-2])
+        rot_mats = self.rotary_setup.get_rot_mats_prefill(seq_len, start_pos)
+
+        hidden_states: List[torch.Tensor] = [self._hidden_state_to_torch(x)]
+        for block in self.blocks:
+            x, _ = block(
+                x,
+                rot_mats,
+                self.transformation_mats,
+                attn_mask,
+                start_pos,
+                None,
+                None,
+                0,
+            )
+            hidden_states.append(self._hidden_state_to_torch(x))
+
+        x = self.ln_f(x)
+        hidden_states.append(self._hidden_state_to_torch(x))
+        ttnn.deallocate(x)
+
+        return hidden_states
+
+    def forward_collect_hidden_states_from_inputs_embeds_torch(
+        self,
+        hidden_states: ttnn.Tensor,
+        start_pos: int = 0,
+        attn_mask: Optional[ttnn.Tensor] = None,
+    ) -> List[torch.Tensor]:
+        """
+        Like ``forward_collect_hidden_states_torch`` but starts from **fused** input embeddings
+        (e.g. after ``Molmo2Model.prepare_inputs_for_multimodal``) instead of token IDs.
+
+        Returns the same 38-tensor layout: embed (here: fused), after each of 36 blocks, after ``ln_f``.
+        """
+        seq_len = int(hidden_states.shape[-2])
+        rot_mats = self.rotary_setup.get_rot_mats_prefill(seq_len, start_pos)
+
+        out: List[torch.Tensor] = [self._hidden_state_to_torch(hidden_states)]
+        x = hidden_states
+        for block in self.blocks:
+            x, _ = block(
+                x,
+                rot_mats,
+                self.transformation_mats,
+                attn_mask,
+                start_pos,
+                None,
+                None,
+                0,
+            )
+            out.append(self._hidden_state_to_torch(x))
+        x = self.ln_f(x)
+        out.append(self._hidden_state_to_torch(x))
+        ttnn.deallocate(x)
+        return out
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -282,7 +389,6 @@ class TextModel(LightweightModule):
 
         # For long sequences, slice to last real token before LM head to avoid
         # materializing [seq_len, vocab_size] logits (9.5GB at 32K).
-
         if last_token_idx is not None:
             x = ttnn.slice(x, (0, 0, last_token_idx, 0), (1, 1, last_token_idx + 1, self.hidden_dim))
 

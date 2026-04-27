@@ -254,11 +254,13 @@ def preprocess_video(
         Dict with:
           - input_ids: [1, seq_len] tensor (with video tokens already inserted)
           - attention_mask: [1, seq_len] tensor
-          - pixel_values: [n_frames, 729, 588] tensor (HF patch format, already unfolded)
+          - pixel_values: [n_frames, 3, 378, 378] image tensor (after ``hf_patches_to_images``) for TTNN
+          - pixel_values_videos: [n_frames, 729, 588] in HF **patch** format (for the HF model forward;
+            ``build_batched_videos`` / ``pixel_values_videos=``)
           - image_token_pooling: [n_frames * h * w, k_pool] tensor
           - pooled_patches_idx_flat: [1, n_tokens * k_pool] tensor for TTNN embedding
           - valid_mask_flat: [1, 1, n_tokens * k_pool, 1] mask tensor
-          - video_grids: [[n_frames, h, w]]
+          - video_grids: torch long tensor, shape ``[num_videos, 3]`` (f, h, w) per video
           - n_frames: int
           - pooled_h: int
           - pooled_w: int
@@ -326,10 +328,19 @@ def preprocess_video(
         "input_ids": torch.from_numpy(result["input_ids"]),
         "attention_mask": torch.from_numpy(result["attention_mask"]),
         "pixel_values": pixel_values,
+        # HF ``Molmo2Model`` video forward (``build_batched_videos``) expects patch-format frames:
+        # ``[n_frames, n_patches, 588]``, not the ``[n_frames, 3, 378, 378]`` tensor from ``hf_patches_to_images``.
+        "pixel_values_videos": torch.as_tensor(
+            np.asarray(result["pixel_values_videos"]),
+            dtype=torch.float32,
+        ),
         "image_token_pooling": torch.from_numpy(pooling_idx).long(),
         "pooled_patches_idx_flat": torch.from_numpy(pooling_idx_flat.reshape(1, -1)).long(),
         "valid_mask_flat": torch.from_numpy(valid_mask_flat.reshape(1, 1, -1, 1)).float(),
-        "video_grids": result["video_grids"],
+        "video_grids": torch.as_tensor(
+            np.asarray(result["video_grids"]),
+            dtype=torch.long,
+        ),
         "n_frames": int(n_frames),
         "pooled_h": int(pooled_h),
         "pooled_w": int(pooled_w),

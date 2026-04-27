@@ -416,7 +416,7 @@ class Molmo2Model(LightweightModule):
 
         # Threshold for using chunked pooling (based on memory analysis)
         # NOTE: chunked pooling has scale bug that affects accuracy - use single-pass when possible
-        max_frames_for_single_pool = 64
+        max_frames_for_single_pool = 384
 
         if batch_size <= max_frames_for_single_pool:
             # Small video: use single pooling pass (more accurate)

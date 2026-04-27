@@ -5,12 +5,16 @@
 """
 RMSNorm for Molmo2 Text Model.
 
-Implements Root Mean Square Layer Normalization:
-    output = x * rsqrt(mean(x^2) + eps) * weight
+Implements Root Mean Square Layer Normalization (HuggingFace ``Molmo2RMSNorm`` numerics):
+    output = weight * (x * rsqrt(mean(x^2) + eps))
 
-No bias term, following Llama-style RMSNorm.
+The forward pass uses **PyTorch** on host (float32 reduction) and uploads the result with
+``ttnn.from_torch`` to match reference behavior; ``self.weight`` remains on device for
+compatibility with weight-loading and any code that inspects parameters.
 """
 
+
+import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -68,9 +72,12 @@ class TextRMSNorm(LightweightModule):
         # Load weight
         weight_key_full = f"{state_dict_prefix}.{weight_key}" if state_dict_prefix else weight_key
         weight = state_dict[weight_key_full]
+        w_view = weight.reshape(1, 1, 1, -1).contiguous()
+        # CPU / torch copy for forward() HF-aligned RMS (same math as ``Molmo2RMSNorm`` in HF).
+        self._weight_torch = w_view.clone()
 
         self.weight = ttnn.as_tensor(
-            weight.reshape(1, 1, 1, -1),
+            w_view,
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -78,6 +85,39 @@ class TextRMSNorm(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name,
         )
+
+    @staticmethod
+    def _molmo2_rms_norm_torch(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+        """
+        Port of HuggingFace ``Molmo2RMSNorm.forward``: variance in float32, then back to
+        activations' dtype, then ``weight * x``.
+        """
+        og_dtype = x.dtype
+        x_f = x.to(torch.float32)
+        variance = x_f.pow(2).mean(-1, keepdim=True)
+        x_f = x_f * torch.rsqrt(variance + eps)
+        x_f = x_f.to(og_dtype)
+        w = weight.to(device=x.device, dtype=og_dtype)
+        if w.dim() == 1:
+            w = w.view(1, 1, 1, -1)
+        return w * x_f
+
+    @staticmethod
+    def _ttnn_to_torch_replicated(x: ttnn.Tensor, mesh_device) -> torch.Tensor:
+        is_mesh = mesh_device.__class__.__name__ == "MeshDevice"
+        if is_mesh:
+            mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+            t = ttnn.to_torch(x, mesh_composer=mesh_composer)
+            n = mesh_device.get_num_devices()
+            if t.shape[0] == n:
+                t = t[0]
+        else:
+            t = ttnn.to_torch(x)
+        if t.dim() == 4 and t.shape[1] == 1:
+            return t
+        if t.dim() == 3:
+            return t.unsqueeze(1)
+        return t
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -89,5 +129,15 @@ class TextRMSNorm(LightweightModule):
         Returns:
             Normalized tensor of shape [1, 1, seq_len, hidden_dim]
         """
-        # Use TTNN's rms_norm operation
-        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
+        is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        x_torch = self._ttnn_to_torch_replicated(x, self.mesh_device)
+        out = self._molmo2_rms_norm_torch(x_torch, self._weight_torch, self.eps)
+        return ttnn.from_torch(
+            out,
+            device=self.mesh_device,
+            dtype=x.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )

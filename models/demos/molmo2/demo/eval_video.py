@@ -250,10 +250,11 @@ def run_eval(
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_shape = ttnn.MeshShape(1, 8)
     device = ttnn.open_mesh_device(mesh_shape)
+    # device.disable_and_clear_program_cache()
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers, use_async_ccl=False, max_seq_len=max_seq_len)
+        model = create_model(device, state_dict, num_layers, use_async_ccl=True, max_seq_len=max_seq_len)
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -285,25 +286,25 @@ def run_eval(
 
         # Upfront warmup: ViT+pool traces are required for fast DP vision (else eager path can be ~tens of seconds).
         # Prefill/decode traces are optional and only captured when use_trace / use_decode_trace.
-        if runnable and (use_dp_vision_trace or use_trace or use_decode_trace):
-            generator.warmup_video_traces(
-                frames_per_device=8,
-                num_devices=8,
-                prefill_buckets=_buckets,
-                max_frames_per_pool_chunk=16,
-                pool_n_out=_n_out,
-                pool_k_pool=_k_pool,
-                max_vit_frames=MAX_VIT_FRAMES_FOR_POOL,
-                use_prefill_trace=use_trace,
-                use_decode_trace=use_decode_trace,
-            )
-            if use_trace or use_decode_trace:
-                logger.info("Upfront video trace warmup complete (ViT + pool + prefill/decode as requested).")
-            else:
-                logger.info(
-                    "Upfront ViT + pool trace warmup complete (prefill/decode still eager; "
-                    "add --use-trace / --use-decode-trace to capture those traces)."
-                )
+        # if runnable and (use_dp_vision_trace or use_trace or use_decode_trace):
+        generator.warmup_video_traces(
+            frames_per_device=8,
+            num_devices=8,
+            prefill_buckets=_buckets,
+            max_frames_per_pool_chunk=16,
+            pool_n_out=_n_out,
+            pool_k_pool=_k_pool,
+            max_vit_frames=MAX_VIT_FRAMES_FOR_POOL,
+            use_prefill_trace=use_trace,
+            use_decode_trace=use_decode_trace,
+        )
+        # if use_trace or use_decode_trace:
+        #     logger.info("Upfront video trace warmup complete (ViT + pool + prefill/decode as requested).")
+        # else:
+        #     logger.info(
+        #         "Upfront ViT + pool trace warmup complete (prefill/decode still eager; "
+        #         "add --use-trace / --use-decode-trace to capture those traces)."
+        #     )
 
         results = []
         total_vision_ms = 0.0
