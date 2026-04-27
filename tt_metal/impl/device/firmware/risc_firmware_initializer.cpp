@@ -213,7 +213,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         // New teardown order:
         //   Step 1: Detect relay_broken_non_mmio and any_teardown_timed_out.
         //   Step 2: If relay broken — hard-reset MMIO ETH channels via PCIe (no relay
-        //           needed) and sleep 500ms so MMIO ERISCs reboot to base firmware.
+        //           needed) then poll each channel's heartbeat address until (val >> 16) == 0xABCD
+        //           (UMD base firmware running), with 1s timeout per core.
         //   Step 3: assert_cores/l1_barrier loop — skip ALL non-MMIO devices when any
         //           relay is broken (all share the same MMIO relay path; even devices
         //           not in relay_broken_non_mmio are unreachable and would timeout).
@@ -251,7 +252,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         }
 
         // Step 2: Early MMIO ETH reset when relay is broken.
-        // Must run BEFORE assert_cores/l1_barrier so ERISCs have 500ms to reboot.
+        // Must run BEFORE assert_cores/l1_barrier; we poll for ERISC reboot completion.
         if (!relay_broken_non_mmio.empty() && get_control_plane_) {
             log_warning(
                 tt::LogAlways,
@@ -286,19 +287,70 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
-            // Give MMIO ERISCs time to reboot from ROM and load UMD base relay firmware.
-            // TODO: Replace with a per-core polled readiness check once the ETH heartbeat
-            // address is confirmed stable across all supported architectures.
-            // Blocker: Wormhole does not support ETH_MAILBOX_API
-            // (hal_.get_dispatch_feature_enabled(DispatchFeature::ETH_MAILBOX_API) == false),
-            // so get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT) returns 0 on WH and cannot
-            // be used to detect liveness.  On Blackhole and Quasar, the HEARTBEAT register at
-            // MEM_SYSENG_ETH_HEARTBEAT increments in 0xABCDxxxx format once base firmware is
-            // running, and cluster_.read_reg() on MMIO cores goes through PCIe (safe even with
-            // a broken relay).  When WH support for ETH_MAILBOX_API is added, replace this
-            // sleep with a per-core loop: read HEARTBEAT via cluster_.read_reg(), break when
-            // (val >> 16) == 0xABCD, warn+continue after ~1s of attempts.
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            // Poll each reset MMIO ETH channel's heartbeat address until (val >> 16) == 0xABCD,
+            // indicating the ERISC has rebooted and is running UMD base relay firmware.
+            // cluster_.read_reg() on MMIO cores goes through PCIe — safe even with broken relay.
+            //
+            // Heartbeat addresses (populated in each arch's HAL active_eth file):
+            //   WH: 0x1F80  (test_results[48], written by base UMD relay firmware)
+            //   BH: MEM_SYSENG_ETH_HEARTBEAT = 0x7CC70  (eth_status_t.heartbeat[0])
+            //   QA: MEM_SYSENG_ETH_HEARTBEAT = 0x7CC70  (same struct layout as BH)
+            //
+            // On all arches: base firmware increments in 0xABCDxxxx format.
+            // hal_.get_eth_fw_mailbox_val(HEARTBEAT) == 0 means arch not yet wired up —
+            // fall back to 500ms sleep so we don't silently skip the wait.
+            {
+                const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+                if (hb_addr == 0u) {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AC — ETH heartbeat address not wired for this arch; "
+                        "using 500ms sleep as fallback.");
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                } else {
+                    constexpr int kMaxPollMs = 1000;
+                    constexpr auto kPollInterval = std::chrono::milliseconds(5);
+                    for (const tt::ChipId poll_mmio_id : mmio_ids_set) {
+                        for (const auto& poll_logical_core :
+                             this->get_control_plane_().get_active_ethernet_cores(poll_mmio_id)) {
+                            CoreCoord poll_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                poll_mmio_id, poll_logical_core, CoreType::ETH);
+                            tt_cxy_pair poll_target(poll_mmio_id, poll_virt);
+                            const auto poll_start = std::chrono::steady_clock::now();
+                            bool ready = false;
+                            while (true) {
+                                uint32_t hb_val = 0;
+                                try {
+                                    cluster_.read_reg(&hb_val, poll_target, hb_addr);
+                                } catch (...) {
+                                    break;  // PCIe read failed — don't spin
+                                }
+                                if ((hb_val >> 16) == 0xABCDu) {
+                                    ready = true;
+                                    break;
+                                }
+                                const auto elapsed_ms =
+                                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - poll_start)
+                                        .count();
+                                if (elapsed_ms >= kMaxPollMs) {
+                                    break;
+                                }
+                                std::this_thread::sleep_for(kPollInterval);
+                            }
+                            if (!ready) {
+                                log_warning(
+                                    tt::LogAlways,
+                                    "teardown: FIX AC — ETH core {} on MMIO device {} did not "
+                                    "report base firmware heartbeat within {}ms; proceeding.",
+                                    poll_virt.str(),
+                                    poll_mmio_id,
+                                    kMaxPollMs);
+                            }
+                        }
+                    }
+                }
+            }
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channels rebooted; relay should be restored.");
         }
 
@@ -405,15 +457,61 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
-            // Give timeout-reset MMIO ERISCs time to reboot before ~Cluster destroys
-            // the driver.
-            // TODO: Replace with a polled readiness check once ETH heartbeat address is
-            // confirmed stable across all supported architectures.  Same blocker as the
-            // 500ms sleep in Step 2: Wormhole has ETH_MAILBOX_API == false, so
-            // get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT) == 0 and cannot be used.
-            // On Blackhole/Quasar, poll cluster_.read_reg() for (val >> 16) == 0xABCD
-            // on each reset MMIO ETH core (PCIe-direct; relay intact in this path).
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            // Poll each reset MMIO ETH channel's heartbeat for 0xABCDxxxx — same logic
+            // as Step 2.  Relay is intact in this path (relay_broken_non_mmio was empty),
+            // but cluster_.read_reg() via PCIe is still the right read path for MMIO cores.
+            {
+                const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+                if (hb_addr == 0u) {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AC (timeout) — ETH heartbeat address not wired for this arch; "
+                        "using 200ms sleep as fallback.");
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                } else {
+                    constexpr int kMaxPollMs = 1000;
+                    constexpr auto kPollInterval = std::chrono::milliseconds(5);
+                    for (const tt::ChipId poll_mmio_id : mmio_ids_set) {
+                        for (const auto& poll_logical_core :
+                             this->get_control_plane_().get_active_ethernet_cores(poll_mmio_id)) {
+                            CoreCoord poll_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                poll_mmio_id, poll_logical_core, CoreType::ETH);
+                            tt_cxy_pair poll_target(poll_mmio_id, poll_virt);
+                            const auto poll_start = std::chrono::steady_clock::now();
+                            bool ready = false;
+                            while (true) {
+                                uint32_t hb_val = 0;
+                                try {
+                                    cluster_.read_reg(&hb_val, poll_target, hb_addr);
+                                } catch (...) {
+                                    break;
+                                }
+                                if ((hb_val >> 16) == 0xABCDu) {
+                                    ready = true;
+                                    break;
+                                }
+                                const auto elapsed_ms =
+                                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - poll_start)
+                                        .count();
+                                if (elapsed_ms >= kMaxPollMs) {
+                                    break;
+                                }
+                                std::this_thread::sleep_for(kPollInterval);
+                            }
+                            if (!ready) {
+                                log_warning(
+                                    tt::LogAlways,
+                                    "teardown: FIX AC (timeout) — ETH core {} on MMIO device {} did not "
+                                    "report base firmware heartbeat within {}ms; proceeding.",
+                                    poll_virt.str(),
+                                    poll_mmio_id,
+                                    kMaxPollMs);
+                            }
+                        }
+                    }
+                }
+            }
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channel reset complete.");
         }
     }

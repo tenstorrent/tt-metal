@@ -16,6 +16,9 @@
 #define MEM_SYSENG_ETH_MAILBOX_ADDR 0x7D000
 #define MEM_SYSENG_ETH_MAILBOX_NUM_ARGS 3
 #define MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00
+// boot_results_t.eth_status.heartbeat[0]: base firmware writes 0xABCDxxxx here.
+// Struct layout: postcode(4) + port_status(4) + train_status(4) + train_speed(4) + spare[24](96) = 0x70.
+#define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
 #define NUM_SERDES_LANES 8
 
 enum link_train_status_e : uint32_t {
