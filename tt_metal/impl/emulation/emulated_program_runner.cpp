@@ -359,7 +359,7 @@ static std::unordered_map<std::string, std::function<void()>> g_jit_cache;
 static constexpr size_t FNV_HEX_BUF_SIZE = 17;  // 16 hex digits + null
 
 static uint64_t fnv1a_hash(const std::string& s) {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     hasher.update(s);
     return hasher.digest();
 }
