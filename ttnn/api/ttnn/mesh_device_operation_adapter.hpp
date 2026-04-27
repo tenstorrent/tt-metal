@@ -7,7 +7,7 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/descriptor_patching.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include <memory>
 #include <optional>

@@ -27,7 +27,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
-#include <tt-metalium/experimental/descriptor_patching.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "device_fixture.hpp"

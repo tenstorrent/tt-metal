@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Implementation of the fast cache-hit patching helpers declared in
-// tt-metalium/experimental/descriptor_patching.hpp.
+// tt-metalium/experimental/program_descriptor_patching.hpp.
 //
 // This is a temporary shim. Metal 2.0 solves the same problem at the framework
 // level with native Tensor/Buffer bindings. Remove once op factories migrate.
 
-#include <tt-metalium/experimental/descriptor_patching.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
