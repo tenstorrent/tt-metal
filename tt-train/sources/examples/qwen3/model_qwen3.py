@@ -16,14 +16,7 @@ import ttml
 
 # Re-export shared components so existing callers (model_qwen3_distributed,
 # model_factory, etc.) continue to work with ``from model_qwen3 import ...``
-from ttml.models.qwen3 import (  # noqa: F401
-    Qwen3,
-    Qwen3Config,
-    Qwen3RMSNorm,
-    Qwen3RopeScalingConfig,
-    create_qwen3_config_from_hf,
-)
-from ttml.models.qwen3.autograd_ops import ConcatLastDim, RMSNormFunction  # noqa: F401
+from ttml.models.qwen3 import Qwen3, Qwen3Config  # noqa: F401
 
 from utils.tensor_utils import torch_to_ttml
 from utils.param_utils import (  # noqa: F401 — re-exported for callers

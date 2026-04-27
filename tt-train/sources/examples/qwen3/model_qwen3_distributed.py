@@ -54,7 +54,12 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 
-from model_qwen3 import Qwen3Config, Qwen3RMSNorm, ConcatLastDim, linear
+from ttml.models.qwen3 import (
+    Qwen3Config,
+    Qwen3RMSNorm,
+    ConcatLastDim,
+)
+from model_qwen3 import linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
 from utils.param_utils import (

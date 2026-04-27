@@ -7,9 +7,11 @@
 import time
 
 from ttml.models import RunnerType
-from model_qwen3 import (
+from ttml.models.qwen3 import (  # noqa: F401
     Qwen3,
     create_qwen3_config_from_hf,
+)
+from model_qwen3 import (
     load_weights_from_hf,
 )
 from model_qwen3_distributed import (
