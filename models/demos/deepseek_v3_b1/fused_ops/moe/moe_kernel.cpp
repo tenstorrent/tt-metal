@@ -682,9 +682,16 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_bg_expert_dst_stride"),
             };
 
-            // SRAM Routed Gated Reduce (writer — no-op for BRISC)
-            using SRAMRoutedGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
-            deepseek_b1_ops::GatedReduce::WriterArgs sram_routed_gated_reduce_args{};
+            // SRAM Routed Gated Reduce (writer) — feeds one local router scale per top-k slot to TRISC.
+            // The shared-gated-reduce core is the mcast sender, so it keeps gate_output_cb locally
+            // instead of receiving its own expert-scale mcast.
+            using SRAMRoutedGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ScalarWriterCTArgs<
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_num_experts"),
+                get_named_compile_time_arg_val("enable_routing")>;
+            deepseek_b1_ops::GatedReduce::WriterArgs sram_routed_gated_reduce_args{
+                get_named_compile_time_arg_val("gate_output_cb"),
+                get_named_compile_time_arg_val("mul_cb_scalar"),
+            };
 
             // SRAM Routed Down Mcast — sender (full grid, persistent sender — same noc grid as Routed::McastCTArgs)
             using SRAMRoutedDownMcastCTArgs = Routed::McastCTArgs;
@@ -1135,12 +1142,14 @@ void kernel_main() {
             using SRAMRoutedGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
                 get_named_compile_time_arg_val("sram_routed_gated_reduce_tiles_per_k"),
                 get_named_compile_time_arg_val("sram_routed_gated_reduce_k_num_tiles"),
-                get_named_compile_time_arg_val("sram_routed_gated_reduce_num_experts")>;
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_num_experts"),
+                get_named_compile_time_arg_val("enable_routing")>;
             deepseek_b1_ops::GatedReduce::ComputeArgs sram_routed_gated_reduce_args{
                 get_named_compile_time_arg_val("sram_routed_gated_reduce_group1_cb"),
                 get_named_compile_time_arg_val("sram_routed_gated_reduce_group2_cb"),
                 get_named_compile_time_arg_val("sram_routed_gated_reduce_intermed_cb"),
                 get_named_compile_time_arg_val("sram_routed_mcast_src_cb"),
+                get_named_compile_time_arg_val("mul_cb_scalar"),
             };
 
             // SRAM Routed Down Mcast (compute — no-op)
@@ -1276,6 +1285,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_gated_reduce_group2_cb"),
                 get_named_compile_time_arg_val("shared_gated_reduce_intermed_cb"),
                 get_named_compile_time_arg_val("shared_gated_reduce_mcast_src_cb"),
+                0,
             };
 
             // Down Mcast — compute no-op
@@ -1541,7 +1551,8 @@ void kernel_main() {
             index_mcast(moe.routed.index_mcast_args);
         }
 
-        // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores
+        // 5b. Mcast Expert Scale: Broadcast expert scale to cold mul cores.
+        // The hot routed reduce runs on the sender/shared-reduce core and consumes gate_output_cb locally.
         {
             DeviceZoneScopedN("MCAST_EXPERT_SCALE");
             deepseek_b1_ops::Mcast::Op<
@@ -1549,7 +1560,7 @@ void kernel_main() {
                 Core::is_sender_core,
                 Core::is_mcast_grid_core,
                 Core::Routed::is_gate_proj_core,
-                true,
+                false,
                 /*ReceiverOnBrisc=*/true>
                 expert_scale_mcast;
             expert_scale_mcast(moe.routed.expert_scale_mcast_args);

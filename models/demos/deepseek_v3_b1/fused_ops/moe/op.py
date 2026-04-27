@@ -2754,6 +2754,9 @@ class MoeRoutedExpertOp:
         )
         brisc_named_compile_time_args += _sram_gather_sender_args("sram_ag", ctx.sram_ag_params)
         brisc_named_compile_time_args += _sram_gather_sender_args("sram_bg", ctx.sram_bg_params)
+        brisc_named_compile_time_args += [
+            ("sram_routed_gated_reduce_num_experts", ctx.sram_routed_gated_reduce_params["num_experts"]),
+        ]
         # SRAM routed Down Mcast sender (mirrors shared_down_mcast — sender_core → all 130 cores)
         brisc_named_compile_time_args += [
             (

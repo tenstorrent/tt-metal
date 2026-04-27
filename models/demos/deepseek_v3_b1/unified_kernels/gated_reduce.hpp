@@ -14,12 +14,13 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
 #endif
 
 namespace deepseek_b1_ops {
 
 // ============================================================================
-// GatedReduce micro-op: SiLU(sum(group1_e)) * sum(group2_e), per expert.
+// GatedReduce micro-op: SiLU(sum(group1_e)) * sum(group2_e) [* scalar_e], per expert.
 //
 // Performs gated local reduction over two groups of input tiles for each of
 // `num_experts` experts (per-expert blocks concatenated in each group CB):
@@ -41,23 +42,37 @@ namespace deepseek_b1_ops {
 // ============================================================================
 struct GatedReduce {
     struct ReaderCTArgs {};
-    struct WriterCTArgs {};
+    struct WriterCTArgs {
+        static constexpr uint32_t num_experts = 1;
+        static constexpr bool enable_scalar = false;
+    };
 
-    template <uint32_t TilesPerK, uint32_t KNumTiles, uint32_t NumExperts = 1>
+    template <uint32_t NumExperts, uint32_t EnableScalar = 1>
+    struct ScalarWriterCTArgs {
+        static constexpr uint32_t num_experts = NumExperts;
+        static constexpr bool enable_scalar = EnableScalar != 0;
+    };
+
+    template <uint32_t TilesPerK, uint32_t KNumTiles, uint32_t NumExperts = 1, uint32_t EnableScalar = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t tiles_per_k = TilesPerK;
         static constexpr uint32_t k_num_tiles = KNumTiles;
         static constexpr uint32_t num_experts = NumExperts;
+        static constexpr bool enable_scalar = EnableScalar != 0;
     };
 
     struct ReaderArgs {};
-    struct WriterArgs {};
+    struct WriterArgs {
+        uint32_t scalar_src_cb;
+        uint32_t scalar_cb;
+    };
 
     struct ComputeArgs {
         uint32_t group1_cb;    // gate partials CB
         uint32_t group2_cb;    // up partials CB
         uint32_t intermed_cb;  // intermediate CB (2 tiles, reused)
         uint32_t out_cb;       // output CB (num_experts * k_num_tiles tiles)
+        uint32_t scalar_cb = 0;  // optional per-expert scalar pages
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -73,7 +88,24 @@ struct GatedReduce {
 
     private:
         void impl(const RTArgs& args) {
-#if defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (CTArgs::enable_scalar) {
+                cb_wait_front(args.scalar_src_cb, 1);
+
+                uint32_t cb_read_addr = get_read_ptr(args.scalar_src_cb);
+                volatile tt_l1_ptr uint16_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_read_addr);
+
+                for (uint32_t e = 0; e < CTArgs::num_experts; e++) {
+                    cb_reserve_back(args.scalar_cb, 1);
+                    volatile tt_l1_ptr uint16_t* dst_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(args.scalar_cb));
+                    dst_ptr[0] = src_ptr[e];
+                    cb_push_back(args.scalar_cb, 1);
+                }
+
+                cb_pop_front(args.scalar_src_cb, 1);
+            }
+#elif defined(COMPILE_FOR_TRISC)
             constexpr uint32_t tiles_per_k = CTArgs::tiles_per_k;
             constexpr uint32_t k_num_tiles = CTArgs::k_num_tiles;
             constexpr uint32_t num_experts = CTArgs::num_experts;
@@ -125,13 +157,24 @@ struct GatedReduce {
                     tile_regs_release();
                     cb_push_back(args.intermed_cb, 1);
 
-                    // Multiply: SiLU(gate_e) * up_e. Keep experts separate for down-proj.
-                    mul_tiles_init(args.intermed_cb, args.intermed_cb);
+                    // Multiply: SiLU(gate_e) * up_e [* scalar_e]. Keep experts separate for down-proj.
                     cb_wait_front(args.intermed_cb, 2);
+                    if constexpr (CTArgs::enable_scalar) {
+                        cb_wait_front(args.scalar_cb, e + 1);
+                        deepseek_mul_tiles_bcast_scalar_init_short(args.intermed_cb, args.scalar_cb);
+                    } else {
+                        mul_tiles_init(args.intermed_cb, args.intermed_cb);
+                    }
                     cb_reserve_back(args.out_cb, 1);
 
                     tile_regs_acquire();
-                    mul_tiles(args.intermed_cb, args.intermed_cb, 0, 1, 0);
+                    if constexpr (CTArgs::enable_scalar) {
+                        deepseek_mul_tiles_bcast_scalar(args.intermed_cb, args.scalar_cb, 0, e, 0);
+                        deepseek_binary_dest_reuse_tiles_init(args.intermed_cb);
+                        deepseek_binary_dest_reuse_tiles(args.intermed_cb, 1, 0);
+                    } else {
+                        mul_tiles(args.intermed_cb, args.intermed_cb, 0, 1, 0);
+                    }
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_tile(0, args.out_cb);
@@ -144,6 +187,9 @@ struct GatedReduce {
 
             cb_pop_front(args.group1_cb, total_in_tiles);
             cb_pop_front(args.group2_cb, total_in_tiles);
+            if constexpr (CTArgs::enable_scalar) {
+                cb_pop_front(args.scalar_cb, num_experts);
+            }
 #endif
         }
     };
