@@ -6,7 +6,7 @@ Reference for writing `compute_kernel_lib` helpers. All helpers live in `ttnn/cp
 
 | Helper | What it unifies | Key patterns |
 |---|---|---|
-| `sfpu_helpers.hpp` | SFPU unary/binary/ternary ops + chains | CRTP op bases, CompactLoad, chain transformation, pipeline batching |
+| `sfpu_helpers.hpp` | SFPU unary/binary/ternary ops + chains | CRTP op bases, Load, chain execution, pipeline batching |
 | `tilize_helpers.hpp` | tilize/fast_tilize init/block/uninit | Config enums, CB indices as template params, auto fast_tilize dispatch |
 | `untilize_helpers.hpp` | untilize/pack_untilize | Auto-dispatches pack_untilize vs standard based on width/datatype |
 | `reduce_helpers_compute.hpp` | reduce ROW/COL/SCALAR with SUM/AVG/MAX | InputPolicy enum, Accumulate type trait, PostReduceOp callback, auto DEST limit detection |

@@ -1,10 +1,11 @@
 ---
 name: LLK Review-Fix Loop Agent Prompt
 description: >
-  General-purpose review-fix loop agent. Reads any pipeline output document,
-  finds issues (BLOCKER / CONFUSING / MINOR), fixes them, re-reviews, and
-  repeats until the exit condition is met. Can be applied to any stage output:
-  proposals, op struct designs, investigation reports, or verification results.
+  Phase 3: Implement — L2 internal behavior. After Phase 3 writes or edits
+  helper files, L2 re-runs Phase 2 sub-stages 2c + 2d against the actual
+  implementation. This agent defines the review/fix loop for that step.
+  Also used for reviewing any pipeline output document (proposals, investigation
+  reports) for accuracy before the next phase consumes it.
 type: reference
 ---
 
@@ -15,6 +16,7 @@ Invoke with `subagent_type: general-purpose`. Replace placeholders:
 - `{{REFERENCE_FILES}}` — newline-separated list of ground-truth files to verify claims against
 - `{{REVIEW_CRITERIA}}` — domain-specific checklist items (in addition to the general criteria baked in)
 - `{{DONE_CONDITION}}` — exit predicate, e.g. "0 blockers and 0 confusing issues"
+- `{{CATEGORY_SLUG}}` — the pipeline category slug (e.g. `elementwise_unary`); used to route logs to the same `agent_logs/{category_slug}/` directory as other phases
 
 ## Prompt Template
 
@@ -22,10 +24,12 @@ Invoke with `subagent_type: general-purpose`. Replace placeholders:
 You are running a review-fix loop on {{TARGET_FILE}}.
 
 BREADCRUMB LOGGING — do this first:
-Derive SLUG from {{TARGET_FILE}} filename (stem, underscores).
-BCRUMB="agent_logs/${SLUG}_review_breadcrumbs.jsonl"
-mkdir -p agent_logs
-echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"review_fix","target":"{{TARGET_FILE}}"}' >> $BCRUMB
+Derive SLUG from {{TARGET_FILE}} filename (stem, underscores) — used in the breadcrumb filename
+to distinguish multiple review targets within the same category.
+LOG_DIR="agent_logs/{{CATEGORY_SLUG}}"
+BCRUMB="${LOG_DIR}/review_${SLUG}_breadcrumbs.jsonl"
+mkdir -p "${LOG_DIR}"
+echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"review_fix","target":"{{TARGET_FILE}}","category":"{{CATEGORY_SLUG}}"}' >> $BCRUMB
 
 Your job: read the document, find issues, fix them, re-review, and repeat
 until the exit condition is met. Run autonomously — do not stop after one

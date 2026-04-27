@@ -1,6 +1,6 @@
 ---
 name: LLK Investigation Agent
-description: "Phase 1 agent. Analyzes a group of ops across device, host, and usage dimensions. One instance per group, all run in parallel. Replaces the previous 3-agent split (device/host/usage)."
+description: "Phase 0: Understand — investigation step (new helper mode). Analyzes a group of ops across device, host, usage, encapsulation, CB management, and existing helper dimensions. One instance per group, run in parallel within Phase 0. Verification is inline: mark each claim CONFIRMED or UNCERTAIN directly in the output — no separate verification agent."
 type: reference
 ---
 
@@ -12,7 +12,7 @@ Replace placeholders:
 - `{{GROUP_NAME}}` — functional sub-group (e.g. Activations, Trigonometry)
 - `{{LLK_CATEGORY}}` — operation category (e.g. elementwise unary)
 - `{{OPS_LIST}}` — comma-separated operation names assigned to this group
-- `{{LOCATOR_RESULTS}}` — locator table from Phase 0 (op -> file paths)
+- `{{LOCATOR_RESULTS}}` — locator table from the catalog step (run earlier in same Phase 0)
 - `{{CODEGEN_FILE}}` — path to op_utils (e.g. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`)
 - `{{FOCUS}}` — optional role-based focus directive to scope the analysis
 
@@ -26,7 +26,16 @@ Investigate the {{GROUP_NAME}} group of {{LLK_CATEGORY}} operations: {{OPS_LIST}
 Use the locator results below to find files without searching:
 {{LOCATOR_RESULTS}}
 
-Log breadcrumbs to agent_logs/. See tt_metal/third_party/tt-agents/scripts/logging/ for format.
+BREADCRUMB LOGGING:
+Derive CATEGORY_SLUG = "{{LLK_CATEGORY}}" lowercased, spaces/slashes → underscores.
+Derive GROUP_SLUG = "{{GROUP_NAME}}" lowercased, spaces/slashes → underscores.
+LOG_DIR="agent_logs/${CATEGORY_SLUG}"
+BCRUMB="${LOG_DIR}/investigation_${GROUP_SLUG}_breadcrumbs.jsonl"
+Run at start:
+  mkdir -p "${LOG_DIR}"
+  echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"investigation","category":"{{LLK_CATEGORY}}","group":"{{GROUP_NAME}}"}' >> $BCRUMB
+
+See tt_metal/third_party/tt-agents/scripts/logging/ for the JSONL event schema.
 
 For EACH operation in the group, analyze three dimensions:
 
@@ -166,9 +175,18 @@ If it varies at runtime → runtime param.
 
 ═══ OUTPUT ═══
 
-Save to: agent_logs/{{CATEGORY_SLUG}}_{{GROUP_SLUG}}_investigation.md
+Save to: ${LOG_DIR}/{{GROUP_SLUG}}_investigation.md (i.e., `agent_logs/{{CATEGORY_SLUG}}/{{GROUP_SLUG}}_investigation.md`)
 
 The orchestrator will consolidate per-group outputs into {category}_investigation.md.
+
+**Inline confidence flags (mandatory — replaces separate verification agent):**
+For every non-trivial claim (init compatibility, mutual exclusion, parameter derivability,
+cross-iteration state, CB sharing), mark it with one of:
+- **[CONFIRMED]** — directly read from code (cite file:line)
+- **[UNCERTAIN]** — inferred from patterns, not directly read; note what would confirm it
+
+Do NOT leave claims unmarked. The proposal agent reads these flags and weights
+CONFIRMED claims as design constraints, UNCERTAIN claims as open questions.
 ```
 
 ## Focus Directives
