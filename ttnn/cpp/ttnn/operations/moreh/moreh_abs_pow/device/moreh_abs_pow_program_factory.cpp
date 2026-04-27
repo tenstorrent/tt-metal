@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_abs_pow_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <bit>
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
 
@@ -243,7 +246,7 @@ ProgramDescriptor MorehAbsPowOperation::create_descriptor(
             KernelDescriptor::CoreRuntimeArgs{
                 input.buffer()->address(),
                 static_cast<uint32_t>(is_dram(input)),
-                *reinterpret_cast<uint32_t*>(&decimal),
+                std::bit_cast<uint32_t>(decimal),
                 num_units_per_core,
                 Wt,
                 tile_offset,
