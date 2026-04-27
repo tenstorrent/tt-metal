@@ -33,11 +33,9 @@ volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
 
-// On WH, NCRISC uses NOC1 which requires a different PCIe XY encoding than
-// what the D2H socket config provides (NOC0-based).  The host passes NOC0
-// coordinates via RT_PROFILER_PCIE_NOC_X/Y kernel defines (WH only) so we
-// can compute the NOC1 encoding at compile time.  On BH, no override is
-// needed — the socket's encoding is already correct.
+// WH NCRISC runs on NOC1, which needs a different PCIe XY encoding than the NOC0-based one
+// stored in the D2H socket config; the host passes the NOC0 coordinates via
+// RT_PROFILER_PCIE_NOC_X/Y on WH so we can re-encode at compile time. BH is already correct.
 #ifdef RT_PROFILER_PCIE_NOC_X
 constexpr uint64_t pcie_noc_xy_full =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(RT_PROFILER_PCIE_NOC_X), NOC_Y_PHYS_COORD(RT_PROFILER_PCIE_NOC_Y)));
@@ -54,11 +52,8 @@ __attribute__((noinline)) void push_entry_to_host(
     uint32_t host_fifo_start,
     uint32_t fifo_page_aligned_size) {
     noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
-    // Heartbeat: bump _pad[9] before we potentially block. If this keeps climbing without
-    // _pad[10] catching up, NCRISC is stuck inside socket_reserve_pages (i.e. the host D2H
-    // receiver is not draining). This is the primary signal for "host went away while the
-    // profiler was still pushing" and lines up with the "Failed to halt brisc core" class
-    // of triage failures where the NOC ends up choked.
+    // Heartbeat: _pad[9] increments before the potentially-blocking socket_reserve_pages,
+    // _pad[10] after. A growing gap means NCRISC is stuck waiting on the host receiver.
     ring_buffer->_pad[9]++;
     socket_reserve_pages(sock, 1);
     ring_buffer->_pad[10]++;
@@ -77,28 +72,24 @@ __attribute__((noinline)) void push_entry_to_host(
     socket_notify_receiver(sock);
 
     noc_async_write_barrier();
-    // Heartbeat: made it past the write barrier. If _pad[10] == _pad[11] but _pad[11] is
-    // stalled while _pad[10] keeps climbing, NCRISC is wedged in noc_async_write_barrier
-    // (NOC credits never returning), which is a different failure mode than a dead host.
+    // Heartbeat: incremented once the write barrier returns. If _pad[10] keeps growing
+    // while _pad[11] stalls, NCRISC is wedged in the write barrier (NOC credits not returning).
     ring_buffer->_pad[11]++;
 }
 
-// Heartbeat markers written to ring_buffer->_pad[] so host can diagnose NCRISC progress.
+// Heartbeat markers written to ring_buffer->_pad[] so host can diagnose NCRISC progress:
 // _pad[0]  = stage (1=started, 2=config_wait, 3=socket_init, 4=main_loop, 5=pushing)
 // _pad[1]  = config_buffer_addr seen by NCRISC
 // _pad[2]  = pcie_xy_enc from socket config
 // _pad[3]  = fifo_addr_lo from socket config
 // _pad[4]  = loop iteration counter
 // _pad[5]  = push count
-// _pad[6]  = L1 address of realtime_profiler_mailbox (where NCRISC reads config_buffer_addr)
+// _pad[6]  = L1 address of realtime_profiler_mailbox (config_buffer_addr read site)
 // _pad[7]  = raw 32-bit value at that address
 // _pad[8]  = RING_BUFFER_ADDR define value
-// _pad[9]  = socket_reserve_pages entries (incremented just before the blocking call).
-//           If _pad[9] != _pad[10] for a while, NCRISC is stuck waiting for the host
-//           D2H socket receiver, which is the classic "host died mid-run" signature.
-// _pad[10] = socket_reserve_pages exits (incremented once the call returned).
-// _pad[11] = noc_async_write_barrier exits after push_entry_to_host (useful to tell
-//           "stuck in write barrier waiting for NOC credits" from "stuck in reserve_pages").
+// _pad[9]  = socket_reserve_pages entries (bumped before the blocking call)
+// _pad[10] = socket_reserve_pages exits (bumped once the call returned)
+// _pad[11] = noc_async_write_barrier exits after push_entry_to_host
 
 void kernel_main() {
     ring_buffer->_pad[0] = 1;  // stage: kernel started

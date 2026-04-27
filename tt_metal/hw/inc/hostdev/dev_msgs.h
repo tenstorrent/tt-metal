@@ -100,21 +100,12 @@ struct realtime_profiler_timestamp_t {
     uint32_t header;   // Event header/metadata
 };
 
-// Real-time profiler message.
-//
-// Lives in a dedicated L1 region on the dispatch cores and the reserved RT-profiler tensix
-// core, carved by DispatchMemMap via CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG.
-// The base address is propagated to the relevant kernels through the REALTIME_PROFILER_MSG_ADDR
-// compile-time define.
-//
-// The struct holds everything the RT profiler subsystem needs — ping-pong timestamp buffers,
-// state, host<->device sync, and the program-id handoff FIFO between cq_dispatch BRISC
-// (producer) and cq_dispatch_subordinate NCRISC (consumer).
-//
-// The program_id_fifo is sized 32 entries because the dispatcher BRISC pushes to it
-// asynchronously from dispatch_s NCRISC, and BRISC may push up to ~32 kernels before
-// NCRISC drains the first one. Do NOT shrink this without confirming the producer/
-// consumer asynchrony bound.
+// Real-time profiler message. Lives in a dedicated L1 region on the dispatch cores and the
+// reserved RT-profiler tensix core (carved by DispatchMemMap via REALTIME_PROFILER_MSG;
+// address propagated through the REALTIME_PROFILER_MSG_ADDR compile-time define). Holds
+// ping-pong timestamp buffers, state, host<->device sync, and the BRISC->NCRISC program-id
+// handoff FIFO. program_id_fifo is sized 32 to absorb BRISC/NCRISC asynchrony — do not
+// shrink without re-validating the producer/consumer bound.
 struct realtime_profiler_msg_t {
     volatile uint32_t config_buffer_addr;       // Address of D2H socket config buffer in L1
     volatile uint32_t realtime_profiler_state;  // Current state (RealtimeProfilerState enum)

@@ -408,10 +408,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             dispatch_metadata.stall_before_program,
             chip_ids_in_workload);
 
-        // Annotate host-side Tracy zone with encoded program IDs so the host
-        // EnqueueProgram zone can be matched 1:1 with device-side program zones
-        // reported by the real-time profiler (which uses the same encoded ID as
-        // runtime_host_id).
+        // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
+        // with the device-side zones emitted by the real-time profiler.
         if (!tt::tt_metal::getDeviceProfilerState()) {
             std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
             TracyMessage(msg.c_str(), msg.size());

@@ -255,24 +255,12 @@ void dispatch_core_manager::reset_dispatch_core_manager(
             }
         }
 
-        // Reserve a guaranteed-spare tensix for the real-time profiler kernel — MMIO chips only.
-        // Background: get_closest_available_dispatch_core_to_pcie computes "available = pool − assigned",
-        // but RT profiler init runs before any dispatch kernel is assigned, so the entire pool looks
-        // available and the picker can land on a core dispatch will later claim (e.g. (3,7) on N300
-        // nebula_x1, which is dispatch_s under fabric-mux). Reserving the back of the pool here
-        // (dispatch consumes from the front via get_next_available_dispatch_core) makes the slot
-        // permanently invisible to dispatch and removes the race entirely.
-        // - Skipped for remote chips because mesh_device.cpp's is_mmio_capable() guard prevents
-        //   RT profiler from running there; reserving on remote would shrink the dispatch pool for
-        //   no benefit.
-        // - Skipped for ETH dispatch because the pool holds ethernet cores, not tensixes, and RT
-        //   profiler (a worker kernel) cannot use them. Callers fall back to the legacy picker.
-        // - Skipped when the fabric tensix datamover is enabled (MUX or UDM). In those modes the
-        //   fabric mux claims additional dispatch-pool cores at fabric-init time — up to and
-        //   including all remaining slots on small-pool chips like T3K's 2D UDM path. Reserving a
-        //   tensix for RT profiler on top of that tips the pool into exhaustion and triggers the
-        //   "No more available dispatch cores on device N" TT_THROW out of fabric_mux_core(). RT
-        //   profiler is not worth starving fabric for, so we cede the slot back to the pool.
+        // Reserve a tensix for the real-time profiler from the back of the dispatch pool
+        // (dispatch consumes from the front). Skipped when:
+        //   - chip is not MMIO-capable (RT profiler is gated to MMIO chips upstream);
+        //   - dispatch core type is ETH (pool holds ethernet cores, not tensixes);
+        //   - fabric tensix datamover (MUX or UDM) is enabled (it claims dispatch-pool slots
+        //     at fabric-init time and shrinking the pool further can starve fabric_mux_core).
         const bool is_mmio = env.get_cluster().get_associated_mmio_device(device_id) == device_id;
         const bool fabric_tensix_datamover_enabled =
             env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED;
