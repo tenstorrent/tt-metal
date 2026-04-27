@@ -18,29 +18,47 @@ by plumbing `cur_pos` into the kernel and bounding the loop dynamically
 vs baseline BFP8 (37 ms/tok), Full Dequant is now **1.6× from baseline** at
 32L instead of 100×.
 
-### Open issue: e2e output quality is wrong
+### Open issue: e2e output quality is wrong (kernel is correct in isolation)
 
-The kernel itself is correct — `test_paged_fused.py` passes cos > 0.999
-against the torch reference at seqlens 128–2048. **But** end-to-end
-generation (eval_e2e.py 32L) produces garbage tokens regardless of whether
-the cap is applied:
+The kernel itself is correct in isolation — verified against multiple
+torch references:
 
-| Variant | 32L tokens generated for "What is the capital of France?" |
+| Test | Config | cos vs torch | Verdict |
+|---|---|---:|---|
+| `test_paged_fused.py` | seq=128–2048, full-fill, NKH=8/NQH=8 | 0.9996+ | PASS |
+| `test_padded_cache.py` | real=42, max_blocks=1024, cap=1 | 0.9939 | PASS |
+| `test_e2e_writes.py` | + paged_update_cache writes | 0.9996 | PASS |
+| `test_e2e_writes.py` (with GQA + pre-rotated Q) | NQH=32/NKH=8, Q × Π | 0.9996 | PASS |
+| `test_bfp4_roundtrip.py` | BFP4 lossless for integers 0–7 | exact | PASS |
+
+But end-to-end generation (eval_e2e.py 32L) produces garbage:
+
+| Variant | 32L "What is the capital of France?" |
 |---|---|
-| With cap (HEAD) | "OOOOak\nOOak" — random |
-| Without cap (cur_pos plumbed but `valid_k_chunks = k_num_chunks`) | " ( the first, the" — degraded English |
+| Baseline BFP8 (`--no-turbo-quant`) | "The capital of France is Paris" ✓ |
+| BFP4 paged (`--bfp4-cache`, std SDPA) | "The capital of France is Paris" ✓ |
+| TQ Full Dequant, no cap | " ( the first, the" — broken English |
+| TQ Full Dequant, cap=1 (HEAD) | "OOOOak\nOOak" — random |
+| TQ Full Dequant, cap=2 (forced min) | "OOOOOOOOOOOO" — collapse |
+| TQ Full Dequant 1L | "ONUS .bz #..." — random (1L baseline also random) |
 
-Both are wrong. The "without cap" variant is identical to the pre-fix
-behaviour (just iterating all chunks), so this is a **pre-existing** e2e
-correctness bug, not introduced by the cur_pos fix. The PLAN previously
-noted "Full 32-layer test deferred — only logic verified at 2 layers"
-(which was 6.9 ms/tok no-trace, not validated for output text).
+Even with `--no-trace`, `--num-layers 1`, and at single-device, the bug
+persists. The pre-rescaled BFP4 path WORKS — same TQ quantization, just
+stored as `centroid_value × norm` and read by std SDPA. The fused kernel
+which stores `index + norm` separately and dequantizes inside, doesn't.
 
-The cap variant is *differently* wrong than the no-cap variant, suggesting
-some interaction with partially-filled paged cache that doesn't show up in
-the unit test (which uses fully-filled small caches). Hypothesis: zero K/V
-in the unfilled positions of the iterated chunk dilutes the softmax in a
-way the existing kernel was implicitly tolerating across all 256 chunks.
+**Confidence note:** unit tests prove the kernel computes
+`Q × dequant(idx, norm)^T × dequant(idx, norm) = Q × K^T × V` correctly
+even with paged + GQA + pre-rotated Q + 1024-block padding + cap=1.
+But somewhere between the unit test setup and eval_e2e.py's setup,
+something diverges. Bisect candidates not yet exhausted:
+- multi-layer interaction (1L bug looks similar but baseline 1L is also
+  garbage — model needs >1 layer to be coherent)
+- mesh device replication (unit test = single device, e2e = mesh)
+- trace mode (ruled out: `--no-trace` also fails)
+- eval_e2e quantize ordering (RoPE → TQ rotation chain)
+- `paged_update_cache` precision when called repeatedly across steps in
+  trace replay (ruled out by sequential write test)
 
 ### Bottleneck diagnosis trail (for posterity)
 
