@@ -248,20 +248,10 @@ Before trusting a passing test:
 3. Confirm the test file calls that op (grep for `ttnn.op_name` in the test).
 4. Optional paranoid check: introduce a `static_assert(false, "sentinel")` in the kernel, run the test, confirm it FAILS to compile, then revert.
 
-### DEST × CB Capacity Deadlocks (general)
-
-Helpers that hold DEST across multiple tiles while writing to an output CB can deadlock when the output CB is too small to drain. The shape:
-
-- Helper acquires DEST and starts batching `batch_size` tiles.
-- Per-tile pack / push hits `cb_reserve_back` and spin-waits for the writer to drain.
-- The writer cannot drain until DEST is released; DEST cannot release until the batch finishes — **circular wait**.
-
-Generic rule: if the helper exposes a batching control AND a per-tile output policy, ensure the resolved `batch_size ≤ output CB capacity` (read the capacity from the program factory's CB allocation). The helper's header documents its own batching/output enum names and any safety asserts; consult it for the exact knob.
 
 ### Anti-patterns (do NOT do these during migration)
 
 - **Hand-coding around a helper gap.** If an op, policy, or fusion point is missing, fix the helper (Helper Update / Helper Creation) — do not inline a workaround in the kernel.
-- **Restructuring control flow to fit the helper.** If the kernel's runtime conditionals don't fit a single helper call, emit multiple helper calls (one per branch) or leave that branch on raw LLK. Do NOT reshape the kernel's logic.
 - **Batching migrations of unrelated kernels in one commit.** One kernel per commit so failures bisect to a single change.
 - **Silently dropping FP32_DEST_ACC-guarded reconfig calls.** Verify the helper emits an equivalent reconfig (or flag the gap and leave the path on raw LLK).
 - **Marking a kernel NOT-MIGRATED when only some stages are blocked.** Log as PARTIAL, migrate the clean stages, record the specific blocker per blocked stage.
