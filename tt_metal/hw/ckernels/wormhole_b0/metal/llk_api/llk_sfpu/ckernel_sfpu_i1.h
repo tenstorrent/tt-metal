@@ -63,6 +63,13 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // Clamp to [-10, 10]: polynomial extrapolates catastrophically for |x| > 12.
+        sfpi::vFloat lo = -1.0000000000e+01f;
+        sfpi::vec_min_max(lo, x);
+        sfpi::vFloat hi = 1.0000000000e+01f;
+        sfpi::vec_min_max(x, hi);
+
         sfpi::vFloat result =
             piecewise_rational_eval<I1_NUM_DEGREE, I1_DEN_DEGREE, I1_NUM_SEGMENTS, I1_LUT_SIZE, true>(I1_LUT, x);
         sfpi::dst_reg[0] = result;
