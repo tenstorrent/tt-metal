@@ -57,8 +57,9 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     hidden_dim = 512
     num_routed_experts = 64
     num_experts_per_tok = 2
-    # Most conservative factor such that dgs*seq*factor >= theoretical worst-case buffer.
-    dispatch_buffer_capacity_factor = 3
+    # ceil(N/2) of the most conservative integer N such that dgs*seq*N >= theoretical
+    # worst-case dispatch buffer. Real traffic never approaches the worst case.
+    dispatch_buffer_capacity_factor = 2
 
     num_devices = mesh_device.get_num_devices()
     mesh_config = extract_mesh_config(mesh_device)

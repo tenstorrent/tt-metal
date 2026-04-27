@@ -220,8 +220,9 @@ def test_moe_reference_pcc():
     n_shared_experts = 1
     batch_size = 1
     dispatch_group_size = 1  # Single "chip" for host-side test
-    # Most conservative factor such that dgs*seq*factor >= theoretical worst-case buffer.
-    dispatch_buffer_capacity_factor = 16
+    # ceil(N/2) of the most conservative integer N such that dgs*seq*N >= theoretical
+    # worst-case dispatch buffer. Real traffic never approaches the worst case.
+    dispatch_buffer_capacity_factor = 8
 
     logger.debug(f"Test config: seq_len={seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
     logger.debug(f"  n_routed_experts={n_routed_experts}, num_experts_per_tok={num_experts_per_tok}")

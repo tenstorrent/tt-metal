@@ -37,15 +37,16 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 
 
-# dispatch_buffer_capacity_factor below is the most conservative integer such
-# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, dispatch_buffer_capacity_factor, use_gate, model_id, layer_idx",
     [
         # fmt: off
-        pytest.param(32, 64, 128, 24, 4, 4, 3, False, None, None, id="random-weights"),
-        pytest.param(32, 224, 64, 256, 8, 4, 16, True, None, None, id="random-weights-gate"),
-        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,16,False,"deepseek-ai/DeepSeek-V3",3,id="hf-weights",marks=pytest.mark.slow,
+        pytest.param(32, 64, 128, 24, 4, 4, 2, False, None, None, id="random-weights"),
+        pytest.param(32, 224, 64, 256, 8, 4, 8, True, None, None, id="random-weights-gate"),
+        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,8,False,"deepseek-ai/DeepSeek-V3",3,id="hf-weights",marks=pytest.mark.slow,
         ),
         # fmt: on
     ],
