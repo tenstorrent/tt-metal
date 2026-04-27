@@ -105,8 +105,8 @@ ResolvedBindings resolve_bindings(
         for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
             for (const auto& [core, args] : desc.kernels[k].runtime_args) {
                 for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
-                    if (registered_addresses.count(args[i]) &&
-                        !registered_positions.count(rt_binding_key(k, core, i))) {
+                    if (registered_addresses.contains(args[i]) &&
+                        !registered_positions.contains(rt_binding_key(k, core, i))) {
                         TT_FATAL(
                             false,
                             "Kernel {} core ({},{}) arg[{}]={:#x} matches a registered buffer "
@@ -123,8 +123,8 @@ ResolvedBindings resolve_bindings(
             }
             const auto& common = desc.kernels[k].common_runtime_args;
             for (uint32_t i = 0; i < static_cast<uint32_t>(common.size()); ++i) {
-                if (registered_addresses.count(common[i]) &&
-                    !registered_positions.count(rt_binding_key(k, kCommonArgSentinel, i))) {
+                if (registered_addresses.contains(common[i]) &&
+                    !registered_positions.contains(rt_binding_key(k, kCommonArgSentinel, i))) {
                     TT_FATAL(
                         false,
                         "Kernel {} common arg[{}]={:#x} matches a registered buffer address "

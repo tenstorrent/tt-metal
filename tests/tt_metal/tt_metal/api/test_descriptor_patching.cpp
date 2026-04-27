@@ -42,7 +42,7 @@ namespace {
 
 // Build a minimal single-kernel ProgramDescriptor using the blank dataflow kernel.
 // The kernel occupies core {0,0} and all runtime args are set via emplace_runtime_args.
-static KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
+KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
     KernelDescriptor kd;
     kd.kernel_source = "tt_metal/kernels/dataflow/blank.cpp";
     kd.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -51,7 +51,7 @@ static KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
     return kd;
 }
 
-static std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
+std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
     InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::DRAM};
     return CreateBuffer(cfg);
 }
