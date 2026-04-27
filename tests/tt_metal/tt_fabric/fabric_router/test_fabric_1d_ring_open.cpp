@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt::tt_fabric::test_1d_ring {
 
