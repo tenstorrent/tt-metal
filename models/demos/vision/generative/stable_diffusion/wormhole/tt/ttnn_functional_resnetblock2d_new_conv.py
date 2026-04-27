@@ -1,5 +1,5 @@
 // File: models/demos/vision/generative/stable_diffusion/wormhole/tt/ttnn_functional_resnetblock2d_new_conv.py
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,8 +18,8 @@ from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional
     weight_to_bfp8,
 )
 
-# This file is a placeholder for ResNetBlock2D optimization specific to SD 1.4.
-# Currently, no changes are required for the stable diffusion 1.4 model.
+# This file is a test file for model stable diffusion 1.4.
+# No changes are required for the stable diffusion 1.4 model.
 # Any modifications should be scoped to the relevant model and issue.
 # Refer to the specific model's requirements before making changes to this test file.
 
