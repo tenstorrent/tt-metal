@@ -788,13 +788,14 @@ def assert_numeric_metrics(
 
     # Build final message
     if num_checks_enabled == 0:
-        full_message = "No checks enabled"
+        header = "No checks enabled"
     else:
         header = f"Numeric metrics: {num_checks_passed}/{num_checks_enabled} checks passed"
         if not overall_passed:
             header = f"Numeric metrics comparison failed: {num_checks_passed}/{num_checks_enabled} checks passed"
-        full_message = header + "\n" + "\n".join(messages)
 
+    details = "\n".join(messages)
+    full_message = header if not details else header + "\n" + details
     # Return or assert based on flag
     if assert_on_fail:
         assert overall_passed, full_message
