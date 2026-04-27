@@ -335,7 +335,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                                         prev_hb = hb_val;
                                         nonzero_seen = true;
                                     }
-                                } else if ((hb_val >> 16) == 0xABCDu && hb_val != prev_hb) {
+                                } else if (hb_val != prev_hb) {
+                                    // WH heartbeat (0x1F80) is a plain incrementing counter,
+                                    // not 0xABCDxxxx format — just check that the value changed.
                                     ready = true;
                                     break;
                                 }
@@ -503,7 +505,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                                         prev_hb = hb_val;
                                         nonzero_seen = true;
                                     }
-                                } else if ((hb_val >> 16) == 0xABCDu && hb_val != prev_hb) {
+                                } else if (hb_val != prev_hb) {
+                                    // WH heartbeat (0x1F80) is a plain incrementing counter,
+                                    // not 0xABCDxxxx format — just check that the value changed.
                                     ready = true;
                                     break;
                                 }
