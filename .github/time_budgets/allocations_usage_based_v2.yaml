@@ -1,0 +1,124 @@
+# Fractional allocation of each SKU pool per team — usage-based v2.
+# Generated from Snowflake TTDATASF.SW_TEST.CICD_JOB, 28-day window (Apr 2026).
+#
+# Coverage: pipeline_reorg jobs AND all legacy (bucket 2) workflows that run on
+# dedicated hardware. CPU-only build jobs (ubuntu-latest / large-stable runners)
+# and release pipelines (build-test-publish, in-release) are excluded — they do
+# not draw from the hardware pools tracked here.
+#
+# ─── How each estimate was made ─────────────────────────────────────────────
+#
+# Data source
+#   SELECT SPLIT_PART(j.NAME, ' / ', 1) AS workflow_prefix,
+#          j.JOB_LABEL,
+#          SUM(j.JOB_EXECUTION_TIME) / 28.0 * 7 / 3600  AS weekly_hours
+#   FROM   TTDATASF.SW_TEST.CICD_JOB  j
+#   JOIN   TTDATASF.SW_TEST.CICD_PIPELINE p ON j.CICD_PIPELINE_ID = p.CICD_PIPELINE_ID
+#   WHERE  p.PROJECT = 'tt-metal'
+#     AND  p.PIPELINE_START_TS >= DATEADD('day', -28, CURRENT_TIMESTAMP())
+#     AND  j.JOB_EXECUTION_TIME > 0
+#   GROUP BY 1, 2
+#   HAVING weekly_hours > 5
+#
+# Unlike v1 (pipeline_reorg timeout × runs/week), all numbers here are ACTUAL
+# wall-clock execution time averaged over 28 days and scaled to one week.
+# This captures both pipeline_reorg jobs and all legacy workflows in a single pass.
+#
+# SKU mapping  (JOB_LABEL string → hardware pool)
+#   tt-ubuntu-2204-N150-*-stable          → N150   (CIv2 bare-metal Wormhole N150)
+#   tt-ubuntu-2204-N300-*-stable          → N300   (CIv2 bare-metal Wormhole N300)
+#   {N150,N300},in-service[,cloud-vm]     → N150/N300  (cloud or bare-metal WH)
+#   N300,pipeline-perf,bare-metal         → N300   (bare-metal WH N300 perf pool)
+#   config-t3000,arch-wormhole_b0         → LLMBOX (T3000 4-card chassis)
+#   topology-6u,arch-wormhole_b0          → galaxy (6U Galaxy chassis)
+#   multi-host-galaxy / multi-host-glx-*  → galaxy (multi-host Galaxy jobs)
+#   tt-ubuntu-2204-P150b-*-stable         → p150b  (CIv2 Blackhole P150b)
+#   arch-blackhole + BH-LLMBox            → p150b  (BH QuietBox  – 4×P150b)
+#   arch-blackhole + BH-LoudBox           → p150b  (BH LoudBox   – 8×P150b)
+#   arch-blackhole + BH-DeskBox           → p150b  (BH DeskBox   – 2×P150b)
+#   cloud-virtual-machine + P150          → p150b  (cloud P150b)
+#   multi-host-bh-lb-2x,arch-blackhole    → p150b  (multi-host BH LoudBox)
+#   BH-QB-GE / P300-viommu                → p300b  (BH QuietBox2 – 2×P300b)
+#   tt-ubuntu-2204-large-stable / xlarge  → (excluded – CPU-only build runner)
+#
+# Team attribution  (workflow prefix heuristic; legacy workflows have no team: field)
+#
+#   models:   fd-nightly, single-card-*, galaxy-demo-tests, galaxy-model-perf-tests,
+#             models-unit-tests*, models-e2e-tests, models-perf, vllm-tests,
+#             blackhole-demo-tests*, tt-train-*, t3000-demo-tests
+#             Rationale: fast-dispatch nightly model suites, demo tests, vllm serving,
+#             and training jobs are all owned by the models team.
+#
+#   ttnn:     ttnn-unit-tests*, ttnn-smoke-tests*, ttnn-basic-tests*, ttnn-merge-gate-*,
+#             ttnn-examples*, ttnn sweeps {N150,N300,T3K},
+#             galaxy-perf-tests, galaxy-e2e-tests, galaxy-unit-tests, galaxy-sanity-test,
+#             galaxy-integration-tests
+#             Rationale: all TTNN-prefixed regression suites plus the Galaxy test
+#             suites driven by the TTNN team.
+#
+#   runtime:  blackhole-multi-card-{fast-,}unit-tests*, tt-metal-l2-tests*,
+#             t3000-{unit,e2e,integration,perf}-tests, t3000-apc-fast-tests,
+#             fast-dispatch-unit-tests*, metalium-{smoke,basic,examples}*,
+#             cpp-unit-tests*, ops-unit-tests*, sd-unit-tests*, tt-cnn-unit-tests*,
+#             run-profiler-regression*, sanity tests nightly debug run*,
+#             blackhole nightly debug run*, triage-tests*, umd-unit-tests*, fabric-unit-tests*,
+#             device-perf, didt-tests
+#             Rationale: dispatch/metalium/hardware-level tests, multi-card BH suites,
+#             nightly debug runs, and device perf are all runtime-team infrastructure.
+#
+#   scaleout: multi-host-glx-{2x,4x}, multi-host-bh-lb-2x, Galaxy-DeepSeek-tests
+#             Rationale: multi-host topology tests owned by scaleout team.
+#
+#   shield:   ttsim-{integration,unit}-tests
+#             Note: ttsim runs on CPU-only runners (large-stable) and does not consume
+#             any hardware pool — shield's ttsim usage is therefore zero h/wk on HW.
+#
+#   llk:      llk-test-wormhole, llk-test-blackhole
+#             Rationale: LLK kernel test suites; llk-build-quasar is CPU-only (excluded).
+#
+# Excluded workflows
+#   build-artifact, build, build-sweeps, asan-build, build-asan, build-tsan,
+#   code-analysis, clang-tidy-light, build-artifact-profiler, llk-build-quasar,
+#   fabric-cpu-only-unit-tests, Build artifacts (Ubuntu {22,24}.04)
+#     → all run on tt-ubuntu-2204-large-stable (CPU-only runner, no accelerator)
+#   build-test-publish (Ubuntu {22,24}.04) with in-release label
+#     → release pipeline; hardware usage is real but charged to release/infra, not teams
+#   trigger-post-commit
+#     → GHA orchestration job; N300 runner time is coordination overhead, not test time
+#   test-wh-6u-image
+#     → infra image-build smoke test; not a team workload
+#
+# ─── Fractions ───────────────────────────────────────────────────────────────
+# Values sum to ≤ 1.0 per pool. Remainder (if any) = untracked jobs / headroom.
+
+N150:  # 2,697 h/wk total measured
+  models      :  0.30  # 822 h/wk (30%)  – fd-nightly N150, single-card N150
+  ttnn        :  0.23  # 607 h/wk (23%)  – ttnn-unit-tests, ttnn sweeps N150
+  runtime     :  0.41  # 1,107 h/wk (41%) – tt-metal-l2, metalium, cpp/sd-unit, triage
+  llk         :  0.06  # 161 h/wk  (6%)  – llk-test-wormhole (N150)
+
+N300:  # 19,308 h/wk total measured
+  models      :  0.70  # 13,588 h/wk (70%) – fd-nightly N300 (8,218 h), single-card-ttnn-models (3,836 h), single-card-demo, models-unit-tests
+  ttnn        :  0.16  # 3,017 h/wk (16%) – ttnn-unit-tests N300, ttnn sweeps N300, ttnn-merge-gate
+  runtime     :  0.14  # 2,703 h/wk (14%) – t3000-apc-fast (N300-llmbox), tt-metal-l2, cpp-unit, ops-unit, metalium-smoke, sanity-debug, run-profiler, didt
+
+p150b:  # 4,514 h/wk total measured
+  models      :  0.08  # 356 h/wk  (8%)  – fd-nightly P150b, single-card-ttnn-models P150b, models-unit-tests P150
+  ttnn        :  0.24  # 1,073 h/wk (24%) – ttnn-unit-tests P150b (1,013 h), ttnn-basic P150b, ttnn-smoke P150b
+  runtime     :  0.64  # 2,901 h/wk (64%) – blackhole-multi-card (BH-LLMBox/LoudBox/DeskBox/QB2/P300-viommu), tt-metal-l2 P150b, cpp/ops/tt-cnn/sd/triage/run-profiler, blackhole nightly debug
+  scaleout    :  0.01  # 50 h/wk   (1%)  – multi-host-bh-lb-2x
+  llk         :  0.03  # 133 h/wk  (3%)  – llk-test-blackhole (P150b)
+
+p300b:  # 440 h/wk total measured
+  models      :  0.15  # 64 h/wk  (15%) – blackhole-demo-tests (QuietBox 2)
+  runtime     :  0.85  # 376 h/wk (85%) – blackhole-multi-card (QB2/P300-viommu fast+unit tests)
+
+LLMBOX:  # 1,435 h/wk total measured
+  models      :  0.17  # 245 h/wk (17%) – t3000-demo-tests (perf), vllm-tests t3000
+  ttnn        :  0.02  # 33 h/wk   (2%) – ttnn sweeps T3K
+  runtime     :  0.81  # 1,158 h/wk (81%) – t3000-unit/e2e/integration/perf-tests, t3000-apc-fast
+
+galaxy:  # 2,632 h/wk total measured
+  models      :  0.67  # 1,766 h/wk (67%) – galaxy-demo-tests (912 h), galaxy-model-perf (344 h), models-unit-tests galaxy (133 h), models-e2e (136 h), vllm-tests galaxy (241 h)
+  ttnn        :  0.19  # 488 h/wk  (19%) – galaxy-perf-tests (243 h), galaxy-e2e/unit/sanity tests
+  scaleout    :  0.14  # 378 h/wk  (14%) – multi-host-glx-2x (196 h), multi-host-glx-4x (92 h), Galaxy-DeepSeek-tests (90 h)
