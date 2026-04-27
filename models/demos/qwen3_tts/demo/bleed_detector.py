@@ -8,6 +8,7 @@ Uses Whisper word-level timestamps to detect where the target text actually star
 in the generated audio, identifying any prefix content from reference audio bleeding.
 """
 
+import os
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -30,6 +31,12 @@ def _safe_audio_path(path: str, *, must_exist: bool) -> Path:
     if must_exist and not resolved.is_file():
         raise FileNotFoundError(path)
     return resolved
+
+
+def _is_under_root(path: Path, root: Path) -> bool:
+    path_str = str(path)
+    root_str = str(root)
+    return path_str == root_str or path_str.startswith(root_str + os.sep)
 
 
 def detect_bleed(
@@ -171,7 +178,15 @@ def auto_trim_bleed(
         # No significant bleed, just copy
         import shutil
 
-        shutil.copy(str(src), str(dst))
+        src_abs = Path(os.path.abspath(str(src)))
+        dst_abs = Path(os.path.abspath(str(dst)))
+        allowed_roots = (Path.cwd().resolve(), Path.home().resolve(), Path("/tmp").resolve())
+
+        if not all(any(_is_under_root(p, root) for root in allowed_roots) for p in (src_abs, dst_abs)):
+            roots = ", ".join(str(root) for root in allowed_roots)
+            raise ValueError(f"Copy source/destination must resolve under one of: {roots}")
+
+        shutil.copy(str(src_abs), str(dst_abs))
         results["trimmed"] = False
         results["trim_seconds"] = 0
 
