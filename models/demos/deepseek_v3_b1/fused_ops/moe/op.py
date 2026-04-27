@@ -549,11 +549,11 @@ class MoeRoutedExpertOp:
             primary_worker_cores=primary_worker_cores,
         )
 
-        # dram_results layout (one entry per mesh coordinate) is pr42896's 15-element tuple:
+        # dram_results layout (one entry per mesh coordinate) — 17-element tuple:
         #   (dram_backing_tensor, meta_tensors, fmt_dram_info, l1_addrs, per_core_values,
         #    num_in1_buffers, fmt_cb_l1_addr, fmt_sem_addr_0, fmt_sem_addr_1,
         #    fmt_sem_0, fmt_sem_1, partial_sem_addr, pipeline_sem_addr,
-        #    partial_sem, pipeline_sem)
+        #    partial_sem, pipeline_sem, gather_sync_sem_addr, gather_sync_sem)
         # dram_backing_tensor holds in1 + fmt regions fused; buffer_address() seeds cb_in1.
         # l1_addrs per coord = (expert_offsets_l1_addr_core_values, block_sizes_l1_addr_core_values).
         # Cross-device constants (fmt_cb_l1_addr, sem addrs) match across coords by construction.
@@ -574,6 +574,8 @@ class MoeRoutedExpertOp:
             pipeline_sem_addr,
             partial_sem,
             pipeline_sem,
+            gather_sync_sem_addr,
+            gather_sync_sem,
         ) = dram_results[first_coord]
         fmt_dram_tensor = fmt_dram_info["fmt_dram_tensor"]
 
@@ -657,6 +659,12 @@ class MoeRoutedExpertOp:
             "fmt_sem_addr_1": fmt_sem_addr_1,
             "partial_sem_addr": partial_sem_addr,
             "pipeline_sem_addr": pipeline_sem_addr,
+            # gather_to_next is unused in MoE today (gate/up/down don't gather).
+            # Pass 0 + the sem addr so the kernel's CTArgs template instantiates
+            # cleanly; the sem is allocated regardless and the kernel skips all
+            # gather logic when gather_to_next == 0.
+            "gather_to_next": 0,
+            "gather_sync_sem_addr": gather_sync_sem_addr,
             "dram_meta_words_per_block": dram_meta_words_per_block,
             "in0_page_size": in0_page_size,
             # Keep sem objects alive so their L1 allocations aren't reclaimed before
@@ -665,6 +673,7 @@ class MoeRoutedExpertOp:
             "_fmt_sem_1": fmt_sem_1,
             "_partial_sem": partial_sem,
             "_pipeline_sem": pipeline_sem,
+            "_gather_sync_sem": gather_sync_sem,
             "meta_tensors_per_device": meta_tensors_per_device,
             "expert_offsets_l1_addr_per_device": expert_offsets_l1_addr_per_device,
             "block_sizes_l1_addr_per_device": block_sizes_l1_addr_per_device,
@@ -2004,6 +2013,8 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_subblocks_k_local", ctx.gate_proj_params["num_subblocks_k_local"]),
             ("gate_proj_accum_experts", ctx.gate_proj_params["accum_experts"]),
             ("gate_proj_index_offset", 0),
+            ("gate_proj_gather_to_next", ctx.gate_proj_params["gather_to_next"]),
+            ("gate_proj_gather_sync_sem_addr", ctx.gate_proj_params["gather_sync_sem_addr"]),
             # Physical CB base address — used as CBIn1ResetAddr template param so the
             # kernel's software write-pointer wrap aligns with the HW CB's physical
             # wrap boundary across sequential matmuls sharing cb_in1 (GP → UP).
@@ -2038,6 +2049,8 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k_local", ctx.up_proj_params["num_subblocks_k_local"]),
             ("up_proj_accum_experts", ctx.up_proj_params["accum_experts"]),
             ("up_proj_index_offset", 0),
+            ("up_proj_gather_to_next", ctx.up_proj_params["gather_to_next"]),
+            ("up_proj_gather_sync_sem_addr", ctx.up_proj_params["gather_sync_sem_addr"]),
             # down_proj MatmulExpertCompressedDRAM reader
             ("down_proj_cb_in0", ctx.down_proj_cb_in0),
             ("down_proj_cb_in1", ctx.down_proj_cb_in1),
@@ -2067,6 +2080,8 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k_local", ctx.down_proj_params["num_subblocks_k_local"]),
             ("down_proj_accum_experts", ctx.down_proj_params["accum_experts"]),
             ("down_proj_index_offset", 0),
+            ("down_proj_gather_to_next", ctx.down_proj_params["gather_to_next"]),
+            ("down_proj_gather_sync_sem_addr", ctx.down_proj_params["gather_sync_sem_addr"]),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -2245,6 +2260,9 @@ class MoeRoutedExpertOp:
             # Silu fast-path — only used when fuse_silu=1. gate_proj has it; up/down pass 0.
             ("gate_proj_cb_out_silu", ctx.gate_proj_cb_out_silu),
             ("gate_proj_silu_tile_h", ctx.gate_proj_silu_tile_h),
+            ("gate_proj_cores_per_bank", ctx.gate_proj_params["cores_per_bank"]),
+            ("gate_proj_gather_to_next", ctx.gate_proj_params["gather_to_next"]),
+            ("gate_proj_gather_sync_sem_addr", ctx.gate_proj_params["gather_sync_sem_addr"]),
             # Required for MatmulExpertCompressedDRAM ResetCBIn1 template param (referenced in moe_kernel.cpp outer scope)
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             # up_proj MatmulExpertCompressedDRAM compute — shares weight CB with gate_proj
@@ -2276,6 +2294,9 @@ class MoeRoutedExpertOp:
             ("up_proj_fuse_silu", 0),
             ("up_proj_cb_out_silu", 0),
             ("up_proj_silu_tile_h", 0),
+            ("up_proj_cores_per_bank", ctx.up_proj_params["cores_per_bank"]),
+            ("up_proj_gather_to_next", ctx.up_proj_params["gather_to_next"]),
+            ("up_proj_gather_sync_sem_addr", ctx.up_proj_params["gather_sync_sem_addr"]),
             # Mul compute
             ("mul_cb_in0", ctx.mul_cb_in0),
             ("mul_cb_in1", ctx.mul_cb_in1),
@@ -2313,6 +2334,9 @@ class MoeRoutedExpertOp:
             ("down_proj_fuse_silu", 0),
             ("down_proj_cb_out_silu", 0),
             ("down_proj_silu_tile_h", 0),
+            ("down_proj_cores_per_bank", ctx.down_proj_params["cores_per_bank"]),
+            ("down_proj_gather_to_next", ctx.down_proj_params["gather_to_next"]),
+            ("down_proj_gather_sync_sem_addr", ctx.down_proj_params["gather_sync_sem_addr"]),
             # Required by decoder_block_kernel.cpp's DRAMStreamingMatmul CBIn1ResetAddr template param
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Shared matmul-expert compute args (index_offset: 0 for TP8 all-device broadcast)
