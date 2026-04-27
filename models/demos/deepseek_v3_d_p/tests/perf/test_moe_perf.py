@@ -15,29 +15,13 @@ Sum of per-op approximation approximates one glx column's MoE block kernel time;
 the 8x4 ground-truth test is the reference the approximation is compared against.
 """
 
-import os
-
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
+    _is_galaxy_env,
     run_model_device_perf_test_with_merge,
     run_moe_perf_with_approximation,
 )
-
-
-def _is_galaxy_env() -> bool:
-    """Galaxy detection without opening the cluster.
-
-    `conftest.is_galaxy()` calls `ttnn.cluster.get_cluster_type()` which opens the chip
-    cluster as a side effect. When used in a `@skipif` marker (evaluated at collection)
-    or even in-test before `run_device_perf` spawns its tracy subprocess, the parent
-    holds chip locks and the subprocess deadlocks waiting for them.
-
-    CI sets `MESH_DEVICE=TG` for galaxy jobs (see galaxy_deepseek_prefill_tests.yaml
-    and demo_sp_release_tests.yaml).
-    """
-    return os.environ.get("MESH_DEVICE", "").upper() in ("TG", "GALAXY")
-
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe"
 
