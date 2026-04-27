@@ -108,6 +108,11 @@ FORCE_INLINE RemoteReceiverCBInterface& get_remote_receiver_cb_interface(uint32_
     return cb_interface[cb_id].remote_receiver_cb_interface;
 }
 
+__attribute__((noinline)) bool cb_access_within_bounds(uint32_t cb_id, uint32_t start_tile_index, uint32_t num_tiles) {
+    const auto& cb = get_local_cb_interface(cb_id);
+    return cb.fifo_rd_ptr + (start_tile_index + num_tiles) * cb.fifo_page_size <= cb.fifo_limit;
+}
+
 #if defined(COMPILE_FOR_TRISC)
 constexpr uint32_t cb_addr_shift = CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
 #else

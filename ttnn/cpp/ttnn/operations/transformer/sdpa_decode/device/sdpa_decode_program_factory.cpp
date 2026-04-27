@@ -331,12 +331,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     }
 
     // All active cores (for tree reduction lookups)
-    std::vector<uint32_t> reduction_group_core_xs(num_active_cores);
-    std::vector<uint32_t> reduction_group_core_ys(num_active_cores);
+    std::vector<uint32_t> reduction_group_core_xs;
+    std::vector<uint32_t> reduction_group_core_ys;
+    reduction_group_core_xs.reserve(num_active_cores);
+    reduction_group_core_ys.reserve(num_active_cores);
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         auto physical = device->worker_core_from_logical_core(core_group[i]);
-        reduction_group_core_xs[i] = physical.x;
-        reduction_group_core_ys[i] = physical.y;
+        reduction_group_core_xs.push_back(physical.x);
+        reduction_group_core_ys.push_back(physical.y);
     }
 
     log_debug(
@@ -636,7 +638,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
-        reader_compile_time_args_common.push_back(0);
+        tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
 
     std::vector<uint32_t> writer_compile_time_args_common = {

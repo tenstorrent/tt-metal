@@ -22,11 +22,10 @@ void kernel_main() {
     const auto routing_weights_base_address = get_arg_val<uint32_t>(0);
     const auto device_weights_count_offset = get_arg_val<uint32_t>(1);
 
-    const auto routing_weights_addrgen =
-        TensorAccessor(routing_weights_args, routing_weights_base_address, routing_weights_page_size_bytes);
+    const auto routing_weights_addrgen = TensorAccessor(routing_weights_args, routing_weights_base_address);
 
     cb_reserve_back(routing_weights_cb_id, 1);
-    const uint32_t routing_weights_l1_addr = get_read_ptr(routing_weights_cb_id);
+    const uint32_t routing_weights_l1_addr = get_write_ptr(routing_weights_cb_id);
     const uint64_t routing_weights_noc_addr = get_noc_addr(0, routing_weights_addrgen);
     noc_async_read(routing_weights_noc_addr, routing_weights_l1_addr, routing_weights_page_size_bytes);
 

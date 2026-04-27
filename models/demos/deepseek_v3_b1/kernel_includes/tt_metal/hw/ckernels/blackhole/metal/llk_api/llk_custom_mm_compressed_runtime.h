@@ -106,4 +106,71 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
     MATH((_llk_math_custom_mm_<FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
+// Sentinel value for zero tiles in relative-offset fmt metadata.
+constexpr uint32_t ZERO_TILE_SENTINEL = 0xFFFFFF;
+
+/**
+ * @brief DRAM streaming variant with runtime slot base.
+ *
+ * fmt metadata stores [relative_offset:24 | fmt:8] per tile.
+ * Zero tiles use ZERO_TILE_SENTINEL as the offset.
+ * effective_addr = (offset == SENTINEL) ? zero_addr : (slot_base + offset)
+ */
+template <uint32_t KT_DIM, bool FINALIZE = true>
+FORCE_INLINE void custom_mm_compressed_block_runtime_dram(
+    uint32_t fmt_l1_addr,
+    uint32_t addr_in0,
+    uint32_t slot_base,
+    uint32_t zero_addr,
+    uint32_t in0_face_r_dim,
+    uint32_t dst_index) {
+    UNPACK(({
+        volatile uint* cfg = get_cfg_pointer();
+        uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
+        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
+
+        union TileInfo {
+            uint32_t packed;
+            struct {
+                uint8_t fmt;
+                uint32_t addr : 24;
+            };
+        };
+
+        const volatile TileInfo* tile_ptr = reinterpret_cast<const volatile TileInfo*>(fmt_l1_addr);
+
+        wait_for_next_context(1);
+        reset_config_context();
+
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = addr_in0;
+        TT_MOP(0, (KT_DIM / 2) - 1, 0);
+
+        constexpr uint32_t num_pairs = KT_DIM / 2;
+        for (uint32_t pair = 0; pair < num_pairs; pair++) {
+            TileInfo t0, t1;
+            t0.packed = tile_ptr[pair * 2].packed;
+            t1.packed = tile_ptr[pair * 2 + 1].packed;
+
+            uint32_t a0 = (t0.addr == ZERO_TILE_SENTINEL) ? zero_addr : (slot_base + t0.addr);
+            uint32_t a1 = (t1.addr == ZERO_TILE_SENTINEL) ? zero_addr : (slot_base + t1.addr);
+
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = a0;
+            semaphore_post(semaphore::UNPACK_SYNC);
+
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca_raw(cfg, t1.fmt, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = a1;
+            semaphore_post(semaphore::UNPACK_SYNC);
+        }
+
+        wait_for_next_context(1);
+        reset_config_context();
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    }));
+    MATH((_llk_math_custom_mm_<FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, 1)));
+}
+
 }  // namespace compressed

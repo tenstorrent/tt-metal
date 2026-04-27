@@ -181,6 +181,12 @@ public:
             params.core_type == HalProgrammableCoreType::IDLE_ETH) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
+        // We need to disable -mtt-fix-whbhebreak for asserts using ebreak.
+        // After asserts, we don't want to continue code execution, so we don't need 8 nops after ebreak (as it will
+        // unnecessarily grow code size).
+        if (params.rtoptions.get_lightweight_kernel_asserts() || params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-whbhebreak ";
+        }
         return cflags;
     }
 

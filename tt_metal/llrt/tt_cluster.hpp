@@ -337,6 +337,11 @@ public:
 
     tt::TargetDevice get_target_device_type() const { return this->target_type_; }
 
+    /// Returns true if target device is Mock or Emulated (both skip firmware/dispatch).
+    bool is_mock_or_emulated() const {
+        return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
+    }
+
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores

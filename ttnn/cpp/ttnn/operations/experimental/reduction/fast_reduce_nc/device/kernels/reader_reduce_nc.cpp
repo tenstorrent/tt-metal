@@ -41,7 +41,7 @@ void kernel_main() {
 
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
 
-    auto tensor_accessor = TensorAccessor(tensor_args, input_addr, input_tile_bytes);
+    auto tensor_accessor = TensorAccessor(tensor_args, input_addr);
     uint32_t input_granularity_index = 0;
     uint32_t write_offset = 0;
 

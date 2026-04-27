@@ -51,7 +51,6 @@ void kernel_main() {
     constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 5);
     constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 6);
     constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 7);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(args_base + 8);
     constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 9);
     constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 10);
     constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 11);
@@ -67,7 +66,7 @@ void kernel_main() {
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
     // read k, p, temp
 
-    const auto addrg_k = TensorAccessor(k_args, k_addr, 128);
+    const auto addrg_k = TensorAccessor(k_args, k_addr);
     cb_reserve_back(cb_id_k, 1);
     uint32_t cb_id_k_ptr = get_write_ptr(cb_id_k);
     uint64_t k_noc_addr = get_noc_addr(0, addrg_k);
@@ -79,7 +78,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint32_t k = k_ptr[core_id];
 
-    const auto addrg_p = TensorAccessor(p_args, p_addr, 64);
+    const auto addrg_p = TensorAccessor(p_args, p_addr);
     cb_reserve_back(cb_id_p, 1);
     uint32_t cb_id_p_ptr = get_write_ptr(cb_id_p);
     uint64_t p_noc_addr = get_noc_addr(0, addrg_p);
@@ -91,7 +90,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint32_t p = p_ptr[core_id];
 
-    const auto addrg_temp = TensorAccessor(temp_args, temp_addr, 64);
+    const auto addrg_temp = TensorAccessor(temp_args, temp_addr);
     // cb_reserve_back(cb_id_temp, 1);
     uint32_t cb_id_temp_ptr = get_write_ptr(cb_id_temp);
     uint64_t temp_noc_addr = get_noc_addr(0, addrg_temp);
@@ -220,7 +219,7 @@ void kernel_main() {
     cb_pop_front(output_local_indices_cb_index, 1);
     cb_pop_front(output_final_indices_rm_cb_index, 32);
 
-    const auto s_out = TensorAccessor(dst_args, dst_addr, out_stick_size);
+    const auto s_out = TensorAccessor(dst_args, dst_addr);
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
     // Write individual core result - output buffer should handle alignment
     noc_async_write(out_addr + core_id * 4, dst_noc_addr + core_id * 4, 4);

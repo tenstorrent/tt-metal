@@ -51,36 +51,17 @@ jobs:
           # Define all test groups as YAML (test-type: "fast" = run when fast-only; others run in full matrix)
           # Convert to JSON for jq filtering; multi-line cmd blocks stay readable
           all_tests_yaml=$(cat <<'YAML_EOF'
-          - name: fabric fast unit tests (1D, 2D, system health)
+          - name: fabric fast unit tests (1D, 2D, single erisc)
             cmd: |
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-              ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
+              TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
             timeout: 15
-            test-type: fast
-          - name: Sockets fast unit test
-            cmd: |
-              ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
-            timeout: 10
             test-type: fast
           - name: Host IO fast unit test (viommu only)
             cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
             timeout: 10
             test-type: fast-viommu
-          - name: cpp fast unit tests (eth, single erisc)
-            cmd: |
-              ./build/test/tt_metal/unit_tests_eth
-              TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
-              TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
-            timeout: 15
-            test-type: fast
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
             cmd: |
               pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
@@ -130,7 +111,9 @@ jobs:
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and pcc_check' -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short
-            timeout: 45
+              pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -vvv --tb=short --timeout=900
+              pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short
+            timeout: 60
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
@@ -138,7 +121,9 @@ jobs:
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc" --timeout 1800
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check' -vvv --tb=short
-            timeout: 40
+              pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py -vvv --tb=short
+            timeout: 25
             test-type: qb
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill

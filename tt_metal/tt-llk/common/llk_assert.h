@@ -6,7 +6,7 @@
 
 #ifdef ENABLE_LLK_ASSERT
 
-#ifdef ENV_LLK_INFRA
+#if defined(ENV_LLK_INFRA) || defined(ENABLE_LLK_ASSERT_ONLY)
 
 #define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
 
@@ -26,7 +26,7 @@
 
 #define LLK_ASSERT(condition, message) ASSERT(condition)
 
-#endif // ENV_LLK_INFRA
+#endif // defined(ENV_LLK_INFRA) || defined(ENABLE_LLK_ASSERT_ONLY)
 
 #else
 

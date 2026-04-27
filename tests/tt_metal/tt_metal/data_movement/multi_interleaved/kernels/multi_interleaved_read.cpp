@@ -30,7 +30,7 @@ void kernel_main() {
     // Tensor accessor compile time args appended to kernel's compile time args
     // so the index is offset to start at 6
     auto args = TensorAccessorArgs<6>();
-    auto s = TensorAccessor(args, src_addr, page_size_bytes);
+    auto s = TensorAccessor(args, src_addr);
 
     constexpr uint32_t transaction_size_bytes = page_size_bytes;
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);

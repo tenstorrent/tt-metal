@@ -18,7 +18,7 @@ void kernel_main() {
     uint32_t tensor_volume = get_compile_time_arg_val(args_dst.next_compile_time_args_offset() + 2);
     uint32_t output_base_address = get_common_arg_val<uint32_t>(0);
 
-    auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address, page_size);
+    auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address);
 
     // Iterate over all pages in the tensor and write them from CB
     // For interleaved tensors, we need to pass start_page_id and end_page_id to pages()

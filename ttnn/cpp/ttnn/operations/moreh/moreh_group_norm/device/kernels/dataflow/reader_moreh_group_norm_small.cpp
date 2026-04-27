@@ -67,15 +67,15 @@ void kernel_main() {
 
     // input
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     // gamma
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr);
 
     // beta
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto beta_addrg = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
+    const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 
     const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
     uint32_t input_tile_idx;

@@ -71,6 +71,8 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
 
+    LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");
+
     LLK_ASSERT(
         (is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
             unpack_src_format[operand_id],
@@ -96,6 +98,8 @@ inline void llk_unpack_A_block(
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
     std::uint32_t address = base_address + start_tile_index * offset_address;
+
+    LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");

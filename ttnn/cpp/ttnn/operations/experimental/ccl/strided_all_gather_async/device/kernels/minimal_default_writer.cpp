@@ -103,7 +103,7 @@ void kernel_main() {
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
-    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, output_page_size);
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;

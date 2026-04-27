@@ -119,8 +119,9 @@ struct KVCacheUpdate {
         void signal_cache_ready([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 constexpr uint8_t WRITE_NOC = 0;
+                static_assert(
+                    noc_mode == DM_DYNAMIC_NOC || WRITE_NOC == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
                 uint32_t target_core_idx = (args.local_cur_pos / args.k_chunk_size) % args.num_cores_per_head;
                 uint64_t sem_noc_addr = get_noc_addr(
                     args.mla_sender_noc_x[target_core_idx],
@@ -194,7 +195,6 @@ struct KVCacheUpdate {
             // ============================================================
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                constexpr uint32_t PAGE_SIZE = 1088;
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
                 constexpr uint32_t nope_num_pages = 16;
@@ -204,7 +204,7 @@ struct KVCacheUpdate {
                 uint32_t cur_pos = args.local_cur_pos;
 
                 constexpr auto k_args = TensorAccessorArgs<0>();
-                auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr, PAGE_SIZE);
+                auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr);
 
                 uint32_t kv_cache_page_id_start = cur_pos / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
                 if constexpr (IsRopeCore) {

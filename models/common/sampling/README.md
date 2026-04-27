@@ -75,6 +75,24 @@ sub_core_grids            # CoreRangeSet or None
 model_config: dict        # keys: GALAXY_NUM_LINKS, DECODE_SAMPLING_INPUT_MEMCFG, SAMPLING_AG_CONFIG
 ```
 
+## `data_parallel` vs `sampling_dp`
+
+These are different concepts and should not be mixed:
+
+- **`data_parallel`** lives above this package. It means multiple TT model
+  instances / submeshes process different requests in parallel.
+- **`sampling_dp`** lives inside this package. It means one TT model instance
+  has multiple independent sampling groups, usually one per mesh row.
+
+For `sampling_dp > 1`:
+- logits are still computed per sampling group
+- but sampling params, seeds, and penalty state are flattened to
+  `max_batch_size * sampling_dp`
+- those flattened host tensors are then row-sharded onto the device
+
+Decode already follows this contract by using `chunk_sampling_params(...)`
+plus `apply_decode_state(...)`.
+
 ## Param Distribution API
 
 **`SamplingParams`**: Canonical dataclass for sampling parameters (temp, top_k, top_p, penalties, seed, log_probs). Import from `models.common.sampling`. vLLM has its own duck-type-compatible `TTSamplingParams`.
@@ -92,6 +110,11 @@ model_config: dict        # keys: GALAXY_NUM_LINKS, DECODE_SAMPLING_INPUT_MEMCFG
 **`padded_vocab_size` vs `vocab_size`**: TTSampling device offsets for global token IDs must use the padded vocab size to match how the LM head shards logits across devices. Using unpadded `vocab_size` for offsets shifts token IDs from devices 1+ and produces garbled output.
 
 **`sampling_dp`**: When >1, k/p/temp tensors must have length `max_batch_size * sampling_dp` and are row-sharded via `ShardTensor2dMesh(dims=(0, None))`. Use `chunk_sampling_params` + `apply_decode_state` to distribute params across mesh rows.
+
+**Batched prefill + on-device sampling**: This path is only valid when the
+runtime prefill compute layout matches the sampling-group layout. If a model
+uses `sampling_dp > 1` but does not expose a row-sharded batched-prefill input
+contract, batched prefill must fall back to sequential prefill for correctness.
 
 **Trace invalidation**: Changing `force_argmax_sampling` state invalidates captured traces. Force-argmax is triggered when callers pass k=1, p=1.0, temp=1.0 (note: p=1.0 means "no top-p filtering", distinct from the internal initialization default of p=0). `SamplingGenerator.reset_sampling_params` handles this.
 

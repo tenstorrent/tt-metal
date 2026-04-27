@@ -27,7 +27,7 @@ void kernel_main() {
     const uint32_t out_tile_size = get_tile_size(out_cb_id);
 
     // Create tensor accessor
-    const auto output_accessor = TensorAccessor(output_args, output_addr, out_tile_size);
+    const auto output_accessor = TensorAccessor(output_args, output_addr);
 
     // Write output rows in blocks
     for (uint32_t row_idx = 0; row_idx < num_rows; ++row_idx) {

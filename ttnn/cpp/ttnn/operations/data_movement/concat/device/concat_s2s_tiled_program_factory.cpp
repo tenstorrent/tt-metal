@@ -119,11 +119,12 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     const uint32_t tile_size = tt::tile_size(data_format);
 
     const uint32_t num_input_tensors = input_tensors.size();
-    std::vector<CBHandle> cb_inputs(num_input_tensors);
+    std::vector<CBHandle> cb_inputs;
+    cb_inputs.reserve(num_input_tensors);
     for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
         const Tensor& input_tensor = input_tensors.at(idx);
         const uint32_t total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_each_input_shard[idx]);
-        cb_inputs[idx] = create_cb_from_tensor(idx, input_tensor, total_num_tiles);
+        cb_inputs.push_back(create_cb_from_tensor(idx, input_tensor, total_num_tiles));
     }
 
     const uint32_t cb_output_id = cb_inputs.size();

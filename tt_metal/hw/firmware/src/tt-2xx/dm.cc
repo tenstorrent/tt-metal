@@ -136,6 +136,7 @@ inline void run_triscs(uint32_t enables) {
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
     DEVICE_PRINT("DM-FW: running TRISCs {}\n", enables);
+    invalidate_trisc_instruction_cache();
     if (enables &
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;

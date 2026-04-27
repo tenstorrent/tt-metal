@@ -29,7 +29,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt b = sfpi::abs(b_orig);
 
     // Convert to floats, but check for the edge case mentioned above.
-    sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
+    sfpi::vFloat b_f = sfpi::int32_to_float(b, sfpi::RoundMode::NearestEven);
     v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
     v_endif;
 
@@ -43,7 +43,7 @@ sfpi_inline void calculate_div_int32_body(
     e = e * e + e;
     sfpi::vInt a = sfpi::abs(a_orig);
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
+    sfpi::vFloat a_f = sfpi::int32_to_float(a, sfpi::RoundMode::NearestEven);
     v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
     v_endif;
 
@@ -70,12 +70,12 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
+    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), sfpi::RoundMode::NearestEven);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
     sfpi::vInt b1 = b >> 23;
-    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
+    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, sfpi::RoundMode::NearestEven);
 
     // Compute tmp = correction * b.
     b1 = __builtin_rvtt_sfpmul24(correction.get(), b1.get(), 0);

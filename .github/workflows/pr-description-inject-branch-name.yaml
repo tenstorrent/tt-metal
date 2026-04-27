@@ -37,50 +37,28 @@ jobs:
               { name: "Sanity tests",                  workflow: "sanity-tests.yaml",               optional: false },
               { name: "Blackhole post-commit",          workflow: "blackhole-post-commit.yaml",      optional: false },
               { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
+              { name: "All Model Tests",               workflow: "all-model-tests.yaml",            optional: true  },
               { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",            optional: true  },
               { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",        optional: true  },
               { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml",     optional: true  },
             ];
 
-            const rows = [];
+            const badges = [];
             for (const p of pipelines) {
               // Include branch filter so the link lands on runs for this PR's branch
               const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}?query=branch:${branchName}`;
               const badgeUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}/badge.svg?branch=${branchName}`;
-              const optionalTag = "";  // all pipelines are opt-in; no label needed
 
-              let runLink;
-              try {
-                const runsResp = await github.rest.actions.listWorkflowRuns({
-                  owner,
-                  repo,
-                  workflow_id: p.workflow,
-                  branch: branchName,
-                  per_page: 1,
-                });
-
-                if (runsResp.data.total_count === 0) {
-                  runLink = `[Launch ↗](${dispatchUrl})`;
-                } else {
-                  const run = runsResp.data.workflow_runs[0];
-                  runLink = `[#${run.run_number}](${run.html_url})`;
-                }
-              } catch (e) {
-                runLink = `[Launch ↗](${dispatchUrl})`;
-              }
-
-              // Badge image in status column: always live, auto-updates between pushes too
-              const statusBadge = `[![](${badgeUrl})](${dispatchUrl})`;
-              rows.push(`| [${p.name}](${dispatchUrl})${optionalTag} | ${statusBadge} | ${runLink} |`);
+              // Badge is live (re-rendered on every page load) and includes the pipeline name.
+              // Clicking it filters to runs for this branch.
+              badges.push(`- [![](${badgeUrl})](${dispatchUrl})`);
             }
 
             const statusSection = [
               "### CI Status",
-              "_Auto-generated on every push. Badges update live. Click a pipeline name or badge to filter by this branch._",
+              "_Auto-generated on every push. Badges update live. Click a badge to filter runs by this branch._",
               "",
-              "| Pipeline | Status | Latest Run |",
-              "|---|:---:|---|",
-              ...rows,
+              badges.join("\n"),
             ].join("\n");
 
             // Replace existing CI Status section if present, otherwise append

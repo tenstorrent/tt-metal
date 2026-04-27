@@ -39,8 +39,8 @@ void kernel_main() {
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
-    const auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
-    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
+    const auto s_src = TensorAccessor(s_src_args, src_base_addr);
+    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
     // CB in L1 memory for storing input
     const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);

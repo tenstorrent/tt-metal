@@ -14,6 +14,8 @@ import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc, torch_random, is_wormhole_b0
 from loguru import logger
 
+TEST_PADDING_VALUE = -42
+
 
 def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
     """
@@ -640,6 +642,7 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
 
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device)
+    ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_errored = False
     try:
@@ -761,6 +764,7 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
 
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device)
+    ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_errored = False
     try:
@@ -929,7 +933,7 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
 
 # (2, 2, 32, 64) shape hangs the test. Issue #39795
 # @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (2, 2, 32, 64), (1, 1, 0, 64)])
-@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64)])
+@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64), (1, 1, 15, 23)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_moe(device, tensor_shape, dtype, layout):
@@ -992,8 +996,11 @@ def test_moe(device, tensor_shape, dtype, layout):
     ttnn_errored = False
     try:
         ttnn_input = ttnn.from_torch(torch_input, layout=layout, device=device)
+        ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
         ttnn_expert_mask = ttnn.from_torch(expert_mask, layout=layout, device=device)
+        ttnn_expert_mask = ttnn.fill_implicit_tile_padding(ttnn_expert_mask, TEST_PADDING_VALUE)
         ttnn_topE_mask = ttnn.from_torch(topE_mask, layout=layout, device=device)
+        ttnn_topE_mask = ttnn.fill_implicit_tile_padding(ttnn_topE_mask, TEST_PADDING_VALUE)
         ttnn_result = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
     except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
@@ -1039,7 +1046,7 @@ def test_moe(device, tensor_shape, dtype, layout):
     ), f"Preallocated moe result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
 
 
-@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 32, 0)])
+@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 32, 0), (1, 1, 18, 22)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_sampling(device, tensor_shape, dtype, layout):
@@ -1084,6 +1091,7 @@ def test_sampling(device, tensor_shape, dtype, layout):
     ttnn_errored = False
     try:
         input_values = ttnn.from_torch(torch_values, layout=layout, device=device)
+        input_values = ttnn.fill_implicit_tile_padding(input_values, TEST_PADDING_VALUE)
         input_indices = ttnn.from_torch(
             torch_indices,
             dtype=ttnn.int32,

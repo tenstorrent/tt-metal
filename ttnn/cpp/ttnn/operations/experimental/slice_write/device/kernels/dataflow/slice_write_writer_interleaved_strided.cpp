@@ -81,6 +81,8 @@ void kernel_main() {
     constexpr uint32_t element_size = get_compile_time_arg_val(4);
     constexpr auto dst_args = TensorAccessorArgs<5>();
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
     uint32_t dst_stick_id = start_id;

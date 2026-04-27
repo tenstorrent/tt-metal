@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
 #ifdef USE_SPECIAL_CASE
@@ -21,14 +22,17 @@ void kernel_main() {
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(2);
 
+    experimental::CircularBuffer cb_in(cb_in0);
+    experimental::CircularBuffer cb_out(cb_out0);
+
     if (read_single_h_block_per_core) {
         uint32_t write_stick_stride = stick_size_bytes * num_cores_read;
         uint32_t l1_write_offset = 0;
 
         for (uint32_t core = 0; core < num_cores_read; ++core) {
-            uint32_t l1_read_addr = get_read_ptr(cb_in0) + read_stick_offset[core];
+            uint32_t l1_read_addr = cb_in.get_read_ptr() + read_stick_offset[core];
             uint64_t noc_read_addr = get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr);
-            uint32_t l1_write_addr = get_write_ptr(cb_out0) + l1_write_offset;
+            uint32_t l1_write_addr = cb_out.get_write_ptr() + l1_write_offset;
 
             noc_async_read_one_packet_set_state(noc_read_addr, stick_size_bytes);
 
@@ -41,8 +45,8 @@ void kernel_main() {
             noc_async_read_barrier();
         }
     } else {
-        uint32_t l1_write_addr = get_write_ptr(cb_out0);
-        uint32_t l1_read_addr = get_read_ptr(cb_in0);
+        uint32_t l1_write_addr = cb_out.get_write_ptr();
+        uint32_t l1_read_addr = cb_in.get_read_ptr();
 
         for (uint32_t c = 0; c < num_C_blocks_per_core; ++c) {
             for (uint32_t core = 0; core < num_cores_read; ++core) {
@@ -91,8 +95,11 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    cb_reserve_back(cb_out0, num_sticks_per_core);
-    uint32_t l1_write_addr = get_write_ptr(cb_out0);
+    experimental::CircularBuffer cb_in(cb_in0);
+    experimental::CircularBuffer cb_out(cb_out0);
+
+    cb_out.reserve_back(num_sticks_per_core);
+    uint32_t l1_write_addr = cb_out.get_write_ptr();
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core; ++iter) {
@@ -117,7 +124,7 @@ void kernel_main() {
             worker_y_physical = shard_grid_y_map[shard_grid_inner_dim_id];
         }
 
-        uint32_t l1_read_addr = get_read_ptr(cb_in0) + stick_id_in_shard * stick_size_bytes;
+        uint32_t l1_read_addr = cb_in.get_read_ptr() + stick_id_in_shard * stick_size_bytes;
 
         uint64_t read_noc_addr = get_noc_addr(worker_x_physical, worker_y_physical, l1_read_addr);
         noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
@@ -140,7 +147,7 @@ void kernel_main() {
     }
 
     noc_async_read_barrier();
-    cb_push_back(cb_out0, num_sticks_per_core);
+    cb_out.push_back(num_sticks_per_core);
 
 #endif
 }

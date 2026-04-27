@@ -263,8 +263,8 @@ void kernel_main() {
         fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
     }
 
-    const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size);
-    const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size);
+    const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt);
+    const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt);
 #endif
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
@@ -272,8 +272,8 @@ void kernel_main() {
     constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
     constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
-    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, DHt);

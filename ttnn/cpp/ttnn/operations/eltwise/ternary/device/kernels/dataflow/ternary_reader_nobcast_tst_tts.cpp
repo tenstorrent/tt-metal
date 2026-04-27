@@ -23,8 +23,8 @@ void kernel_main() {
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
     const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
     const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes_0);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, tile_bytes_1);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     constexpr uint32_t onetile = 1;
 

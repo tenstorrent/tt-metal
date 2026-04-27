@@ -144,7 +144,7 @@ void kernel_main() {
     constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tile_height;
     constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
-    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();

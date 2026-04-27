@@ -39,6 +39,8 @@ void kernel_main() {
     if constexpr (is_non_aligned) {
         misalignment = (src_addr % src_buffer_alignment);
     }
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(src_args, src_addr - misalignment, padded_stick_size);
 
 #ifdef DEBUG

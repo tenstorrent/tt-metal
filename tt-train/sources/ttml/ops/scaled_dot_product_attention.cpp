@@ -104,10 +104,11 @@ void validate_qkv_shapes(
         value->get_value().logical_shape().to_array_4D();
 
     if (batch_num != batch_num_key || batch_num != batch_num_value || seq_len_key != seq_len_value ||
-        embedding_dim != embedding_dim_key || embedding_dim != embedding_dim_value) {
+        embedding_dim != embedding_dim_key) {
         throw std::invalid_argument(fmt::format(
-            "Query, key, and value must have matching batch_num and embedding_dim. Key and value must have matching "
-            "seq_len. Got shapes: query={}, key={}, value={}",
+            "Query and key must have matching batch_num and embedding_dim. Value must also have matching "
+            "batch_num. Key and value must have matching seq_len. Value embedding_dim may differ. "
+            "Got shapes: query={}, key={}, value={}",
             query->get_value().logical_shape(),
             key->get_value().logical_shape(),
             value->get_value().logical_shape()));
@@ -266,7 +267,7 @@ autograd::TensorPtr scaled_dot_product_attention(
         /*return_intermediates=*/true);  // Need intermediates for backward pass
 
     auto attn_output = fw_result[0].value();    // (B, H, S, D)
-    auto intermediates = fw_result[1].value();  // (B, H, S, 2 tiles) - stores [max_val, 1/sum_exp] per row for softmax
+    auto intermediates = fw_result[1].value();  // (B, H, S, 32) FP32 logsumexp per row for softmax
 
     auto out = ttml::autograd::create_tensor(attn_output);
 

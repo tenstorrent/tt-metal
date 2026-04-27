@@ -4028,6 +4028,7 @@ class MoeOp:
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
                 ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
+                ("reduce_enable_downstream_socket", 1 if self.downstream_sockets else 0),
             ]
         )
         self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])

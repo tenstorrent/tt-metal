@@ -42,12 +42,12 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_query);
 
-    const auto query_address_generator = TensorAccessor(query_args, query_address, tile_bytes);
-    const auto key_address_generator = TensorAccessor(key_args, key_address, tile_bytes);
-    const auto value_address_generator = TensorAccessor(value_args, value_address, tile_bytes);
+    const auto query_address_generator = TensorAccessor(query_args, query_address);
+    const auto key_address_generator = TensorAccessor(key_args, key_address);
+    const auto value_address_generator = TensorAccessor(value_args, value_address);
 
 #ifdef USE_ATTN_MASK
-    const auto mask_address_generator = TensorAccessor(mask_args, mask_address, tile_bytes);
+    const auto mask_address_generator = TensorAccessor(mask_args, mask_address);
 #endif
 
     // Note: Tile generation (reduction_scaler, matmul_reduce, causal_mask) moved to writer kernel

@@ -44,7 +44,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
 
     // Generate constant tiles for reduce scalar
     uint32_t scaler = get_arg_val<uint32_t>(8);

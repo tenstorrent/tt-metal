@@ -240,11 +240,10 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
-    const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
-    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
-    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
-    const auto cu_window_seqlens_reader =
-        TensorAccessor(cu_window_seqlens_args, cu_window_seqlens_addr, cu_window_seqlens_tile_bytes);
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
+    const auto cu_window_seqlens_reader = TensorAccessor(cu_window_seqlens_args, cu_window_seqlens_addr);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);

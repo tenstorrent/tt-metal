@@ -37,6 +37,7 @@
 #if defined(COMPILE_FOR_TRISC)
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/pack_block.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -244,11 +245,8 @@ public:
 private:
     void impl([[maybe_unused]] const ReceiverArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (CTArgs::has_residual) {
-            cb_reserve_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
-            cb_push_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
-        }
-
+        // Note: residual CB lifecycle is handled by the caller (kernel NOC-copies
+        // the residual slice and does cb_reserve_back/cb_push_back before Reader runs).
         cb_reserve_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
         cb_reserve_back(CTArgs::remote_data_cb_id, CTArgs::total_num_tiles);
         constexpr uint32_t local_payload_bytes = CTArgs::total_num_tiles * CTArgs::page_size_bytes;
@@ -338,8 +336,8 @@ private:
 
             for (uint32_t i = 0; i < batch_size; ++i) {
                 add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, start_tile + i);
-                pack_tile(start_tile + i, cb_out);
             }
+            pack_block_contiguous(start_tile, cb_out, batch_size);
 
             if (batch == num_batches - 1) {
                 tile_regs_commit();
@@ -359,11 +357,12 @@ private:
 
     void impl() {
 #if defined(COMPILE_FOR_TRISC)
-        reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
-        pack_reconfig_data_format<true>(CTArgs::cb_out);
-
         // TODO: Fix this to account for actual dst size
         static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
+
+        reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
+        pack_reconfig_data_format<true>(CTArgs::cb_out);
+        pack_block_contiguous_init(CTArgs::cb_out);
 
         if constexpr (CTArgs::has_residual) {
             copy_tile_to_dst_init_short(CTArgs::cb_residual);

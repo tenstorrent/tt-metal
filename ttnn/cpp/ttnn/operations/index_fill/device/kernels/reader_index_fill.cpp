@@ -32,8 +32,8 @@ void kernel_main() {
     constexpr uint32_t fill_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t onepage = 1;
 
-    const auto s0 = TensorAccessor(input_args, input_buffer_address, input_page_size);
-    const auto s1 = TensorAccessor(index_args, index_buffer_address, index_total_size);
+    const auto s0 = TensorAccessor(input_args, input_buffer_address);
+    const auto s1 = TensorAccessor(index_args, index_buffer_address);
 
     // Read the entire index tensor into L1
     cb_reserve_back(index_cb_id, onepage);
