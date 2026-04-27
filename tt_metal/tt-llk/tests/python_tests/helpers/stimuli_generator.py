@@ -6,6 +6,7 @@ import math
 import torch
 
 from .bfp_format_utils import bfp4b_to_float16b
+from .deprecation import deprecated
 from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
 from .llk_params import format_dict
 from .tile_constants import (
@@ -526,6 +527,7 @@ def _clamp_mx_tensors(
     return srcA_tensor, srcB_tensor
 
 
+@deprecated("Use generate_stimuli_v2 from helpers.stimuli_generator_v2 instead.")
 def generate_stimuli(
     stimuli_format_A=DataFormat.Float16_b,
     input_dimensions_A=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
@@ -612,6 +614,7 @@ def generate_stimuli(
     return srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B
 
 
+@deprecated("Use generate_stimuli_v2 from helpers.stimuli_generator_v2 instead.")
 def generate_stimuli_w_tile_dimensions(
     stimuli_format_A=DataFormat.Float16_b,
     input_dimensions_A=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],

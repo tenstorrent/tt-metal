@@ -379,7 +379,7 @@ def test_sfpu_binary_bcast(
 
     input_dimensions = [32, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
