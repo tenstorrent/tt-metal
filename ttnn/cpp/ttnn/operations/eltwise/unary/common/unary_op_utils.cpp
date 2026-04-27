@@ -1005,23 +1005,24 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 }
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    using namespace std::string_view_literals;
     switch (op_type) {
         case UnaryOpType::LGAMMA:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
 
             if (input_dtype.value() == DataType::BFLOAT16) {
-                return "lgamma_fast_kernel.cpp";
+                return "lgamma_fast_kernel.cpp"sv;
             }
-            return "lgamma_kernel.cpp";
-        case UnaryOpType::MISH: return "mish_kernel.cpp";
-        case UnaryOpType::TANHSHRINK: return "tanhshrink_kernel.cpp";
-        case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
-        case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
-        case UnaryOpType::LOGIT: return "logit_kernel.cpp";
-        case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
-        case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
-        default: return "eltwise_sfpu.cpp";
+            return "lgamma_kernel.cpp"sv;
+        case UnaryOpType::MISH: return "mish_kernel.cpp"sv;
+        case UnaryOpType::TANHSHRINK: return "tanhshrink_kernel.cpp"sv;
+        case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp"sv;
+        case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp"sv;
+        case UnaryOpType::LOGIT: return "logit_kernel.cpp"sv;
+        case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp"sv;
+        case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp"sv;
+        default: return "eltwise_sfpu.cpp"sv;
     }
 }
 

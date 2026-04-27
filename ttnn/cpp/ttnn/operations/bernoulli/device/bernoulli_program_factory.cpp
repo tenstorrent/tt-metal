@@ -89,19 +89,12 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
 
     // ---- Kernels ----
 
-    static constexpr const char* READER_KERNEL_PATH =
-        "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/reader_bernoulli.cpp";
-    static constexpr const char* WRITER_KERNEL_PATH =
-        "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/writer_bernoulli.cpp";
-    static constexpr const char* COMPUTE_KERNEL_PATH =
-        "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/compute_bernoulli.cpp";
-
     // Reader kernel
     KernelDescriptor::CompileTimeArgs reader_compile_time_args{in_cb_id};
     TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = READER_KERNEL_PATH;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/reader_bernoulli.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_compile_time_args;
@@ -124,7 +117,7 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     }
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = WRITER_KERNEL_PATH;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/writer_bernoulli.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = writer_compile_time_args;
@@ -138,7 +131,7 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/compute_bernoulli.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = compute_compile_time_args;

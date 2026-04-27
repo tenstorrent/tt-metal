@@ -78,118 +78,77 @@ std::string BinaryNgKernelConfig::bcast_input_str() const {
     return "";
 }
 
-std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
-    // Path constants are declared constexpr so the string data lives in read-only storage;
-    // each call copies into a std::string (safe for descriptor ownership).
-    static constexpr const char* READER_NO_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp";
-    static constexpr const char* READER_ROW_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_row_bcast.cpp";
-    static constexpr const char* READER_COL_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_col_bcast.cpp";
-    static constexpr const char* READER_ROW_COL_MIXED_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/"
-        "reader_interleaved_row_col_mixed_bcast.cpp";
-    static constexpr const char* READER_SCALAR_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_scalar_bcast.cpp";
-    static constexpr const char* READER_RM_NO_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_no_bcast.cpp";
-    static constexpr const char* READER_RM_ROW_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_row_bcast.cpp";
-    static constexpr const char* READER_RM_COL_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_col_bcast.cpp";
-    static constexpr const char* READER_RM_ROW_COL_MIXED_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/"
-        "reader_interleaved_rm_row_col_mixed_bcast.cpp";
-    static constexpr const char* READER_RM_SCALAR_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_scalar_bcast.cpp";
-    static constexpr const char* READER_RM_SCALAR_OP_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_scalar_op.cpp";
-    static constexpr const char* WRITER_RM_NO_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_rm_no_bcast.cpp";
-    static constexpr const char* WRITER_NO_BCAST_NG =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp";
-    static constexpr const char* READER_NO_BCAST =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/reader_interleaved_no_bcast.cpp";
-    static constexpr const char* WRITER_SCALAR =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/writer_interleaved_scalar.cpp";
-
-    static constexpr const char* COMPUTE_NO_BCAST_WHERE =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_no_bcast.cpp";
-    static constexpr const char* COMPUTE_NO_BCAST_SFPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp";
-    static constexpr const char* COMPUTE_NO_BCAST_FPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp";
-
-    static constexpr const char* COMPUTE_BCAST_WHERE =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu.cpp";
-    static constexpr const char* COMPUTE_BCAST_SFPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu.cpp";
-    static constexpr const char* COMPUTE_BCAST_FPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary.cpp";
-
-    static constexpr const char* COMPUTE_SCALAR_WHERE =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu_scalar";
-    static constexpr const char* COMPUTE_SCALAR_SFPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp";
-    static constexpr const char* COMPUTE_SCALAR_FPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_scalar.cpp";
-
-    static constexpr const char* COMPUTE_ROW_BCAST_NG_WHERE =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_where_sfpu_row_bcast.cpp";
-    static constexpr const char* COMPUTE_ROW_BCAST_NG_SFPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_row_bcast.cpp";
-    static constexpr const char* COMPUTE_ROW_BCAST_NG_FPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_bcast.cpp";
-
-    static constexpr const char* COMPUTE_COL_BCAST_NG_SFPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_col_bcast.cpp";
-    static constexpr const char* COMPUTE_COL_BCAST_NG_FPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_col_bcast.cpp";
-
-    static constexpr const char* COMPUTE_SCALAR_BCAST_NG_SFPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_scalar_bcast.cpp";
-    static constexpr const char* COMPUTE_SCALAR_BCAST_NG_FPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_scalar_bcast.cpp";
-
-    static constexpr const char* COMPUTE_ROW_COL_BCAST_NG_WHERE =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_where_sfpu_row_col_bcast.cpp";
-    static constexpr const char* COMPUTE_ROW_COL_BCAST_NG_SFPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_row_col_bcast.cpp";
-    static constexpr const char* COMPUTE_ROW_COL_BCAST_NG_FPU =
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_col_bcast.cpp";
-
+std::string_view get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
+    using namespace std::string_view_literals;
     switch (kernel_name) {
-        case KernelName::ReaderNoBcastNg: return READER_NO_BCAST_NG;
-        case KernelName::ReaderRowBcastNg: return READER_ROW_BCAST_NG;
-        case KernelName::ReaderColBcastNg: return READER_COL_BCAST_NG;
-        case KernelName::ReaderRowBColABcastNg: return READER_ROW_COL_MIXED_BCAST_NG;
-        case KernelName::ReaderScalarBcastNg: return READER_SCALAR_BCAST_NG;
-        case KernelName::ReaderRmNoBcastNg: return READER_RM_NO_BCAST_NG;
-        case KernelName::ReaderRmRowBcastNg: return READER_RM_ROW_BCAST_NG;
-        case KernelName::ReaderRmColBcastNg: return READER_RM_COL_BCAST_NG;
-        case KernelName::ReaderRmRowBColABcastNg: return READER_RM_ROW_COL_MIXED_BCAST_NG;
-        case KernelName::ReaderRmScalarBcastNg: return READER_RM_SCALAR_BCAST_NG;
-        case KernelName::ReaderRmScalarOpNg: return READER_RM_SCALAR_OP_NG;
-        case KernelName::WriterRmNoBcastNg: return WRITER_RM_NO_BCAST_NG;
-        case KernelName::WriterNoBcastNg: return WRITER_NO_BCAST_NG;
-        case KernelName::ReaderNoBcast: return READER_NO_BCAST;
-        case KernelName::WriterScalar: return WRITER_SCALAR;
+        case KernelName::ReaderNoBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp"sv;
+        case KernelName::ReaderRowBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_row_bcast.cpp"sv;
+        case KernelName::ReaderColBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_col_bcast.cpp"sv;
+        case KernelName::ReaderRowBColABcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_row_col_mixed_bcast.cpp"sv;
+        case KernelName::ReaderScalarBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_scalar_bcast.cpp"sv;
+        case KernelName::ReaderRmNoBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_no_bcast.cpp"sv;
+        case KernelName::ReaderRmRowBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_row_bcast.cpp"sv;
+        case KernelName::ReaderRmColBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_col_bcast.cpp"sv;
+        case KernelName::ReaderRmRowBColABcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_row_col_mixed_bcast.cpp"sv;
+        case KernelName::ReaderRmScalarBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_scalar_bcast.cpp"sv;
+        case KernelName::ReaderRmScalarOpNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_rm_scalar_op.cpp"sv;
+        case KernelName::WriterRmNoBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_rm_no_bcast.cpp"sv;
+        case KernelName::WriterNoBcastNg:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp"sv;
+        case KernelName::ReaderNoBcast:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/reader_interleaved_no_bcast.cpp"sv;
+        case KernelName::WriterScalar:
+            return "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/writer_interleaved_scalar.cpp"sv;
         case KernelName::ComputeNoBcast:
-            return is_where_op ? COMPUTE_NO_BCAST_WHERE : (is_sfpu ? COMPUTE_NO_BCAST_SFPU : COMPUTE_NO_BCAST_FPU);
+            return is_where_op
+                       ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_no_bcast.cpp"sv
+                       : (is_sfpu
+                              ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp"sv
+                              : "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp"sv);
         case KernelName::ComputeBcast:
-            return is_where_op ? COMPUTE_BCAST_WHERE : (is_sfpu ? COMPUTE_BCAST_SFPU : COMPUTE_BCAST_FPU);
+            return is_where_op
+                       ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu.cpp"sv
+                       : (is_sfpu
+                              ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu.cpp"sv
+                              : "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary.cpp"sv);
         case KernelName::ComputeScalar:
-            return is_where_op ? COMPUTE_SCALAR_WHERE : (is_sfpu ? COMPUTE_SCALAR_SFPU : COMPUTE_SCALAR_FPU);
+            return is_where_op
+                       ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu_scalar"sv
+                       : (is_sfpu
+                              ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp"sv
+                              : "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_scalar.cpp"sv);
         case KernelName::ComputeRowBcastNg:
-            return is_where_op ? COMPUTE_ROW_BCAST_NG_WHERE
-                               : (is_sfpu ? COMPUTE_ROW_BCAST_NG_SFPU : COMPUTE_ROW_BCAST_NG_FPU);
-        case KernelName::ComputeColBcastNg: return is_sfpu ? COMPUTE_COL_BCAST_NG_SFPU : COMPUTE_COL_BCAST_NG_FPU;
+            return is_where_op
+                       ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_where_sfpu_row_bcast.cpp"sv
+                       : (is_sfpu
+                              ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_row_bcast.cpp"sv
+                              : "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_bcast.cpp"sv);
+        case KernelName::ComputeColBcastNg:
+            return is_sfpu
+                       ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_col_bcast.cpp"sv
+                       : "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_col_bcast.cpp"sv;
         case KernelName::ComputeScalarBcastNg:
-            return is_sfpu ? COMPUTE_SCALAR_BCAST_NG_SFPU : COMPUTE_SCALAR_BCAST_NG_FPU;
+            return is_sfpu
+                       ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_scalar_bcast.cpp"sv
+                       : "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_scalar_bcast.cpp"sv;
         case KernelName::ComputeRowColBcastNg:
-            return is_where_op ? COMPUTE_ROW_COL_BCAST_NG_WHERE
-                               : (is_sfpu ? COMPUTE_ROW_COL_BCAST_NG_SFPU : COMPUTE_ROW_COL_BCAST_NG_FPU);
+            return is_where_op
+                       ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_where_sfpu_row_col_bcast.cpp"sv
+                       : (is_sfpu
+                              ? "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_row_col_bcast.cpp"sv
+                              : "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_col_bcast.cpp"sv);
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }

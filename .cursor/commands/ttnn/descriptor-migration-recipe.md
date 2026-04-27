@@ -345,22 +345,38 @@ The ProgramDescriptor path calls `create_descriptor` on **every dispatch** (cach
 Everything built inside it — CBDescriptors, KernelDescriptors, CoreRangeSet copies,
 runtime arg vectors — is allocation overhead. Follow these patterns to keep it fast.
 
-### Prefer constexpr kernel paths
+### Prefer string literals for kernel paths
 
-Prefer `static constexpr const char*` over runtime string concatenation for kernel paths.
-`kernel_source` is `std::string`, so each assignment copies — but starting from constexpr
-storage avoids the CPU + heap cost of formatting/concatenating the path per dispatch:
+Don't build kernel paths at runtime — string concatenation and `fmt::format` allocate per
+dispatch. `kernel_source` is `std::string` (the descriptor owns the path), so the only
+unavoidable cost is one copy into the descriptor; starting from a string literal keeps
+that copy cheap and the path data lives in read-only program storage:
 
 ```cpp
 // BAD — formats/concatenates a new std::string every dispatch
 const std::string kernels_dir = "ttnn/cpp/ttnn/operations/my_op/device/kernels/";
 reader_desc.kernel_source = kernels_dir + "reader.cpp";
 
-// GOOD — path data lives in read-only storage; only one copy into the descriptor
-static constexpr const char* READER_KERNEL_PATH =
-    "ttnn/cpp/ttnn/operations/my_op/device/kernels/reader.cpp";
-reader_desc.kernel_source = READER_KERNEL_PATH;
+// GOOD — single copy from a string literal
+reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/my_op/device/kernels/reader.cpp";
 ```
+
+If a helper picks among several paths (e.g. for different dtypes), return
+`std::string_view` and use `"..."sv` literals — `string_view` carries the size at compile
+time, so converting to `std::string` skips the runtime `strlen` that `const char*` requires:
+
+```cpp
+std::string_view kernel_for(DataType dt) {
+    using namespace std::string_view_literals;
+    switch (dt) {
+        case DataType::BFLOAT16: return "path/to/bf16_kernel.cpp"sv;
+        default:                 return "path/to/default_kernel.cpp"sv;
+    }
+}
+```
+
+Avoid `static constexpr const char*` locals for paths — string literals already have
+static storage, and the `static` only adds an unnecessary shared pointer between calls.
 
 ### Use KernelDescriptor type aliases for args
 

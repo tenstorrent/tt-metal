@@ -16,8 +16,6 @@
 
 namespace tt::tt_metal {
 
-class IDevice;
-
 // Cached result of split_work_to_cores + grid_to_cores.
 // Use cached_split_work_to_cores() to obtain one — never construct directly.
 struct CachedWorkSplit {
@@ -30,10 +28,17 @@ struct CachedWorkSplit {
     std::vector<CoreCoord> cores;
 };
 
-// Returns a cached work split for the given device and units_to_divide.
-// Caches device→grid mapping and (grid, units)→split result per thread.
-// Safe to call from any op's create_descriptor — no per-op boilerplate needed.
-const CachedWorkSplit& cached_split_work_to_cores(IDevice* device, uint32_t units_to_divide, bool row_wise = false);
+// Returns a cached work split for the given grid and units_to_divide.
+// The cache lives in thread_local storage; on every call the cached entry is
+// validated against the full key (grid_x, grid_y, units, row_wise) and
+// recomputed on miss.
+//
+// The caller is responsible for choosing the right grid:
+//   - For full-device dispatch: pass device->compute_with_storage_grid_size().
+//   - For sub-device dispatch:  pass the sub-device's worker grid (or use
+//     split_work_to_cores directly with a CoreRangeSet — this helper handles
+//     the rectangular-grid case only).
+const CachedWorkSplit& cached_split_work_to_cores(CoreCoord grid_size, uint32_t units_to_divide, bool row_wise = false);
 
 uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size);
 
