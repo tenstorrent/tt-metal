@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from typing import Any
 
 import numpy as np
 import pyworld as pw
@@ -103,6 +104,7 @@ class Pipeline:
         index_rate: float = 0.75,
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
+        file_index: str | None = None,
     ):
         hubert_cfg_path, hubert_path = get_hubert_paths()
         if not os.path.exists(hubert_path):
@@ -119,8 +121,11 @@ class Pipeline:
         self.index_rate = index_rate
         self.rms_mix_rate = rms_mix_rate
         self.protect = protect
+        self.file_index = file_index
         self._rmvpe_pitch_algorithm: RMVPEPitchAlgorithm | None = None
         self._crepe_predictor: CrepePredictor | None = None
+        self._feature_index: Any | None = None
+        self._feature_index_embeddings: torch.Tensor | None = None
 
         if self.tt_device.get_num_devices() > 1:
             self.input_mesh_mapper = ttnn.ShardTensorToMesh(self.tt_device, dim=0)
@@ -163,6 +168,29 @@ class Pipeline:
             device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
             self._crepe_predictor = CrepePredictor(device=self.tt_device)
         return self._crepe_predictor
+
+    def _load_feature_index(self):
+        if not self.file_index or self.index_rate == 0:
+            return None, None
+        if self._feature_index is not None and self._feature_index_embeddings is not None:
+            return self._feature_index, self._feature_index_embeddings
+        if not os.path.exists(self.file_index):
+            raise FileNotFoundError(f"Feature index file not found: {self.file_index}")
+
+        try:
+            import faiss
+        except ImportError as exc:
+            raise ImportError(
+                "Feature index support requires faiss. Install faiss-cpu or faiss-gpu to use --file-index."
+            ) from exc
+
+        feature_index = faiss.read_index(self.file_index)
+        feature_index_embeddings = torch.from_numpy(feature_index.reconstruct_n(0, feature_index.ntotal)).to(
+            torch.float32
+        )
+        self._feature_index = feature_index
+        self._feature_index_embeddings = feature_index_embeddings
+        return self._feature_index, self._feature_index_embeddings
 
     def _get_f0(self, audio, num_frames):
         f0_min = 50
@@ -307,13 +335,24 @@ class Pipeline:
         if self.protect < 0.5 and pitch is not None and pitchf is not None:
             protected_features = _interpolate_1d(feats, scale_factor=2, mode="linear")
         if index is not None and big_npy is not None and self.index_rate != 0:
-            index_features = feats[0].cpu().numpy()
+            feats_torch = ttnn.to_torch(feats, mesh_composer=self.output_mesh_composer).to(torch.float32)
+            index_features = feats_torch[0].detach().cpu().numpy()
             scores, indices = index.search(index_features, k=8)
-            scores, indices = torch.from_numpy(scores), torch.from_numpy(indices)
-            weights = torch.square(1 / scores)
+            scores = torch.from_numpy(scores).to(torch.float32)
+            indices = torch.from_numpy(indices).to(torch.long)
+            weights = torch.square(1.0 / torch.clamp(scores, min=1e-6))
             weights /= weights.sum(dim=1, keepdim=True)
             index_features = torch.sum(big_npy[indices] * weights.unsqueeze(2), dim=1)
-            feats = index_features * self.index_rate + (1 - self.index_rate) * feats
+            index_features = index_features.unsqueeze(0).to(dtype=feats_torch.dtype)
+            feats_torch = index_features * self.index_rate + (1 - self.index_rate) * feats_torch
+            feats = ttnn.from_torch(
+                feats_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.tt_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=self.input_mesh_mapper,
+            )
 
         feats = _interpolate_1d(feats, scale_factor=2, mode="linear")
         num_frames = feats.shape[1]
@@ -356,7 +395,7 @@ class Pipeline:
 
     def _run_pipeline(self, audio):
         assert audio.dim() == 2, audio.dim()
-        index = big_npy = None
+        index, big_npy = self._load_feature_index()
         audio_padded = F.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
         num_frames = audio_padded.shape[1] // self.window
         idx_list = self._get_time_stamps(audio, num_frames)

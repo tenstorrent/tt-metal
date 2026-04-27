@@ -5,6 +5,7 @@
 import json
 import math
 import os
+from typing import Any
 
 import numpy as np
 import pyworld as pw
@@ -153,6 +154,7 @@ class Pipeline:
         index_rate: float = 0.75,
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
+        file_index: str | None = None,
     ):
         hubert_cfg_path, hubert_path = get_hubert_paths()
         if not os.path.exists(hubert_path):
@@ -166,9 +168,12 @@ class Pipeline:
         self.index_rate = index_rate
         self.rms_mix_rate = rms_mix_rate
         self.protect = protect
+        self.file_index = file_index
         self.speaker_id = speaker_id
         self._crepe_predictor: CrepePredictor | None = None
         self._rmvpe_pitch_algorithm: RMVPEPitchAlgorithm | None = None
+        self._feature_index: Any | None = None
+        self._feature_index_embeddings: torch.Tensor | None = None
 
         self.synthesizer, data_cfg = _load_synthesizer(self.config, self.if_f0, self.version, self.num)
         self.tgt_sr = data_cfg["sampling_rate"]
@@ -203,6 +208,29 @@ class Pipeline:
             device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
             self._crepe_predictor = CrepePredictor()
         return self._crepe_predictor
+
+    def _load_feature_index(self):
+        if not self.file_index or self.index_rate == 0:
+            return None, None
+        if self._feature_index is not None and self._feature_index_embeddings is not None:
+            return self._feature_index, self._feature_index_embeddings
+        if not os.path.exists(self.file_index):
+            raise FileNotFoundError(f"Feature index file not found: {self.file_index}")
+
+        try:
+            import faiss
+        except ImportError as exc:
+            raise ImportError(
+                "Feature index support requires faiss. Install faiss-cpu or faiss-gpu to use --file-index."
+            ) from exc
+
+        feature_index = faiss.read_index(self.file_index)
+        feature_index_embeddings = torch.from_numpy(feature_index.reconstruct_n(0, feature_index.ntotal)).to(
+            torch.float32
+        )
+        self._feature_index = feature_index
+        self._feature_index_embeddings = feature_index_embeddings
+        return self._feature_index, self._feature_index_embeddings
 
     def _get_f0(self, audio, num_frames):
         f0_min = 50
@@ -330,12 +358,14 @@ class Pipeline:
         if self.protect < 0.5 and pitch is not None and pitchf is not None:
             protected_features = feats.clone()
         if index is not None and big_npy is not None and self.index_rate != 0:
-            index_features = feats[0].cpu().numpy()
+            index_features = feats[0].detach().cpu().numpy()
             scores, indices = index.search(index_features, k=8)
-            scores, indices = torch.from_numpy(scores), torch.from_numpy(indices)
-            weights = torch.square(1 / scores)
+            scores = torch.from_numpy(scores).to(torch.float32)
+            indices = torch.from_numpy(indices).to(torch.long)
+            weights = torch.square(1.0 / torch.clamp(scores, min=1e-6))
             weights /= weights.sum(dim=1, keepdim=True)
             index_features = torch.sum(big_npy[indices] * weights.unsqueeze(2), dim=1)
+            index_features = index_features.unsqueeze(0).to(device=feats.device, dtype=feats.dtype)
             feats = index_features * self.index_rate + (1 - self.index_rate) * feats
 
         feats = F.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
@@ -364,23 +394,7 @@ class Pipeline:
 
     def _run_pipeline(self, audio):
         assert audio.dim() == 2, audio.dim()
-        # if (
-        #     file_index
-        #     and file_index != ""
-        #     and os.path.exists(file_index)
-        #     and index_rate != 0
-        # ):
-        #     try:
-        #         import faiss
-
-        #         index = faiss.read_index(file_index)
-        #         # big_npy = np.load(file_big_npy)
-        #         big_npy = index.reconstruct_n(0, index.ntotal)
-        #     except:
-        #         traceback.print_exc()
-        #         index = big_npy = None
-        # else:
-        index = big_npy = None
+        index, big_npy = self._load_feature_index()
         audio_padded = F.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
         num_frames = audio_padded.shape[1] // self.window
         opt_ts = []

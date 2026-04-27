@@ -96,23 +96,28 @@ def _get_assets_dir() -> str:
 def _build_path_mapping() -> dict[tuple[str, str, bool], tuple[str, str]]:
     configs_dir = _get_configs_dir()
     assets_dir = _get_assets_dir()
-    pretrained_dir = os.path.join(assets_dir, "pretrained")
+    pretrained_dir_v1 = os.path.join(assets_dir, "pretrained_v1")
+    pretrained_dir_v2 = os.path.join(assets_dir, "pretrained_v2")
     return {
         ("v1", "32k", True): (
-            os.path.join(pretrained_dir, "f0G32k.safetensors"),
+            os.path.join(pretrained_dir_v1, "f0G32k.safetensors"),
             os.path.join(configs_dir, "v1/32k.json"),
         ),
         ("v1", "40k", True): (
-            os.path.join(pretrained_dir, "f0G40k.safetensors"),
+            os.path.join(pretrained_dir_v1, "f0G40k.safetensors"),
             os.path.join(configs_dir, "v1/40k.json"),
         ),
         ("v1", "48k", True): (
-            os.path.join(pretrained_dir, "f0G48k.safetensors"),
+            os.path.join(pretrained_dir_v1, "f0G48k.safetensors"),
             os.path.join(configs_dir, "v1/48k.json"),
         ),
         ("v1", "48k", False): (
-            os.path.join(pretrained_dir, "G48k.safetensors"),
+            os.path.join(pretrained_dir_v1, "G48k.safetensors"),
             os.path.join(configs_dir, "v1/48k.json"),
+        ),
+        ("v2", "48k", False): (
+            os.path.join(pretrained_dir_v2, "G48k.safetensors"),
+            os.path.join(configs_dir, "v2/48k.json"),
         ),
     }
 
