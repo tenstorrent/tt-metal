@@ -1048,8 +1048,9 @@ def test_optimized_moe_decode_block(
             tt_compute_output_token_counts,
             tt_compute_output_dense_expert_activation,
             tt_compute_output_dense_e_t,
-            _,  # tile layout output of selective tilize (same buffer as output)
-            tt_compute_output,
+            _,  # tile layout output of selective tilize (same buffer as matmul_output)
+            tt_compute_matmul_output,
+            tt_compute_combine_output,
         ) = ttnn.experimental.moe_compute(
             tt_dispatch_output_sparse_buffer,
             tt_dispatch_output_expert_indices,
@@ -1060,29 +1061,15 @@ def test_optimized_moe_decode_block(
             layer_id=layer_id,
             output_height_shard_dim=compute_output_height_shard_dim,
             output_width_shard_dim=compute_output_width_shard_dim,
+            has_bias=False,
             cluster_axis=cluster_axis,
-        )
-
-        tt_combine_output = ttnn.experimental.selective_reduce_combine(
-            tt_compute_output,
-            tt_compute_output_dense_expert_activation,
-            tt_compute_output_dense_e_t,
-            tt_compute_output_token_counts,
-            hidden_size,
-            batch,
-            seq,
-            select_experts_k,
-            experts,
-            cluster_axis,
-            topology=ttnn.Topology.Ring,
-            num_links=4,
-            token_parallel_core_dim=combine_token_parallel_core_dim,
-            data_parallel_core_dim=combine_data_parallel_core_dim,
-            worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
             mux_core_range_set=combine_mux_cores,
-            output_tensor=tt_preallocated_combine_output,
+            optional_output_tensor=tt_preallocated_combine_output,
             optional_cross_device_semaphore=combine_global_semaphore,
         )
+
+        # moe_compute now includes the combine step, so use its output directly
+        tt_combine_output = tt_compute_combine_output
 
         tt_tilized_compute_output = ttnn.to_layout(
             tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
@@ -1090,7 +1077,7 @@ def test_optimized_moe_decode_block(
 
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
-        tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
+        tt_unsqueezed_output = ttnn.unsqueeze(tt_combine_output, dim=1)
 
         # scale with scores
         # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]

@@ -23,6 +23,7 @@ import random
 import pytest
 import torch
 from loguru import logger
+from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
 
 import ttnn
 
@@ -34,8 +35,6 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
     create_sharded_memory_config,
     gen_expert_mapping,
     gen_sparse_buffer_and_indices,
-    prepare_w0_w1_tensor,
-    prepare_w2_tensor,
     tt_to_torch_dtype,
     validate_activation,
     validate_e_t,
@@ -98,6 +97,9 @@ def run_moe_compute_test(
 
     # Drain tilize core where indices and scores are sharded
     tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
+
+    # Mux cores for combine operation (fabric communication)
+    combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 3))])
 
     # Expert mapping - replicated on all devices
     expert_mapping = gen_expert_mapping(
@@ -165,10 +167,12 @@ def run_moe_compute_test(
         torch_w2 = torch.cat([torch_w2_tensors[e], torch_w2_tensors[e + 1]], dim=1)
 
         # Reorder for optimal DRAM placement
-        torch_w0_w1_reordered = prepare_w0_w1_tensor(
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
             torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
         )
-        torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
+        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+            torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+        )
 
         # Calculate linearized mesh coordinate
         if cluster_axis == 0:
@@ -318,8 +322,9 @@ def run_moe_compute_test(
             tt_token_counts,
             tt_activation,
             tt_e_t,
-            _,
-            tt_output,
+            _,  # tile layout output
+            tt_matmul_output,
+            tt_combine_output,
         ) = ttnn.experimental.moe_compute(
             tt_sparse,
             tt_indices,
@@ -331,6 +336,7 @@ def run_moe_compute_test(
             output_height_shard_dim=output_height_shard_dim,
             output_width_shard_dim=output_width_shard_dim,
             cluster_axis=cluster_axis,
+            mux_core_range_set=combine_mux_cores,
         )
 
         # Deallocate L1 input copies to avoid memory accumulation
@@ -338,7 +344,7 @@ def run_moe_compute_test(
         ttnn.deallocate(tt_indices)
         ttnn.deallocate(tt_scores)
 
-        return tt_token_counts, tt_activation, tt_e_t, tt_output, layer_id
+        return tt_token_counts, tt_activation, tt_e_t, tt_combine_output, layer_id
 
     output_list = []
 
