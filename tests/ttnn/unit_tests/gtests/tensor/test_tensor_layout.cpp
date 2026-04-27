@@ -352,6 +352,57 @@ INSTANTIATE_TEST_SUITE_P(
             .dtype = DataType::BFLOAT16,
             .expected_physical_shape = tt::tt_metal::Shape2D{576, 32}}));
 
+// `alignment_can_be_2D` branch for TILE: when legacy H/W padding is no larger than the minimum required for
+// tile layout on each of the last two dimensions, legacyShapeToAlignment uses tile height/width (not the
+// padded H/W) so the layout matches default TILE alignment. If a dimension is overpadded, that edge is kept.
+struct Tile2DInterleavedAlignmentTestParams {
+    Shape shape;
+    Shape padded_shape;
+    tt::tt_metal::Alignment expected_alignment;
+};
+
+class TensorLayoutTile2DInterleavedAlignmentTests
+    : public ::testing::TestWithParam<Tile2DInterleavedAlignmentTestParams> {};
+
+TEST_P(TensorLayoutTile2DInterleavedAlignmentTests, FromPaddedShape_TileAlignmentUsesTileUnlessOverpadded) {
+    const auto& params = GetParam();
+    TensorLayout layout = TensorLayout::fromPaddedShape(
+        DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig, params.shape, params.padded_shape);
+
+    EXPECT_EQ(layout.get_alignment(), params.expected_alignment);
+    // Padded shape roundtrip: alignment must still recover the supplied legacy padded shape.
+    EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorLayoutTests,
+    TensorLayoutTile2DInterleavedAlignmentTests,
+    ::testing::Values(
+        // 2D: minimum tile padding only -> alignment is tile 32x32, not 32x64 from padded H/W.
+        Tile2DInterleavedAlignmentTestParams{
+            .shape = Shape{30, 60},
+            .padded_shape = Shape{32, 64},
+            .expected_alignment = tt::tt_metal::Alignment({32, 32}),
+        },
+        // Rank-3: only H/W differ from logical; same rule.
+        Tile2DInterleavedAlignmentTestParams{
+            .shape = Shape{1, 30, 60},
+            .padded_shape = Shape{1, 32, 64},
+            .expected_alignment = tt::tt_metal::Alignment({32, 32}),
+        },
+        // Width overpadded beyond minimum for logical width -> keep legacy padded width in alignment.
+        Tile2DInterleavedAlignmentTestParams{
+            .shape = Shape{30, 60},
+            .padded_shape = Shape{32, 96},
+            .expected_alignment = tt::tt_metal::Alignment({32, 96}),
+        },
+        // Height overpadded (e.g. 30 -> 64) -> keep that edge; width still uses tile when not overpadded.
+        Tile2DInterleavedAlignmentTestParams{
+            .shape = Shape{30, 60},
+            .padded_shape = Shape{64, 64},
+            .expected_alignment = tt::tt_metal::Alignment({64, 32}),
+        }));
+
 struct ConsumedMemoryBytesPerBankTestParams {
     Shape shape;
     TensorLayout tensor_layout;

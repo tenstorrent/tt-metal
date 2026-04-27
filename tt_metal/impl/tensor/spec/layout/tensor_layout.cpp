@@ -57,11 +57,26 @@ Alignment legacyShapeToAlignment(
     if (alignment_can_be_2D) {
         ttsl::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
-        if (alignment_size >= 1) {
-            values[alignment_size - 1] = legacy_padded_shape[-1];
-        }
-        if (alignment_size == 2) {
-            values[alignment_size - 2] = legacy_padded_shape[-2];
+        if (page_config.get_layout() == Layout::TILE) {
+            // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
+            const auto& tile = page_config.get_tile();
+            const uint32_t min_padded_h = round_up(logical_shape[-2], tile.get_height());
+            const uint32_t min_padded_w = round_up(logical_shape[-1], tile.get_width());
+            const bool height_overpadded = legacy_padded_shape[-2] > min_padded_h;
+            const bool width_overpadded = legacy_padded_shape[-1] > min_padded_w;
+            if (alignment_size == 1) {
+                values[0] = width_overpadded ? legacy_padded_shape[-1] : tile.get_width();
+            } else {
+                values[alignment_size - 2] = height_overpadded ? legacy_padded_shape[-2] : tile.get_height();
+                values[alignment_size - 1] = width_overpadded ? legacy_padded_shape[-1] : tile.get_width();
+            }
+        } else {
+            if (alignment_size >= 1) {
+                values[alignment_size - 1] = legacy_padded_shape[-1];
+            }
+            if (alignment_size == 2) {
+                values[alignment_size - 2] = legacy_padded_shape[-2];
+            }
         }
         Alignment result(std::move(values));
         return result;
