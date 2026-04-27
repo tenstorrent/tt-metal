@@ -6,64 +6,21 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_expm1_cw.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
-// ======================================================================
-// CELU via Cody-Waite range reduction + factored expm1 polynomial
-//
-// Same algorithm as ELU, evaluated on x_rescaled = x/alpha.
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
-// ======================================================================
-
-// Cody-Waite constants
-constexpr float CELU_CW_INV_LN2 = 1.4426950408889634f;
-constexpr float CELU_CW_NEG_LN2_HI = -0.6931152343750000f;
-constexpr float CELU_CW_NEG_LN2_LO = -3.19461832987e-05f;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_celu(uint32_t param0, uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
-    const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat xr = alpha_recip * x;
-
-        // Clamp to prevent exponent underflow
-        sfpi::vFloat lo = -87.0f;
-        sfpi::vec_min_max(lo, xr);
-
-        // Cody-Waite range reduction on x_rescaled
-        sfpi::vFloat tmp = xr * CELU_CW_INV_LN2 + c231;
-        sfpi::vFloat k_f = tmp - c231;
-        sfpi::vFloat r = k_f * CELU_CW_NEG_LN2_HI + xr;
-        r = r + k_f * CELU_CW_NEG_LN2_LO;
-
-        // expm1(r) = r * h(r)
-#ifdef INP_FLOAT32
-        sfpi::vFloat h = PolynomialEvaluator::eval(
-            r,
-            sfpi::vConst1,
-            5.0000000000e-01f,
-            1.6666504741e-01f,
-            4.1666239500e-02f,
-            8.3691505715e-03f,
-            1.3948583510e-03f);
-#else
-        sfpi::vFloat h = PolynomialEvaluator::eval(
-            r, sfpi::vConst1, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
-#endif
-        h = r * h;
-
-        // Reconstruct: exp(xr)-1 = (2^k - 1) + 2^k * expm1(r)
-        // 0x4B3FFF81 = 0x4B400000 - 127: fuses k_int ISUB + bias IADD into one ISUB
-        constexpr int kC231Bias = 0x4B3FFF81;
-        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - kC231Bias);
-        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
-        result = alpha * result;
+        sfpi::vFloat result = alpha * expm1_cw_clamped(alpha_recip * x);
 
         v_if(x >= 0.0f) { result = x; }
         v_endif;
