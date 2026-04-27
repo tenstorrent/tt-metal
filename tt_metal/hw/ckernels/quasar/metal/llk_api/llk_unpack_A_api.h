@@ -42,7 +42,7 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
+    [[maybe_unused]] bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces = 0, const std::uint32_t operand = 0) {
@@ -83,7 +83,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
 template <
     BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
+    [[maybe_unused]] bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {

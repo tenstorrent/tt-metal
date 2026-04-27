@@ -29,6 +29,7 @@ void kernel_main() {
 
     unary_bcast_init<BCAST_DIM>(src_dfb_id, dst_dfb_id);
 
+    // TODO (tt-metal #42792): revert to batched multi-tile broadcast once Quasar unpack<->pack semaphores land.
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             dfb_src.wait_front(1);
@@ -48,6 +49,7 @@ void kernel_main() {
 
     unary_bcast_init<BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
+    // TODO (tt-metal #42792): revert to batched multi-tile broadcast once Quasar unpack<->pack semaphores land.
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             cb0.wait_front(1);
