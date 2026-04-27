@@ -125,10 +125,16 @@ def decode_forward(
 
     # For large head_dim (e.g. 512 on global layers), use a smaller compute grid
     # to avoid L1 overflow on mesh devices where fabric reserves L1 space
-    sdpa_program_config = None
     if config.head_dim >= 512:
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+            q_chunk_size=32,
+            k_chunk_size=64,
+            exp_approx_mode=False,
+        )
+    else:
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
             k_chunk_size=64,
             exp_approx_mode=False,
