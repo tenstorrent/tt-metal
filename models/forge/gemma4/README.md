@@ -149,17 +149,22 @@ gibberish.
 `current_pos` flows through the model as two related tensors injected
 in `Gemma4ForCausalLM.__call__`:
 
-- **Slot 0** (`var_0`) gets `current_pos - 1`. The orchestration
-  builds `ttnn_add_0 = var_0 + var_185(=1)` for decode, which feeds
-  the prelude's RoPE position lookup. Q therefore ends up with
-  RoPE(`current_pos`) — matching the row the new K just got written
-  into.
-- **Per-layer pos slots** (`runtime_inputs[2]` for L0..L58) get
-  `current_pos`. Full layers' decode body reads this as `update_idxs`
-  for `paged_update_cache`.
+- **Slot 0** (`var_0`) gets `current_pos`. `SlidingPreludeDecode`
+  reads it directly (`fp32(var_0) * sliding_inv_freq`) to build the
+  RoPE cos/sin caches, so Q and the new K end up with RoPE(`current_pos`).
+  It also flows into `FullPreludeDecode` as `ttnn_reshape_18`, where
+  the full-attention position mask (`var_0 >= arange(0..255)`) admits
+  positions `0..current_pos` — including the new K just written at
+  row `current_pos`.
+- **Per-layer pos slots** (`runtime_inputs[2]` for L0..L58) also get
+  `current_pos`. They feed `paged_update_cache(update_idxs=…)` and
+  `scaled_dot_product_attention_decode(cur_pos_tensor=…)`.
 
-`current_pos=0` (the test_decode default) collapses both to 0, which
-matches the codegen reference.
+Both slots receive the same value (`current_pos`); the orchestration's
+`ttnn_add_0 = var_0 + var_185(=1)` is computed for op-graph completeness
+but is only consumed by the now-unused sliding position-helper subgraph.
+At `current_pos=0` everything collapses to 0, matching the codegen
+reference.
 
 ### Generator
 
@@ -175,16 +180,6 @@ path or for cases where decode-side state diverges.
 
 ## Known issues
 
-- **Single-token glitch** at decode step 3 of the canonical prompt:
-  fast `generate()` emits `id=236773 ("S")` instead of `id=236764 (",")`,
-  giving "As an AI**S**, I don't have…". The rest of the continuation
-  ("personal feelings, memories, or…") is coherent and on-topic.
-  Likely bf16 precision drift accumulating in the K/V cache writes —
-  the legacy manual SDPA ran the score matmul in `f32` and absorbed
-  this rounding before it could compound. Possible fixes: store the
-  cache in `bfloat8_b`/`f32`, typecast K/V to `f32` before
-  `paged_update_cache` (only useful with `f32` cache), or replace the
-  full and sliding-prefill bodies with canonical SDPA ops too.
 - **Sliding prefill body** and **full attention bodies** still use the
   codegen-derived manual matmul SDPA (~1500 lines combined). Functional
   and PCC-passing, but a future cleanup could replace them with

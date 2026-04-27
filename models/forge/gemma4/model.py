@@ -115,27 +115,31 @@ class Gemma4ForCausalLM:
         # (PCC tests) call reset_kv_caches() explicitly before model().
         #
         # `current_pos` is the absolute position of the new token being
-        # processed. We inject two related tensors:
-        #   * slot 0 (var_0) = current_pos - 1, so the orchestration's
-        #     ttnn_add_0 = var_0 + var_185 = current_pos for decode
-        #     (var_185=1) — Q's RoPE then ends up at position current_pos.
-        #   * per-layer pos slots = current_pos, used as update_idxs by
-        #     full layers' paged_update_cache (write the new K at row
-        #     current_pos, where prefill K[i] sits at row i).
-        # Prefill mode ignores ttnn_add_0 and per-layer pos slots entirely
-        # (cache writes go through fill_cache(.., 0); RoPE comes from the
-        # prelude's per-position arange), so the split is decode-only — but
-        # injecting different values in both modes is harmless.
-        var0_pos = max(0, current_pos - 1)
-        var0_tensor = _build_pos_tensor(var0_pos, self.mesh_device)
-        layer_tensor = var0_tensor if current_pos == 0 else _build_pos_tensor(current_pos, self.mesh_device)
+        # processed. Both slot 0 (var_0) and the per-layer pos slots get
+        # the same value, current_pos:
+        #   * slot 0 (var_0) feeds `SlidingPreludeDecode` directly — the
+        #     RoPE cos/sin caches are built from `c_626 * fp32(var_0)`,
+        #     so Q and the new K end up with RoPE(current_pos). It also
+        #     feeds the full-attention position mask via `ttnn_reshape_18`
+        #     in `FullPreludeDecode` (mask = `var_0 >= arange(0..255)`),
+        #     so positions 0..current_pos (including the new K at row
+        #     current_pos) are admitted into the score.
+        #   * per-layer pos slots feed `paged_update_cache(update_idxs)`
+        #     and `scaled_dot_product_attention_decode(cur_pos_tensor)`
+        #     — the new K is written at row current_pos and SDPA reads
+        #     K[0..current_pos]. Aligning slot 0 to the same value keeps
+        #     RoPE consistent with cache geometry.
+        # Prefill mode passes current_pos=0 — both slots get 0, the
+        # prefill prelude expands per-position via arange(0..seq_len-1)
+        # internally, and per-layer pos slots are unread by prefill bodies.
+        pos_tensor = _build_pos_tensor(current_pos, self.mesh_device)
         eff_input = list(input)
         max_slot = max(self._pos_slots)
         if len(eff_input) <= max_slot:
             eff_input.extend([None] * (max_slot + 1 - len(eff_input)))
         for slot in self._pos_slots:
-            eff_input[slot] = layer_tensor
-        eff_input[0] = var0_tensor
+            eff_input[slot] = pos_tensor
+        eff_input[0] = pos_tensor
         if mode == "decode":
             return self._call_decode(eff_input)
         elif mode == "prefill":
