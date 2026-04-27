@@ -379,20 +379,16 @@ def _subtract_intervals(
     return result
 
 
-def exclude_undefined(op: MathOperation, spec: StimuliSpec) -> StimuliSpec:
-    """Return a copy of *spec* with its domain clipped to where *op* is defined.
+def exclude_intervals(
+    spec: StimuliSpec,
+    holes: List[Tuple[float, float]],
+) -> StimuliSpec:
+    """Return a copy of *spec* with the given *holes* subtracted from its domain.
 
-    - If spec.intervals is set: treat those as the domain and subtract
-      undefined regions.
-    - Otherwise: treat [spec.low, spec.high] as the domain and convert
-      to intervals.
-    - The result is a new StimuliSpec with .intervals set.  low/high are
-      left unchanged but ignored by the generator when intervals are present.
+    - If spec.intervals is set, those are the base domain.
+    - Otherwise [spec.low, spec.high] is used as a single base interval.
+    - Raises ValueError if nothing remains after subtraction.
     """
-    undefined = _SFPU_UNDEFINED_RANGES.get(op)
-    if not undefined:
-        return spec
-
     new_spec = copy.deepcopy(spec)
 
     if new_spec.intervals:
@@ -400,12 +396,39 @@ def exclude_undefined(op: MathOperation, spec: StimuliSpec) -> StimuliSpec:
     else:
         base = [(new_spec.low, new_spec.high)]
 
-    defined = _subtract_intervals(base, undefined)
+    defined = _subtract_intervals(base, holes)
     if not defined:
         raise ValueError(
-            f"exclude_undefined({op}) produced empty domain from {base} "
-            f"minus undefined {undefined}"
+            f"exclude_intervals produced empty domain from {base} "
+            f"minus holes {holes}"
         )
 
     new_spec.intervals = defined
     return new_spec
+
+
+def exclude_values(
+    spec: StimuliSpec,
+    values: List[float],
+    epsilon: float = 1e-6,
+) -> StimuliSpec:
+    """Return a copy of *spec* with tiny intervals around each value excluded.
+
+    For each *v* in *values*, the interval [v - epsilon, v + epsilon] is
+    subtracted from the domain.
+    """
+    holes = [(v - epsilon, v + epsilon) for v in values]
+    return exclude_intervals(spec, holes)
+
+
+def exclude_undefined(op: MathOperation, spec: StimuliSpec) -> StimuliSpec:
+    """Return a copy of *spec* with its domain clipped to where *op* is defined.
+
+    Looks up the undefined regions for *op* in _SFPU_UNDEFINED_RANGES
+    and delegates to exclude_intervals.  Returns *spec* unchanged if
+    the op has no registered undefined regions.
+    """
+    undefined = _SFPU_UNDEFINED_RANGES.get(op)
+    if not undefined:
+        return spec
+    return exclude_intervals(spec, undefined)
