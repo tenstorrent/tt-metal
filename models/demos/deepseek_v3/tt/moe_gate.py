@@ -38,7 +38,6 @@ def prepare_output_tensor(tt_output, ring2cores):
     """
     import itertools
 
-    breakpoint()
     each_shard = []
     current_column = 0
     for ring_pos in range(len(ring2cores)):
@@ -404,9 +403,11 @@ class MoEGate(AbstractModule):
         )
         temp = temp[:32, :384]
         temp1, temp2 = prepare_output_tensor(temp, RING2CORES)
-        breakpoint()
+
         output_tensor = ttnn.view(output_tensor, (-1, batch_size_per_iter, output_tensor.shape[-1]))
         assert SEND_CORES == (0, 3, 6, 9), "SEND_CORES should be (0, 3, 6, 9)"
+        # here is said to just get the matmul results
+        """
         weight_tensor = ttnn.reshape(output_tensor, (output_tensor.shape[0], batch_size_per_iter, 4, -1))
         valid_indices = weight_tensor.shape[-1] // 3
         weight_tensor = weight_tensor[:, :, :, valid_indices:]
@@ -421,20 +422,24 @@ class MoEGate(AbstractModule):
             dim=-1,
             memory_config=ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
-        breakpoint()
         topk_experts_weights = ttnn.transpose(topk_experts_weights, -1, -2)
+        """
         topk_experts_indices = ttnn.transpose(output_tensor[:, 8:16, -32:], -1, -2)
-        topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
+        topk_experts_indices = ttnn.bitcast(topk_experts_indices, dtype=ttnn.uint16)
         topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, -1, topk_experts_indices.shape[-1]))
+        topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
         topk_experts_indices = ttnn.bitwise_right_shift(topk_experts_indices, 7)
-        # or ttnn.logical_right_shift(topk_experts_indices, 7)
+        # you can not directly do bitwise_right_shift on uint16, you need to typecast to int32 first.
+        # Otherwise, it will be all-zeros
+        topk_experts_weights = ttnn.transpose(output_tensor[:, :8, -32:], -1, -2)
         topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, -1, topk_experts_weights.shape[-1]))
+        breakpoint()
         if padding_shape > 0:
-            output_tensor = output_tensor[:-padding_shape, :]
+            topk_experts_indices = topk_experts_indices[:, :, :-padding_shape, :]
+            topk_experts_weights = topk_experts_weights[:, :, :-padding_shape, :]
         if mode == "prefill":
-            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, ttnn.DRAM_MEMORY_CONFIG)
-            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
+        topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
         return topk_experts_weights, topk_experts_indices
 
     @classmethod
