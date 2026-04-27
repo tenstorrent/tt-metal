@@ -1669,6 +1669,11 @@ void Device::launch_eth_cores_for_quiesce() {
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
 
             // Pre-launch status read: confirm ERISC is in TERMINATED (0xA4B4C4D4) or 0x0.
+            // FIX-3 (#42429): If the ERISC is live (relay firmware or any non-quiesced state),
+            // sending write_launch_msg_to_core while BRISC is still executing the old relay
+            // firmware's shutdown path stalls fabric ERISC init (never writes EDMStatus::STARTED).
+            // Skip the channel and mark it newly-dead so Phase 5 / subsequent quiesce do not relay
+            // through it.
             {
                 const auto [erisc_sync_addr_pre, unused_pre] =
                     builder_ctx.get_fabric_router_sync_address_and_status();
@@ -1704,6 +1709,35 @@ void Device::launch_eth_cores_for_quiesce() {
                     logical_core.x,
                     logical_core.y,
                     pre_launch_buf[0]);
+
+                // FIX-3: gate launch on ERISC being in a quiesced state.
+                constexpr uint32_t terminated_val =
+                    static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+                if (pre_launch_buf[0] != 0x0 && pre_launch_buf[0] != terminated_val) {
+                    log_warning(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Phase 3: ETH logical ({},{}) "
+                        "pre_status=0x{:08x} ({}) — ERISC not quiesced, skipping "
+                        "write_launch_msg_to_core to prevent firmware-init stall. "
+                        "Marking channel as dead.  (FIX-3: #42429)",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y,
+                        pre_launch_buf[0],
+                        edm_status_str(pre_launch_buf[0]));
+                    // Resolve the channel number and mark it dead so Phase 5 / subsequent
+                    // quiesce relay ops skip it.
+                    try {
+                        auto eth_chan = soc_desc_q.get_eth_channel_for_core(
+                            tt::umd::CoreCoord(
+                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            CoordSystem::LOGICAL);
+                        pending_quiesce_newly_dead_eth_chans_.insert(eth_chan);
+                    } catch (...) {
+                        // Channel resolution failed — can't mark dead, but still skip launch.
+                    }
+                    continue;
+                }
             }
 
             tt::llrt::write_launch_msg_to_core(
@@ -2580,14 +2614,20 @@ void Device::wait_for_fabric_workers_ready() {
                     // (health check reads) and any subsequent quiesce relay ops are skipped,
                     // exactly as done for Phase 5 relay read exceptions (FIX U) and ENTRY
                     // snapshot deadline exceeded (FIX S/T).
-                    if (!this->is_mmio_capable() && sync_buf[0] == 0x0) {
+                    if (sync_buf[0] == 0x0) {
+                        // FIX-1 (#42429): status=0x0 after 10s means ETH firmware never booted
+                        // on this device (MMIO or non-MMIO).  Set fabric_relay_path_broken_ to
+                        // skip Phase 5b health-check reads (which hit channels 14/15 on MMIO T3K
+                        // devices — invalid TRANSLATED coordinates → crash) and all relay ops in
+                        // subsequent quiesce.  Previously this only applied to !is_mmio_capable();
+                        // extending to MMIO closes the crash window for MMIO devices as well.
                         fabric_relay_path_broken_ = true;
                         log_warning(
                             tt::LogMetal,
                             "wait_for_fabric_workers_ready: Device {} (mmio={}) Phase 5: timeout ({}ms) "
                             "waiting for LOCAL_HANDSHAKE_COMPLETE on master chan {} — status "
-                            "still 0x0 on non-MMIO device.  Setting fabric_relay_path_broken_=true "
-                            "to skip relay ops in subsequent quiesce.  (FIX V: #42429)",
+                            "still 0x0.  Setting fabric_relay_path_broken_=true "
+                            "to skip Phase 5b health check and relay ops in subsequent quiesce.  (FIX-1: #42429)",
                             this->id(),
                             this->is_mmio_capable(),
                             kSyncTimeoutMs,
