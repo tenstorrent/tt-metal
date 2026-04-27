@@ -13,7 +13,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
-    get_mesh_composer,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -176,14 +175,11 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Pass arg2 (padded output shape) when the master trace recorded it as a
-    # third positional argument so that the sweep trace matches the master.
-    if arg2 is not None:
-        output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
+    if tgt_numel != input_numel and arg2 is not None:
+        output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
     else:
-        output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+        output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
