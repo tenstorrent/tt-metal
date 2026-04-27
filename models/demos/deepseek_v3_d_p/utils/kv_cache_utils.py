@@ -107,7 +107,7 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
     logger.info("chunks_per_device_group = ", chunks_per_device_group)
 
     logger.info(f"kvpe cache shape is: {tt_kvpe_cache.shape}")
-    dram_bank_0_addr = tt_kvpe_cache.buffer_address()
+    dram_bank_base_addr = tt_kvpe_cache.buffer_address()
     for row in range(len(device_group_idx_per_row)):
         group_idx = device_group_idx_per_row[row]
         curr_bank_id = 0
@@ -123,8 +123,7 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
             for chunk in range(chunks_per_device_group):
                 location = ttnn.experimental.disaggregation.KvCacheLocation()
 
-                # This needs proper handling in KvCacheLocation(), just add it up atm
-                noc_addr = dram_bank_0_addr + curr_bank_id + curr_bank_offset
+                noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                 location.noc_addr = noc_addr
                 location.size_bytes = chunk_size_bytes
                 location.device_group_index = group_idx

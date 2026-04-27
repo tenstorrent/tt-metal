@@ -58,18 +58,24 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
 @pytest.mark.parametrize(
     "input_path",
     [
-        Path("/tmp/r1/pretrained_abc_1k_isl1024_layers61_experts256.pt"),
+        # Path("/tmp/r1/pretrained_abc_1k_isl1024_layers61_experts256.pt"),
         Path(
             "/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Reference-prefill/pretrained_abc_1k_isl1024_layers61_experts256.pt"
         ),
         Path(
             "/workspace/ds_output_all_sources_new_/norm_20260415_114721_mesh8x4_isl1024_L61_e256_cf32_gatehost_all_pretrained_abc_1k.pt"
         ),
+        Path(
+            "/tmp/ds_output_all_sources_new_ndshard/norm_20260421_061041_mesh8x4_isl1024_L61_e256_cf32_gatehost_all_pretrained_abc_1k.pt"
+        ),
+        Path(
+            "/tmp/ds_output_all_sources_new_ndshard/norm_20260421_150333_mesh8x4_isl1024_L61_e256_cf32_gatehost_all_pretrained_abc_1k.pt"
+        ),
     ],
 )
 def test_first_token_from_reference(input_path, model_path, config_only, tokenizer):
     # Use weights_only=False since this is a trusted local file with custom objects
-    logger.info(f"{input_path=}")
+    logger.warning(f"{input_path=}")
     if not input_path.exists():
         pytest.skip(f"Reference artifact not found: {input_path}")
     data = torch.load(input_path, weights_only=False)
@@ -133,21 +139,22 @@ def test_first_token_from_reference(input_path, model_path, config_only, tokeniz
         return probs.div_(torch.empty_like(probs).exponential_(1)).argmax(dim=-1)
 
     index = -1  # Last token
-    for temperature in [0.0, 0.5, 1]:
-        first_token = sample(logits=logits[index].clone(), temperature=temperature)
-        token_text = tokenizer.decode([first_token.item()])
-        logger.info(f"{index} First token (temperature={temperature}): {first_token.item()} -> {repr(token_text)}")
-
-    last_logit = logits[-1, :].clone()
+    last_logit = logits[index, :].clone()
     top_k = 5
-    top_logits, top_indices = torch.topk(last_logit, top_k, dim=-1)
-    probs = torch.softmax(last_logit, dim=-1)
 
-    for i, (token_id, logit_value) in enumerate(zip(top_indices.tolist(), top_logits.tolist())):
-        token_text = tokenizer.decode([token_id])
-        prob = probs[token_id].item()
+    for temperature in [0.0, 0.5, 1.0]:
+        # Sample token
+        first_token = sample(logits=last_logit.clone(), temperature=temperature)
+        token_text = tokenizer.decode([first_token.item()])
+        logger.info(f"First token (temp={temperature}): ID={first_token.item()} [{repr(token_text)}]")
 
-        logger.info(
-            f"{i+1}. Token ID: {token_id:6d} | Logit: {logit_value:8.4f} | "
-            f"Prob: {prob:8.6f} | Text: {repr(token_text)}"
-        )
+        # Compute temperature-scaled probabilities
+        scaled_logits = last_logit / max(temperature, 1e-5)
+        probs = torch.softmax(scaled_logits, dim=-1)
+
+        # Get top-5 by probability (after temperature scaling)
+        top_probs, top_indices = torch.topk(probs, top_k, dim=-1)
+
+        for i, (token_id, prob) in enumerate(zip(top_indices.tolist(), top_probs.tolist())):
+            token_text = tokenizer.decode([token_id])
+            logger.info(f"  top{i+1}: ID={token_id:6d} | Prob: {prob*100:6.2f}% | Text: {repr(token_text)}")
