@@ -57,11 +57,20 @@ namespace sfpu
 // Loads the 3 hoisted constants into LREG4/5/6. Call exactly once per SFPU
 // section (after `_llk_math_eltwise_unary_sfpu_init_` and before the per-face
 // `_calculate_swiglu_` loop). The values persist for the whole section.
+//
+// `+L` and `+2L` are loaded as BF16 (1 SFPLOADI each) since 7.0f and 14.0f
+// are exactly representable in BF16. `alpha = 1.702f` is loaded as full FP32
+// via the 2-step UPPER/LOWER pattern (mod0=0x8, mod0=0xA) — the BF16 form
+// would quantize to 1.703125 (abs err ~1.1e-3) which then gets amplified by
+// the (up+1)*gate*sig multiplication chain. The extra SFPLOADI here is
+// amortized across every face in the SFPU section. Same pattern as
+// `_init_gelu_` in ckernel_sfpu_gelu.h.
 inline void _init_swiglu_()
 {
     TTI_SFPLOADI(p_sfpu::LREG4, 0 /*Float16_b*/, 0x40E0); // +clamp_limit  =  +7.0f  (BF16 exact)
     TTI_SFPLOADI(p_sfpu::LREG5, 0 /*Float16_b*/, 0x4160); // +2*clamp_limit = +14.0f (BF16 exact, used by nested-relu clip)
-    TTI_SFPLOADI(p_sfpu::LREG6, 0 /*Float16_b*/, 0x3FDA); // alpha          =  1.702f (BF16 quantizes to 1.703125, abs err ~1.1e-3)
+    TTI_SFPLOADI(p_sfpu::LREG6, 0x8 /*UPPER*/, 0x3FD9);   // alpha = 1.702f, FP32 = 0x3FD9DB23 — high half
+    TTI_SFPLOADI(p_sfpu::LREG6, 0xA /*LOWER*/, 0xDB23);   // alpha low half — combined: exact FP32 1.702f
 }
 
 // Per-face inner loop: reads `iterations` (= TEST_FACE_R_DIM / SFP_ROWS)
