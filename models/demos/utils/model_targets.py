@@ -11,7 +11,6 @@ from typing import Any
 
 import yaml
 
-
 DEFAULT_MODEL_TARGETS_PATH = str(Path(__file__).resolve().parents[2] / "model_targets.yaml")
 
 _SKU_ALIASES = {
