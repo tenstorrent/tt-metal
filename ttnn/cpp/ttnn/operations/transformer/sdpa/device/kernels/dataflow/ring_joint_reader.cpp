@@ -387,7 +387,10 @@ void kernel_main() {
                     k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                 }
 
-                // Skip Q, V reads and V forward for padded iterations (K mcast sync only)
+                // Skip Q, V reads and V forward for padded iterations (K mcast sync only).
+                // Note: cb_push_back is intentionally skipped — without it, the write pointer
+                // doesn't advance, so cb_reserve_back returns the same address each iteration.
+                // This lets the buffer act as a reusable staging area for the mcast.
                 if (is_padded_iter) {
                     continue;
                 }
