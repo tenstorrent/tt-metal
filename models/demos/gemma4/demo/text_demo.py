@@ -13,6 +13,7 @@ Usage:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600 -k "test_demo"
 """
 
+import gc
 import os
 import time
 
@@ -288,6 +289,11 @@ def run_generation(
         )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 
+        # Disable Python GC during decode to avoid pause spikes; collect once before.
+        gc.collect()
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+
         # ── Main decode loop (mode-agnostic) ──────────────────────────────
         for step in range(max_new_tokens - 1):
             if iteration == 0:
@@ -295,13 +301,16 @@ def run_generation(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
 
+            t_make_start = time.perf_counter()
             inputs_h = _make_decode_inputs(next_token, current_pos)
+            t_make_end = time.perf_counter()
 
             if enable_decode_trace and trace_id is not None:
                 # ── Traced execution: copy inputs and replay ──
                 _copy_inputs_to_trace(inputs_h)
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 decode_logits = trace_output
+                t_enq_end = time.perf_counter()
 
             elif enable_decode_trace and iteration == 0:
                 # ── Iteration 0: compile run + trace capture ──
@@ -334,13 +343,16 @@ def run_generation(
                 _copy_inputs_to_trace(inputs_h2)
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 decode_logits = trace_output
+                t_enq_end = time.perf_counter()
 
             else:
                 # ── No tracing: straightforward forward ──
                 inputs_d = _inputs_to_device(inputs_h)
                 decode_logits, _ = _fwd(inputs_d)
+                t_enq_end = time.perf_counter()
 
             next_token = _extract_token(decode_logits)
+            t_sync_end = time.perf_counter()
             generated_tokens.append(next_token)
             current_pos += 1
 
@@ -354,9 +366,13 @@ def run_generation(
                 )
 
             tokens_per_second_per_user = 1 / decode_iteration_time
+            host_inputs_ms = 1000 * (t_make_end - t_make_start)
+            copy_enq_ms = 1000 * (t_enq_end - t_make_end)
+            exec_sync_ms = 1000 * (t_sync_end - t_enq_end)
             logger.debug(
                 f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ "
-                f"{tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                f"{tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput) "
+                f"| host_inputs={host_inputs_ms:.1f}ms copy+enq={copy_enq_ms:.1f}ms exec+sync={exec_sync_ms:.1f}ms"
             )
 
             iteration += 1
@@ -364,6 +380,10 @@ def run_generation(
             # Check for EOS
             if next_token == tokenizer.eos_token_id:
                 break
+
+        # Re-enable GC after the decode loop.
+        if gc_was_enabled:
+            gc.enable()
 
         # Release trace
         if trace_id is not None:
