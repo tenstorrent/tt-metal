@@ -1455,7 +1455,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         // before writing launch messages — prevents race with .bss init zeroing edm_status.
         constexpr uint32_t kForceResetPollIntervalMs_inline = 5;
         constexpr uint32_t kForceResetPollTimeoutMs_inline = 500;
-        constexpr uint32_t umd_relay_canary_p0 = 0x49706550U;
+        const uint32_t umd_relay_canary_p0 = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
         constexpr uint32_t terminated_val_p0 =
             static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
         const auto erisc_sync_addr_p0 =
@@ -1618,7 +1618,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
 
                 constexpr uint32_t terminated_val =
                     static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-                constexpr uint32_t umd_relay_canary = 0x49706550U;
+                const uint32_t umd_relay_canary = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
                 bool is_force_reset_chan_inline = false;
                 if (!pending_phase25_force_reset_chans_.empty()) {
                     try {
@@ -1863,7 +1863,7 @@ void Device::launch_eth_cores_for_quiesce() {
         // so Phase 5 and subsequent quiesce operations skip them.
         constexpr uint32_t kForceResetPollIntervalMs = 5;
         constexpr uint32_t kForceResetPollTimeoutMs = 500;
-        constexpr uint32_t umd_relay_canary_poll = 0x49706550U;
+        const uint32_t umd_relay_canary_poll = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
         constexpr uint32_t terminated_val_poll =
             static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
         const auto erisc_sync_addr_poll =
@@ -2032,7 +2032,7 @@ void Device::launch_eth_cores_for_quiesce() {
                 // will have completed base UMD .bss init and show 0x49706550 (UMD relay firmware
                 // canary) at edm_status_address.  This is an expected quiesced state for those
                 // channels — allow it through so we don't incorrectly mark them dead.
-                constexpr uint32_t umd_relay_canary = 0x49706550U;
+                const uint32_t umd_relay_canary = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
                 bool is_force_reset_chan = false;
                 if (!p25_force_reset.empty()) {
                     try {

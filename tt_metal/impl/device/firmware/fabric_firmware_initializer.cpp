@@ -940,7 +940,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             // firmware, if any, is running), but DO zero edm_status_address to break the
             // cascade — corrupt L1 values persist across container restarts and would otherwise
             // re-poison every subsequent session until hardware reset.
-            static constexpr uint32_t kBaseUmdFirmwareSentinel = 0x49706550u;
+            const uint32_t kBaseUmdFirmwareSentinel = static_cast<uint32_t>(tt::tt_metal::EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL);
             // CANARY value written at the very top of fabric_erisc_router.cpp kernel_main()
             // (#42429).  Means the ERISC transitioned away from base-UMD and entered fabric
             // firmware, but crashed before POSTCODE(INITIALIZATION_STARTED).  This is distinct

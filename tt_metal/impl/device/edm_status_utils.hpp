@@ -14,18 +14,27 @@
 //
 // edm_status_name(EDMStatus)  — typed enum → name, used for enum-aware callers
 //                               and by is_known_edm_status().
-// edm_status_str(uint32_t)    — raw uint32_t → name, handles host-side sentinel
-//                               values 0xDEAD5B5B and 0xDEADECE7 in addition to
+// edm_status_str(uint32_t)    — raw uint32_t → name, handles EthDiagSentinel
+//                               values (0x49706550, 0xDEAD****) in addition to
 //                               all EDMStatus enumerators.
 // is_known_edm_status(uint32_t) — returns true iff the raw value is a recognised
 //                               EDMStatus enumerator (used by probe / quiesce logic).
 
 namespace tt::tt_metal {
 
-// Host-side sentinel values written to or inferred for ETH channel status
-// fields when no valid EDMStatus enumerator applies.  These are purely
-// host-side diagnostics — firmware never writes these values.
+// Sentinel values used to represent ETH channel status fields when no valid
+// EDMStatus enumerator applies.  Includes both firmware-written sentinels and
+// host-side diagnostic placeholders.
 enum class EthDiagSentinel : uint32_t {
+    // Written by base UMD relay firmware to erisc_sync_addr once it has
+    // completed .bss init and entered its polling loop.  ASCII "iPeP".
+    // The host uses this value to distinguish:
+    //   - "UMD relay never launched" (still 0x49706550 → leave alone)
+    //   - "launch sent but ERISC crashed before STARTED" (also 0x49706550 →
+    //     detect via the HOST_PRE_LAUNCH_CANARY probe written before launch)
+    // Firmware writes this.  Do not use as a host-side placeholder.
+    BASE_UMD_FIRMWARE_SENTINEL = 0x49706550u,
+
     // Host wrote this value to router_sync_address before sending the launch
     // message.  If the field still reads this value after launch, ERISC never
     // polled — the channel is stuck in base firmware or crashed.
@@ -87,8 +96,11 @@ inline const char* edm_status_str(uint32_t v) {
         case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:       return "INITIALIZATION_COMPLETE";
         default: break;
     }
-    if (v == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED)) return "(deadline-skipped)";
-    if (v == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION))   return "(read-exception)";
+    if (v == static_cast<uint32_t>(EthDiagSentinel::BASE_UMD_FIRMWARE_SENTINEL)) return "(base-umd-relay)";
+    if (v == static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY))    return "(host-pre-launch-canary)";
+    if (v == static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION))            return "(read-exception)";
+    if (v == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED))  return "(deadline-skipped)";
+    if (v == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION))    return "(phase5b-read-exception)";
     return "(unknown)";
 }
 
