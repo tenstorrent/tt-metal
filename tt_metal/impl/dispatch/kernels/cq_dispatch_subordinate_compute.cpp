@@ -27,8 +27,11 @@ constexpr uint32_t num_streams_to_monitor = NUM_STREAMS_TO_MONITOR;
 void kernel_main() {
 #if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
 
+    // Dispatch-core-local L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::
+    // REALTIME_PROFILER_MSG). Address is supplied by host via the REALTIME_PROFILER_MSG_ADDR
+    // compile-time define; mirrors cq_dispatch.cpp / cq_dispatch_subordinate.cpp on the same core.
     volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
-        reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
+        reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
     // Clear stale RT-profiler mailbox state left in L1 from prior runs.
     realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;

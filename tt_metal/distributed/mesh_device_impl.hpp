@@ -82,6 +82,19 @@ class DistributedContext;
 
 using DeviceIds = std::vector<int>;
 
+// L1 layout addresses on the reserved RT-profiler tensix core. The ring buffer
+// (BRISC->NCRISC handoff) and the D2H socket sender config both live in a single
+// carve-out anchored at dispatch_mem_map's UNRESERVED boundary on this core; see
+// tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp::RealtimeProfilerCoreL1
+// for the exact field layout. This avoids routing dispatch-core L1 through the
+// user-space allocator, which would otherwise expose these regions to ttnn graph
+// tracing (ttnn::reports::get_buffer_pages) and crash on get_bank_ids_from_logical_core.
+struct RealtimeProfilerCoreL1Addrs {
+    uint32_t base = 0;           // RealtimeProfilerCoreL1 base on the profiler core
+    uint32_t ring_buffer = 0;    // base + offsetof(RealtimeProfilerCoreL1, ring)
+    uint32_t socket_config = 0;  // base + offsetof(RealtimeProfilerCoreL1, socket_config)
+};
+
 class MeshDeviceImpl : public IDevice {
 private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
@@ -156,14 +169,16 @@ private:
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
-    // Per-device real-time profiler state (one entry per device in the mesh)
+    // Per-device real-time profiler state (one entry per device in the mesh).
+    // RealtimeProfilerCoreL1Addrs is at namespace scope above so the free helper
+    // compute_rt_profiler_core_l1_addrs() in mesh_device.cpp can name it.
     struct RealtimeProfilerDeviceState {
         IDevice* device = nullptr;                      // Physical device pointer
         uint32_t chip_id = 0;                           // Physical device ID
         MeshCoordinate mesh_coord = MeshCoordinate(0);  // Position in the mesh
         CoreCoord realtime_profiler_core;               // Core running real-time profiler kernel
         std::unique_ptr<D2HSocket> socket;              // D2H socket for this device
-        std::shared_ptr<Buffer> ring_buffer;            // L1 ring buffer (BRISC→NCRISC handoff)
+        RealtimeProfilerCoreL1Addrs core_l1;            // Carve-out addresses on the profiler core
         uint64_t first_timestamp = 0;                   // First device timestamp (for normalization)
         int64_t sync_host_start = 0;                    // Host time when sync started
         double sync_frequency = 0.0;                    // Device clock frequency in GHz
@@ -180,7 +195,7 @@ private:
             mesh_coord(o.mesh_coord),
             realtime_profiler_core(o.realtime_profiler_core),
             socket(std::move(o.socket)),
-            ring_buffer(std::move(o.ring_buffer)),
+            core_l1(o.core_l1),
             first_timestamp(o.first_timestamp),
             sync_host_start(o.sync_host_start),
             sync_frequency(o.sync_frequency),

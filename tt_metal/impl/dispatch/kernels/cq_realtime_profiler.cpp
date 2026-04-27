@@ -26,8 +26,11 @@ constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profil
 // DISPATCH_DATA_ADDR_B - Address of kernel_start_b in dispatch_s's L1 mailbox
 // RING_BUFFER_ADDR     - L1 address of the shared ring buffer
 
+// L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) on this
+// reserved RT-profiler tensix core. The matching dispatch cores use the same define to address
+// this structure; host propagates the value via the REALTIME_PROFILER_MSG_ADDR compile-time define.
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
 
