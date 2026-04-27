@@ -4,6 +4,10 @@
 #include "tt_metal/api/tt-metalium/hal.hpp"
 #include "command_queue_fixture.hpp"
 
+#define TEST_PARAM(type, var, initial, envvar) \
+    type var = (initial);                      \
+    get_env((envvar), &var)
+
 struct l1_allocator {
     uint32_t start;
     uint32_t end;

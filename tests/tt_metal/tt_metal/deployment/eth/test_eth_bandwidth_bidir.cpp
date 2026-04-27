@@ -161,14 +161,11 @@ static bool run_test_bandwidth_bidir(
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
-    uint32_t transfer_size = 160 * 1024;
-    get_env("ETH_TEST_TRANSFER_SIZE", &transfer_size);
+
+    TEST_PARAM(uint32_t, transfer_size, 160 * 1024, "ETH_TEST_TRANSFER_SIZE");
+    TEST_PARAM(uint32_t, transfer_count, 20 << 10, "ETH_TEST_TRANSFER_COUNT");
 
     uint32_t num_bytes_per_send = transfer_size / 2;
-
-    uint32_t transfer_count = 20 << 10;
-    get_env("ETH_TEST_TRANSFER_COUNT", &transfer_count);
-
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
