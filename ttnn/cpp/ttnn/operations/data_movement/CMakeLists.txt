@@ -19,7 +19,6 @@ file(
     common/kernels/*
     fill_pad/device/kernels/*
     fill_rm/device/kernels/*
-    fold/device/kernels/*
     gather/device/kernels/*
     copy/device/kernels/*
     indexed_fill/device/kernels/*
@@ -143,10 +142,6 @@ target_sources(
             fill_rm/fill_rm_nanobind.hpp
             fill_rm/device/fill_rm_device_operation_types.hpp
             fill_rm/device/fill_rm_program_factory.hpp
-            # fold/
-            fold/fold.hpp
-            fold/fold_nanobind.hpp
-            fold/device/fold_device_op.hpp
             # gather/
             gather/gather.hpp
             gather/gather_nanobind.hpp
@@ -380,10 +375,6 @@ target_sources(
         fill_rm/device/fill_rm_device_operation.cpp
         fill_rm/device/fill_rm_program_factory.cpp
         fill_rm/fill_rm.cpp
-        fold/device/fold_device_op.cpp
-        fold/device/fold_multi_core_dram_program_factory.cpp
-        fold/device/fold_multi_core_program_factory.cpp
-        fold/fold.cpp
         indexed_fill/device/indexed_fill_device_operation.cpp
         indexed_fill/device/indexed_fill_program_factory.cpp
         indexed_fill/device/indexed_fill_utils.cpp
