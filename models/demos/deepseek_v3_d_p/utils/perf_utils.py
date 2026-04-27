@@ -105,6 +105,62 @@ def approximate_8x4_perf(csv_8x1: str, csv_2x4: str, csv_8x4: str = None, use_av
     return df_result
 
 
+# SDPA ops: scale by 4 when extrapolating from 2x4 to 8x4 (SP 2→8 = 4x, TP 4→4 = 1x)
+# Everything else: no scaling, just add directly
+SDPA_OPS = {
+    "ScaledDotProductAttentionDecode",
+    "SDPAProgramConfig",
+    "ScaledDotProductAttention",
+}
+
+
+def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str = None, use_avg: bool = False) -> pd.DataFrame:
+    """
+    Approximate 8x4 MLA performance from a cheaper 2x4 run.
+
+    - SDPA ops: taken from 2x4 and scaled by 4 (SP 2→8 = 4x, TP 4→4 = 1x, total 4x).
+    - Everything else: taken from 2x4 as-is (no scaling).
+    """
+    ops_2x4 = load_merged_durations(csv_2x4, use_avg=use_avg)
+    ops_8x4 = load_merged_durations(csv_8x4, use_avg=use_avg) if csv_8x4 else None
+
+    all_ops = set(ops_8x4.index) if ops_8x4 is not None else set(ops_2x4.index)
+
+    rows = []
+    for op in sorted(all_ops):
+        base_ns = ops_2x4.get(op, 0)
+        if any(sdpa_op in op for sdpa_op in SDPA_OPS):
+            src = "2x4 (×4)"
+            approx_ns = base_ns * 4
+        else:
+            src = "2x4"
+            approx_ns = base_ns
+
+        row = {"OP CODE": op, "source": src, "approx [ms]": approx_ns / 1e6}
+        if ops_8x4 is not None:
+            row["actual 8x4 [ms]"] = ops_8x4.get(op, float("nan")) / 1e6
+        rows.append(row)
+
+    df_result = pd.DataFrame(rows).sort_values("approx [ms]", ascending=False).reset_index(drop=True)
+
+    if ops_8x4 is not None:
+        df_result["diff [ms]"] = (df_result["approx [ms]"] - df_result["actual 8x4 [ms]"]).round(3)
+        df_result["err [%]"] = (
+            df_result["diff [ms]"] / df_result["actual 8x4 [ms]"].replace(0, float("nan")) * 100
+        ).round(1)
+
+    approx_total = df_result["approx [ms]"].sum()
+    actual_total = df_result["actual 8x4 [ms]"].sum() if ops_8x4 is not None else None
+
+    print(f"{'Approximation total:':25s} {approx_total:.3f} ms")
+    if ops_8x4 is not None:
+        err = (approx_total - actual_total) / actual_total * 100
+        print(f"{'8x4 actual total:':25s} {actual_total:.3f} ms")
+        print(f"{'Error:':25s} {err:+.1f}%")
+
+    return df_result
+
+
 def run_model_device_perf_test_with_merge(
     command: str,
     expected_device_perf_ns_per_iteration: float,
@@ -276,3 +332,40 @@ def run_moe_perf_with_approximation(
     finally:
         if tmp_csv_8x1:
             os.unlink(tmp_csv_8x1)
+
+
+def run_mla_perf_with_approximation(
+    command_2x4: str,
+    expected_ns_2x4: float,
+    model_name_2x4: str,
+    subdir: str,
+    num_iterations: int = 1,
+    batch_size: int = 1,
+    margin: float = 0.03,
+    comments_2x4: str = "",
+):
+    """
+    Run 2x4 MLA proxy on loudbox, perf-validate against baseline,
+    and compute the approximated 8x4 galaxy total.
+
+    To estimate time on one galaxy column (8x4):
+    - SDPA time is multiplied by 4 (SP 2→8 = 4x, TP 4→4 = 1x, total 4x)
+    - All other ops are added as-is (no scaling)
+    """
+    logger.info("=== 2x4 proxy: MLA on loudbox ===")
+    run_model_device_perf_test_with_merge(
+        command=command_2x4,
+        expected_device_perf_ns_per_iteration=expected_ns_2x4,
+        subdir=subdir,
+        model_name=model_name_2x4,
+        num_iterations=num_iterations,
+        batch_size=batch_size,
+        margin=margin,
+        comments=comments_2x4,
+    )
+    csv_2x4 = get_latest_ops_log_filename(subdir)
+    logger.info(f"2x4 CSV: {csv_2x4}")
+
+    logger.info("=== Approximating 8x4 galaxy total from 2x4 (SDPA × 4 + other ops) ===")
+    df_approx = approximate_mla_galaxy_perf(csv_2x4=csv_2x4)
+    logger.info(f"\n{df_approx.to_string(index=False)}")
