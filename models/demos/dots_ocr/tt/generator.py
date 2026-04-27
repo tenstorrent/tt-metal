@@ -201,7 +201,7 @@ class Generator(WarmupForwardMixin):
                     tokens = torch.cat([tokens, pad], dim=1)
                     # Ensure RoPE matrices cover the padded length too *if* caller supplied host rot_mats.
                     if rot_mats is not None:
-                        from models.tt_transformers.tt.common import precompute_freqs
+                        from models.demos.dots_ocr.tt.rope_freqs import precompute_freqs
 
                         head_dim = getattr(self.model_args, "head_dim", 128)
                         theta = getattr(self.model_args, "rope_theta", 10000.0)
@@ -243,7 +243,7 @@ class Generator(WarmupForwardMixin):
                     tokens = torch.cat([tokens, pad], dim=1)
                     # If caller supplied host rot_mats, ensure they cover the padded length too.
                     if rot_mats is not None:
-                        from models.tt_transformers.tt.common import precompute_freqs
+                        from models.demos.dots_ocr.tt.rope_freqs import precompute_freqs
 
                         head_dim = getattr(self.model_args, "head_dim", 128)
                         theta = getattr(self.model_args, "rope_theta", 10000.0)

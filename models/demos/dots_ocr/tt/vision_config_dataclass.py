@@ -27,5 +27,11 @@ class DotsVisionConfig:
     initializer_range: float = 0.02
     init_merger_std: float = 0.02
     post_norm: bool = True  # Dots uses post-norm
+    use_bias: bool = True
     num_channels: int = 3
     temporal_patch_size: int = 1
+
+    @property
+    def embed_dim(self) -> int:
+        # Some call sites (vision bring-up) use `embed_dim` naming.
+        return int(self.hidden_size)
