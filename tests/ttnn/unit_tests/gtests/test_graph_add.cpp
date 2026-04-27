@@ -86,11 +86,8 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
         // per core buffer allocation size
         {
-            auto compute_with_storage_grid_size = device_->compute_with_storage_grid_size();
-            size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-
             const auto& [cb_peak_size_per_core, l1_peak_per_core, peak_memory_usage_per_core] =
-                graph::extract_resource_usage_per_core(json_trace, interleaved_storage_cores);
+                graph::extract_resource_usage_per_core(json_trace);
 
             EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
             EXPECT_EQ(l1_peak_per_core, params.expected_l1_peak_per_core);
