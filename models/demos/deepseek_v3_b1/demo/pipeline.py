@@ -86,7 +86,7 @@ def create_single_galaxy_pipeline_configuration(
         return EmbeddingStage(
             weight_provider.load_embedding(device),
             d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if enable_mtp else None,
-            forward_metadata=enable_mtp,
+            forward_metadata=True,  # BaseLMHeadStage always expects ACTIVATION_W_TOKEN_META upstream
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
@@ -251,21 +251,19 @@ def create_single_galaxy_deepseek_pipeline_configuration(
     lm_head_persistent_mode: bool = True,
     dense_layer_id: int = 0,
     moe_layer_id: int = 0,
+    host_loopback: bool = True,
 ) -> PipelineConfiguration:
-    """4-stage single-galaxy: Embed -> Dense -> MoE -> LMHead.
+    """4-stage single-galaxy: Embed -> LMHead -> Passthrough(TOKEN) -> Passthrough(TOKEN).
 
-    This is the decoder stack that :func:`create_single_galaxy_pipeline_configuration` approximates
-    with two token :class:`PassthroughStage` stages after LMHead. Here the two passthrough slots are
-    replaced by :class:`DenseDecoderStage` and :class:`MoEDecoderStage` **before** LMHead so every
-    D2D hop stays activation-sized until the final LMHead emits token-sized pages to loopback.
-    (Placing dense/MoE after LMHead would mismatch TOKEN vs activation socket handshakes.)
-
+    When ``host_loopback=True``, the last-stage token is returned to rank 0 via host MPI
+    (``send_bytes``/``recv_bytes``) instead of a fabric loopback kernel.
     """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(
             weight_provider.load_embedding(device),
             forward_metadata=True,
+            host_loopback=host_loopback,
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
@@ -273,6 +271,7 @@ def create_single_galaxy_deepseek_pipeline_configuration(
             weights=weight_provider.load_dense_layer(layer_id=dense_layer_id, device=device),
             layer_idx=dense_layer_id,
             forward_metadata=True,
+            host_loopback=host_loopback,
         )
 
     def stage_2(device: ttnn.MeshDevice) -> StageKind:
@@ -280,6 +279,7 @@ def create_single_galaxy_deepseek_pipeline_configuration(
             weights=weight_provider.load_moe_layer(layer_id=moe_layer_id, device=device),
             layer_idx=moe_layer_id,
             forward_metadata=True,
+            host_loopback=host_loopback,
         )
 
     def stage_3(device: ttnn.MeshDevice) -> StageKind:
@@ -292,9 +292,9 @@ def create_single_galaxy_deepseek_pipeline_configuration(
     return PipelineConfiguration(
         {
             0: stage_0,
-            1: stage_1,
-            2: stage_2,
-            3: stage_3,
+            1: stage_3,
+            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN, host_loopback=host_loopback),
+            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN, host_loopback=host_loopback),
         }
     )
 
@@ -519,6 +519,7 @@ class PipelineConfiguration:
         my_stage_idx: int | None = None,
         stages_metadata: dict[int, StageMetadata] | None = None,
         pipeline_config: list | None = None,
+        host_loopback: bool = False,
     ) -> Pipeline:
         """Create a Pipeline for this process's stage.
 
@@ -529,12 +530,18 @@ class PipelineConfiguration:
             stages_metadata: Per-stage rank/mesh_id routing info.
             pipeline_config: List of PipelineConfigEntry (entry/exit coords per stage).
                 Required when stages_metadata is provided.
+            host_loopback: If True, generate a host-loopback pipeline config (no fabric loopback).
         """
         if my_stage_idx is None:
             my_stage_idx = mesh_device.get_system_mesh_id()
         stage = self._stage_factories[my_stage_idx](mesh_device)
         return Pipeline(
-            mesh_device, stage, my_stage_idx, stages_metadata=stages_metadata, pipeline_config=pipeline_config
+            mesh_device,
+            stage,
+            my_stage_idx,
+            stages_metadata=stages_metadata,
+            pipeline_config=pipeline_config,
+            host_loopback=host_loopback,
         )
 
 
@@ -548,6 +555,7 @@ class Pipeline:
         my_stage_idx: int,
         stages_metadata: dict[int, StageMetadata] | None = None,
         pipeline_config: list | None = None,
+        host_loopback: bool = False,
     ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
@@ -556,7 +564,11 @@ class Pipeline:
             assert pipeline_config is not None, "pipeline_config required when stages_metadata is provided"
             self._pipeline_config = pipeline_config
         else:
-            self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+            # Wait for all ranks to finish weight loading before entering distributed topology generation.
+            ttnn.distributed_context_barrier()
+            self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(
+                not host_loopback
+            )
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
@@ -603,6 +615,7 @@ class Pipeline:
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
+
         self.barrier()  # Synchronize before socket creation — stage 0 may be slow due to weight loading
         logger.info("Configuring block")
         self.configure_block()
@@ -627,10 +640,10 @@ class Pipeline:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.write_token(token_tensor)
 
-    def read_output(self, output_tensor: ttnn.Tensor) -> None:
+    def read_output(self, output_tensor: ttnn.Tensor):
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
-        self._pipeline_block.read_output(output_tensor)
+        return self._pipeline_block.read_output(output_tensor)
 
     def export_host_socket_descriptors(self, prefix: str) -> None:
         if self._pipeline_block is None:

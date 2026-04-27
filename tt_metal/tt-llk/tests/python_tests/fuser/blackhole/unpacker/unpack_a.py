@@ -44,41 +44,41 @@ class UnpackerA(Unpacker):
             tensor_b = tensor_a
             tensor_a = None
             tensor_b = tilize_block(
-                tensor_b, operation.src_a.dimensions, operation.src_a.data_format
+                tensor_b, compute_unit.src_a.dimensions, compute_unit.src_a.data_format
             )
             broadcast_golden = get_golden_generator(BroadcastGolden)
             tensor_b = broadcast_golden(
                 compute_unit.broadcast_type,
                 tensor_b,
-                operation.src_a.data_format,
-                operation.num_faces,
-                operation.src_a.tile_count,
-                operation.face_r_dim,
+                compute_unit.src_a.data_format,
+                compute_unit.src_a.tile_shape.total_num_faces(),
+                compute_unit.src_a.tile_count,
+                compute_unit.src_a.tile_shape.face_r_dim,
             )
             tensor_b = untilize_block(
                 tensor_b,
-                operation.src_a.data_format,
-                operation.src_a.dimensions,
+                compute_unit.src_a.data_format,
+                compute_unit.src_a.dimensions,
             )
         else:
             if compute_unit.unpack_transpose_faces == Transpose.Yes:
                 tensor_a = t_matrix.transpose_faces_multi_tile(
                     tensor_a,
-                    operation.src_a.data_format,
-                    operation.src_a.tile_count,
+                    compute_unit.src_a.data_format,
+                    compute_unit.src_a.tile_count,
                     tilize=True,
                     untilize=True,
-                    input_dimensions=operation.src_a.dimensions,
+                    input_dimensions=compute_unit.src_a.dimensions,
                 )
 
             if compute_unit.unpack_transpose_within_face == Transpose.Yes:
                 tensor_a = t_matrix.transpose_within_faces_multi_tile(
                     tensor_a,
-                    operation.src_a.data_format,
-                    operation.src_a.tile_count,
+                    compute_unit.src_a.data_format,
+                    compute_unit.src_a.tile_count,
                     tilize=True,
                     untilize=True,
-                    input_dimensions=operation.src_a.dimensions,
+                    input_dimensions=compute_unit.src_a.dimensions,
                 )
             tensor_b = None
 
@@ -101,7 +101,7 @@ class UnpackerA(Unpacker):
         elif compute_unit.broadcast_type == BroadcastType.Row:
             return "_perf_unpack_loop_set_valid<false, true>(4);\n"
         else:
-            num_faces = operation.num_faces
+            num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             return f"_perf_unpack_loop_set_valid<true, true>({num_faces});\n"
 
     def perf_clear_valid(
@@ -121,7 +121,7 @@ class UnpackerA(Unpacker):
         elif compute_unit.broadcast_type == BroadcastType.Row:
             return "_perf_math_loop_clear_valid<false, true>(4);\n"
         else:
-            num_faces = operation.num_faces
+            num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             return f"_perf_math_loop_clear_valid<true, true>({num_faces});\n"
 
     def init(
@@ -135,8 +135,8 @@ class UnpackerA(Unpacker):
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
         transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
 
@@ -157,9 +157,10 @@ class UnpackerA(Unpacker):
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
+        buffer_a = compute_unit.src_a.cpp_name
 
         return (
             f"_llk_unpack_A_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    L1_ADDRESS(buffer_A{stage}[{block.tile_id_global}]), unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
+            f"    L1_ADDRESS({buffer_a}[{block.tile_id_global}]), unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
             f");\n"
         )

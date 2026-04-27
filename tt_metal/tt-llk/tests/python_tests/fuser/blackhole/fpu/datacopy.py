@@ -42,9 +42,9 @@ class DatacopyFpu(Fpu):
         golden_tensor = golden_generator(
             source_tensor,
             operation.output.data_format,
-            num_faces=operation.num_faces,
-            input_dimensions=operation.src_a.dimensions,
-            face_r_dim=operation.face_r_dim,
+            num_faces=operation.output.tile_shape.total_num_faces(),
+            input_dimensions=compute_unit.src_a.dimensions,
+            face_r_dim=operation.output.tile_shape.face_r_dim,
         )
 
         return (tensor_a, tensor_b, golden_tensor)
@@ -61,7 +61,7 @@ class DatacopyFpu(Fpu):
         tilize_en = operation.bh_tilize.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
-        num_faces = operation.num_faces
+        num_faces = operation.output.tile_shape.total_num_faces()
         is_int_fpu_en = dest_acc
 
         return (
@@ -83,7 +83,7 @@ class DatacopyFpu(Fpu):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
-        num_faces = operation.num_faces
+        num_faces = operation.output.tile_shape.total_num_faces()
 
         return (
             f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
