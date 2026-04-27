@@ -697,7 +697,7 @@ def test_persistent_moe_15_stages(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
             )
 
-            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
+            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 0)
 
             input_core_grid = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid
             bcast_shard_spec = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
@@ -1083,7 +1083,7 @@ def test_persistent_moe_multi_token(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
             )
 
-            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
+            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 0)
 
             input_core_grid = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid
             bcast_shard_spec = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)

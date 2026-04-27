@@ -4382,11 +4382,7 @@ class MoeOp:
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         sem_addrs = self.sem_addrs
         self.persistent_mode = persistent_mode
-        self.persistent_next_iter_sem_addr = (
-            int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
-            if persistent_next_iter_semaphore is not None
-            else 0
-        )
+        self.persistent_next_iter_sem_addr = int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
 
         if cb_id_context is None:
             self.cb_id_manager = CircularBufferIdManager()
@@ -4753,7 +4749,7 @@ class MoeOp:
         sdpa_out_interm_buffer=None,
         num_iterations=1,
         persistent_mode=False,
-        persistent_next_iter_semaphore=None,  # TODO: (GR)
+        persistent_next_iter_semaphore=None,
         # ReduceToOne parameters
         reduce_intermediate_tensors: Optional[list] = None,
         reduce_output_tensor: Optional[ttnn.Tensor] = None,

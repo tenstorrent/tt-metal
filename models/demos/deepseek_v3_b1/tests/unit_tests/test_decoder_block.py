@@ -448,7 +448,7 @@ def test_decoder(
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
     ttnn.synchronize_device(submesh)
     reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
-    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)  # TODO: (GR) value
+    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
     ttnn.synchronize_device(submesh)
 
     num_links_bcast = 1
@@ -959,7 +959,7 @@ def test_decoder_mlp(
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
     ttnn.synchronize_device(submesh)
     reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
-    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)  # TODO: (GR) value
+    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
     ttnn.synchronize_device(submesh)
 
     num_links_bcast = 1

@@ -833,7 +833,7 @@ def test_persistent_mode_pipeline(
             available_cores = moe_worker_core_grid
             bcast_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(3)]
             moe_semaphores = MoeOp.create_semaphores(mesh_device)
-            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 1)
+            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
 
             input_core_grid = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid
             bcast_shard_spec = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
