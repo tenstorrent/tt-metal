@@ -261,6 +261,7 @@ def run_generation(
                 page_table=page_table_tt,
                 kv_cache=tt_kv_cache,
                 sampling_on_device=on_device_sampling,
+                pli_combined=device_inputs.get("pli"),
             )
 
         def _inputs_to_device(inputs):
