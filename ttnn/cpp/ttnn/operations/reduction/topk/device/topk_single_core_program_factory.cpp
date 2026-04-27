@@ -16,7 +16,11 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactory::create_descriptor(
-    const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
+    const TopkParams& operation_attributes,
+    const TopkInputs& tensor_args,
+    std::tuple<Tensor, Tensor>& tensor_return_value) {
+    const auto& args = operation_attributes;
+    auto& output_tensors = tensor_return_value;
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& value_tensor = std::get<0>(output_tensors);

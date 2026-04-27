@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "tt_stl/reflection.hpp"
 
 #include "welford_reduce_device_operation_types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
@@ -49,8 +50,8 @@ ttnn::Tensor welford_reduce(
     tt::tt_metal::ReduceOpMath reduce_math,
     tt::tt_metal::ReduceOpDim reduce_dim,
     float scalar,
-    const MemoryConfig& output_mem_config,
-    const std::optional<DataType>& output_dtype,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,

@@ -9,6 +9,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
