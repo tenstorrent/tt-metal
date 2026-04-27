@@ -257,7 +257,6 @@ class TtMoe(LightweightModule):
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             metadata_len=metadata_len,
-            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,

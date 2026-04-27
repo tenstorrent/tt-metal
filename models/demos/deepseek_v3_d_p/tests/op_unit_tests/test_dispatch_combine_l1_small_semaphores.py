@@ -138,7 +138,6 @@ def run_dispatch_op(mesh_device, use_l1_small):
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         cluster_axis=sp_axis,
         num_links=1,

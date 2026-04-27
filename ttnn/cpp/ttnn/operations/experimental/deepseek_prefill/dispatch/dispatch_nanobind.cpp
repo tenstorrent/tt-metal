@@ -58,9 +58,6 @@ void bind_dispatch(nb::module_& mod) {
             num_experts_per_tok (int): Number of experts each token is routed to (top-k).
             metadata_len (int): Number of fields per token in the metadata buffer (5:
                 linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight).
-            max_dispatched_tokens_per_expert (int): Per-expert theoretical upper bound on the
-                number of tokens any single expert may receive (full sequence length of the
-                dispatch group).
             max_dispatch_buffer_token_size (int): Total token capacity of the flat dispatch
                 buffer per chip (shared across all local experts via dynamic offsets).
                 Used as the in-kernel bounds check ceiling.
@@ -94,7 +91,6 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("num_routed_experts"),
         nb::arg("num_experts_per_tok"),
         nb::arg("metadata_len"),
-        nb::arg("max_dispatched_tokens_per_expert"),
         nb::arg("max_dispatch_buffer_token_size"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
