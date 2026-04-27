@@ -287,8 +287,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
-            // Poll each reset MMIO ETH channel's heartbeat address until (val >> 16) == 0xABCD,
-            // indicating the ERISC has rebooted and is running UMD base relay firmware.
+            // Poll each reset MMIO ETH channel's heartbeat until the counter is actively
+            // incrementing in 0xABCDxxxx format, confirming UMD base relay firmware is running.
+            // Two-phase check (mirrors UMD topology_discovery::eth_heartbeat_running):
+            //   Phase 1: wait for heartbeat != 0  (ROM zeroes L1 on boot; firmware writes first value)
+            //   Phase 2: wait for value to CHANGE  (proves firmware is actively running, not stale memory)
+            //            AND upper 16 bits == 0xABCD (rules out non-base-firmware garbage)
             // cluster_.read_reg() on MMIO cores goes through PCIe — safe even with broken relay.
             //
             // Heartbeat addresses (populated in each arch's HAL active_eth file):
@@ -296,7 +300,6 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             //   BH: MEM_SYSENG_ETH_HEARTBEAT = 0x7CC70  (eth_status_t.heartbeat[0])
             //   QA: MEM_SYSENG_ETH_HEARTBEAT = 0x7CC70  (same struct layout as BH)
             //
-            // On all arches: base firmware increments in 0xABCDxxxx format.
             // hal_.get_eth_fw_mailbox_val(HEARTBEAT) == 0 means arch not yet wired up —
             // fall back to 500ms sleep so we don't silently skip the wait.
             {
@@ -318,6 +321,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                             tt_cxy_pair poll_target(poll_mmio_id, poll_virt);
                             const auto poll_start = std::chrono::steady_clock::now();
                             bool ready = false;
+                            uint32_t prev_hb = 0;
+                            bool nonzero_seen = false;
                             while (true) {
                                 uint32_t hb_val = 0;
                                 try {
@@ -325,7 +330,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                                 } catch (...) {
                                     break;  // PCIe read failed — don't spin
                                 }
-                                if ((hb_val >> 16) == 0xABCDu) {
+                                if (!nonzero_seen) {
+                                    if (hb_val != 0) {
+                                        prev_hb = hb_val;
+                                        nonzero_seen = true;
+                                    }
+                                } else if ((hb_val >> 16) == 0xABCDu && hb_val != prev_hb) {
                                     ready = true;
                                     break;
                                 }
@@ -457,8 +467,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
-            // Poll each reset MMIO ETH channel's heartbeat for 0xABCDxxxx — same logic
-            // as Step 2.  Relay is intact in this path (relay_broken_non_mmio was empty),
+            // Same two-phase heartbeat poll as Step 2 — see comment there for rationale.
+            // Relay is intact in this path (relay_broken_non_mmio was empty),
             // but cluster_.read_reg() via PCIe is still the right read path for MMIO cores.
             {
                 const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
@@ -479,6 +489,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                             tt_cxy_pair poll_target(poll_mmio_id, poll_virt);
                             const auto poll_start = std::chrono::steady_clock::now();
                             bool ready = false;
+                            uint32_t prev_hb = 0;
+                            bool nonzero_seen = false;
                             while (true) {
                                 uint32_t hb_val = 0;
                                 try {
@@ -486,7 +498,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                                 } catch (...) {
                                     break;
                                 }
-                                if ((hb_val >> 16) == 0xABCDu) {
+                                if (!nonzero_seen) {
+                                    if (hb_val != 0) {
+                                        prev_hb = hb_val;
+                                        nonzero_seen = true;
+                                    }
+                                } else if ((hb_val >> 16) == 0xABCDu && hb_val != prev_hb) {
                                     ready = true;
                                     break;
                                 }
