@@ -107,7 +107,12 @@ ALWI void reload_accumulator_if_needed(
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
             accum_cb.wait_front(onetile);
-            copy_tile_to_dst_init_short_with_dt(input_cb_id, accumulate.config.cb_accumulator);
+            // SRCA currently holds scaler_cb's format in matmul mode (reconfig_data_format(scaler_cb, input_cb)
+            // sets SRCA=scaler_cb, SRCB=input_cb), and input_cb's format otherwise. The reconfig must be
+            // told the *current* SRCA source so the format-switch issued by copy_tile_to_dst_init_short_with_dt
+            // is correct.
+            const uint32_t old_srca_cb_id = use_matmul ? scaler_cb_id : input_cb_id;
+            copy_tile_to_dst_init_short_with_dt(old_srca_cb_id, accumulate.config.cb_accumulator);
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
             accum_cb.pop_front(onetile);
 
