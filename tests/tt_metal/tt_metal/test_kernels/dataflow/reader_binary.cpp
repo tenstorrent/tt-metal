@@ -70,33 +70,33 @@ void kernel_main() {
     // This input populates dest with values before binary operation
     // executes, this is used to test eltwise binary with dest re-use
     // and eltwise binary with dest accumulation
-#if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
+#if defined(DST_ACCUM_MODE) || defined(LOAD_BUF2_DATA) || defined(ELTWISE_DEST_REUSE_TYPE)
     uint32_t src2_addr = get_arg_val<uint32_t>(5);
     uint32_t src2_bank_id = get_arg_val<uint32_t>(6);
 
-    #ifdef ARCH_QUASAR
-        constexpr uint32_t dfb_in2_id = get_compile_time_arg_val(2);
-        experimental::DataflowBuffer dfb2(dfb_in2_id);
-        uint32_t ublock_size_bytes_2 = dfb2.get_entry_size() * ublock_size_tiles;
-    #else
-        constexpr uint32_t cb_id_in2 = 2;
-        experimental::CircularBuffer cb2(cb_id_in2);
-        uint32_t ublock_size_bytes_2 = cb2.get_tile_size() * ublock_size_tiles;
-    #endif
+#ifdef ARCH_QUASAR
+    constexpr uint32_t dfb_in2_id = get_compile_time_arg_val(2);
+    experimental::DataflowBuffer dfb2(dfb_in2_id);
+    uint32_t ublock_size_bytes_2 = dfb2.get_entry_size() * ublock_size_tiles;
+#else
+    constexpr uint32_t cb_id_in2 = 2;
+    experimental::CircularBuffer cb2(cb_id_in2);
+    uint32_t ublock_size_bytes_2 = cb2.get_tile_size() * ublock_size_tiles;
+#endif
 
     for (uint32_t i=0; i<num_tiles; i += ublock_size_tiles) {
         uint64_t src2_noc_addr = get_noc_addr_from_bank_id<true>(src2_bank_id, src2_addr);
-        #ifdef ARCH_QUASAR
-            dfb2.reserve_back(ublock_size_tiles);
-            noc.async_read(dram_src, dfb2, ublock_size_bytes_2, {.bank_id = src2_bank_id, .addr = src2_addr}, {});
-            noc.async_read_barrier();
-            dfb2.push_back(ublock_size_tiles);
-        #else
-            cb2.reserve_back(ublock_size_tiles);
-            noc.async_read(dram_src, cb2, ublock_size_bytes_2, {.bank_id = src2_bank_id, .addr = src2_addr}, {});
-            noc.async_read_barrier();
-            cb2.push_back(ublock_size_tiles);
-        #endif
+#ifdef ARCH_QUASAR
+        dfb2.reserve_back(ublock_size_tiles);
+        noc.async_read(dram_src, dfb2, ublock_size_bytes_2, {.bank_id = src2_bank_id, .addr = src2_addr}, {});
+        noc.async_read_barrier();
+        dfb2.push_back(ublock_size_tiles);
+#else
+        cb2.reserve_back(ublock_size_tiles);
+        noc.async_read(dram_src, cb2, ublock_size_bytes_2, {.bank_id = src2_bank_id, .addr = src2_addr}, {});
+        noc.async_read_barrier();
+        cb2.push_back(ublock_size_tiles);
+#endif
         src2_addr += ublock_size_bytes_2;
     }
 #endif

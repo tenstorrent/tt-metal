@@ -41,6 +41,11 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
 
 blackhole:
+  # UINT32 tiled concat crash — segfault in ttsim for 4D UINT32 tensors on BH.
+  # Skipping full test function because parametrized ID contains parens/brackets
+  # that break the skip-list shell interpolation.
+  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
+
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py

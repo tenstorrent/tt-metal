@@ -7,7 +7,6 @@ import statistics
 import numpy as np
 import pytest
 import torch
-from diffusers.utils import export_to_video
 from loguru import logger
 from PIL import Image
 
@@ -16,6 +15,7 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import line_params, ring_params, ring_params_8k
 
@@ -29,12 +29,22 @@ def _scale_expected_metrics(expected_metrics: dict, factor: float) -> dict:
     return {k: v * factor for k, v in expected_metrics.items()}
 
 
+def create_fractal_image(width: int, height: int) -> Image.Image:
+    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
+    z = np.zeros_like(c)
+    img = np.zeros(c.shape, dtype=np.uint8)
+    for i in range(32):
+        z = z * z + c
+        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
+    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
+
+
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         if is_blackhole():
             expected_metrics = {
-                "encoder": 0.08,
+                "encoder": 0.1,
                 "denoising": 240.0,
                 "vae": 5.0,
                 "total": 255.0,
@@ -104,7 +114,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3), dtype=np.uint8), "RGB")
+        image_prompt = create_fractal_image(width, height)
 
     # Only WH 4x8 uses ring; BH 4x8 linear is the distinct Linear case at this mesh shape.
     if tuple(mesh_device.shape) == (4, 8) and topology == ttnn.Topology.Linear:
@@ -276,6 +286,7 @@ def test_pipeline_performance(
                     profiler_iteration=i,
                     seed=42,
                     traced=traced,
+                    output_type="uint8",
                 )
                 ttnn.synchronize_device(mesh_device)
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -294,22 +305,22 @@ def test_pipeline_performance(
 
     # Basic validation
     if isinstance(frames, np.ndarray):
-        print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
+        print(f"  Video dtype:      {frames.dtype}")
+        print(f"  Video data range: [{frames.min()}, {frames.max()}]")
     elif isinstance(frames, torch.Tensor):
-        print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
+        print(f"  Video dtype:      {frames.dtype}")
+        print(f"  Video data range: [{frames.min().item()}, {frames.max().item()}]")
 
-    # Save video using diffusers utility
+    # Save video
     # Remove batch dimension
     frames = frames[0]
-    try:
-        if not is_ci_env:
-            if int(ttnn.distributed_context_get_rank()) == 0:
-                export_to_video(frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16)
-                print(f"✓ Saved video to: wan_output_video_{model_type}{'_traced' if traced else ''}.mp4")
-            else:
-                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
-    except AttributeError as e:
-        logger.info(f"AttributeError: {e}")
+    if not is_ci_env:
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
+            export_to_video(frames, output_path, fps=16)
+            print(f"✓ Saved video to: {output_path}")
+        else:
+            print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]

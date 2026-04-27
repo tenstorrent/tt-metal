@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
+from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     PROMPTS_PATH,
@@ -52,9 +52,12 @@ PCC_THRESHOLD = 0.99
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
+SEQ_LEN_1K = 1024
+SEQ_LEN_25K = 25 * 1024
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
+@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
@@ -62,7 +65,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
     ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("isl_total", [1024, 6400])
+@pytest.mark.parametrize("isl_total", [SEQ_LEN_1K, SEQ_LEN_25K])
 @pytest.mark.parametrize(
     "num_layers",
     [
@@ -79,6 +82,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
     ],
     ids=["e64_cf4_host", "e256_cf32_host", "e256_cf32_device"],
 )
+@pytest.mark.parametrize("num_iterations", [1])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -120,9 +124,11 @@ def test_prefill_transformer(
     num_links,
     topology,
     pcc_validation,
+    num_iterations,
     input_source,
     use_pretrained,
     return_kv_cache,
+    temperature,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
@@ -198,6 +204,11 @@ def test_prefill_transformer(
     )
 
     profiler.end("cache_check")
+
+    # Report cache check timing breakdown
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import report_and_clear
+
+    report_and_clear()
 
     # --- Create input (needed early for reference computation) ---
     if input_source == "random":
@@ -283,6 +294,10 @@ def test_prefill_transformer(
     profiler.end("weights_creation")
 
     # --- TT transformer ---
+    # Log program cache size BEFORE creation
+    cache_entries_before = mesh_device.num_program_cache_entries()
+    logger.info(f"Program cache entries BEFORE transformer creation: {cache_entries_before}")
+
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
         mesh_device=mesh_device,
@@ -300,6 +315,12 @@ def test_prefill_transformer(
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
+
+    # Log program cache size AFTER creation
+    cache_entries_after = mesh_device.num_program_cache_entries()
+    logger.info(f"Program cache entries AFTER transformer creation: {cache_entries_after}")
+    logger.info(f"Program cache entries ADDED during creation: {cache_entries_after - cache_entries_before}")
+
     # --- Free memory immediately after transformer creation ---
     del state_dict
     gc.collect()
@@ -334,47 +355,52 @@ def test_prefill_transformer(
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
-    result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation, read_profiler=True)
-    ttnn.synchronize_device(mesh_device)
+    for i in range(num_iterations):
+        logger.info(f"Starting iteration: {i}")
+        first_token_id, first_token_prob, tt_intermediates = transformer(
+            tt_tokens,
+            tt_kvpe_cache,
+            return_intermediates=pcc_validation,
+            read_profiler=True,
+            temperature=temperature,
+        )
+        logger.info(f"Starting completion sync on iteration: {i}")
+        ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
-    logger.info("Forward pass completed successfully")
+    logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
 
+    # --- Save intermediate outputs ---
     if pcc_validation:
-        tt_output, tt_snapshots = result
-    else:
-        tt_output = result
+        assert tt_intermediates is not None, "Expected intermediates dict"
+        test_params = {
+            "mesh_shape": mesh_shape,
+            "isl_total": isl_total,
+            "isl_per_chip": isl_per_chip,
+            "num_layers": num_layers,
+            "n_routed_experts": n_routed_experts,
+            "capacity_factor": capacity_factor,
+            "gate_fallback_mode": gate_fallback_mode,
+            "use_pretrained": use_pretrained,
+            "input_source": input_source,
+            "topology": str(topology),
+            "num_links": num_links,
+            "emb_dim": emb_dim,
+            "sp_factor": sp_factor,
+            "tp_factor": tp_factor,
+        }
 
-    # --- Validate output shape ---
-    expected_per_device_shape = [1, 1, isl_per_chip, emb_dim // tp_factor]
-    output_shape = list(tt_output.shape)
-    assert (
-        output_shape == expected_per_device_shape
-    ), f"Output shape mismatch: got {output_shape}, expected {expected_per_device_shape}"
-    logger.info(f"Output shape: {output_shape} (matches expected)")
+        assert "norm" in tt_intermediates, "Expected 'norm' in intermediates"
+        save_intermediate_output(
+            tensor=tt_intermediates["norm"],
+            name="norm",
+            test_params=test_params,
+        )
 
-    # --- Save final norm output ---
-    if pcc_validation:
-        final_norm_label, final_norm_tensor = tt_snapshots[-1]
-        assert final_norm_label == "norm", f"Expected last snapshot to be 'norm', got '{final_norm_label}'"
-
-        save_norm_output(
-            norm_tensor=final_norm_tensor,
-            test_params={
-                "mesh_shape": mesh_shape,
-                "isl_total": isl_total,
-                "isl_per_chip": isl_per_chip,
-                "num_layers": num_layers,
-                "n_routed_experts": n_routed_experts,
-                "capacity_factor": capacity_factor,
-                "gate_fallback_mode": gate_fallback_mode,
-                "use_pretrained": use_pretrained,
-                "input_source": input_source,
-                "topology": str(topology),
-                "num_links": num_links,
-                "emb_dim": emb_dim,
-                "sp_factor": sp_factor,
-                "tp_factor": tp_factor,
-            },
+        assert "lm_head" in tt_intermediates, "Expected 'lm_head' in intermediates"
+        save_intermediate_output(
+            tensor=tt_intermediates["lm_head"],
+            name="lm_head",
+            test_params=test_params,
         )
 
     # --- PCC check ---
@@ -397,8 +423,16 @@ def test_prefill_transformer(
         # else: already computed by load_and_compute_layer_by_layer()
 
         # Per-stage PCC comparison
+        # ref_snapshots is a list of tensors: [embed, layer_0, ..., layer_N, norm, lm_head]
+        # tt_intermediates is a dict with keys: "embed", "layer_0", ..., "layer_N", "norm", "lm_head", "first_token"
         pcc_results = []
-        for (label, tt_host), ref_host in zip(tt_snapshots, ref_snapshots):
+        ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
+        for label, ref_host in zip(ref_labels, ref_snapshots):
+            if label not in tt_intermediates:
+                logger.error(f"{label:<20s}  Missing from TT intermediates")
+                pcc_results.append((label, -1.0))
+                continue
+            tt_host = tt_intermediates[label]
             try:
                 _, pcc = comp_pcc(ref_host.float(), tt_host.float())
                 logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
@@ -448,6 +482,35 @@ def test_prefill_transformer(
             if pcc <= threshold:
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
+
+        # Log first token info (returned value is for first temperature in list)
+        try:
+            tok = request.getfixturevalue("tokenizer")
+        except Exception:
+            tok = None
+
+        # Decode token to string
+        token_text = tok.decode([first_token_id]) if tok else "N/A"
+        first_temp = temperature[0] if isinstance(temperature, list) else temperature
+        logger.info(
+            f"First Token: ID={first_token_id} [{repr(token_text)}] prob={first_token_prob*100:.1f}% temp={first_temp}"
+        )
+
+        # Log all temperature results from intermediates
+        if tt_intermediates and "first_token" in tt_intermediates:
+            for result in tt_intermediates["first_token"]:
+                tid = result["token_id"]
+                tprob = result["probability"]
+                ttemp = result["temperature"]
+                ttext = tok.decode([tid]) if tok else "N/A"
+                logger.debug(f"First Token: ID={tid} [{repr(ttext)}] prob={tprob*100:.1f}% temp={ttemp}")
+                # Print top5
+                if "top5" in result:
+                    for i, t5 in enumerate(result["top5"]):
+                        t5_id = t5["token_id"]
+                        t5_prob = t5["probability"]
+                        t5_text = tok.decode([t5_id]) if tok else "N/A"
+                        logger.debug(f"  top{i+1}: ID={t5_id} [{repr(t5_text)}] prob={t5_prob*100:.1f}%")
 
         # Store failures for deferred check (after timing report)
         has_pcc_failures = len(failures) > 0
