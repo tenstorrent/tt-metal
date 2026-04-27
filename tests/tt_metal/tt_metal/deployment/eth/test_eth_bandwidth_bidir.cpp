@@ -74,6 +74,7 @@ static void track_eth_progress_timeout(
     uint32_t recv_l1_address,
     uint32_t iter_l1_addr,
     uint32_t expected_count) {
+    /* =================== */
     uint32_t prev_send = -1;
     uint32_t prev_recv = -1;
 
@@ -87,7 +88,7 @@ static void track_eth_progress_timeout(
             break;
         }
 
-        log_info(tt::LogTest, "Read {} {}, waiting until {}", curr_send, curr_recv, expected_count);
+        // log_info(tt::LogTest, "Read {} {}, waiting until {}", curr_send, curr_recv, expected_count);
 
         if (curr_send == prev_send || curr_recv == prev_recv) {
             log_critical(tt::LogTest, "Timed out! You probably need to reset the device (tt-smi -r)");
@@ -244,6 +245,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidthBidir) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     bool pass = true;
+    int n = 0;
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -269,11 +271,13 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidthBidir) {
                     log_info(tt::LogTest, "    running on {}", processor);
                     pass &= run_test_bandwidth_bidir(
                         this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
+                    n++;
                 }
             }
         }
     }
 
+    log_info(tt::LogTest, "Ran {} tests", n);
     ASSERT_TRUE(pass);
 }
 

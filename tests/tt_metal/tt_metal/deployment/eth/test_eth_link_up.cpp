@@ -82,6 +82,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetLinkUp) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     bool pass = true;
+    int n = 0;
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -107,11 +108,13 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetLinkUp) {
                     log_info(tt::LogTest, "    running on {}", processor);
                     pass &=
                         run_test(this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
+                    n++;
                 }
             }
         }
     }
 
+    log_info(tt::LogTest, "Ran {} tests", n);
     ASSERT_TRUE(pass);
 }
 
