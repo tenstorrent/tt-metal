@@ -626,8 +626,6 @@ class Generator(WarmupForwardMixin):
                 )
                 use_batched_prefill = False
 
-        # Host e2e vision prefill trace only has a single-user merged-embedding capture; batched+images would
-        # misroute pixels. Fall back to sequential per-user so each step can use _vm trace when supported.
         if use_batched_prefill and enable_trace and kwargs.get("pixel_values", None) is not None:
             pvs = kwargs["pixel_values"]
             if isinstance(pvs, (list, tuple)):
@@ -705,8 +703,6 @@ class Generator(WarmupForwardMixin):
                 prefill_seq_len, num_cached_tokens if not use_batched_prefill else 0
             )
 
-            # Prefill host trace: text uses uint32 + embd in the graph; vision e2e (Gemma3 TtGemmaModel)
-            # uses pre-merged bf16 activations + decoder in the graph (vision tower runs before each prefill).
             _pvs = kwargs.get("pixel_values", None)
             if _pvs is not None and use_batched_prefill:
                 has_vision = isinstance(_pvs, (list, tuple)) and any(x is not None for x in _pvs)
