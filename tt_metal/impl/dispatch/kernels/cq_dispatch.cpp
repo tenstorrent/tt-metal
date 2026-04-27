@@ -121,6 +121,9 @@ constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
 constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 
+constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
+constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled;
+
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
 // Note: due to the current method of release pages, up to 1 block of pages
@@ -1389,7 +1392,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
     return done;
 }
 
-struct dispatch_d_noc_counter_snapshot {
+struct NocCounterSnapshot {
     uint32_t reads_num_issued;
     uint32_t nonposted_writes_num_issued;
     uint32_t nonposted_writes_acked;
@@ -1398,7 +1401,7 @@ struct dispatch_d_noc_counter_snapshot {
 };
 
 FORCE_INLINE
-dispatch_d_noc_counter_snapshot snapshot_dispatch_d_noc_counters() {
+NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
     return {
         .reads_num_issued = noc_reads_num_issued[upstream_noc_index],
         .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[upstream_noc_index],
@@ -1409,10 +1412,14 @@ dispatch_d_noc_counter_snapshot snapshot_dispatch_d_noc_counters() {
 }
 
 // dispatch_d writes to the NOC1 core, but dispatch_s holds dedicated noc status on it. L1 noc counters
-// are levaraged along with a shutdown semaphore to transfer dispatch_d's write count to dispatch_s.
+// are leveraged along with a shutdown semaphore to transfer dispatch_d's write count to dispatch_s.
 FORCE_INLINE
-void publish_dispatch_d_noc_count(const dispatch_d_noc_counter_snapshot& snapshot) {
-    static_assert(!distributed_dispatcher, "publish_dispatch_d_noc_count is only supported when dispatch_d runs on the same core");
+void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
+    if constexpr (!publish_noc_count) {
+        DEVICE_PRINT("publish_dispatch_d_noc_count is only supported when dispatch_s runs on the same core");
+        ASSERT(0);
+        return;
+    }
 
     const uint32_t reads_delta = noc_reads_num_issued[upstream_noc_index] - snapshot.reads_num_issued;
     const uint32_t nonposted_writes_delta =
@@ -1461,8 +1468,8 @@ void kernel_main() {
         noc_local_state_init(upstream_noc_index);
     }
 
-    [[maybe_unused]] dispatch_d_noc_counter_snapshot dispatch_d_noc_counter_start = {};
-    if constexpr (!distributed_dispatcher) {
+    [[maybe_unused]] NocCounterSnapshot dispatch_d_noc_counter_start = {};
+    if constexpr (publish_noc_count) {
         dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters();
     }
 
@@ -1545,7 +1552,7 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
-    if constexpr (!distributed_dispatcher) {
+    if constexpr (publish_noc_count) {
         publish_dispatch_d_noc_count(dispatch_d_noc_counter_start);
     }
 
