@@ -61,6 +61,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sqrt.h"
+#include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
@@ -83,7 +84,7 @@ constexpr auto cb_x = tt::CBIndex::c_0;
 constexpr auto cb_dout = tt::CBIndex::c_1;
 constexpr auto cb_db_acc = tt::CBIndex::c_2;
 constexpr auto cb_scaler = tt::CBIndex::c_3;
-// c_4 unused (eps is now a compute runtime arg applied via add_unary_tile).
+constexpr auto cb_matmul_reduce = tt::CBIndex::c_4;
 constexpr auto cb_one = tt::CBIndex::c_5;
 constexpr auto cb_w0 = tt::CBIndex::c_6;
 constexpr auto cb_w1 = tt::CBIndex::c_7;
@@ -102,23 +103,16 @@ constexpr auto cb_coeff_2 = tt::CBIndex::c_19;
 constexpr auto cb_coeff_3 = tt::CBIndex::c_20;
 constexpr auto cb_output = tt::CBIndex::c_21;
 constexpr auto cb_packed_partials_output = tt::CBIndex::c_22;
-// Preweighted inv_rms (bfloat16) used by Pass-2 emit_output_for_row():
+// Preweighted inv_rms (Float32 + UnpackToDestFp32) used by Pass-2 emit_output_for_row():
 //   c_24 = w2 * inv_rms_x    (linear branch)
 //   c_25 = w1 * inv_rms_x2   (quadratic branch)
 //   c_26 = w0 * inv_rms_x3   (cubic branch)
 //
-// PRECISION NOTE: the preweighting hoist introduces one extra bf16 rounding (the pack into
-// these CBs) vs the original path, which kept w*inv_rms in fp32 DEST regs. A Float32-
-// intermediate version was attempted but hits a TT-Metal unpack/pack HW-configuration issue
-// that could not be resolved from the compute kernel alone: copy_tile uses a kernel-wide
-// UnpackToDestEn constant and the pack HW is configured once by binary_op_init_common, so
-// only individual data-format reconfigs are exposed via the high-level helpers — not the
-// full llk_unpack_hw_configure / llk_pack_hw_configure pair needed for a clean mid-kernel
-// fp32↔bf16 switch. The extra bf16 rounding contributes a worst-case absolute error of
-// ~0.077 on dL/dx for very narrow shapes ({1,1,1,32}); backward gradients flow into
-// optimizer updates scaled by the learning rate so the impact on training is negligible.
-// The test tolerance kBackwardAtol/Rtol in polynorm_op_test.cpp is widened from 5e-2 to
-// 8e-2 to accommodate this.
+// PRECISION NOTE: these CBs preserve the w*inv_rms product in fp32 and reload it directly
+// into DEST via UnpackToDestFp32. This removes the extra bf16 rounding from the original
+// BW preweighting hoist. One-block row reductions use a matmul-reduce workaround to avoid
+// scalar-sum precision loss; the remaining very-short-shape error is dominated by final
+// BF16 dL/dx output quantization.
 constexpr auto cb_weighted_inv_rms_x = tt::CBIndex::c_24;
 constexpr auto cb_weighted_inv_rms_x2 = tt::CBIndex::c_25;
 constexpr auto cb_weighted_inv_rms_x3 = tt::CBIndex::c_26;
@@ -142,15 +136,31 @@ inline void copy_scalar_tile_to_reg(const uint32_t cb_src, const uint32_t reg_ds
     copy_tile_to_reg(cb_src, 0U, reg_dst);
 }
 
+inline void row_reduce_sum_to_reg(const uint32_t cb_sum, const uint32_t reg_dst) {
+    reconfig_data_format(cb_sum, cb_matmul_reduce);
+    mm_init(cb_sum, cb_matmul_reduce, cb_sum, 0);
+    matmul_tiles(cb_sum, cb_matmul_reduce, 0, 0, reg_dst);
+}
+
+inline bool use_one_block_precision_path() {
+    return get_num_inner() <= block_size;
+}
+
 // Compute dout · (w_k · inv_rms_k) into reg_dst, using the preweighted inv_rms tile from
-// cb_weighted_inv (produced once per row by prepare_weighted_inv_rms_for_row() with valid
-// data in every column — see PRECISION NOTE above).
+// cb_weighted_inv (produced once per row by prepare_weighted_inv_rms_for_row() as fp32 and
+// reloaded through UnpackToDestFp32).
 // Clobbers register 1. Leaves math pipeline in mul mode.
 inline void weighted_dout_to_reg(const uint32_t block_idx, const uint32_t cb_weighted_inv, const uint32_t reg_dst) {
     constexpr uint32_t r1 = 1U;
 
-    copy_tile_to_reg(cb_dout, block_idx, r1);
-    copy_tile_to_reg(cb_weighted_inv, 0U, reg_dst);
+    reconfig_data_format(cb_weighted_inv, cb_weighted_inv);
+    copy_tile_to_dst_init_short(cb_weighted_inv);
+    copy_tile(cb_weighted_inv, 0U, reg_dst);
+
+    reconfig_data_format(cb_dout, cb_dout);
+    copy_tile_to_dst_init_short(cb_dout);
+    copy_tile(cb_dout, block_idx, r1);
+
     mul_binary_tile_init();
     mul_binary_tile(r1, reg_dst, reg_dst);
 }
@@ -168,10 +178,19 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     tile_regs_acquire();
     constexpr uint32_t reg_acc = 0U;
 
-    reconfig_data_format(cb_sum, cb_scaler);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, cb_inv_rms);
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, 0, 0, reg_acc);
-    reduce_uninit();
+    if (use_one_block_precision_path()) {
+        cb_wait_front(cb_matmul_reduce, onetile);
+        constexpr uint32_t reg_scaler = 1U;
+        row_reduce_sum_to_reg(cb_sum, reg_acc);
+        copy_scalar_tile_to_reg(cb_scaler, reg_scaler);
+        mul_binary_tile_init();
+        mul_binary_tile(reg_acc, reg_scaler, reg_acc);
+    } else {
+        reconfig_data_format(cb_sum, cb_scaler);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, cb_inv_rms);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, 0, 0, reg_acc);
+        reduce_uninit();
+    }
 
     binop_with_scalar_tile_init();
     add_unary_tile(reg_acc, get_eps_fp32_bits());
@@ -190,15 +209,20 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
 // Consumes cb_sum (pop), pushes one tile to cb_scalar.
 void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
     cb_wait_front(cb_sum, onetile);
-    cb_wait_front(cb_one, onetile);
 
     tile_regs_acquire();
     constexpr uint32_t reg_acc = 0U;
 
-    reconfig_data_format(cb_sum, cb_one);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, cb_scalar);
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, 0, 0, reg_acc);
-    reduce_uninit();
+    if (use_one_block_precision_path()) {
+        cb_wait_front(cb_matmul_reduce, onetile);
+        row_reduce_sum_to_reg(cb_sum, reg_acc);
+    } else {
+        cb_wait_front(cb_one, onetile);
+        reconfig_data_format(cb_sum, cb_one);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, cb_scalar);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, 0, 0, reg_acc);
+        reduce_uninit();
+    }
 
     tile_regs_commit();
     if (cb_sum == cb_scalar) {
@@ -213,10 +237,10 @@ void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
 
 // --- Per-row scalar computations ---
 
-// Multiply one inv_rms tile by its matching weight scalar and push a bfloat16 tile that
+// Multiply one inv_rms tile by its matching weight scalar and push an fp32 tile that
 // has valid data in every column. We broadcast inv_rms's col-0 to all columns, then
 // multiply by the uniform weight tile — the result is a per-row scalar replicated across
-// the tile. Downstream emit reads it via plain copy_tile (no side effects on pack HW config).
+// the tile. Downstream emit reads it via UnpackToDestFp32.
 inline void emit_weighted_inv_rms(const uint32_t cb_inv, const uint32_t cb_w, const uint32_t cb_out) {
     constexpr uint32_t reg_inv = 0U;
     constexpr uint32_t reg_weight = 1U;
@@ -232,7 +256,7 @@ inline void emit_weighted_inv_rms(const uint32_t cb_inv, const uint32_t cb_w, co
 }
 
 // Precompute weighted inv_rms triplet once per row, folding the w_k multiplies out of the
-// Pass-2 inner loop.  Writes three bfloat16 tiles to cb_weighted_inv_rms_{x, x2, x3}.
+// Pass-2 inner loop.  Writes three fp32 tiles to cb_weighted_inv_rms_{x, x2, x3}.
 void prepare_weighted_inv_rms_for_row() {
     cb_wait_front(cb_inv_rms_x, onetile);
     cb_wait_front(cb_inv_rms_x2, onetile);
@@ -537,6 +561,7 @@ void emit_output_for_row() {
 void kernel_main() {
     // Wait for constant tiles generated by the reader kernel
     cb_wait_front(cb_scaler, onetile);
+    cb_wait_front(cb_matmul_reduce, onetile);
     cb_wait_front(cb_one, onetile);
     cb_wait_front(cb_w0, onetile);
     cb_wait_front(cb_w1, onetile);
@@ -586,6 +611,7 @@ void kernel_main() {
 
     // Release constant tiles
     cb_pop_front(cb_scaler, onetile);
+    cb_pop_front(cb_matmul_reduce, onetile);
     cb_pop_front(cb_one, onetile);
     cb_pop_front(cb_w0, onetile);
     cb_pop_front(cb_w1, onetile);
