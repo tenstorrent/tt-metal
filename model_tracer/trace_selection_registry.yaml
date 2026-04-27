@@ -69,7 +69,8 @@ targets:
         - vit
         - vit_2
         - whisper
-      trace: [3,4,5,7]
+        - gpt_oss
+      trace: [3,4,5,7,10]
 
 registry:
   - trace_id: 1
