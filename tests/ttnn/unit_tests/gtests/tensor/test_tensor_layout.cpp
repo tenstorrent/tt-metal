@@ -404,7 +404,7 @@ INSTANTIATE_TEST_SUITE_P(
 struct Tile2DInterleavedAlignmentTestParams {
     Shape shape;
     Shape padded_shape;
-    Tile tile = Tile();
+    Tile tile;
     tt::tt_metal::Alignment expected_alignment;
 };
 
