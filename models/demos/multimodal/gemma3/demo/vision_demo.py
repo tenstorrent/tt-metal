@@ -45,6 +45,24 @@ def _create_page_table(
     )
 
 
+def _zero_paged_kv_caches(model: list, tt_kv_cache) -> None:
+    """Clear attention K/V (same pattern as ``text_demo``).
+
+    Warmup fills the same ``layer_past`` tensors used for inference but can use a
+    different paging pattern than the demo's ``page_table``. Without resetting,
+    decode sees stale K/V and produces nonsense (e.g. newline-only logits).
+    """
+    if tt_kv_cache is None:
+        return
+    for i in range(len(model)):
+        if tt_kv_cache[i] is None:
+            continue
+        for layer in model[i].layers:
+            k_cache, v_cache = layer.attention.layer_past
+            ttnn.mul(k_cache, 0, output_tensor=k_cache)
+            ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+
 class UserMessage(BaseModel):
     role: Literal[Role.user.value] = Role.user.value
     content: InterleavedTextMedia
@@ -304,6 +322,7 @@ def test_multimodal_demo_text(
         non_greedy_decoding_on_device=False,
     )
     logger.info("Warmup complete")
+    _zero_paged_kv_caches(model, tt_kv_cache)
 
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
@@ -397,6 +416,9 @@ def test_multimodal_demo_text(
             # Fill in actual tokens for each sequence in batch
             for i, seq in enumerate(prompt_tokens):
                 tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
+
+            if iter_num != 0 or batch_idx != 0:
+                _zero_paged_kv_caches(model, tt_kv_cache)
 
             prefill_start = time.perf_counter()
             with profiler("inference_prefill", iteration=batch_idx):
