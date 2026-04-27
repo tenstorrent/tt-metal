@@ -104,7 +104,9 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
     //   hop[N-1]: mesh_{N-1} → mesh_0     (stage N-1 exit → loopback entry)
     //
     // Stage 0 entry and loopback exit are intra-mesh on mesh_0 (not from inter-mesh cables).
-    // Find two unclaimed nodes on mesh_0 for these.
+    // Pick two unclaimed chips with a direct intra-mesh ethernet link (loopback_exit -> stage_0_entry).
+    // Prefer a non-Z link when available so the loopback hop matches typical NESW mesh wiring.
+    // Collect ALL unclaimed nodes; the directly-connected pair may not be the first ones found.
     auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
     std::vector<tt::tt_fabric::FabricNodeId> unclaimed_mesh_0_nodes;
     for (const auto& coord : mesh_0_coord_range) {
@@ -112,9 +114,6 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
         tt::tt_fabric::FabricNodeId fn(mesh_ids[0], chip_id);
         if (!used_nodes.contains(fn)) {
             unclaimed_mesh_0_nodes.push_back(fn);
-            if (unclaimed_mesh_0_nodes.size() >= 2) {
-                break;
-            }
         }
     }
     TT_FATAL(
