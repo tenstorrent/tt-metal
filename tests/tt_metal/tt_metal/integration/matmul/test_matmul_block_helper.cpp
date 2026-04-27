@@ -2,19 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated integration tests for the matmul_block helper
-// (ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp).
+// Isolated integration tests for the matmul_block helper.
 //
 // Each test pins one dimension of the template parameter pack
 // (transpose, packer_l1_acc, pack_last_to_interm, pack_relu,
 // row_major_output, PostComputeFn) against a CPU golden. Helper signatures
 // are verified regardless of the caller kernel that uses them in production.
-//
-// Pattern adapted from the dropped tests at base commit 23d9cbd4.
-// Key adaptations for the current helper API:
-//   - matmul_block CB arguments are runtime, not template parameters
-//   - row_major_output is a new template bool (absolute-offset packing)
-//   - PostComputeFn is a template type instead of a macro
 //
 // Uses reader_matmul_blocked.cpp + writer_unary.cpp. The reader walks DRAM
 // blocks in K-block order; the writer streams c_16 tiles to DRAM in the

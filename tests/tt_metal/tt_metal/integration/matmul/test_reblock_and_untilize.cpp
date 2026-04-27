@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated integration tests for reblock_and_untilize helper
-// (ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp).
+// Isolated integration tests for the reblock_and_untilize helper.
 //
 // Drives the helper directly with a synthetic subblock-major tiled buffer —
 // no matmul participates. Verifies the helper reorders + untilizes into

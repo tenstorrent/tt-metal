@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated test compute kernel for matmul_reduce_inplace helper
-// (ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp).
+// Isolated test compute kernel for the matmul_reduce_inplace helper.
 //
 // The helper reduces `in_out_cb` in place using a column-identity tile in
 // `in1_cb`. Used by SDPA to sum rows via a matmul against an all-ones

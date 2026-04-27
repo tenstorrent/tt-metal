@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Parameterized test compute kernel for matmul_block helper
-// (ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp).
+// Parameterized test compute kernel for the matmul_block helper.
 //
 // Exercises the template parameter pack: transpose, packer_l1_acc,
 // pack_last_to_interm, pack_relu, OutputLayout, and PostComputeFn.

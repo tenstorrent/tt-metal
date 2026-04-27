@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated integration tests for TransposePreKBlock
-// (ttnn/cpp/ttnn/kernel_lib/transpose_block_helpers.hpp), used as the
+// Isolated integration tests for TransposePreKBlock, used as the
 // PreKBlockFn slot of matmul_block.
 //
 // The functor WH-transposes in0 tiles from `in0_transpose_cb` into `in0_cb`

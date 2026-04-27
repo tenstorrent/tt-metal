@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated integration tests for matmul_reduce_inplace
-// (ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp).
+// Isolated integration tests for the matmul_reduce_inplace helper.
 //
 // The helper reduces `in_out_cb` in place by matmul-ing against a
 // column-identity tile in `in1_cb`. Net CB tile count is unchanged: for
