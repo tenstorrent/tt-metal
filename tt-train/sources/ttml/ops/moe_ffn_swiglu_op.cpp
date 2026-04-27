@@ -188,41 +188,15 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         grouped->add_grad(dX);
     };
 
-    // Manual autograd registration: variadic add_backward_node template can't
-    // unpack a runtime-sized weight vector, so we build the link list directly
-    // and call ctx().add_backward_node ourselves.
-    bool needs_grad = (grouped != nullptr) && grouped->get_requires_grad();
-    auto check_list = [&](const std::vector<autograd::TensorPtr>& v) {
-        for (const auto& t : v) {
-            if (t && t->get_requires_grad()) {
-                needs_grad = true;
-                return;
-            }
-        }
-    };
-    check_list(w_gate);
-    check_list(w_up);
-    check_list(w_down);
-    out->set_requires_grad(needs_grad);
-
-    if (needs_grad) {
-        std::vector<autograd::NodeId> links;
-        links.reserve(1U + 3U * num_experts);
-        auto add_link = [&](const autograd::TensorPtr& t) {
-            if (!t) {
-                return;
-            }
-            const auto& node = t->get_node();
-            if (node) {
-                links.push_back(node.value());
-            }
-        };
-        add_link(grouped);
-        for (const auto& w : w_gate) add_link(w);
-        for (const auto& w : w_up) add_link(w);
-        for (const auto& w : w_down) add_link(w);
-        out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-    }
+    // Pack the runtime-sized input set (grouped + 3 weight lists) into one
+    // span and register the backward node via the runtime-arity overload.
+    std::vector<autograd::TensorPtr> inputs;
+    inputs.reserve(1U + 3U * num_experts);
+    inputs.push_back(grouped);
+    inputs.insert(inputs.end(), w_gate.begin(), w_gate.end());
+    inputs.insert(inputs.end(), w_up.begin(), w_up.end());
+    inputs.insert(inputs.end(), w_down.begin(), w_down.end());
+    out->set_node(autograd::add_backward_node(std::move(grad), out, inputs));
 
     return out;
 }
