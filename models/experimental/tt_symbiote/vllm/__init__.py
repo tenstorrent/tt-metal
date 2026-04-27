@@ -19,4 +19,7 @@ SYMBIOTE_MODEL_REGISTRY: dict[str, str] = {
     "TTGemma4ForConditionalGeneration": (
         "models.experimental.tt_symbiote.vllm.generator_vllm:SymbioteGemma4ForCausalLM"
     ),
+    "TTBailingMoeV2ForCausalLM": (
+        "models.experimental.tt_symbiote.vllm.generator_vllm_ling:SymbioteBailingMoeV2ForCausalLM"
+    ),
 }

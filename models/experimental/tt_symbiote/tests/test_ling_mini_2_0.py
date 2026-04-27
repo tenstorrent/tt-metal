@@ -126,13 +126,45 @@ def test_ling_mini_2_0(mesh_device):
         v.preprocess_weights()
         v.move_weights_to_device()
 
-    # Create paged KV cache
+    # Create paged KV cache with enough blocks for ISL=1024 (block_size=64 → 16 blocks)
     paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
 
     print("Running inference with paged attention...")
     model.eval()
     torch.set_grad_enabled(False)
 
+    # ------------------------------------------------------------------
+    # Warmup-sequence test: mirrors exactly what the vLLM server does in
+    # warmup_model_prefill / warmup_model_decode (prefill 128, prefill 1024,
+    # one decode step). This exercises _next_power_of_2 at ISL=1024 — the
+    # path that was silently hanging before the power-of-2 fix.
+    # ------------------------------------------------------------------
+    print("Warmup sequence: prefill ISL=128")
+    dummy_128 = torch.zeros((1, 128), dtype=torch.long)
+    with torch.no_grad():
+        out_128 = model(input_ids=dummy_128, use_cache=True, past_key_values=paged_cache)
+    assert out_128.logits is not None, "prefill at ISL=128 returned None logits"
+    assert out_128.logits.shape[1] == 128, f"Expected prefill logits seq_dim=128, got {out_128.logits.shape}"
+    paged_cache.reset()
+
+    print("Warmup sequence: prefill ISL=1024")
+    dummy_1024 = torch.zeros((1, 1024), dtype=torch.long)
+    with torch.no_grad():
+        out_1024 = model(input_ids=dummy_1024, use_cache=True, past_key_values=paged_cache)
+    assert out_1024.logits is not None, "prefill at ISL=1024 returned None logits"
+    assert out_1024.logits.shape[1] == 1024, f"Expected prefill logits seq_dim=1024, got {out_1024.logits.shape}"
+
+    print("Warmup sequence: one decode step after ISL=1024 prefill")
+    decode_token = torch.zeros((1, 1), dtype=torch.long)
+    with torch.no_grad():
+        out_dec = model(input_ids=decode_token, use_cache=True, past_key_values=paged_cache)
+    assert out_dec.logits is not None, "decode step returned None logits"
+    paged_cache.reset()
+    print("Warmup sequence: PASSED")
+
+    # ------------------------------------------------------------------
+    # Original generate-based smoke test
+    # ------------------------------------------------------------------
     # Warmup run without trace
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
     paged_cache.reset()

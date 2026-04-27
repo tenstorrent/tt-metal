@@ -146,15 +146,12 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
 
 
 def _next_power_of_2(n: int, minimum=256) -> int:
-    """Return the smallest power of 2 >= n."""
+    """Return the smallest power of 2 >= n, with a minimum floor of `minimum`."""
     if n <= 1:
         return 1
     if n <= minimum:
         return minimum
-    result = 1 << ((n - 1).bit_length() + 1)  # Shift by one more than the bit length to get the next power of 2
-    if result == n * 4:  # If n is already a power of 2, we want to return n, not the next power of 2
-        result = n
-    return result
+    return 1 << (n - 1).bit_length()
 
 
 class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
