@@ -11,7 +11,7 @@
 
 namespace tt::tt_metal::mx {
 
-enum class InfNanRep : uint8_t {
+enum class InfNanRepresentation : uint8_t {
     NotRepresentable = 0,
     ExpAllOnesManZero,
     ExpAllOnesManNonZero,
@@ -33,8 +33,8 @@ struct FormatParams {
     bool sat_supported = false;
     uint32_t elem_sat_pos_bits = 0;
     uint32_t elem_sat_neg_bits = 0;
-    InfNanRep inf_rep = InfNanRep::NotRepresentable;
-    InfNanRep nan_rep = InfNanRep::NotRepresentable;
+    InfNanRepresentation inf_rep = InfNanRepresentation::NotRepresentable;
+    InfNanRepresentation nan_rep = InfNanRepresentation::NotRepresentable;
 };
 
 struct RoundResult {
@@ -44,7 +44,10 @@ struct RoundResult {
 
 struct BlockScaleResult {
     uint8_t shared_exp_biased = 0;
-    float scale = 1.0f;
+    // Unbiased shared exponent. Effective scale is 2^shared_exp_adj — kept as
+    // an int so callers can ldexp directly and avoid building/dividing by a
+    // float power of two.
+    int shared_exp_adj = 0;
 };
 
 struct TileWordCounts {

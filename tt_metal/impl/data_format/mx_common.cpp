@@ -53,27 +53,46 @@ BlockScaleResult compute_block_scale(
     tt::stl::Span<const float> values, size_t block_offset, const FormatParams& params, bool exp_rnd_en) {
     TT_ASSERT(block_offset + params.block_size <= values.size());
 
-    float max_abs = 0.0f;
+    // Track the maximum finite |v| as raw IEEE-754 bits so we can extract its
+    // exponent directly without going through std::log2/std::floor. For two
+    // finite non-negative floats, the one with the larger raw bit pattern is
+    // also the larger value, so a uint32_t max suffices.
+    uint32_t max_abs_bits = 0;
     bool all_nan = true;
     bool all_inf_or_zero = true;
     bool any_inf = false;
 
     for (uint32_t i = 0; i < params.block_size; ++i) {
-        float v = values[block_offset + i];
-        if (!std::isnan(v)) {
-            all_nan = false;
+        uint32_t bits = std::bit_cast<uint32_t>(values[block_offset + i]);
+        uint32_t abs_bits = bits & 0x7FFFFFFFu;
+        uint32_t exp_field = abs_bits >> 23;
+        uint32_t mant_field = abs_bits & 0x7FFFFFu;
+        bool is_nan = (exp_field == 0xFFu) && (mant_field != 0);
+        bool is_inf = (exp_field == 0xFFu) && (mant_field == 0);
+        bool is_zero = (abs_bits == 0u);
+
+        all_nan = all_nan && is_nan;
+        any_inf = any_inf || is_inf;
+        all_inf_or_zero = all_inf_or_zero && (is_inf || is_nan || is_zero);
+
+        if (!is_nan && !is_inf && abs_bits > max_abs_bits) {
+            max_abs_bits = abs_bits;
         }
-        if (std::isinf(v)) {
-            any_inf = true;
-        }
-        if (!(std::isinf(v) || std::isnan(v) || v == 0.0f)) {
-            all_inf_or_zero = false;
-        }
-        float v_abs = (std::isnan(v) || std::isinf(v)) ? 0.0f : std::abs(v);
-        max_abs = std::max(max_abs, v_abs);
     }
 
-    int max_abs_exp = (max_abs == 0.0f) ? 0 : static_cast<int>(std::floor(std::log2(max_abs)));
+    // floor(log2(max_abs)) computed from the IEEE-754 exponent field directly.
+    // Subnormals (exp_field == 0) are rare in MX inputs; fall back to std::log2
+    // there to preserve the original semantics without complicating the hot path.
+    int max_abs_exp = 0;
+    if (max_abs_bits != 0) {
+        uint32_t exp_field = max_abs_bits >> 23;
+        if (exp_field != 0) {
+            max_abs_exp = static_cast<int>(exp_field) - 127;
+        } else {
+            float max_abs = std::bit_cast<float>(max_abs_bits);
+            max_abs_exp = static_cast<int>(std::floor(std::log2(max_abs)));
+        }
+    }
     int shared_exp = max_abs_exp;
     int shared_exp_adj_for_elem_max = -127;
 
@@ -93,8 +112,7 @@ BlockScaleResult compute_block_scale(
         shared_exp_biased = 0xFE;
     }
 
-    float scale = std::ldexp(1.0f, shared_exp_adj_for_elem_max);
-    return {static_cast<uint8_t>(shared_exp_biased), scale};
+    return {static_cast<uint8_t>(shared_exp_biased), shared_exp_adj_for_elem_max};
 }
 
 uint32_t compute_exp_count(uint32_t elem_count, const FormatParams& params) {
@@ -132,8 +150,14 @@ uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params) {
         return elem_sign_bit;
     }
 
-    if (std::isinf(datum)) {
-        if (params.inf_rep != InfNanRep::NotRepresentable) {
+    // Use the already-extracted exponent/mantissa fields rather than std::isinf
+    // and std::isnan, which on most libc implementations involve an extra
+    // function call (and may go through fpclassify).
+    bool fp32_is_inf = (fp32_exp_biased == 0xFFu) && (fp32_mant == 0u);
+    bool fp32_is_nan = (fp32_exp_biased == 0xFFu) && (fp32_mant != 0u);
+
+    if (fp32_is_inf) {
+        if (params.inf_rep != InfNanRepresentation::NotRepresentable) {
             uint32_t exp_all_ones = (1u << params.elem_exp_bits) - 1u;
             uint32_t man = 0;
             uint32_t sign_bit = static_cast<uint32_t>(sign) << (params.elem_man_bits + params.elem_exp_bits);
@@ -145,13 +169,13 @@ uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params) {
         return 0;
     }
 
-    if (std::isnan(datum)) {
-        if (params.nan_rep == InfNanRep::ExpAllOnesManNonZero) {
+    if (fp32_is_nan) {
+        if (params.nan_rep == InfNanRepresentation::ExpAllOnesManNonZero) {
             uint32_t exp_all_ones = (1u << params.elem_exp_bits) - 1u;
             uint32_t man = 1u;
             return (exp_all_ones << params.elem_man_bits) | man;
         }
-        if (params.nan_rep == InfNanRep::ExpAllOnesManAllOnes) {
+        if (params.nan_rep == InfNanRepresentation::ExpAllOnesManAllOnes) {
             uint32_t exp_all_ones = (1u << params.elem_exp_bits) - 1u;
             uint32_t man = (1u << params.elem_man_bits) - 1u;
             return (exp_all_ones << params.elem_man_bits) | man;
@@ -176,7 +200,11 @@ uint32_t convert_to_mx_elem_bits(float datum, const FormatParams& params) {
             elem_exp_unbiased_adj -= static_cast<int>(exp_inc);
             uint32_t mant_with_hb = fp32_mant | (1u << 23);
             int shift = std::abs(params.elem_exp_min_unbiased - elem_exp_unbiased_adj);
-            uint32_t mant_exp_adjusted_pre = mant_with_hb >> shift;
+            // Right-shifting a uint32_t by >= 32 is undefined behaviour.
+            // For very small inputs (|v| << block max) shift can exceed the 24
+            // significant bits of mant_with_hb, in which case the result is
+            // unconditionally zero.
+            uint32_t mant_exp_adjusted_pre = (shift >= 24) ? 0u : (mant_with_hb >> shift);
             auto [mant_round_sub, exp_inc_sub] = round_ties_even(mant_exp_adjusted_pre, mant_width, 24);
             mant_exp_adjusted = mant_round_sub;
             elem_exp_unbiased_adj =
@@ -215,17 +243,17 @@ float convert_from_mx_elem_bits(uint32_t elem_bits, uint8_t scale_exp_biased, co
     uint32_t exp_all_ones = (params.elem_exp_bits == 0) ? 0 : ((1u << params.elem_exp_bits) - 1u);
     uint32_t man_all_ones = elem_man_mask;
 
-    if (params.inf_rep == InfNanRep::ExpAllOnesManZero) {
+    if (params.inf_rep == InfNanRepresentation::ExpAllOnesManZero) {
         if (elem_exp_biased == exp_all_ones && elem_man == 0) {
             return sign_bit ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
         }
     }
 
-    if (params.nan_rep == InfNanRep::ExpAllOnesManNonZero) {
+    if (params.nan_rep == InfNanRepresentation::ExpAllOnesManNonZero) {
         if (elem_exp_biased == exp_all_ones && elem_man != 0) {
             return std::numeric_limits<float>::quiet_NaN();
         }
-    } else if (params.nan_rep == InfNanRep::ExpAllOnesManAllOnes) {
+    } else if (params.nan_rep == InfNanRepresentation::ExpAllOnesManAllOnes) {
         if (elem_exp_biased == exp_all_ones && elem_man == man_all_ones) {
             return std::numeric_limits<float>::quiet_NaN();
         }
@@ -263,6 +291,7 @@ void pack_exp_words(const std::vector<uint8_t>& exps, uint32_t exp_words, std::v
 
 void pack_elem_words(
     const std::vector<uint8_t>& elems, uint32_t elem_words, const FormatParams& params, std::vector<uint32_t>& out) {
+    TT_ASSERT(params.elem_width_storage_bits >= params.elem_width_bits);
     uint32_t elem_index = 0;
     uint32_t mask = (params.elem_width_bits >= 32) ? 0xFFFFFFFFu : ((1u << params.elem_width_bits) - 1u);
 
@@ -286,19 +315,6 @@ void pack_elem_words(
             uint32_t elem_val = elem_index < elems.size() ? (elems[elem_index++] & mask) : 0;
             word |= elem_val << ((i % 8) * 4);
             if ((i % 8) == 7) {
-                out.push_back(word);
-                word = 0;
-            }
-        }
-        return;
-    }
-
-    if (params.elem_width_storage_bits == 2) {
-        uint32_t word = 0;
-        for (uint32_t i = 0; i < elem_words * 16; ++i) {
-            uint32_t elem_val = elem_index < elems.size() ? (elems[elem_index++] & mask) : 0;
-            word |= elem_val << ((i % 16) * 2);
-            if ((i % 16) == 15) {
                 out.push_back(word);
                 word = 0;
             }
@@ -332,6 +348,7 @@ void unpack_elem_words(
     uint32_t elem_count,
     const FormatParams& params,
     std::vector<uint8_t>& out) {
+    TT_ASSERT(params.elem_width_storage_bits >= params.elem_width_bits);
     out.clear();
     out.reserve(elem_count);
 
@@ -355,17 +372,6 @@ void unpack_elem_words(
             uint32_t word = words[word_offset++];
             for (uint32_t b = 0; b < 8 && out.size() < elem_count; ++b) {
                 uint32_t elem_val = (word >> (4 * b)) & 0xFu;
-                out.push_back(static_cast<uint8_t>(elem_val & mask));
-            }
-        }
-        return;
-    }
-
-    if (params.elem_width_storage_bits == 2) {
-        for (uint32_t w = 0; w < elem_words; ++w) {
-            uint32_t word = words[word_offset++];
-            for (uint32_t b = 0; b < 16 && out.size() < elem_count; ++b) {
-                uint32_t elem_val = (word >> (2 * b)) & 0x3u;
                 out.push_back(static_cast<uint8_t>(elem_val & mask));
             }
         }

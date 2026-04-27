@@ -36,8 +36,8 @@ constexpr tt::tt_metal::mx::FormatParams kMxFp4Params = {
     .sat_supported = true,
     .elem_sat_pos_bits = 0x7,
     .elem_sat_neg_bits = 0xF,
-    .inf_rep = tt::tt_metal::mx::InfNanRep::NotRepresentable,
-    .nan_rep = tt::tt_metal::mx::InfNanRep::NotRepresentable,
+    .inf_rep = tt::tt_metal::mx::InfNanRepresentation::NotRepresentable,
+    .nan_rep = tt::tt_metal::mx::InfNanRepresentation::NotRepresentable,
 };
 
 }  // namespace
@@ -73,9 +73,17 @@ std::vector<uint32_t> pack_as_mxfp4_tiles(
 
     size_t linear_index = 0;
 
+    std::vector<float> tile_values;
+    tile_values.reserve(tile_HW);
+    std::vector<uint8_t> exps;
+    exps.reserve(exp_count);
+    std::vector<uint8_t> elems;
+    elems.reserve(tile_HW);
+
     for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<float> tile_values;
-        tile_values.reserve(tile_HW);
+        tile_values.clear();
+        exps.clear();
+        elems.clear();
 
         if (row_major_input) {
             for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
@@ -96,22 +104,20 @@ std::vector<uint32_t> pack_as_mxfp4_tiles(
             }
         }
 
-        std::vector<uint8_t> exps;
-        exps.reserve(exp_count);
-        std::vector<uint8_t> elems;
-        elems.reserve(tile_HW);
-
         for (uint32_t blk_idx = 0; blk_idx < exp_count; ++blk_idx) {
+            // TODO: once we start testing stochastic rounding for exponents,
+            // add a mechanism that passes exp_rnd_en to compute_block_scale.
             auto block_scale = tt::tt_metal::mx::compute_block_scale(
                 tt::stl::Span<const float>(tile_values.data(), tile_values.size()),
                 blk_idx * kMxFp4Params.block_size,
                 kMxFp4Params);
             exps.push_back(block_scale.shared_exp_biased);
 
-            float scale = block_scale.scale;
+            int scale_exp = block_scale.shared_exp_adj;
+            uint32_t base = blk_idx * kMxFp4Params.block_size;
             for (uint32_t i = 0; i < kMxFp4Params.block_size; ++i) {
-                float v = tile_values[blk_idx * kMxFp4Params.block_size + i];
-                float scaled = v / scale;
+                float v = tile_values[base + i];
+                float scaled = std::ldexp(v, -scale_exp);
                 elems.push_back(static_cast<uint8_t>(tt::tt_metal::mx::convert_to_mx_elem_bits(scaled, kMxFp4Params)));
             }
         }
@@ -173,22 +179,28 @@ std::vector<float> unpack_mxfp4_tiles_into_float_vec(
     size_t linear_index = 0;
 
     size_t word_offset = 0;
-    for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<uint8_t> exps;
-        tt::tt_metal::mx::unpack_exp_words(mxfp4_tiles, word_offset, exp_words, exp_count, exps);
 
-        std::vector<uint8_t> elems;
+    std::vector<uint8_t> exps;
+    exps.reserve(exp_count);
+    std::vector<uint8_t> elems;
+    elems.reserve(tile_HW);
+    std::vector<float> tile_values;
+    tile_values.resize(tile_HW);
+
+    for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
+        tt::tt_metal::mx::unpack_exp_words(mxfp4_tiles, word_offset, exp_words, exp_count, exps);
         tt::tt_metal::mx::unpack_elem_words(mxfp4_tiles, word_offset, elem_words, tile_HW, kMxFp4Params, elems);
 
-        std::vector<float> tile_values;
-        tile_values.resize(tile_HW);
-        for (uint32_t i = 0; i < tile_HW; ++i) {
-            uint8_t scale_exp_biased = exps[i / kMxFp4Params.block_size];
+        for (uint32_t blk = 0; blk < exp_count; ++blk) {
+            uint8_t scale_exp_biased = exps[blk];
             int scale_exp_unbiased = static_cast<int>(scale_exp_biased) - kMxFp4Params.scale_bias;
-            float elem_pre_scale =
-                tt::tt_metal::mx::convert_from_mx_elem_bits(elems[i], scale_exp_biased, kMxFp4Params);
-            float scale = std::ldexp(1.0f, scale_exp_unbiased);
-            tile_values[i] = elem_pre_scale * scale;
+            uint32_t base = blk * kMxFp4Params.block_size;
+            for (uint32_t j = 0; j < kMxFp4Params.block_size; ++j) {
+                uint32_t i = base + j;
+                float elem_pre_scale =
+                    tt::tt_metal::mx::convert_from_mx_elem_bits(elems[i], scale_exp_biased, kMxFp4Params);
+                tile_values[i] = std::ldexp(elem_pre_scale, scale_exp_unbiased);
+            }
         }
 
         if (row_major_output) {

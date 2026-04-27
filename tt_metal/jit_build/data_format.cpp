@@ -41,6 +41,8 @@ bool is_bfp_format(DataFormat data_format) {
         (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::Bfp2));
 }
 
+bool is_mx_format(DataFormat data_format) { return (data_format == DataFormat::MxFp4); }
+
 bool is_exp_b_format(DataFormat data_format) {
     return (
         (data_format == DataFormat::Tf32 || data_format == DataFormat::Float16_b) ||
@@ -130,7 +132,7 @@ DataFormat get_single_unpack_dst_format(
         dst_format = unpack_conditional_dst_format;
     }
 
-    if (src_format == DataFormat::MxFp4) {
+    if (is_mx_format(src_format)) {
         dst_format = DataFormat::Float16_b;  // Fixed unpack_dst format for mx formats.
     }
 
@@ -224,13 +226,6 @@ DataFormat get_single_pack_src_format(
         pack_src_format = DataFormat::Invalid;
     } else if (data_format == DataFormat::Fp8_e4m3) {
         pack_src_format = is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
-    } else if (data_format == DataFormat::MxFp4) {
-        if (fp32_dest_acc_en) {
-            pack_src_format = DataFormat::Float32;
-        } else {
-            pack_src_format =
-                is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
-        }
     } else if (fp32_dest_acc_en) {
         if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
             pack_src_format = DataFormat::Float32;
@@ -292,6 +287,9 @@ DataFormat get_single_pack_src_format(
             } else {
                 pack_src_format = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
             }
+        } else if (is_mx_format(data_format)) {
+            pack_src_format =
+                is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
         } else {
             pack_src_format = data_format;
         }
@@ -307,6 +305,11 @@ DataFormat get_single_pack_src_format(
             } else {
                 pack_src_format_tmp = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
             }
+        }
+
+        if (is_mx_format(data_format)) {
+            pack_src_format_tmp =
+                is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
         }
 
         if (pack_src_format_tmp != DataFormat::Float32) {
