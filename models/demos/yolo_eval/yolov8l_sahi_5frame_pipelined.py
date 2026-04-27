@@ -68,6 +68,19 @@ MESH_COLS = 4
 TAG = "[sahi-640-multi]"
 
 
+def _write_init_stage(port: int, stage: str) -> None:
+    """Atomic stage marker for the supervisor's overlay. Best-effort I/O —
+    matches the path layout in `demo_supervisor._stage_file_path(port)`.
+    """
+    try:
+        path = Path(f"/tmp/sahi-init-stage-{port}.txt")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(stage)
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Prep worker: read 1 frame, slice into 4 tiles, broadcast 8x across batch.
 # ---------------------------------------------------------------------------
@@ -601,6 +614,7 @@ def run_sahi_5frame_pipelined(args):
         )
         sys.exit(1)
 
+    _write_init_stage(int(args.port), "opening_device")
     mesh_shape = ttnn.MeshShape(MESH_ROWS, MESH_COLS)
     print(
         f"{TAG} Opening mesh {MESH_ROWS}x{MESH_COLS}={TOTAL_TILES} "
@@ -618,6 +632,7 @@ def run_sahi_5frame_pipelined(args):
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
 
     # --- Build runner (batch = TOTAL_TILES = 32) -----------------------------
+    _write_init_stage(int(args.port), "building_runner")
     print(
         f"{TAG} Building YOLOv8lPerformantRunner " f"({_TILE_SIZE_640}x{_TILE_SIZE_640}, batch={TOTAL_TILES})...",
         flush=True,
@@ -634,6 +649,7 @@ def run_sahi_5frame_pipelined(args):
         staging_ring=3,
     )
     print(f"{TAG} Runner ready.", flush=True)
+    _write_init_stage(int(args.port), "warming")
 
     # --- NMS / merge config --------------------------------------------------
     coco_names = _load_coco_names()

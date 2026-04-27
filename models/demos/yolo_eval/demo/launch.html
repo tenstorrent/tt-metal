@@ -400,6 +400,7 @@
         <div class="row"><span>transport</span><b id="m_transport">—</b></div>
         <div class="row"><span>resolution</span><b id="m_res">—</b></div>
         <div class="row"><span>tiles</span><b id="m_tiles">—</b></div>
+        <div class="row" id="m_camera_row" style="display:none"><span>camera</span><b id="m_camera">—</b></div>
       </div>
     </aside>
   </main>
@@ -823,6 +824,9 @@ function teardown() {
   closeDetsStream();
   teardownStreams();
   _resetDetsFps();
+  // Hide the camera-only meta row on mode change.
+  const _camRow = document.getElementById("m_camera_row");
+  if (_camRow) _camRow.style.display = "none";
   latestDets = null;
   mainEl.srcObject = null;
   mainEl.removeAttribute("src");
@@ -856,19 +860,38 @@ async function postSource(transport, w, h) {
 async function awaitState(targetTransport, timeoutMs) {
   const t0 = Date.now();
   let lastState = null;
+  let lastStageKey = null;
   while (Date.now() - t0 < timeoutMs) {
     let s = null;
     try {
       const r = await fetch(`${SUPERVISOR}/api/status`, { cache: "no-store" });
       if (r.ok) s = await r.json();
     } catch (_e) { /* network blip — retry */ }
-    if (s && s.state !== lastState) {
+    // Show the pipeline's init_stage as a sub-label so users see forward
+    // motion (opening device → building runner → warming) instead of a
+    // static spinner during the 30-90 s transport switch.
+    const stageLabel = (stage) => {
+      if (!stage) return "";
+      const map = {
+        spawning: "starting process",
+        opening_device: "opening device",
+        building_runner: "building runner",
+        warming: "warming up",
+        pre_decode: "pre-decoding video",
+        ready: "ready",
+      };
+      return map[stage] || stage.replace(/_/g, " ");
+    };
+    const stageKey = `${s ? s.state : ""}|${s ? s.init_stage : ""}`;
+    if (s && (s.state !== lastState || stageKey !== lastStageKey)) {
       lastState = s.state;
-      const label = s.state === "switching" ? `Loading ${s.pending_transport || targetTransport}…`
-                  : s.state === "recovering" ? "Resetting chips…"
+      lastStageKey = stageKey;
+      const sub = s.init_stage ? ` · ${stageLabel(s.init_stage)}` : "";
+      const label = s.state === "switching" ? `Loading ${s.pending_transport || targetTransport}…${sub}`
+                  : s.state === "recovering" ? `Resetting chips…${sub}`
                   : s.state === "ready" ? `Ready (${s.transport})`
                   : s.state === "error" ? `Error: ${s.last_error || "unknown"}`
-                  : `${s.state}…`;
+                  : `${s.state}…${sub}`;
       try { showSwitch(label); } catch (_) {}
     }
     if (s && s.state === "ready" && s.transport === targetTransport) return s;
@@ -980,13 +1003,30 @@ async function startCamera() {
       video: {
         width: { ideal: 1920 },
         height: { ideal: 1080 },
-        // Ask the webcam for 60 fps — most modern cameras support it at
-        // ≤ 1080p given enough light. Browsers silently fall back to 30
-        // if the device/lighting can't sustain it.
-        frameRate: { ideal: 60, min: 30 },
+        // Ask the webcam for the highest sustainable rate. Browsers will
+        // negotiate down (to 60 or 30) if the device/lighting can't keep
+        // up — `ideal` is a hint, not a hard requirement. Some webcams
+        // (Logitech Brio, MX Brio, MacBook Pro >= M3) can sustain 120 fps
+        // at 720p; most cap at 60 fps at 1080p.
+        frameRate: { ideal: 120, min: 30 },
       },
       audio: false,
     });
+    // Surface the negotiated camera framerate in the side-panel meta-card
+    // so users can see what the webcam is actually delivering vs what the
+    // model is processing.
+    try {
+      const settings = stream.getVideoTracks()[0].getSettings();
+      console.log("[camera] negotiated:", JSON.stringify(settings));
+      const camRow = document.getElementById("m_camera_row");
+      const camEl = document.getElementById("m_camera");
+      if (camRow && camEl) {
+        camRow.style.display = "";
+        const fr = (settings.frameRate || 0).toFixed(0);
+        const w = settings.width || "?", h = settings.height || "?";
+        camEl.textContent = `${w}×${h} @ ${fr} fps`;
+      }
+    } catch (_e) {}
   } catch (e) {
     hideSwitch(); toast("camera permission denied: " + e.message); return;
   }
@@ -1031,6 +1071,24 @@ async function startCamera() {
   stream.getVideoTracks().forEach(t => pc.addTrack(t, stream));
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
+  // aiortc on the server only supports non-trickle ICE (it expects all
+  // candidates inline in the offer SDP). Wait for our local ICE gathering
+  // to finish before posting — otherwise pc.localDescription.sdp arrives
+  // candidate-less and the server has nothing to send packets to.
+  if (pc.iceGatheringState !== "complete") {
+    await new Promise((resolve) => {
+      const done = () => {
+        pc.removeEventListener("icegatheringstatechange", check);
+        clearTimeout(t);
+        resolve();
+      };
+      const check = () => { if (pc.iceGatheringState === "complete") done(); };
+      pc.addEventListener("icegatheringstatechange", check);
+      // Hard cap: 5s. Some browsers take a while to give up on TURN/STUN
+      // probes; we'd rather post with whatever we have than hang forever.
+      const t = setTimeout(done, 5000);
+    });
+  }
   const ans = await offerToPipeline(pc);
   await pc.setRemoteDescription(ans);
   hideSwitch();

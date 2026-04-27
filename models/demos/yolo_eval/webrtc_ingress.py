@@ -32,7 +32,7 @@ import time
 from typing import Any
 
 from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 
 _HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>YOLOv8L Camera</title></head>
@@ -127,7 +127,13 @@ async def _offer(req: web.Request) -> web.Response:
     body = await req.json()
     offer = RTCSessionDescription(sdp=body["sdp"], type=body["type"])
 
-    pc = RTCPeerConnection()
+    # Match the browser's STUN config so both sides gather server-reflexive
+    # candidates. Without this the server only offers host candidates from
+    # local interfaces; browsers behind NAT (or even on a different LAN
+    # segment) can fail to find a working pair and the PC sits at "connecting".
+    pc = RTCPeerConnection(
+        configuration=RTCConfiguration(iceServers=[RTCIceServer(urls="stun:stun.l.google.com:19302")])
+    )
     req.app["pcs"].add(pc)
     ingress_q = req.app["ingress_q"]
     dets_q = req.app["dets_q"]
@@ -142,6 +148,14 @@ async def _offer(req: web.Request) -> web.Response:
                 pass
             req.app["pcs"].discard(pc)
 
+    @pc.on("iceconnectionstatechange")
+    async def _on_ice_state() -> None:
+        print(f"[webrtc] ice={pc.iceConnectionState}", flush=True)
+
+    @pc.on("icegatheringstatechange")
+    async def _on_gather_state() -> None:
+        print(f"[webrtc] icegather={pc.iceGatheringState}", flush=True)
+
     @pc.on("track")
     def _on_track(track: Any) -> None:
         if track.kind == "video":
@@ -155,8 +169,16 @@ async def _offer(req: web.Request) -> web.Response:
             asyncio.create_task(_pump_dets(channel, dets_q, pc))
 
     await pc.setRemoteDescription(offer)
+    # Log offer candidates so we can see what the browser is advertising.
+    for line in (offer.sdp or "").splitlines():
+        if line.startswith("a=candidate:"):
+            print(f"[webrtc] OFFER {line}", flush=True)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
+    # Log answer candidates so we can see what aiortc is advertising back.
+    for line in (pc.localDescription.sdp or "").splitlines():
+        if line.startswith("a=candidate:"):
+            print(f"[webrtc] ANSWER {line}", flush=True)
     return web.json_response({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
 
 

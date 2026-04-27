@@ -58,6 +58,22 @@ _CONF_FLOOR_640 = 0.50
 _PAD_VALUE = 114  # YOLOv8 letterbox grey
 
 
+def _write_init_stage(port: int, stage: str) -> None:
+    """Atomically write the current init stage so the supervisor can show
+    forward motion in the browser overlay during a transport switch.
+
+    Best-effort: any I/O error is swallowed — this is observability, not
+    correctness. Path matches the supervisor's `_stage_file_path(port)`.
+    """
+    try:
+        path = Path(f"/tmp/sahi-init-stage-{port}.txt")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(stage)
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
 _INV_255 = torch.tensor(1.0 / 255.0, dtype=torch.bfloat16)
 
 
@@ -1642,6 +1658,7 @@ def run_sahi_640_pipelined(args):
     n_padding = total_devices - tiles_per_frame
 
     # --- Open sub-mesh -----------------------------------------------------
+    _write_init_stage(int(args.port), "opening_device")
     mesh_shape = ttnn.MeshShape(mesh_rows, mesh_cols)
     print(
         f"{TAG} Opening mesh {mesh_rows}x{mesh_cols}={total_devices} "
@@ -1659,6 +1676,7 @@ def run_sahi_640_pipelined(args):
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
 
     # --- Build runner (batch = total_devices) ------------------------------
+    _write_init_stage(int(args.port), "building_runner")
     print(
         f"{TAG} Building YOLOv8lPerformantRunner " f"({_TILE_SIZE_640}x{_TILE_SIZE_640}, batch={total_devices})...",
         flush=True,
@@ -1685,6 +1703,7 @@ def run_sahi_640_pipelined(args):
         runner._skip_h2d = True
         print(f"{TAG} *** DEBUG: H2D SKIPPED (stale inputs) ***", flush=True)
     print(f"{TAG} Runner ready.", flush=True)
+    _write_init_stage(int(args.port), "warming")
 
     # Staging buffer is pre-allocated during runner construction (before trace capture).
 

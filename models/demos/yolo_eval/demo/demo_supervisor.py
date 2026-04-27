@@ -81,6 +81,32 @@ MULTI_STREAM_W = 1280
 MULTI_STREAM_H = 1280
 
 
+def _stage_file_path(port: int) -> Path:
+    """Where the pipeline writes its current init-stage marker.
+
+    Both ends agree on the path: supervisor passes ``--port`` to the
+    pipeline, so each side independently builds the same filename.
+    """
+    return Path(f"/tmp/sahi-init-stage-{port}.txt")
+
+
+def _read_stage(port: int) -> str:
+    """Read the pipeline's current stage marker, or "" if none."""
+    try:
+        return _stage_file_path(port).read_text(errors="replace").strip()
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return ""
+
+
+def _clear_stage(port: int) -> None:
+    try:
+        _stage_file_path(port).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _grid_for(w: int, h: int) -> dict:
     cols = max(1, math.ceil(w / TILE))
     rows = max(1, math.ceil(h / TILE))
@@ -140,22 +166,35 @@ async def _await_port_free(host: str, port: int, budget_s: float = 8.0) -> bool:
     return not _port_busy(host, port)
 
 
-async def _await_pipeline_ready(host: str, port: int, budget_s: float = 90.0) -> bool:
-    """The pipeline serves an HTML page on / once aiortc is up. We poll it.
-    Model warmup + trace capture can easily take 30-60 s on first start.
+async def _await_pipeline_ready(
+    host: str,
+    port: int,
+    budget_s: float = 90.0,
+    proc: Optional[subprocess.Popen] = None,
+) -> tuple[bool, Optional[int]]:
+    """Poll the pipeline's HTTP root until it answers 200.
+
+    Returns ``(ready, exit_code)``. If ``proc`` is provided and the child
+    exits during the wait, we return ``(False, exit_code)`` immediately
+    instead of waiting the full ``budget_s`` — this drops failure detection
+    from ~90 s to ~0.5 s for segfault-on-init crashes.
     """
     url = f"http://{_connect_host(host)}:{port}/"
     t0 = time.time()
     async with ClientSession(timeout=ClientTimeout(total=2.0)) as sess:
         while time.time() - t0 < budget_s:
+            if proc is not None:
+                rc = proc.poll()
+                if rc is not None:
+                    return False, rc
             try:
                 async with sess.get(url) as r:
                     if r.status == 200:
-                        return True
+                        return True, None
             except Exception:
                 pass
             await asyncio.sleep(0.5)
-    return False
+    return False, (proc.poll() if proc is not None else None)
 
 
 class Supervisor:
@@ -338,7 +377,16 @@ class Supervisor:
         argv += self.extra_pipeline_args
         return argv
 
-    async def stop(self, sig: int = signal.SIGTERM, timeout: float = 8.0) -> None:
+    async def stop(self, sig: int = signal.SIGTERM, timeout: float = 5.0) -> None:
+        """Two-stage process group shutdown with reaping.
+
+        SIGTERM the child's process group; if it doesn't exit within
+        ``timeout`` seconds, SIGKILL the group and wait briefly to reap
+        the zombie. We saw the pipeline ignore SIGTERM under load (busy
+        in a C++ kernel) several times today — without the SIGKILL leg
+        the supervisor would hang and the next spawn would fail because
+        port 9090 was still bound by the old child.
+        """
         p = self.proc
         if p is None or p.poll() is not None:
             self.proc = None
@@ -357,6 +405,11 @@ class Supervisor:
                 self.proc = None
                 return
             await asyncio.sleep(0.1)
+        # SIGTERM ignored — escalate to SIGKILL on the whole process group.
+        print(
+            f"[supervisor] stop: pid={p.pid} ignored SIGTERM after {timeout:.1f}s — escalating SIGKILL",
+            flush=True,
+        )
         try:
             os.killpg(os.getpgid(p.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
@@ -364,14 +417,28 @@ class Supervisor:
                 p.kill()
             except ProcessLookupError:
                 pass
+        # Reap so we don't leave a zombie. Bounded — if even SIGKILL doesn't
+        # work in 3 s something's very wrong (kernel-stuck process), but we
+        # still null `self.proc` so a future spawn can proceed.
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            if p.poll() is not None:
+                break
+            await asyncio.sleep(0.1)
         self.proc = None
 
     def _status_payload(self) -> dict:
         """Snapshot used by both /api/status and the response from /api/source."""
+        # Surface the pipeline's init stage when we're switching/recovering so
+        # the browser overlay can show forward motion ("opening device" →
+        # "building runner" → "pre-decoding") instead of a static spinner.
+        # Once ready, the stage marker is stale and we hide it.
+        init_stage = _read_stage(self.pipeline_port) if self.state in ("switching", "recovering") else ""
         return {
             "state": self.state,
             "transport": self.transport,
             "pending_transport": self.pending_transport,
+            "init_stage": init_stage,
             "ready": self.state == "ready",
             "last_error": self.last_error,
             "frame_w": self.frame_w,
@@ -460,6 +527,9 @@ class Supervisor:
             ok = False
         finally:
             self.pending_transport = None
+            # Clear the stage marker on terminal outcome — pipeline is either
+            # serving (no longer initializing) or dead (file is meaningless).
+            _clear_stage(self.pipeline_port)
 
         if ok:
             self.state = "ready"
@@ -546,6 +616,15 @@ class Supervisor:
             await _await_port_free(self.pipeline_host, self.pipeline_port, 12.0)
             await asyncio.sleep(2.0)
 
+            # Reset the stage marker — the supervisor seeds "spawning" so the
+            # browser overlay shows forward motion the instant /api/source
+            # returns, even before the child has started writing its own
+            # stages. The pipeline overwrites this within ~1 s of starting.
+            try:
+                _stage_file_path(self.pipeline_port).write_text("spawning")
+            except Exception:
+                pass
+
             argv = self._build_argv(transport, width, height)
             print(f"[supervisor] spawn: {' '.join(argv)}", flush=True)
             self.proc = subprocess.Popen(  # noqa: S603
@@ -577,13 +656,15 @@ class Supervisor:
 
         # Bump readiness timeout for the multi-stream pipeline — 32-chip init
         # + model load + trace capture is comfortably 60 s on a cold start.
-        ready_budget = 150.0 if transport == "multi" else 90.0
-        ready = await _await_pipeline_ready(self.pipeline_host, self.pipeline_port, ready_budget)
+        # Single-mesh transports drop to 75 s now that we short-circuit on
+        # subprocess death.
+        ready_budget = 150.0 if transport == "multi" else 75.0
+        ready, exit_code = await _await_pipeline_ready(
+            self.pipeline_host, self.pipeline_port, ready_budget, proc=self.proc
+        )
         if not ready:
-            # Distinguish "subprocess died" from "process alive but didn't bind".
-            poll = self.proc.poll() if self.proc else 0
-            if poll is not None:
-                self.last_error = f"pipeline subprocess exited rc={poll} during init"
+            if exit_code is not None:
+                self.last_error = f"pipeline subprocess exited rc={exit_code} during init"
             else:
                 self.last_error = (
                     f"pipeline did not bind {self.pipeline_host}:{self.pipeline_port} within {ready_budget:.0f}s"
