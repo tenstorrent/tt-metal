@@ -11,7 +11,7 @@ StateDictWeightProvider loads HuggingFace safetensors and runs the same prepare_
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 import torch
 
@@ -35,14 +35,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_mtp_weights,
     prepare_spec_weights,
 )
-from models.demos.deepseek_v3_b1.weights.upload import (
-    extract_backing_tensors,
-    rebuild_with_device_tensors,
-    tensor_identity_key,
-    two_phase_upload,
-)
-
-TWeights = TypeVar("TWeights")
+from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
 
 class WeightProvider(Protocol):
@@ -245,11 +238,8 @@ class CacheWeightProvider:
         )
         return CacheConfig(cache=self._cache, context=context)
 
-    def _upload_prepared_weights(self, device: ttnn.MeshDevice, host_weights: TWeights) -> TWeights:
-        host_tensors = extract_backing_tensors(host_weights)
-        device_tensors = two_phase_upload(device, host_tensors)
-        host_to_device = {tensor_identity_key(host): dev for host, dev in zip(host_tensors, device_tensors)}
-        return rebuild_with_device_tensors(host_weights, host_to_device)
+    def _upload_prepared_weights(self, device: ttnn.MeshDevice, host_weights: Uploadable):
+        return two_phase_upload(device, host_weights)
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         host_weights = prepare_embedding_weights(

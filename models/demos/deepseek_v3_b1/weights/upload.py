@@ -4,11 +4,129 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
-from typing import Any
+from dataclasses import fields
+from types import UnionType
+from typing import Protocol, Union, get_args, get_origin, get_type_hints
 
 import ttnn
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
+
+TensorKey = tuple[str, int]
+TensorMap = dict[TensorKey, ttnn.Tensor]
+WeightTensor = ttnn.Tensor | OverlappedTensor
+
+
+class Uploadable(Protocol):
+    def backing_tensors(self) -> list[ttnn.Tensor]:
+        ...
+
+    def with_device_tensors(self, tensor_map: TensorMap):
+        ...
+
+
+class UploadableMixin:
+    """Typed helper for extracting and rebuilding weight dataclasses."""
+
+    def backing_tensors(self) -> list[ttnn.Tensor]:
+        out: list[ttnn.Tensor] = []
+        seen_ids: set[TensorKey] = set()
+        hints = get_type_hints(type(self))
+        for field in fields(self):
+            annotation = hints[field.name]
+            value = getattr(self, field.name)
+            kind, allows_none = _classify_annotation(annotation)
+            if value is None:
+                if allows_none:
+                    continue
+                raise TypeError(f"Field {type(self).__name__}.{field.name} is None but annotation is non-optional")
+            if kind == "tensor":
+                _append_unique_tensor(out, seen_ids, value, field.name)
+            elif kind == "overlapped":
+                _append_unique_tensor(out, seen_ids, value.fused_tensor, field.name)
+            elif kind == "tensor_list":
+                if not isinstance(value, list):
+                    raise TypeError(
+                        f"Field {type(self).__name__}.{field.name} must be list[ttnn.Tensor], got {type(value)}"
+                    )
+                for tensor in value:
+                    _append_unique_tensor(out, seen_ids, tensor, field.name)
+            else:
+                raise TypeError(f"Unsupported field annotation in {type(self).__name__}.{field.name}: {annotation}")
+        return out
+
+    def with_device_tensors(self, tensor_map: TensorMap):
+        hints = get_type_hints(type(self))
+        rebuilt_fields: dict[str, object] = {}
+        for field in fields(self):
+            annotation = hints[field.name]
+            value = getattr(self, field.name)
+            kind, allows_none = _classify_annotation(annotation)
+            if value is None:
+                if allows_none:
+                    rebuilt_fields[field.name] = None
+                    continue
+                raise TypeError(f"Field {type(self).__name__}.{field.name} is None but annotation is non-optional")
+            if kind == "tensor":
+                rebuilt_fields[field.name] = tensor_map[tensor_identity_key(value)]
+            elif kind == "overlapped":
+                fused_tensor = tensor_map[tensor_identity_key(value.fused_tensor)]
+                rebuilt_fields[field.name] = OverlappedTensor(
+                    fused_tensor=fused_tensor,
+                    tensor_shape=value.tensor_shape,
+                    shard_shape=value.shard_shape,
+                    core_range_set=value.core_range_set,
+                    dtype=value.dtype,
+                    tile_shape=value.tile_shape,
+                    byte_offset=value.byte_offset,
+                    total_size=value.total_size,
+                )
+            elif kind == "tensor_list":
+                if not isinstance(value, list):
+                    raise TypeError(
+                        f"Field {type(self).__name__}.{field.name} must be list[ttnn.Tensor], got {type(value)}"
+                    )
+                rebuilt_fields[field.name] = [tensor_map[tensor_identity_key(tensor)] for tensor in value]
+            else:
+                raise TypeError(f"Unsupported field annotation in {type(self).__name__}.{field.name}: {annotation}")
+        return type(self)(**rebuilt_fields)
+
+
+def _classify_annotation(annotation: object) -> tuple[str, bool]:
+    origin = get_origin(annotation)
+    if origin is None:
+        if annotation is ttnn.Tensor:
+            return "tensor", False
+        if annotation is OverlappedTensor:
+            return "overlapped", False
+        raise TypeError(f"Unsupported field annotation: {annotation}")
+
+    if origin is list:
+        args = get_args(annotation)
+        if len(args) == 1 and args[0] is ttnn.Tensor:
+            return "tensor_list", False
+        raise TypeError(f"Unsupported list field annotation: {annotation}")
+
+    if origin is tuple:
+        raise TypeError(f"tuple fields are not supported in uploadable weight dataclasses: {annotation}")
+
+    if origin in (Union, UnionType):
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        allows_none = len(args) != len(get_args(annotation))
+        if len(args) != 1:
+            raise TypeError(f"Unsupported union field annotation: {annotation}")
+        kind, _ = _classify_annotation(args[0])
+        return kind, allows_none
+
+    raise TypeError(f"Unsupported field annotation: {annotation}")
+
+
+def _append_unique_tensor(out: list[ttnn.Tensor], seen_ids: set[TensorKey], tensor: object, field_name: str) -> None:
+    if not isinstance(tensor, ttnn.Tensor):
+        raise TypeError(f"Field {field_name} expected ttnn.Tensor, got {type(tensor)}")
+    tensor_key = tensor_identity_key(tensor)
+    if tensor_key not in seen_ids:
+        seen_ids.add(tensor_key)
+        out.append(tensor)
 
 
 def tensor_identity_key(tensor: ttnn.Tensor) -> tuple[str, int]:
@@ -44,39 +162,7 @@ def split_core_ranges(
     return fd_filter, sd_filter
 
 
-def extract_backing_tensors(*weight_structs: Any) -> list[ttnn.Tensor]:
-    """Return unique backing tensors from nested weight dataclasses."""
-    out: list[ttnn.Tensor] = []
-    seen_ids: set[tuple[str, int]] = set()
-
-    def _add_tensor(tensor: ttnn.Tensor) -> None:
-        tensor_key = tensor_identity_key(tensor)
-        if tensor_key not in seen_ids:
-            seen_ids.add(tensor_key)
-            out.append(tensor)
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, OverlappedTensor):
-            _add_tensor(value.fused_tensor)
-            return
-        if isinstance(value, ttnn.Tensor):
-            _add_tensor(value)
-            return
-        if is_dataclass(value):
-            for field in fields(value):
-                _walk(getattr(value, field.name))
-            return
-        if isinstance(value, list | tuple):
-            for item in value:
-                _walk(item)
-
-    for struct in weight_structs:
-        _walk(struct)
-
-    return out
-
-
-def two_phase_upload(device, host_tensors: list[ttnn.Tensor]) -> list[ttnn.Tensor]:
+def _upload_tensors(device: ttnn.MeshDevice, host_tensors: list[ttnn.Tensor]) -> list[ttnn.Tensor]:
     """Upload host tensors by writing FD shards first, then SD-only shards."""
     fd_grid = get_fd_grid(device)
     full_fd_jobs: list[tuple[ttnn.Tensor, ttnn.Tensor]] = []
@@ -118,31 +204,9 @@ def two_phase_upload(device, host_tensors: list[ttnn.Tensor]) -> list[ttnn.Tenso
     return uploaded
 
 
-def rebuild_with_device_tensors(host_struct: Any, host_to_device: dict[tuple[str, int], ttnn.Tensor]) -> Any:
-    """Rebuild nested weight dataclasses by replacing host tensors with device tensors."""
-
-    def _replace(value: Any) -> Any:
-        if isinstance(value, OverlappedTensor):
-            fused_tensor = host_to_device[tensor_identity_key(value.fused_tensor)]
-            return OverlappedTensor(
-                fused_tensor=fused_tensor,
-                tensor_shape=value.tensor_shape,
-                shard_shape=value.shard_shape,
-                core_range_set=value.core_range_set,
-                dtype=value.dtype,
-                tile_shape=value.tile_shape,
-                byte_offset=value.byte_offset,
-                total_size=value.total_size,
-            )
-        if isinstance(value, ttnn.Tensor):
-            return host_to_device[tensor_identity_key(value)]
-        if is_dataclass(value):
-            rebuilt_fields = {field.name: _replace(getattr(value, field.name)) for field in fields(value)}
-            return type(value)(**rebuilt_fields)
-        if isinstance(value, list):
-            return [_replace(item) for item in value]
-        if isinstance(value, tuple):
-            return tuple(_replace(item) for item in value)
-        return value
-
-    return _replace(host_struct)
+def two_phase_upload(device: ttnn.MeshDevice, host_weights: Uploadable):
+    """Upload an Uploadable host weight struct and return device-backed copy."""
+    host_tensors = host_weights.backing_tensors()
+    device_tensors = _upload_tensors(device, host_tensors)
+    host_to_device: TensorMap = {tensor_identity_key(host): dev for host, dev in zip(host_tensors, device_tensors)}
+    return host_weights.with_device_tensors(host_to_device)

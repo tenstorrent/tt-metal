@@ -115,7 +115,7 @@ def test_split_core_ranges_partitions_tensor_grid_into_fd_and_sd():
     assert union == tensor_grid
 
 
-def test_extract_backing_tensors_deduplicates_fused_and_direct_tensors(monkeypatch):
+def test_uploadable_mixin_backing_tensors_deduplicates_fused_and_direct_tensors(monkeypatch):
     _patch_upload_tensor_types(monkeypatch)
     fused = _FakeTensor("fused")
     direct = _FakeTensor("direct")
@@ -141,66 +141,70 @@ def test_extract_backing_tensors_deduplicates_fused_and_direct_tensors(monkeypat
         byte_offset=128,
         total_size=2048,
     )
-    fixture = _OuterFixture(
-        direct=direct,
-        inner=_InnerFixture(fused=ot_a, tensors=[direct, extra]),
-        extra=(ot_b, None, "ignored"),
-    )
 
-    got = upload.extract_backing_tensors(fixture)
+    @dataclass
+    class _UploadFixture(upload.UploadableMixin):
+        direct: upload.ttnn.Tensor
+        fused_a: upload.OverlappedTensor
+        fused_b: upload.OverlappedTensor
+        tensor_list: list[upload.ttnn.Tensor]
+        maybe_tensor: upload.ttnn.Tensor | None
+        maybe_overlapped: upload.OverlappedTensor | None
+
+    fixture = _UploadFixture(
+        direct=direct,
+        fused_a=ot_a,
+        fused_b=ot_b,
+        tensor_list=[direct, extra],
+        maybe_tensor=None,
+        maybe_overlapped=None,
+    )
+    got = fixture.backing_tensors()
     assert got == [direct, fused, extra]
 
 
-def test_extract_backing_tensors_ignores_non_tensor_fields(monkeypatch):
+def test_uploadable_mixin_raises_on_unknown_field_type(monkeypatch):
     _patch_upload_tensor_types(monkeypatch)
     direct = _FakeTensor("direct")
-    fixture = _OuterFixture(
-        direct=direct,
-        inner=_InnerFixture(
-            fused=upload.OverlappedTensor(
-                fused_tensor=direct,
-                tensor_shape=(32, 32),
-                shard_shape=(32, 32),
-                core_range_set=_crs(0, 0, 0, 0),
-                dtype=object(),
-                tile_shape=(32, 32),
-                byte_offset=0,
-                total_size=2048,
-            ),
-            tensors=[],
-        ),
-        extra=(123, "abc", None),
-    )
-    got = upload.extract_backing_tensors(fixture)
-    assert got == [direct]
+
+    @dataclass
+    class _BadFixture(upload.UploadableMixin):
+        direct: upload.ttnn.Tensor
+        unsupported: str
+
+    fixture = _BadFixture(direct=direct, unsupported="bad")
+    with pytest.raises(TypeError):
+        fixture.backing_tensors()
 
 
-def test_extract_backing_tensors_deduplicates_by_tensor_id(monkeypatch):
+def test_uploadable_mixin_backing_tensors_deduplicates_by_tensor_id(monkeypatch):
     _patch_upload_tensor_types(monkeypatch)
     a = _TensorWithStableId("a", tensor_id=123)
     b = _TensorWithStableId("b", tensor_id=123)
-    fixture = _OuterFixture(
+
+    @dataclass
+    class _IdFixture(upload.UploadableMixin):
+        direct: upload.ttnn.Tensor
+        fused: upload.OverlappedTensor
+
+    fixture = _IdFixture(
         direct=a,
-        inner=_InnerFixture(
-            fused=_FakeOverlappedTensor(
-                fused_tensor=b,
-                tensor_shape=(32, 32),
-                shard_shape=(32, 32),
-                core_range_set=_crs(0, 0, 0, 0),
-                dtype=object(),
-                tile_shape=(32, 32),
-                byte_offset=0,
-                total_size=2048,
-            ),
-            tensors=[],
+        fused=_FakeOverlappedTensor(
+            fused_tensor=b,
+            tensor_shape=(32, 32),
+            shard_shape=(32, 32),
+            core_range_set=_crs(0, 0, 0, 0),
+            dtype=object(),
+            tile_shape=(32, 32),
+            byte_offset=0,
+            total_size=2048,
         ),
-        extra=(),
     )
-    got = upload.extract_backing_tensors(fixture)
+    got = fixture.backing_tensors()
     assert got == [a]
 
 
-def test_rebuild_with_device_tensors_replaces_nested_tensors_and_overlapped_views(monkeypatch):
+def test_uploadable_mixin_with_device_tensors_replaces_nested_tensors_and_overlapped_views(monkeypatch):
     _patch_upload_tensor_types(monkeypatch)
     fused_h = _FakeTensor("fused_h")
     direct_h = _FakeTensor("direct_h")
@@ -219,10 +223,19 @@ def test_rebuild_with_device_tensors_replaces_nested_tensors_and_overlapped_view
         byte_offset=64,
         total_size=2048,
     )
-    fixture = _OuterFixture(
+
+    @dataclass
+    class _RebuildFixture(upload.UploadableMixin):
+        direct: upload.ttnn.Tensor
+        fused: upload.OverlappedTensor
+        tensor_list: list[upload.ttnn.Tensor]
+        maybe_tensor: upload.ttnn.Tensor | None
+
+    fixture = _RebuildFixture(
         direct=direct_h,
-        inner=_InnerFixture(fused=overlapped, tensors=[list_h]),
-        extra=("x",),
+        fused=overlapped,
+        tensor_list=[list_h],
+        maybe_tensor=None,
     )
     mapping = {
         upload.tensor_identity_key(fused_h): fused_d,
@@ -230,40 +243,42 @@ def test_rebuild_with_device_tensors_replaces_nested_tensors_and_overlapped_view
         upload.tensor_identity_key(list_h): list_d,
     }
 
-    rebuilt = upload.rebuild_with_device_tensors(fixture, mapping)
+    rebuilt = fixture.with_device_tensors(mapping)
     assert rebuilt.direct is direct_d
-    assert rebuilt.inner.tensors == [list_d]
-    assert rebuilt.inner.fused.fused_tensor is fused_d
-    assert rebuilt.inner.fused.tensor_shape == overlapped.tensor_shape
-    assert rebuilt.inner.fused.shard_shape == overlapped.shard_shape
-    assert rebuilt.inner.fused.dtype == overlapped.dtype
-    assert rebuilt.inner.fused.tile_shape == overlapped.tile_shape
-    assert rebuilt.inner.fused.byte_offset == overlapped.byte_offset
-    assert rebuilt.inner.fused.total_size == overlapped.total_size
+    assert rebuilt.tensor_list == [list_d]
+    assert rebuilt.fused.fused_tensor is fused_d
+    assert rebuilt.fused.tensor_shape == overlapped.tensor_shape
+    assert rebuilt.fused.shard_shape == overlapped.shard_shape
+    assert rebuilt.fused.dtype == overlapped.dtype
+    assert rebuilt.fused.tile_shape == overlapped.tile_shape
+    assert rebuilt.fused.byte_offset == overlapped.byte_offset
+    assert rebuilt.fused.total_size == overlapped.total_size
 
 
-def test_rebuild_with_device_tensors_raises_on_missing_mapping(monkeypatch):
+def test_uploadable_mixin_with_device_tensors_raises_on_missing_mapping(monkeypatch):
     _patch_upload_tensor_types(monkeypatch)
     host = _FakeTensor("host")
-    fixture = _OuterFixture(
+
+    @dataclass
+    class _MissingMapFixture(upload.UploadableMixin):
+        direct: upload.ttnn.Tensor
+        fused: upload.OverlappedTensor
+
+    fixture = _MissingMapFixture(
         direct=host,
-        inner=_InnerFixture(
-            fused=upload.OverlappedTensor(
-                fused_tensor=host,
-                tensor_shape=(32, 32),
-                shard_shape=(32, 32),
-                core_range_set=_crs(0, 0, 0, 0),
-                dtype=object(),
-                tile_shape=(32, 32),
-                byte_offset=0,
-                total_size=2048,
-            ),
-            tensors=[],
+        fused=upload.OverlappedTensor(
+            fused_tensor=host,
+            tensor_shape=(32, 32),
+            shard_shape=(32, 32),
+            core_range_set=_crs(0, 0, 0, 0),
+            dtype=object(),
+            tile_shape=(32, 32),
+            byte_offset=0,
+            total_size=2048,
         ),
-        extra=(),
     )
     with pytest.raises(KeyError):
-        upload.rebuild_with_device_tensors(fixture, {})
+        fixture.with_device_tensors({})
 
 
 def test_two_phase_upload_non_sharded_goes_full_fd_copy(monkeypatch):
@@ -291,10 +306,24 @@ def test_two_phase_upload_non_sharded_goes_full_fd_copy(monkeypatch):
     monkeypatch.setattr(upload.ttnn.device, "setup_fast_dispatch", lambda _device: _FDContext())
     monkeypatch.setattr(upload, "get_fd_grid", lambda _device: _crs(0, 0, 11, 9))
 
-    host = _FakeHostTensor("a", sharded=False)
-    uploaded = upload.two_phase_upload(object(), [host])
+    class _Uploadable:
+        def __init__(self, tensors):
+            self._tensors = tensors
+            self.received_map = None
 
-    assert uploaded == ["dev-spec-a"]
+        def backing_tensors(self):
+            return self._tensors
+
+        def with_device_tensors(self, tensor_map):
+            self.received_map = tensor_map
+            return self
+
+    host = _FakeHostTensor("a", sharded=False)
+    weights = _Uploadable([host])
+    uploaded = upload.two_phase_upload(object(), weights)
+
+    assert uploaded is weights
+    assert weights.received_map == {upload.tensor_identity_key(host): "dev-spec-a"}
     assert calls == [("fd-enter",), ("full", "a", "dev-spec-a"), ("fd-exit",)]
 
 
@@ -325,8 +354,19 @@ def test_two_phase_upload_sharded_with_both_filters_calls_fd_then_sd_partial(mon
     monkeypatch.setattr(upload.ttnn.device, "setup_fast_dispatch", lambda _device: _FDContext())
     monkeypatch.setattr(upload, "get_fd_grid", lambda _device: _crs(0, 0, 11, 9))
 
+    class _Uploadable:
+        def __init__(self, tensors):
+            self._tensors = tensors
+
+        def backing_tensors(self):
+            return self._tensors
+
+        def with_device_tensors(self, tensor_map):
+            return tensor_map
+
     host = _FakeHostTensor("b", sharded=True, grid=_crs(0, 0, 12, 9))
-    upload.two_phase_upload(object(), [host])
+    result = upload.two_phase_upload(object(), _Uploadable([host]))
+    assert result == {upload.tensor_identity_key(host): "dev-spec-b"}
 
     assert calls == [
         ("fd-enter",),
@@ -362,8 +402,18 @@ def test_two_phase_upload_sharded_fd_only_uses_full_fd_copy(monkeypatch):
     monkeypatch.setattr(upload.ttnn.device, "setup_fast_dispatch", lambda _device: _FDContext())
     monkeypatch.setattr(upload, "get_fd_grid", lambda _device: _crs(0, 0, 11, 9))
 
+    class _Uploadable:
+        def __init__(self, tensors):
+            self._tensors = tensors
+
+        def backing_tensors(self):
+            return self._tensors
+
+        def with_device_tensors(self, tensor_map):
+            return tensor_map
+
     host = _FakeHostTensor("c", sharded=True, grid=_crs(0, 0, 11, 9))
-    upload.two_phase_upload(object(), [host])
+    upload.two_phase_upload(object(), _Uploadable([host]))
 
     assert calls == [("fd-enter",), ("full", "c"), ("fd-exit",)]
 
@@ -394,7 +444,17 @@ def test_two_phase_upload_sharded_with_none_shard_spec_falls_back_to_full_fd(mon
     monkeypatch.setattr(upload.ttnn.device, "setup_fast_dispatch", lambda _device: _FDContext())
     monkeypatch.setattr(upload, "get_fd_grid", lambda _device: _crs(0, 0, 11, 9))
 
+    class _Uploadable:
+        def __init__(self, tensors):
+            self._tensors = tensors
+
+        def backing_tensors(self):
+            return self._tensors
+
+        def with_device_tensors(self, tensor_map):
+            return tensor_map
+
     host = _FakeHostTensor("d", sharded=True, grid=None, shard_spec_none=True)
-    upload.two_phase_upload(object(), [host])
+    upload.two_phase_upload(object(), _Uploadable([host]))
 
     assert calls == [("fd-enter",), ("full", "d"), ("fd-exit",)]

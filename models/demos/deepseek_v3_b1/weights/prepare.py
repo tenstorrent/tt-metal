@@ -48,6 +48,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
 )
+from models.demos.deepseek_v3_b1.weights.upload import UploadableMixin
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
@@ -73,7 +74,7 @@ _GATE_BIAS_TILE = ttnn.Tile([16, 16])
 
 
 @dataclass
-class AttentionWeights:
+class AttentionWeights(UploadableMixin):
     """Attention fusion groups: q_ab_kv_a + kv_b12 + o_proj_gate_mm_norms."""
 
     q_a_proj: OverlappedTensor
@@ -91,7 +92,7 @@ class AttentionWeights:
 
 
 @dataclass
-class SharedExpertWeights:
+class SharedExpertWeights(UploadableMixin):
     """Shared expert gate_up fusion group + standalone shared_down_proj."""
 
     shared_gate_proj: OverlappedTensor
@@ -100,7 +101,7 @@ class SharedExpertWeights:
 
 
 @dataclass
-class DenseRoutedExpertWeights:
+class DenseRoutedExpertWeights(UploadableMixin):
     """Routed expert weights for dense layers (single tensor per proj)."""
 
     routed_gate_proj: ttnn.Tensor
@@ -178,7 +179,7 @@ def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: 
 
 
 @dataclass
-class MoERoutedExpertWeights:
+class MoERoutedExpertWeights(UploadableMixin):
     """Routed expert weights for MoE layers (list of tensors, one per expert).
 
     When on device, each of ``routed_gate_proj``, ``routed_up_proj``, and ``routed_down_proj`` must
@@ -197,7 +198,7 @@ class MoERoutedExpertWeights:
 
 
 @dataclass
-class DeepSeekV3DenseLayerWeights:
+class DeepSeekV3DenseLayerWeights(UploadableMixin):
     """Weights for a dense layer (0..first_k_dense_replace-1).
 
     Has the 3 attention fusion groups and o_proj + norms (no gate_mm).
@@ -231,7 +232,7 @@ class DeepSeekV3DenseLayerWeights:
 
 
 @dataclass
-class DeepSeekV3MoELayerWeights:
+class DeepSeekV3MoELayerWeights(UploadableMixin):
     """Weights for an MoE layer (first_k_dense_replace..num_layers-1).
 
     Extends dense with gate_mm and shared expert projections.
@@ -269,14 +270,14 @@ class DeepSeekV3MoELayerWeights:
 
 
 @dataclass
-class DeepSeekV3EmbeddingLayerWeights:
+class DeepSeekV3EmbeddingLayerWeights(UploadableMixin):
     """Weights for the embedding layer."""
 
     embedding: ttnn.Tensor
 
 
 @dataclass
-class DeepSeekV3LMHeadWeights:
+class DeepSeekV3LMHeadWeights(UploadableMixin):
     """Weights for the LM head and final RMSNorm."""
 
     lm_head: ttnn.Tensor
@@ -284,7 +285,7 @@ class DeepSeekV3LMHeadWeights:
 
 
 @dataclass
-class DeepSeekV3MTPWeights:
+class DeepSeekV3MTPWeights(UploadableMixin):
     """Weights for the MTP (Multi-Token Prediction) speculative decode layer.
 
     HF state dict keys live under ``model.layers.{mtp_layer_idx}.*`` (layer 61 for DeepSeek V3).
@@ -297,7 +298,7 @@ class DeepSeekV3MTPWeights:
 
 
 @dataclass
-class DeepSeekV3SpecWeights:
+class DeepSeekV3SpecWeights(UploadableMixin):
     """Weights used only by the speculative verify LM-head stage."""
 
     shared_head_norm: ttnn.Tensor  # model.layers.61.shared_head.norm.weight
