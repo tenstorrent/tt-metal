@@ -22,7 +22,7 @@ import math
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal, Union
+from typing import Optional, Tuple, Literal, Union, Callable
 import time
 import pickle
 
@@ -69,7 +69,7 @@ from ttml.models.nanogpt.flops import calculate_flops_per_token as _gpt2_flops
 from ttml.models.llama.flops import calculate_flops_per_token as _llama_flops
 from ttml.models.qwen3.flops import calculate_flops_per_token as _qwen3_flops
 
-FLOPS_REGISTRY: dict[str, callable] = {
+FLOPS_REGISTRY: dict[str, Callable] = {
     "deepseek": _deepseek_flops,
     "gpt2": _gpt2_flops,
     "llama": _llama_flops,
