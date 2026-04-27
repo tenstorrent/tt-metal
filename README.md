@@ -233,3 +233,11 @@ Some distributable forms of this project—such as manylinux-compliant wheels—
 - libevent (when built with multihost support)
 
 These libraries are bound by their own license terms.
+
+## 💰 Bounty Contribution
+
+- **Task:** [Bounty $1500] Time Series Transformer Model Bring-Up Using TTNN APIs
+- **Reward:** $1500
+- **Source:** GitHub-Bounty
+- **Date:** 2026-04-27
+
