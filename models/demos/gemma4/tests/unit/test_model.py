@@ -58,7 +58,7 @@ def test_model_instantiation():
     assert hf_config.num_hidden_layers > 0
 
 
-def test_softcapping():
+def test_softcapping(reset_seeds):
     """Test logit softcapping matches tanh(x/cap)*cap."""
     cap = 30.0
     x = torch.randn(1, 1, 32, 100, dtype=torch.float32) * 100
@@ -185,7 +185,7 @@ def _hf_model_state_to_tt_state(hf_model):
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("num_layers", [1, 5, 6], ids=["1layer", "5layers", "6layers"])
-def test_single_layer_model(mesh_device, num_layers):
+def test_single_layer_model(mesh_device, num_layers, reset_seeds):
     """Test few-layer model with random weights against HF reference.
 
     1 layer = sliding only, 5 layers = all sliding, 6 layers = includes first global.
@@ -271,7 +271,7 @@ def test_single_layer_model(mesh_device, num_layers):
 
 
 @parametrize_mesh_with_fabric()
-def test_full_model(mesh_device):
+def test_full_model(mesh_device, reset_seeds):
     """Test full model (all layers, real weights) against HuggingFace reference.
 
     Runs on any mesh where the model fits in DRAM. Smaller models (E2B, E4B)

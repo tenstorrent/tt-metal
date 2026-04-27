@@ -26,7 +26,7 @@ from ...tests.test_factory import (
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_router(batch_size, seq_len, mesh_device):
+def test_router(batch_size, seq_len, mesh_device, reset_seeds):
     """Test Router returns dense routing weights that match HF reference."""
     hf_text_config = TestFactory.create_hf_text_config(num_experts=8, top_k=4)
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
