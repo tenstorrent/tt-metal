@@ -57,7 +57,7 @@ class YOLOv8lPerformanceRunnerInfra:
     def run(self):
         self.output_tensor = self.ttnn_yolov8_model(self.input_tensor)
 
-    def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
+    def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16, uint8_input=False):
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
         n, c_in, h, w = torch_input_tensor.shape
 
@@ -98,30 +98,74 @@ class YOLOv8lPerformanceRunnerInfra:
         # from_torch + from_host_shards.  ~150x faster (0.06ms vs 8.7ms).
         if not hasattr(self, "_cached_shard_mapper"):
             self._cached_shard_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        tt_inputs_host = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._cached_shard_mapper,
-        )
+
+        if uint8_input:
+            # uint8 TILE host tensor: half the wire bytes of bf16 RM.  Host-side
+            # tilize is a CPU memcpy reorder.  Device-side path:
+            #   typecast(u8 TILE → bf16 TILE) → multiply(1/255) → untilize → reshard
+            # Note: a uint8 ROW_MAJOR + on-device tilize variant was attempted
+            # but the LLK tilize compute kernel produces ~99% wrong output for
+            # uint8 input (unpacker format mismatch — unfixed upstream).
+            assert (
+                torch_input_tensor.dtype == torch.uint8
+            ), f"uint8_input=True requires torch.uint8 input, got {torch_input_tensor.dtype}"
+            tt_inputs_host = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=ttnn.uint8,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=self._cached_shard_mapper,
+            )
+        else:
+            tt_inputs_host = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._cached_shard_mapper,
+            )
         return tt_inputs_host, input_mem_config
 
-    def _setup_dram_sharded_input(self, device, torch_input_tensor=None):
-        tt_inputs_host, input_mem_config = self._setup_l1_sharded_input(device, torch_input_tensor=torch_input_tensor)
+    def _setup_dram_sharded_input(self, device, torch_input_tensor=None, uint8_input=False):
+        if uint8_input and torch_input_tensor is None:
+            torch_input_tensor = (self.torch_input_tensor.clamp(0, 1) * 255).to(torch.uint8)
+        tt_inputs_host, input_mem_config = self._setup_l1_sharded_input(
+            device, torch_input_tensor=torch_input_tensor, uint8_input=uint8_input
+        )
         dram_grid_size = device.dram_grid_size()
-        dram_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-            ),
-            [
-                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
-                tt_inputs_host.shape[-1],
-            ],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        sharded_mem_config_DRAM = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
-        )
+
+        if uint8_input:
+            # uint8 TILE arrives via interleaved DRAM (no special shard layout
+            # needed for the h2d target).  The bf16-RM sharded layout is
+            # produced by the in-trace untilize, sized for the *bf16* host shape.
+            sharded_mem_config_DRAM = ttnn.DRAM_MEMORY_CONFIG
+            n, c, h, w = torch_input_tensor.shape
+            volume_bf16 = n * c * h * w
+            dram_shard_spec_bf16 = ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+                ),
+                [
+                    divup(volume_bf16 // w, (dram_grid_size.x * dram_grid_size.y)),
+                    w,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            self._bf16_dram_sharded_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec_bf16
+            )
+        else:
+            dram_shard_spec = ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+                ),
+                [
+                    divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
+                    tt_inputs_host.shape[-1],
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            sharded_mem_config_DRAM = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+            )
 
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 

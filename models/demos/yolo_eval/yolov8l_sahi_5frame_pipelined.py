@@ -37,6 +37,7 @@ import signal
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -81,13 +82,19 @@ def _prep_process_worker_multi(
     ready_event,
     stop_event,
     pace: bool = False,
+    stream_paths: list | None = None,
 ):
-    """Read a 1280x1280 frame, convert its 4 tiles to bf16 NCHW, then copy
-    those 4 tiles into each of the 8 stream slots of the 32-tile shm batch.
+    """Read N_STREAMS frames per iter (one per stream), slice each into its
+    own 4-tile region of the 32-tile shm batch.
 
-    Uses the same C++ fused tile conversion as the 640 pipeline but on a
-    single-stream grid of 4 tiles; the result is then broadcast 8x into the
-    full 32-slot buffer.
+    Two modes:
+    - ``stream_paths`` provided (8 file paths): each stream reads from its own
+      independent source, looping that source individually.  Streams will
+      drift apart over time, which is the realistic multi-camera/multi-input
+      demo shape.
+    - ``stream_paths is None`` (legacy): single ``video_path`` is read once
+      per iter and broadcast across all 8 stream slots — same content shown
+      8x in the grid.
 
     Timings layout (same keys as the 640 pipeline's shm_timings):
         [0] n_frames_valid  [1] read_ms  [2] slice_ms  [3] preprocess_ms
@@ -98,7 +105,17 @@ def _prep_process_worker_multi(
     # was leaving ~12ms/frame of memory bandwidth on the table.
     torch.set_num_threads(4)
 
-    src = FrameSource(video_path)
+    multi_source = stream_paths is not None and len(stream_paths) >= N_STREAMS
+    if multi_source:
+        srcs = [FrameSource(stream_paths[i]) for i in range(N_STREAMS)]
+        src = srcs[0]  # legacy variable name kept for places below that probe metadata
+        print(
+            f"{TAG} per-stream sources: " + ", ".join(stream_paths[:N_STREAMS]),
+            flush=True,
+        )
+    else:
+        src = FrameSource(video_path)
+        srcs = None
 
     _pace_interval = 0.0
     if pace:
@@ -119,14 +136,30 @@ def _prep_process_worker_multi(
     # writes here, then we broadcast into each of the 8 stream slots.
     stream_bf16 = torch.zeros(TILES_PER_STREAM, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16)
 
-    def _read_next():
-        ok, f = src.read()
+    def _read_one(_s):
+        ok, f = _s.read()
         if not ok:
-            src.reset()
-            ok, f = src.read()
+            _s.reset()
+            ok, f = _s.read()
         return ok, f
 
-    pending_read = read_pool.submit(_read_next)
+    def _read_next_single():
+        return _read_one(src)
+
+    def _read_next_multi():
+        # Returns list of (ok, frame) tuples, one per stream
+        return [_read_one(s) for s in srcs]
+
+    if multi_source:
+        # Pool with N_STREAMS workers so per-stream decodes run in parallel
+        read_pool_multi = ThreadPoolExecutor(max_workers=N_STREAMS)
+
+        def _read_next_multi_parallel():
+            return list(read_pool_multi.map(_read_one, srcs))
+
+        pending_read = read_pool.submit(_read_next_multi_parallel)
+    else:
+        pending_read = read_pool.submit(_read_next_single)
     prep_frame_idx = 0
     _PREP_LOG_INTERVAL = 30
     _prep_log_sum_read = 0.0
@@ -146,57 +179,101 @@ def _prep_process_worker_multi(
             t_prep_start = time.perf_counter()
 
             t0 = time.perf_counter()
-            ok, frame = pending_read.result()
+            if multi_source:
+                # pending_read is a list of (ok, frame) tuples
+                results = pending_read.result()
+                # All 8 must be ok for this iter to proceed; if any fails
+                # (which shouldn't happen with reset-on-EOF) drop the iter.
+                ok = all(r[0] for r in results)
+                frames = [r[1] for r in results] if ok else None
+            else:
+                ok, frame = pending_read.result()
+                frames = None
             t_read = (time.perf_counter() - t0) * 1000
 
             if not ok:
                 shm_timings[6] = -1.0
                 ready_event.set()
-                pending_read = read_pool.submit(_read_next)
+                if multi_source:
+                    pending_read = read_pool.submit(_read_next_multi_parallel)
+                else:
+                    pending_read = read_pool.submit(_read_next_single)
                 continue
 
-            pending_read = read_pool.submit(_read_next)
+            # Kick off the next iter's read while we slice the current frames
+            if multi_source:
+                pending_read = read_pool.submit(_read_next_multi_parallel)
+            else:
+                pending_read = read_pool.submit(_read_next_single)
 
-            # Defensive resize: source is expected to be exactly STREAM_W x
-            # STREAM_H but tolerate mismatches.
-            if frame.shape[0] != STREAM_H or frame.shape[1] != STREAM_W:
-                frame = cv2.resize(frame, (STREAM_W, STREAM_H), interpolation=cv2.INTER_LINEAR)
+            shm_tensor = shm_tensor_bufs[prep_frame_idx % 2]
 
-            frame_tensor = torch.from_numpy(frame)
+            if multi_source:
+                # Per-stream slice: each stream's frame writes to its OWN
+                # 4-tile region of shm.  Run all 8 stream slices in parallel
+                # via slice_pool (no broadcast — each region is independent).
+                # Defensive resize for mismatched source dims.
+                resized_frames = []
+                for s, fr in enumerate(frames):
+                    if fr.shape[0] != STREAM_H or fr.shape[1] != STREAM_W:
+                        fr = cv2.resize(fr, (STREAM_W, STREAM_H), interpolation=cv2.INTER_LINEAR)
+                    resized_frames.append(fr)
+                frame_tensors = [torch.from_numpy(fr) for fr in resized_frames]
 
-            # 4-way C++ fused slice for the 4 tiles of a single stream.
-            chunk = (TILES_PER_STREAM + 3) // 4
-
-            def _cpp_range(thread_id):
-                start = thread_id * chunk
-                end = min(start + chunk, TILES_PER_STREAM)
-                if start < end:
+                def _cpp_per_stream(s):
+                    # Slice stream s's frame into its 4 tiles directly into shm.
                     _fused_ext.fused_convert_tile_range(
-                        frame_tensor,
-                        stream_bf16,
+                        frame_tensors[s],
+                        shm_tensor[s * TILES_PER_STREAM : (s + 1) * TILES_PER_STREAM],
                         tile_specs,
-                        start,
-                        end,
+                        0,
+                        TILES_PER_STREAM,
                         True,
                     )
 
-            t0 = time.perf_counter()
-            list(slice_pool.map(_cpp_range, range(4)))
-            t_sp = (time.perf_counter() - t0) * 1000
+                t0 = time.perf_counter()
+                list(slice_pool.map(_cpp_per_stream, range(N_STREAMS)))
+                t_sp = (time.perf_counter() - t0) * 1000
+                t_bcast = 0.0  # no broadcast in multi-source mode
+            else:
+                # Legacy single-source path: slice once, broadcast 8x.
+                # Defensive resize: source is expected to be exactly STREAM_W x
+                # STREAM_H but tolerate mismatches.
+                if frame.shape[0] != STREAM_H or frame.shape[1] != STREAM_W:
+                    frame = cv2.resize(frame, (STREAM_W, STREAM_H), interpolation=cv2.INTER_LINEAR)
 
-            # Broadcast the 4-tile stream batch into all 8 stream slots.
-            # 8-way parallel memcpy — each thread writes one stream slot, so
-            # writes are disjoint (no contention).  Memory-bandwidth-bound,
-            # but parallel dispatch recovers the per-thread bandwidth we lost
-            # with a single-threaded copy.
-            t_bcast_start = time.perf_counter()
-            shm_tensor = shm_tensor_bufs[prep_frame_idx % 2]
+                frame_tensor = torch.from_numpy(frame)
 
-            def _bcast_one(s):
-                shm_tensor[s * TILES_PER_STREAM : (s + 1) * TILES_PER_STREAM].copy_(stream_bf16)
+                # 4-way C++ fused slice for the 4 tiles of a single stream.
+                chunk = (TILES_PER_STREAM + 3) // 4
 
-            list(bcast_pool.map(_bcast_one, range(N_STREAMS)))
-            t_bcast = (time.perf_counter() - t_bcast_start) * 1000
+                def _cpp_range(thread_id):
+                    start = thread_id * chunk
+                    end = min(start + chunk, TILES_PER_STREAM)
+                    if start < end:
+                        _fused_ext.fused_convert_tile_range(
+                            frame_tensor,
+                            stream_bf16,
+                            tile_specs,
+                            start,
+                            end,
+                            True,
+                        )
+
+                t0 = time.perf_counter()
+                list(slice_pool.map(_cpp_range, range(4)))
+                t_sp = (time.perf_counter() - t0) * 1000
+
+                # Broadcast the 4-tile stream batch into all 8 stream slots.
+                # 8-way parallel memcpy — each thread writes one stream slot, so
+                # writes are disjoint (no contention).
+                t_bcast_start = time.perf_counter()
+
+                def _bcast_one(s):
+                    shm_tensor[s * TILES_PER_STREAM : (s + 1) * TILES_PER_STREAM].copy_(stream_bf16)
+
+                list(bcast_pool.map(_bcast_one, range(N_STREAMS)))
+                t_bcast = (time.perf_counter() - t_bcast_start) * 1000
             prep_frame_idx += 1
 
             if _pace_interval > 0:
@@ -261,6 +338,8 @@ def _postprocess_worker_shm_multi(
     merge_match: str,
     shm_preds: torch.Tensor,
     dets_q: mp.Queue,
+    stream_n_frames: list | None = None,
+    stream_fps_rates: list | None = None,
 ):
     """Split the 32-tile prediction batch into 8 groups of 4 tiles each and
     run _fused_nms_merge per stream. Each stream pushes its own dets message
@@ -330,10 +409,28 @@ def _postprocess_worker_shm_multi(
                 )
 
                 _n = int(len(boxes_np))
+                # Per-stream clip-local frame index: each clip has different
+                # length, so we mod fc by THIS stream's n_frames. This keeps
+                # the dets aligned with the per-stream <video> playhead in the
+                # browser, which loops independently at its own n_frames.
+                if stream_n_frames and s < len(stream_n_frames) and stream_n_frames[s] > 0:
+                    _nf = int(stream_n_frames[s])
+                    _fid = int(fc) % _nf
+                else:
+                    _nf = 0
+                    _fid = int(fc)
+                # Per-stream source fps: lets the browser map <video>.mediaTime
+                # to the same integer frame index the pipeline used.
+                if stream_fps_rates and s < len(stream_fps_rates) and stream_fps_rates[s] > 0:
+                    _fps_rate = float(stream_fps_rates[s])
+                else:
+                    _fps_rate = 0.0
                 msg = {
                     "k": "dets",
                     "stream_id": s,
-                    "frame_id": int(fc),
+                    "frame_id": _fid,
+                    "n_frames": _nf,
+                    "fps_rate": _fps_rate,
                     "n": _n,
                     "fps": float(ema_fps),
                     "boxes": boxes_np.astype(np.float32).tolist() if _n else [],
@@ -408,8 +505,53 @@ def run_sahi_5frame_pipelined(args):
     l1_small = yolov8l_l1_small_size_for_res(_TILE_SIZE_640, _TILE_SIZE_640)
     trace_region = 6_434_816
 
-    if not args.input:
-        print(f"{TAG} ERROR: --input is required", file=sys.stderr, flush=True)
+    # Multi-source mode: --inputs-dir takes precedence over --input.
+    # Picks the 8 files whose names start with "1." through "8." (any extension).
+    # Stream index = numeric prefix - 1, so 1.mp4 → stream 0, 8.mp4 → stream 7.
+    stream_paths: list = []
+    stream_n_frames: list = []
+    stream_fps_rates: list = []
+    if getattr(args, "inputs_dir", None):
+        d = Path(args.inputs_dir)
+        if not d.is_dir():
+            print(f"{TAG} ERROR: --inputs-dir is not a directory: {d}", file=sys.stderr, flush=True)
+            sys.exit(1)
+        for i in range(1, N_STREAMS + 1):
+            matches = sorted(d.glob(f"{i}.*"))
+            # Filter to media-like extensions
+            matches = [m for m in matches if m.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi")]
+            if not matches:
+                print(
+                    f"{TAG} ERROR: --inputs-dir missing video for stream {i} ({d}/{i}.mp4)", file=sys.stderr, flush=True
+                )
+                sys.exit(1)
+            stream_paths.append(str(matches[0]))
+        # The "primary" video used for browser playback fallback + metadata.
+        args.input = stream_paths[0]
+        # Probe per-stream frame counts AND fps for clip-local frame_id tagging.
+        # The browser uses `fps_rate` to convert each <video>'s mediaTime to a
+        # frame index that matches the pipeline's `fc % n_frames[s]`. Without
+        # per-stream fps, a 29.97 vs 30 mismatch drifts boxes by ~3 frames/min.
+        for p in stream_paths:
+            _cap = cv2.VideoCapture(p)
+            if _cap.isOpened():
+                _nf = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                _fps = float(_cap.get(cv2.CAP_PROP_FPS))
+            else:
+                _nf, _fps = 0, 0.0
+            _cap.release()
+            stream_n_frames.append(max(_nf, 1))
+            stream_fps_rates.append(_fps if _fps > 0 else 30.0)
+        print(
+            f"{TAG} per-stream sources from {d}:\n  "
+            + "\n  ".join(
+                f"stream {i}: {p}  (n_frames={stream_n_frames[i]}, fps={stream_fps_rates[i]:.2f})"
+                for i, p in enumerate(stream_paths)
+            ),
+            flush=True,
+        )
+    elif not args.input:
+        print(f"{TAG} ERROR: --input or --inputs-dir is required", file=sys.stderr, flush=True)
         sys.exit(1)
 
     try:
@@ -544,17 +686,27 @@ def run_sahi_5frame_pipelined(args):
     from models.demos.yolo_eval import _split_server as _split
 
     dets_q = _ctx.Queue(maxsize=256)
+    # Pass per-stream paths so the split server can serve /source-1.mp4 .. /source-N.mp4
+    # When stream_paths is empty, the server falls back to the legacy /source.mp4
+    # endpoint pointing at args.input.
     server_proc = _ctx.Process(
         target=_split.run_server,
-        args=(args.host, int(args.port), dets_q, args.input, STREAM_W, STREAM_H),
+        args=(args.host, int(args.port), dets_q, args.input, STREAM_W, STREAM_H, stream_paths or None),
         daemon=True,
         name="sahi640-multi-split",
     )
     server_proc.start()
-    print(
-        f"{TAG} Split server: http://{args.host}:{args.port}/  " f"source={args.input} ({STREAM_W}x{STREAM_H})",
-        flush=True,
-    )
+    if stream_paths:
+        print(
+            f"{TAG} Split server: http://{args.host}:{args.port}/  "
+            f"per-stream sources at /source-1.mp4 .. /source-{N_STREAMS}.mp4 ({STREAM_W}x{STREAM_H})",
+            flush=True,
+        )
+    else:
+        print(
+            f"{TAG} Split server: http://{args.host}:{args.port}/  " f"source={args.input} ({STREAM_W}x{STREAM_H})",
+            flush=True,
+        )
 
     # --- BG process ----------------------------------------------------------
     bg_proc = _ctx.Process(
@@ -571,6 +723,8 @@ def run_sahi_5frame_pipelined(args):
             args.merge_match,
             shm_preds,
             dets_q,
+            stream_n_frames if stream_n_frames else None,
+            stream_fps_rates if stream_fps_rates else None,
         ),
         daemon=True,
         name="sahi640-multi-bg",
@@ -600,6 +754,7 @@ def run_sahi_5frame_pipelined(args):
             ready_event,
             stop_event,
             getattr(args, "pace", False),
+            stream_paths if stream_paths else None,
         ),
         daemon=True,
         name="sahi640-multi-prep",
@@ -855,7 +1010,20 @@ def parse_args() -> argparse.Namespace:
         f"{MESH_ROWS}x{MESH_COLS} mesh).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--input", required=True, help=f"Path to a {STREAM_W}x{STREAM_H} MP4 source.")
+    p.add_argument(
+        "--input",
+        required=False,
+        default=None,
+        help=f"Path to a single {STREAM_W}x{STREAM_H} MP4 source (broadcast 8x).",
+    )
+    p.add_argument(
+        "--inputs-dir",
+        default=None,
+        help=(
+            f"Directory containing 1.mp4 .. {N_STREAMS}.mp4, one per stream window. "
+            "Each stream loops its own clip independently.  Takes precedence over --input."
+        ),
+    )
     p.add_argument("--conf", type=float, default=0.25, help="NMS confidence.")
     p.add_argument("--iou", type=float, default=0.7, help="NMS IoU threshold.")
     p.add_argument("--serve", action="store_true", help="Serve split-delivery HTTP.")

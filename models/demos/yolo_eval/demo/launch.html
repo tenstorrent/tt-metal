@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>4K Image Detection — TT WH Galaxy</title>
+<title>Yolo Demo on BH Galaxy</title>
 <style>
   :root {
     --bg-0: #0a0612;
     --bg-1: #16101f;
     --card: #161126;
     --card-border: #2a1f48;
-    --text: #e6e1f5;
-    --text-dim: #b9a7ff;
+    --text: #f0eaff;
+    --text-dim: #cbb8ff;
     --accent: #7c5cff;
     --accent-hover: #9279ff;
-    --pill-inactive: #1c1530;
+    --pill-inactive: #0a0517;
     --good: #5af2a3;
     --warn: #ffb05a;
     --bad: #ff6b6b;
@@ -84,19 +84,33 @@
     border-radius: 999px;
     cursor: pointer;
     color: var(--text-dim);
-    font-weight: 500;
+    font-weight: 700;
     font-size: 16px;
     transition: color 160ms ease;
     min-width: 150px;
     justify-content: center;
+    /* Reset the user-agent <button> styles — without these the inactive
+       segments showed the browser's default light-grey button fill, which
+       read as a "white shade" against the dark pill. */
+    background: transparent;
+    border: 0;
+    outline: 0;
+    font-family: inherit;
+    -webkit-appearance: none;
+    appearance: none;
   }
-  .toggle-pill .seg.active { color: #fff; }
+  /* Active text: bright lilac (var(--text) = #f0eaff) on a near-charcoal
+     deep-purple indicator. Highest contrast that still reads as purple. */
+  .toggle-pill .seg.active { color: var(--text); font-weight: 700; }
   .toggle-pill .indicator {
     position: absolute;
     top: 5px; bottom: 5px;
     border-radius: 999px;
-    background: linear-gradient(135deg, var(--accent), #5b3dd6);
-    box-shadow: 0 6px 18px rgba(124, 92, 255, 0.45);
+    /* Very dark deep-purple — close to black, just enough hue to keep the
+       theme. Combined with the brightened text tokens above, the active
+       label now reads cleanly without looking washed-out. */
+    background: linear-gradient(135deg, #1a0d4a, #0a0626);
+    box-shadow: 0 4px 14px rgba(20, 10, 50, 0.6);
     transition: transform 200ms ease, width 200ms ease;
     z-index: 0;
   }
@@ -346,17 +360,17 @@
       <img src="assets/tt_logo.png" alt="Tenstorrent" />
     </div>
     <div class="center-stack">
-      <div class="title">4K Image Detection — TT WH Galaxy</div>
+      <div class="title">Yolo Demo on BH Galaxy</div>
       <div class="toggle-pill" id="toggle" role="tablist" aria-label="Source">
         <span class="indicator" id="ind"></span>
         <button class="seg" data-id="camera" role="tab" aria-selected="false">
-          <span aria-hidden="true">🎥</span><span>Camera</span>
-        </button>
-        <button class="seg" data-id="multi" role="tab" aria-selected="false">
-          <span aria-hidden="true">🗂️</span><span>Streams</span>
+          <span aria-hidden="true">🎥</span><span>Live Camera</span>
         </button>
         <button class="seg active" data-id="video" role="tab" aria-selected="true">
-          <span aria-hidden="true">🎬</span><span>Video</span>
+          <span aria-hidden="true">🎬</span><span>4k Video Stream</span>
+        </button>
+        <button class="seg" data-id="multi" role="tab" aria-selected="false">
+          <span aria-hidden="true">🗂️</span><span>Multi-Stream</span>
         </button>
       </div>
     </div>
@@ -386,7 +400,6 @@
         <div class="row"><span>transport</span><b id="m_transport">—</b></div>
         <div class="row"><span>resolution</span><b id="m_res">—</b></div>
         <div class="row"><span>tiles</span><b id="m_tiles">—</b></div>
-        <div class="row"><span>delivery</span><b id="m_delivery">—</b></div>
       </div>
     </aside>
   </main>
@@ -496,14 +509,23 @@ function drawTilePreview() {
   document.getElementById("tilesCap").textContent = captionFor(lastGrid);
 }
 
+// 500ms snapshot cadence: the underlying EMA already smooths in ~40ms, so
+// half-second sampling looks live without flickering. Stall threshold stays
+// at 2s — we still want to blank the readout if dets actually stop.
+const _FPS_HUD_INTERVAL_MS = 500;
+let _fpsCapDisplay = 0;
+let _fpsCapLastSampleT = 0;
 function _updateFpsCap() {
   const el = document.getElementById("fpsCap");
   if (!el) return;
-  // If no dets arrived in the last 2 s the stream has stalled — blank the
-  // readout so it doesn't keep advertising a stale number.
-  const stalled = _detsLastT === 0 || (performance.now() - _detsLastT) > 2000;
-  el.textContent = (!stalled && detsFps > 0.5)
-    ? `inference ${detsFps.toFixed(1)} FPS`
+  const now = performance.now();
+  const stalled = _detsLastT === 0 || (now - _detsLastT) > 2000;
+  if (now - _fpsCapLastSampleT >= _FPS_HUD_INTERVAL_MS || _fpsCapLastSampleT === 0) {
+    _fpsCapDisplay = detsFps;
+    _fpsCapLastSampleT = now;
+  }
+  el.textContent = (!stalled && _fpsCapDisplay > 0.5)
+    ? `inference ${_fpsCapDisplay.toFixed(1)} FPS`
     : "inference —.— FPS";
 }
 
@@ -686,6 +708,7 @@ function _markDetsArrival(fps) {
 
 function _resetDetsFps() {
   detsFps = 0; _detsLastT = 0;
+  _fpsCapDisplay = 0; _fpsCapLastSampleT = 0;
 }
 
 function closeDetsStream() {
@@ -1013,11 +1036,10 @@ async function startCamera() {
   hideSwitch();
 }
 
-function updateMeta(status, deliveryDesc) {
+function updateMeta(status, _deliveryDesc) {
   document.getElementById("m_transport").textContent = status.transport || "—";
   document.getElementById("m_res").textContent = `${status.frame_w}×${status.frame_h}`;
   document.getElementById("m_tiles").textContent = `${status.tiles_x}×${status.tiles_y} = ${status.n_tiles}`;
-  document.getElementById("m_delivery").textContent = deliveryDesc;
   if (status.frame_w && status.frame_h) {
     srcW = status.frame_w; srcH = status.frame_h;
     lastGrid = gridFor(srcW, srcH);
@@ -1084,6 +1106,8 @@ const STREAMS_SRC_H = 1280;
 const STREAMS_CROP_Y = 280;
 const STREAMS_CROP_H = 724;
 let streamsMaster = null;
+let streamsVideos = [];        // per-stream <video> elements (when per_stream_sources=true)
+let streamsPerStream = false;  // true when supervisor reports per_stream_sources
 let streamsCanvases = [];
 let streamsCtxs = [];
 let streamsDetsBuffers = [];
@@ -1095,46 +1119,80 @@ let streamsHudRightEls = [];   // per-stream FPS element
 let streamsLoadingEls = [];    // per-stream loading overlay (hidden after first paint)
 let streamsFirstFrameSeen = []; // per-stream bool — drop the overlay once true
 let streamsFps = [];           // last-known per-stream FPS (from SSE msg.fps)
+let streamsNFrames = [];       // per-stream clip length (from SSE msg.n_frames); 0 until first dets msg arrives
+let streamsFpsRate = [];       // per-stream SOURCE-VIDEO fps (from SSE msg.fps_rate); used to peg mediaTime->frame
+let streamsFidPerCell = [];    // per-stream current frame_id, set by per-stream rVFC tick (preferred over currentTime*fps)
+let streamsRvfcGen = [];       // generation counter so stale rVFC callbacks self-cancel after teardown
 let streamsTilesPerStream = 4; // model cluster size per stream, seeded from /api/status
+
+function _makeStreamVideo(label, sid = -1) {
+  const v = document.createElement("video");
+  v.autoplay = true;
+  v.muted = true;
+  v.playsInline = true;
+  v.loop = true;
+  v.preload = "auto";
+  v.className = "streams-master-video";
+  v.addEventListener("error", () => {
+    const e = v.error;
+    const codeNames = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
+    const codeName = e ? (codeNames[e.code] || String(e.code)) : "none";
+    console.error(`[multi] ${label} <video> error code=${e && e.code} (${codeName}) message=${e && e.message}`);
+  });
+  v.addEventListener("loadeddata", () => {
+    console.log(`[multi] ${label} loadeddata ${v.videoWidth}x${v.videoHeight}`);
+  });
+  v.addEventListener("stalled", () => console.warn(`[multi] ${label} stalled`));
+  // Per-stream requestVideoFrameCallback: pegs streamsFidPerCell[sid] to the
+  // exact decoded frame index, eliminating currentTime guesswork during
+  // stalls and loop wraps. The generation check makes the callback self-
+  // cancel after teardownStreams() so a stale video doesn't keep ticking.
+  if (sid >= 0 && typeof v.requestVideoFrameCallback === "function") {
+    const myGen = (streamsRvfcGen[sid] || 0);
+    const tick = (_now, metadata) => {
+      if (currentMode !== "multi" || !streamsPerStream) return;
+      if ((streamsRvfcGen[sid] || 0) !== myGen) return;  // stale: a teardown happened
+      if (streamsVideos[sid] !== v) return;
+      const nf = streamsNFrames[sid] || 0;
+      const fps = streamsFpsRate[sid] || negotiatedFps || 0;
+      if (nf > 0 && fps > 0 && metadata && typeof metadata.mediaTime === "number") {
+        const localIdx = Math.round(metadata.mediaTime * fps);
+        streamsFidPerCell[sid] = ((localIdx % nf) + nf) % nf;
+      }
+      v.requestVideoFrameCallback(tick);
+    };
+    v.requestVideoFrameCallback(tick);
+  }
+  return v;
+}
 
 function buildStreamsGrid(forceRebuild = false) {
   const grid = document.getElementById("streamsGrid");
-  if (!forceRebuild && streamsMaster && streamsCanvases.length === N_STREAMS) return;
+  if (
+    !forceRebuild
+    && streamsCanvases.length === N_STREAMS
+    && (streamsMaster || streamsVideos.length === N_STREAMS)
+  ) return;
   // Nuke the DOM tree -- this also removes any existing <video> with a
   // sticky MediaError (code=4 SRC_NOT_SUPPORTED etc), which cannot be
   // fully cleared via src reassignment alone in Chromium.
   streamsMaster = null;
+  streamsVideos = [];
   grid.innerHTML = "";
   streamsCanvases = []; streamsCtxs = [];
   streamsDetsBuffers = []; streamsLatestDets = [];
   streamsHudLeftEls = []; streamsHudRightEls = []; streamsFps = [];
-  streamsLoadingEls = []; streamsFirstFrameSeen = [];
+  streamsLoadingEls = []; streamsFirstFrameSeen = []; streamsNFrames = [];
+  streamsFpsRate = []; streamsFidPerCell = [];
+  // Bump the rVFC generation counter so any in-flight callbacks from the
+  // previous build self-cancel before pushing into the new arrays.
+  streamsRvfcGen = streamsRvfcGen.length === N_STREAMS
+    ? streamsRvfcGen.map(g => (g | 0) + 1)
+    : new Array(N_STREAMS).fill(0);
 
-  streamsMaster = document.createElement("video");
-  streamsMaster.autoplay = true;
-  streamsMaster.muted = true;
-  streamsMaster.playsInline = true;
-  streamsMaster.loop = true;
-  streamsMaster.preload = "auto";
-  streamsMaster.className = "streams-master-video";
-  streamsMaster.addEventListener("error", () => {
-    const e = streamsMaster.error;
-    const codeNames = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
-    const codeName = e ? (codeNames[e.code] || String(e.code)) : "none";
-    console.error(`[multi] master <video> error code=${e && e.code} (${codeName}) message=${e && e.message}`);
-    toast(`stream video failed (${codeName})`);
-  });
-  streamsMaster.addEventListener("loadeddata", () => {
-    console.log(`[multi] master loadeddata ${streamsMaster.videoWidth}x${streamsMaster.videoHeight}`);
-  });
-  streamsMaster.addEventListener("playing", () => {
-    console.log("[multi] master playing");
-  });
-  streamsMaster.addEventListener("stalled", () => console.warn("[multi] master stalled"));
-  // Deferred: we attach the master <video> to cell 0 AFTER the cells are
-  // created (so it sits beneath that cell's canvas in the render tree at
-  // full cell size — keeps the decoder active under Chrome's visibility
-  // heuristics).
+  if (!streamsPerStream) {
+    streamsMaster = _makeStreamVideo("master");
+  }
 
   for (let i = 0; i < N_STREAMS; i++) {
     const cell = document.createElement("div");
@@ -1159,12 +1217,18 @@ function buildStreamsGrid(forceRebuild = false) {
     msg.textContent = "Loading stream…";
     loading.appendChild(spinner);
     loading.appendChild(msg);
-    // Attach the master <video> to cell 0, beneath that cell's canvas.
-    // Canvas sits at z-index:1 via its .stream-cell canvas rule; the video
-    // lives at z-index:0 as a full-size, opaque-black backdrop that the
-    // drawImage loop reads from. Keeps the decoder active because the
-    // element is in a visible render subtree at real size.
-    if (i === 0 && streamsMaster) {
+    // Per-stream mode: each cell gets its OWN <video>, played independently.
+    // Single-source mode: only cell 0 gets the master <video>; all 8 canvases
+    // drawImage from that master.
+    let cellVideo = null;
+    if (streamsPerStream) {
+      // Push to streamsVideos BEFORE constructing the <video> so the rVFC
+      // tick's `streamsVideos[sid] !== v` ownership check passes on first call.
+      streamsVideos.push(null);
+      cellVideo = _makeStreamVideo(`stream-${i + 1}`, i);
+      streamsVideos[i] = cellVideo;
+      cell.appendChild(cellVideo);
+    } else if (i === 0 && streamsMaster) {
       cell.appendChild(streamsMaster);
     }
     cell.appendChild(c);
@@ -1180,6 +1244,9 @@ function buildStreamsGrid(forceRebuild = false) {
     streamsLoadingEls.push(loading);
     streamsFirstFrameSeen.push(false);
     streamsFps.push(0);
+    streamsNFrames.push(0);
+    streamsFpsRate.push(0);
+    streamsFidPerCell.push(-1);
   }
 }
 
@@ -1193,6 +1260,16 @@ function openStreamsDetsStream() {
     _markDetsArrival(msg.fps);
     const sid = (msg.stream_id | 0);
     if (sid < 0 || sid >= N_STREAMS) return;
+    // Cache per-stream clip length so the draw loop can mod by THIS stream's
+    // n_frames (every clip is a different length when per_stream_sources=true).
+    if (typeof msg.n_frames === "number" && msg.n_frames > 0) {
+      streamsNFrames[sid] = msg.n_frames | 0;
+    }
+    // Cache per-stream source video fps so the rVFC tick can convert
+    // mediaTime to a frame index that matches the pipeline's tagging.
+    if (typeof msg.fps_rate === "number" && msg.fps_rate > 0) {
+      streamsFpsRate[sid] = msg.fps_rate;
+    }
     const key = _frameKey(msg.frame_id | 0);
     streamsDetsBuffers[sid].set(key, {
       boxes: msg.boxes || [],
@@ -1201,11 +1278,32 @@ function openStreamsDetsStream() {
     });
     if (typeof msg.fps === "number" && isFinite(msg.fps) && msg.fps >= 0) {
       streamsFps[sid] = msg.fps;
-      const el = streamsHudRightEls[sid];
-      if (el) el.textContent = `${msg.fps.toFixed(1)} FPS`;
+      // HUD text is repainted on a 2s timer (_streamsHudTimer) — repainting
+      // on every dets msg made the number too noisy to read.
     }
   };
   streamsDetsSSE.onerror = () => { console.warn("[dets-multi] SSE error (auto-reconnect)"); };
+}
+
+// 500ms HUD repaint timer — matches the video-mode FPS caption cadence
+// (_FPS_HUD_INTERVAL_MS). Fast enough to feel live, slow enough to read.
+let _streamsHudTimer = null;
+function _startStreamsHudTimer() {
+  if (_streamsHudTimer) return;
+  _streamsHudTimer = setInterval(() => {
+    if (currentMode !== "multi") return;
+    for (let s = 0; s < streamsHudRightEls.length; s++) {
+      const el = streamsHudRightEls[s];
+      if (!el) continue;
+      const fps = streamsFps[s];
+      el.textContent = (typeof fps === "number" && fps >= 0.5)
+        ? `${fps.toFixed(1)} FPS`
+        : "—.— FPS";
+    }
+  }, _FPS_HUD_INTERVAL_MS);
+}
+function _stopStreamsHudTimer() {
+  if (_streamsHudTimer) { clearInterval(_streamsHudTimer); _streamsHudTimer = null; }
 }
 
 function closeStreamsDetsStream() {
@@ -1214,15 +1312,27 @@ function closeStreamsDetsStream() {
   for (const b of streamsDetsBuffers) b.clear();
 }
 
+// Max distance for the "nearest earlier frame_id" fallback. ~1s at 30fps —
+// far enough to ride out a brief buffer gap, close enough that we don't
+// paint dets from the other side of the clip onto a fresh frame (the bug
+// that made stream 7's dets look stuck during its long load-in).
+const _STREAM_DETS_STALE_FRAMES = 30;
+
 function _streamDetsForFrame(sid, frameId) {
   const buf = streamsDetsBuffers[sid];
   if (!buf) return null;
   if (buf.has(frameId)) return buf.get(frameId);
   let best = -1;
   for (const k of buf.keys()) if (k <= frameId && k > best) best = k;
-  if (best < 0 && totalFrames > 0 && buf.size > 0) {
-    for (const k of buf.keys()) if (k > best) best = k;
+  // Gate the earlier-frame fallback by distance. If the closest earlier dets
+  // are more than _STREAM_DETS_STALE_FRAMES away, return null so we paint
+  // NO boxes for this frame instead of obviously-wrong ones.
+  if (best >= 0 && (frameId - best) > _STREAM_DETS_STALE_FRAMES) {
+    return null;
   }
+  // Wrap-around lookup is intentionally NOT used here anymore — for
+  // per-stream sources each clip has its own n_frames, and a wrap fallback
+  // tends to fetch dets from a totally different scene.
   return best >= 0 ? buf.get(best) : null;
 }
 
@@ -1270,23 +1380,40 @@ let _streamsLastFid = 0;
 let _streamsRafHandle = null;
 
 function _streamsDrawLoop() {
-  if (currentMode !== "multi" || !streamsMaster) { _streamsRafHandle = null; return; }
-  const master = streamsMaster;
-  const ready = master.readyState >= 2 && master.videoWidth > 0;
-  let fid = _streamsLastFid;
-  if (ready && totalFrames > 0 && negotiatedFps > 0) {
-    const localIdx = Math.round((master.currentTime || 0) * negotiatedFps);
-    fid = ((localIdx % totalFrames) + totalFrames) % totalFrames;
-  }
+  // Two paths: per-stream (each cell has its own <video>) or single-source
+  // (one master <video> drawn into all 8 cells).
+  if (currentMode !== "multi") { _streamsRafHandle = null; return; }
+  if (!streamsPerStream && !streamsMaster) { _streamsRafHandle = null; return; }
+  if (streamsPerStream && streamsVideos.length !== N_STREAMS) { _streamsRafHandle = null; return; }
   for (let s = 0; s < N_STREAMS; s++) {
     const ctx = streamsCtxs[s];
     const canvas = streamsCanvases[s];
     if (!ctx || !canvas) continue;
+    const v = streamsPerStream ? streamsVideos[s] : streamsMaster;
+    const ready = v && v.readyState >= 2 && v.videoWidth > 0;
+    // Per-stream mode: each video advances its own clip independently, so
+    // frame_id is per-stream too.  Single-source: shared master clock.
+    let fid = _streamsLastFid;
+    if (streamsPerStream && ready) {
+      // Prefer rVFC-derived frame index (pegged to the actually-displayed
+      // frame). Fall back to currentTime * per-stream fps when rVFC is
+      // unavailable or hasn't fired yet.
+      if (streamsFidPerCell[s] >= 0) {
+        fid = streamsFidPerCell[s];
+      } else {
+        const nf = streamsNFrames[s] || totalFrames || 0;
+        const fps = streamsFpsRate[s] || negotiatedFps || 0;
+        if (nf > 0 && fps > 0) {
+          const localIdx = Math.round((v.currentTime || 0) * fps);
+          fid = ((localIdx % nf) + nf) % nf;
+        }
+      }
+    }
     if (ready) {
       // 9-arg drawImage: crop source rect (skip gray bars) -> full canvas.
       try {
         ctx.drawImage(
-          master,
+          v,
           0, STREAMS_CROP_Y, STREAMS_SRC_W, STREAMS_CROP_H,
           0, 0, canvas.width, canvas.height,
         );
@@ -1300,8 +1427,8 @@ function _streamsDrawLoop() {
       if (d) streamsLatestDets[s] = d;
       _drawStreamBoxes(s);
     } else {
-      // Master stalled/loading: blank the tile (video frame + boxes) so we
-      // don't show stale boxes floating over a black canvas.
+      // Stalled/loading: blank the tile so we don't show stale boxes
+      // floating over a black canvas.
       try { ctx.clearRect(0, 0, canvas.width, canvas.height); } catch (_e) {}
       streamsLatestDets[s] = null;
     }
@@ -1344,7 +1471,11 @@ async function startStreams() {
   const nStreams = status.n_streams || N_STREAMS;
   const tps = status.tiles_per_stream || 4;
   streamsTilesPerStream = tps;
-  updateMeta(status, `${nStreams} streams × ${tps} tiles → ${status.n_tiles} devices`);
+  // Detect per-stream-sources mode from the supervisor status.  Browser
+  // builds 8 separate <video> elements (one per cell, each loading
+  // /source-N.mp4) when true; legacy single master <video> when false.
+  streamsPerStream = !!status.per_stream_sources;
+  updateMeta(status, `${nStreams} streams × ${tps} tiles → ${status.n_tiles} devices${streamsPerStream ? " · per-stream sources" : ""}`);
   showSwitch("Loading stream video…");
 
   buildStreamsGrid(true);
@@ -1367,79 +1498,114 @@ async function startStreams() {
   // element. If the pipeline is still warming up (trace capture, mesh lock
   // release), we retry a few times with backoff so we don't poison the
   // <video> element with a cached 404.
-  const srcUrl = `${location.origin}/source.mp4?t=${Date.now()}`;
+  // Probe the appropriate URL: /source-1.mp4 in per-stream mode, /source.mp4
+  // legacy.  Either way we just confirm the supervisor is serving SOMETHING
+  // before binding to the <video> element (otherwise Chrome caches a 404 on
+  // the media element).
+  const probeUrl = streamsPerStream
+    ? `${location.origin}/source-1.mp4?t=${Date.now()}`
+    : `${location.origin}/source.mp4?t=${Date.now()}`;
   let probeOk = false;
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
-      const pr = await fetch(srcUrl, { method: "HEAD", cache: "no-store" });
+      const pr = await fetch(probeUrl, { method: "HEAD", cache: "no-store" });
       if (pr.ok) { probeOk = true; break; }
-      console.warn(`[multi] /source.mp4 probe attempt ${attempt+1}: status=${pr.status}`);
+      console.warn(`[multi] ${probeUrl} probe attempt ${attempt+1}: status=${pr.status}`);
     } catch (e) {
-      console.warn(`[multi] /source.mp4 probe attempt ${attempt+1} threw:`, e && e.message);
+      console.warn(`[multi] probe attempt ${attempt+1} threw:`, e && e.message);
     }
     await new Promise(r => setTimeout(r, 500));
   }
   if (!probeOk) {
     hideSwitch();
-    toast("pipeline did not serve /source.mp4 after 5s — check supervisor logs");
+    toast(`pipeline did not serve ${streamsPerStream ? "/source-1.mp4" : "/source.mp4"} after 5s — check supervisor logs`);
     return;
   }
-  // Clear any poisoned state on the element before re-assigning (browsers
-  // cache a NETWORK/SRC_NOT_SUPPORTED error on media elements across src
-  // changes unless we explicitly blank+load first).
-  streamsMaster.removeAttribute("src");
-  streamsMaster.load();
-  streamsMaster.src = srcUrl;
-  streamsMaster.load();
-  try {
-    await streamsMaster.play();
-  } catch (e) {
-    console.warn("[multi] master play() rejected:", e && e.message);
-    // Autoplay policy can block the first play() even though muted=true.
-    // Retry once after a short delay; if that still fails, surface it.
-    await new Promise(r => setTimeout(r, 250));
-    try { await streamsMaster.play(); }
-    catch (e2) { toast("browser blocked autoplay: click anywhere to start"); console.warn("[multi] retry failed:", e2 && e2.message); }
-  }
-  // Click-anywhere-to-play: if autoplay got blocked, a single click on the
-  // grid unblocks playback. Registered once; the handler removes itself
-  // after the first successful play().
-  const _onGridClick = () => {
-    if (!streamsMaster) return;
-    streamsMaster.play().then(() => {
+
+  if (streamsPerStream) {
+    // Wire each cell's <video> to its own /source-N.mp4 endpoint and start
+    // it playing.  Each clip loops independently — perfect for the
+    // multi-camera demo aesthetic where streams drift apart over time.
+    const tcache = Date.now();
+    for (let s = 0; s < N_STREAMS; s++) {
+      const v = streamsVideos[s];
+      const url = `${location.origin}/source-${s + 1}.mp4?t=${tcache}`;
+      v.removeAttribute("src");
+      v.load();
+      v.src = url;
+      v.load();
+      try { await v.play(); }
+      catch (e) {
+        // Retry once; autoplay policy can flake on fresh elements.
+        await new Promise(r => setTimeout(r, 100));
+        try { await v.play(); } catch (e2) {
+          console.warn(`[multi] stream ${s + 1} play() rejected:`, e2 && e2.message);
+        }
+      }
+    }
+    // Click-anywhere fallback: a single click unblocks any autoplay-stalled
+    // elements all at once.
+    const _onGridClick = () => {
+      streamsVideos.forEach(v => { v.play().catch(() => {}); });
       document.getElementById("streamsGrid").removeEventListener("click", _onGridClick);
-    }).catch(() => {});
-  };
-  document.getElementById("streamsGrid").addEventListener("click", _onGridClick);
-  // Watchdog: if the master isn't reporting HAVE_CURRENT_DATA after 3s,
-  // surface its state to the console so the user can see what's wrong.
-  setTimeout(() => {
-    if (!streamsMaster) return;
-    const m = streamsMaster;
-    console.log(
-      `[multi] master state: readyState=${m.readyState} ` +
-      `videoWidth=${m.videoWidth} videoHeight=${m.videoHeight} ` +
-      `currentTime=${m.currentTime.toFixed(2)} paused=${m.paused} ` +
-      `error=${m.error && m.error.code} networkState=${m.networkState}`
-    );
-  }, 3000);
-  await new Promise((res) => {
-    const done = () => {
-      streamsMaster.removeEventListener("loadeddata", done);
-      streamsMaster.removeEventListener("playing", done);
-      res();
     };
-    streamsMaster.addEventListener("loadeddata", done, { once: true });
-    streamsMaster.addEventListener("playing", done, { once: true });
-    setTimeout(res, 8000);
-  });
+    document.getElementById("streamsGrid").addEventListener("click", _onGridClick);
+    // Wait briefly for the first frame on at least one element before
+    // declaring loaded; rAF will pick up the rest.
+    await new Promise((res) => {
+      const v0 = streamsVideos[0];
+      const done = () => {
+        v0.removeEventListener("loadeddata", done);
+        v0.removeEventListener("playing", done);
+        res();
+      };
+      v0.addEventListener("loadeddata", done, { once: true });
+      v0.addEventListener("playing", done, { once: true });
+      setTimeout(res, 8000);
+    });
+  } else {
+    // Legacy single-source path
+    const srcUrl = `${location.origin}/source.mp4?t=${Date.now()}`;
+    streamsMaster.removeAttribute("src");
+    streamsMaster.load();
+    streamsMaster.src = srcUrl;
+    streamsMaster.load();
+    try {
+      await streamsMaster.play();
+    } catch (e) {
+      await new Promise(r => setTimeout(r, 250));
+      try { await streamsMaster.play(); }
+      catch (e2) { toast("browser blocked autoplay: click anywhere to start"); }
+    }
+    const _onGridClick = () => {
+      if (!streamsMaster) return;
+      streamsMaster.play().then(() => {
+        document.getElementById("streamsGrid").removeEventListener("click", _onGridClick);
+      }).catch(() => {});
+    };
+    document.getElementById("streamsGrid").addEventListener("click", _onGridClick);
+    await new Promise((res) => {
+      const done = () => {
+        streamsMaster.removeEventListener("loadeddata", done);
+        streamsMaster.removeEventListener("playing", done);
+        res();
+      };
+      streamsMaster.addEventListener("loadeddata", done, { once: true });
+      streamsMaster.addEventListener("playing", done, { once: true });
+      setTimeout(res, 8000);
+    });
+  }
 
   openStreamsDetsStream();
+  _startStreamsHudTimer();
   // rAF draws continuously (fires even if autoplay is throttled / rVFC
   // never runs). rVFC, when available, only updates the frame_id so dets
   // overlay aligns to the decoded frame.
   _streamsRafHandle = requestAnimationFrame(_streamsDrawLoop);
-  if (typeof streamsMaster.requestVideoFrameCallback === "function") {
+  if (!streamsPerStream && streamsMaster && typeof streamsMaster.requestVideoFrameCallback === "function") {
+    // Single-source: rVFC tracks the master clock so dets line up.
+    // Per-stream: each video has its own clock; the rAF draw loop reads
+    // each video's currentTime directly, no rVFC needed for sync.
     streamsRvfcHandle = streamsMaster.requestVideoFrameCallback(_onMasterFrame);
   }
   hideSwitch();
@@ -1447,11 +1613,21 @@ async function startStreams() {
 
 function teardownStreams() {
   cancelStreamsRvfc();
+  _stopStreamsHudTimer();
+  // Bump the rVFC generation so any in-flight per-stream callbacks self-cancel.
+  if (streamsRvfcGen.length) {
+    streamsRvfcGen = streamsRvfcGen.map(g => (g | 0) + 1);
+  }
   closeStreamsDetsStream();
   if (streamsMaster) {
     try { streamsMaster.pause(); } catch (_e) {}
     try { streamsMaster.removeAttribute("src"); streamsMaster.load(); } catch (_e) {}
   }
+  for (const v of streamsVideos) {
+    try { v.pause(); } catch (_e) {}
+    try { v.removeAttribute("src"); v.load(); } catch (_e) {}
+  }
+  streamsVideos = [];
   for (let i = 0; i < streamsCanvases.length; i++) {
     streamsLatestDets[i] = null;
     if (streamsCtxs[i] && streamsCanvases[i]) {

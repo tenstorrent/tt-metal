@@ -35,7 +35,13 @@ inline Tensor typecast_impl(
         (output_dtype == DataType::UINT8 and (input_dtype == DataType::BFLOAT16 or input_dtype == DataType::BFLOAT8_B or
                                               input_dtype == DataType::BFLOAT4_B)) or
         (input_dtype == DataType::UINT16 and output_dtype == DataType::UINT8) or
-        (input_dtype == DataType::UINT8 and output_dtype != DataType::BFLOAT16);
+        // The LLK calculate_typecast_uint32_to_fp16b kernel requires the
+        // unpacker to load 32-bit slots; without preserve_fp32_precision the
+        // unpack-to-dest mode defaults to a path that bit-reinterprets the
+        // 1-byte uint8 values and produces garbage bf16.  Enable it for all
+        // uint8 inputs (not just non-bf16 outputs) so uint8→bf16 actually
+        // does the byte→float numerical conversion.
+        (input_dtype == DataType::UINT8);
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;

@@ -65,6 +65,30 @@ async def _source(req: web.Request) -> web.StreamResponse:
     return resp
 
 
+async def _source_n(req: web.Request) -> web.StreamResponse:
+    """Per-stream source for the multi-stream demo: /source-1.mp4 ../source-N.mp4.
+
+    1-indexed to match the user-facing convention (filename "1.mp4" → /source-1.mp4).
+    Falls back to the legacy single source_path when stream_paths isn't set.
+    """
+    paths: list = req.app.get("stream_paths") or []
+    try:
+        n = int(req.match_info.get("n", "0"))
+    except ValueError:
+        return web.Response(status=400, text="bad stream index\n")
+    if n < 1 or n > len(paths):
+        # Legacy fallback: serve the single source for any stream id when
+        # stream_paths isn't configured.
+        path = req.app["source_path"]
+    else:
+        path = Path(paths[n - 1])
+    if not path.exists():
+        return web.Response(status=404, text=f"source missing: {path}\n")
+    resp = web.FileResponse(path=str(path), chunk_size=1 << 16)
+    resp.content_type = "video/mp4"
+    return resp
+
+
 async def _dets_sse(req: web.Request) -> web.StreamResponse:
     """Stream detections over Server-Sent Events.
 
@@ -116,13 +140,15 @@ async def _dets_sse(req: web.Request) -> web.StreamResponse:
     return resp
 
 
-def _build_app(dets_q: Any, source_path: Path) -> web.Application:
+def _build_app(dets_q: Any, source_path: Path, stream_paths: list | None = None) -> web.Application:
     app = web.Application()
     app["dets_q"] = dets_q
     app["source_path"] = source_path
+    app["stream_paths"] = stream_paths or []
     app.router.add_get("/", _index)
     app.router.add_get("/healthz", _healthz)
     app.router.add_get("/source.mp4", _source)
+    app.router.add_get(r"/source-{n:\d+}.mp4", _source_n)
     app.router.add_get("/dets", _dets_sse)
     return app
 
@@ -134,16 +160,25 @@ def run_server(
     source_path: str,
     frame_w: int,
     frame_h: int,
+    stream_paths: list | None = None,
 ) -> None:
     """mp.Process entry point. Runs an aiohttp server until the parent exits."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     path = Path(source_path).resolve()
-    print(
-        f"[split] server on http://{host}:{port}/  " f"source={path} ({frame_w}x{frame_h})",
-        flush=True,
-    )
+    if stream_paths:
+        resolved = [str(Path(p).resolve()) for p in stream_paths]
+        print(
+            f"[split] server on http://{host}:{port}/  per-stream sources at /source-1.mp4..  ({frame_w}x{frame_h})",
+            flush=True,
+        )
+    else:
+        resolved = None
+        print(
+            f"[split] server on http://{host}:{port}/  source={path} ({frame_w}x{frame_h})",
+            flush=True,
+        )
     try:
-        app = _build_app(dets_q, path)
+        app = _build_app(dets_q, path, resolved)
         web.run_app(app, host=host, port=port, print=None, access_log=None)
     except Exception as e:
         print(f"[split] server exit: {e}", flush=True)

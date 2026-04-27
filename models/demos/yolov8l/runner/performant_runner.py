@@ -30,12 +30,18 @@ class YOLOv8lPerformantRunner:
         model_location_generator=None,
         compact_output=False,
         staging_ring=1,
+        uint8_input=False,
     ):
         self.device = device
         self.mesh_mapper = mesh_mapper
         self.mesh_composer = mesh_composer
         self.weights_mesh_mapper = weights_mesh_mapper
         self.compact_output = compact_output
+        # When True, the host produces a uint8 TILE-layout input; PCIe carries
+        # half the bytes of bf16 RM.  The trace prepends typecast(u8→bf16) +
+        # multiply(1/255) + untilize before the existing reshard so the model
+        # graph (bf16 RM) is unchanged.
+        self.uint8_input = uint8_input
         # K dram_staging+host_staging pairs.  K=1 preserves the original behavior
         # where copy(N+1) on CQ0 stalls waiting for d2h(N-1) on CQ1.  K>=2 lets
         # CQ0 advance independently of CQ1 — capped by trace_time vs d2h_time.
@@ -54,14 +60,31 @@ class YOLOv8lPerformantRunner:
             self.tt_inputs_host,
             sharded_mem_config_DRAM,
             self.input_mem_config,
-        ) = self.runner_infra._setup_dram_sharded_input(device)
+        ) = self.runner_infra._setup_dram_sharded_input(device, uint8_input=uint8_input)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
         self._capture_yolov8l_trace_2cqs()
 
     def _convert_tensor_to_input_config(self, tensor):
-        """Convert tensor to the appropriate memory configuration for input."""
-        # Keep original DRAM-sharded format during trace capture
-        return tensor
+        """Convert tensor to the appropriate memory configuration for input.
+
+        For ``uint8_input=True``: tensor is uint8 TILE in interleaved DRAM
+        (h2d target).  Apply ``typecast(u8→bf16) + multiply(1/255) + untilize``
+        producing bf16 RM in DRAM with the conv's expected shard spec.
+
+        For bf16 path: identity (conv reads from DRAM-sharded RM directly).
+        """
+        if not self.uint8_input:
+            return tensor
+        bf16_tile = ttnn.typecast(tensor, ttnn.bfloat16)
+        bf16_norm = ttnn.multiply(bf16_tile, 1.0 / 255.0)
+        ttnn.deallocate(bf16_tile)
+        bf16_rm = ttnn.untilize(
+            bf16_norm,
+            use_multicore=True,
+            memory_config=self.runner_infra._bf16_dram_sharded_config,
+        )
+        ttnn.deallocate(bf16_norm)
+        return bf16_rm
 
     def _reduce_classes(self, rm_output):
         """Compact YOLO output [B, 84, A] → [B, 6, A] via on-device class reduction.
@@ -218,8 +241,18 @@ class YOLOv8lPerformantRunner:
         self.op_event = ttnn.record_event(self.device, 0)
         # Deallocate output to ensure input gets same address after trace
         self.runner_infra.dealloc_output()
-        trace_input_addr = self.runner_infra.input_tensor.buffer_address()
+        # uint8 path: deallocate the pre-trace converted tensor so the trace
+        # allocator reuses its address for the in-trace conversion output.
+        if self.uint8_input:
+            ttnn.deallocate(self.runner_infra.input_tensor)
+        trace_input_addr = (
+            self.tt_image_res.buffer_address() if self.uint8_input else self.runner_infra.input_tensor.buffer_address()
+        )
         self.tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        # uint8 path: re-run conversion INSIDE the trace so each replay reads
+        # fresh uint8 data from tt_image_res (h2d updates each frame).
+        if self.uint8_input:
+            self.runner_infra.input_tensor = self._convert_tensor_to_input_config(self.tt_image_res)
         self.runner_infra.run()
         # On-device output processing inside trace — replayed every frame
         tile_output_traced = self.runner_infra.output_tensor[0]
@@ -254,8 +287,12 @@ class YOLOv8lPerformantRunner:
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        # TODO: Add in place support to ttnn to_memory_config
-        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        # uint8 path: the trace itself converts u8→bf16+/255+untilize+reshard
+        # so we skip the per-frame reshard (and tt_image_res is uint8 TILE,
+        # incompatible with input_mem_config which is bf16 RM L1 sharded).
+        if not self.uint8_input:
+            # TODO: Add in place support to ttnn to_memory_config
+            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
 
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
@@ -268,7 +305,9 @@ class YOLOv8lPerformantRunner:
 
     def run(self, torch_input_tensor):
         t0 = time.perf_counter()
-        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
+        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(
+            self.device, torch_input_tensor, uint8_input=self.uint8_input
+        )
         t1 = time.perf_counter()
         result = self._execute_yolov8l_trace_2cqs_inference(tt_inputs_host)
         t2 = time.perf_counter()
@@ -294,7 +333,9 @@ class YOLOv8lPerformantRunner:
         Returns the host tensor for use in ``enqueue_frame``.
         """
         t0 = time.perf_counter()
-        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
+        tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(
+            self.device, torch_input_tensor, uint8_input=self.uint8_input
+        )
         self._last_host_prep_ms = (time.perf_counter() - t0) * 1000
         return tt_inputs_host
 
@@ -332,8 +373,10 @@ class YOLOv8lPerformantRunner:
             self._stg_write_idx += 1
         t4 = time.perf_counter()
 
-        # Reshard input + start trace (all on CQ0, after reshard-to-staging)
-        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        # Reshard input + start trace (all on CQ0, after reshard-to-staging).
+        # uint8 path: skip — conversion + reshard live inside the trace.
+        if not self.uint8_input:
+            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         t5 = time.perf_counter()
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)

@@ -91,6 +91,30 @@ inline void _calculate_typecast_uint16_to_fp16b_()
 #endif
 }
 
+// uint8 input: the unpacker delivers a 32-bit dest slot per element with the
+// uint8 byte in the low 8 bits and garbage above (since the input format is
+// narrower than the dest slot).  The shared uint32_to_fp16b kernel reads the
+// full 32-bit slot and trips its (LREG0 < 0) → add-2^31 branch on garbage,
+// producing wrong values.  This kernel masks LREG0 to 0xFF (LREG12 is set to
+// 0xFF by the init via vConstIntPrgm0) so the cast sees a clean 0..255.
+//
+// Always uses the simple (unrolled) form — the SFPLOADMACRO pipeline doesn't
+// have a slot for the extra SFPAND step.  Throughput is lower than uint16's
+// macroized version but correctness wins for the uint8 path.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_uint8_to_fp16b_()
+{
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0); // LREG0 &= 0xFF
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    }
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_typecast_int32_to_fp16b_()
 {
@@ -851,6 +875,13 @@ inline void _init_typecast_uint16_to_fp16b_()
     // }
     TTI_SFPCONFIG(0x100 | InstrModLoadStore::DEFAULT, 8, 1);
 #endif
+}
+
+// No SFPLOADMACRO setup — the calculate kernel always uses the simple form so
+// the SFPAND mask step fits between load and cast.
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_uint8_to_fp16b_()
+{
 }
 
 template <bool APPROXIMATION_MODE>

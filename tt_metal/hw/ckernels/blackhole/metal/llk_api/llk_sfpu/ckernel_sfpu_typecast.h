@@ -68,6 +68,11 @@ inline void calculate_typecast_uint16_to_fp16b() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_uint8_to_fp16b() {
+    _calculate_typecast_uint8_to_fp16b_<APPROXIMATION_MODE, ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_int32_to_fp16b() {
     _calculate_typecast_int32_to_fp16b_<APPROXIMATION_MODE, ITERATIONS>();
 }
@@ -150,6 +155,12 @@ inline void init_typecast_uint16_to_fp32() {
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp16b() {
     _init_typecast_uint16_to_fp16b_<APPROXIMATION_MODE>();
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_uint8_to_fp16b() {
+    sfpi::vConstIntPrgm0 = 0xFF;  // LREG12 used by SFPAND in the calculate kernel
+    _init_typecast_uint8_to_fp16b_<APPROXIMATION_MODE>();
 }
 
 template <bool APPROXIMATION_MODE>

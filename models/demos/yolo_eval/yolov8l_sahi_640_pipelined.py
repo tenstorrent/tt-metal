@@ -327,6 +327,60 @@ def _prep_process_worker(
     ring_idx = 0
     prep_frame_idx = 0  # for double-buffer alternation
 
+    # Pre-decode the entire source file into RAM at startup (file source only).
+    # Skips the per-frame H.264 decode (~5 ms / frame) on the prep critical path.
+    # Memory: 1200 frames × 4K × 3 bytes ≈ 30 GB — fits on a server with 64 GB+
+    # of headroom.  Set SAHI_NO_PREDECODE=1 to disable.
+    pre_frames: "np.ndarray | None" = None
+    pre_n: int = 0
+    pre_idx: int = 0
+    _enable_predecode = (webrtc_ingress_q is None) and os.environ.get("SAHI_NO_PREDECODE") != "1"
+    if _enable_predecode:
+        try:
+            t_pd = time.perf_counter()
+            cap = cv2.VideoCapture(video_path)
+            try:
+                _n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                _h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                _w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                if _n > 0 and _h > 0 and _w > 0:
+                    nbytes = _n * _h * _w * 3
+                    print(
+                        f"[prep-640] pre-decoding {_n} frames of {_w}x{_h} " f"({nbytes/1e9:.1f} GB)…",
+                        flush=True,
+                    )
+                    pre_frames = np.empty((_n, _h, _w, 3), dtype=np.uint8)
+                    decoded = 0
+                    while decoded < _n:
+                        ok, f = cap.read()
+                        if not ok:
+                            break
+                        pre_frames[decoded] = f
+                        decoded += 1
+                    pre_n = decoded
+                    if pre_n != _n:
+                        # Trim if the decoder yielded fewer frames than the
+                        # file metadata claimed (rare but happens with some
+                        # variable-frame-rate inputs).
+                        pre_frames = pre_frames[:pre_n]
+                    print(
+                        f"[prep-640] pre-decode done: {pre_n} frames in "
+                        f"{(time.perf_counter()-t_pd):.1f}s — "
+                        f"per-frame decode now ~0 ms",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "[prep-640] pre-decode SKIPPED (cv2 reported invalid dims)",
+                        flush=True,
+                    )
+            finally:
+                cap.release()
+        except MemoryError:
+            print("[prep-640] pre-decode SKIPPED (MemoryError) — falling back to per-frame decode", flush=True)
+            pre_frames = None
+            pre_n = 0
+
     # Frame pacing: when enabled, cap delivery to source video FPS.
     # For WebRTC, browsers don't expose a stable fps; 30 fps is the universal
     # default for getUserMedia streams.
@@ -373,6 +427,14 @@ def _prep_process_worker(
                     v = cv2.resize(v, (frame_w, frame_h), interpolation=cv2.INTER_LINEAR)
                 return True, v
             return False, None
+        # Pre-decoded RAM ring (file source): return a view, no decode work.
+        # The downstream slice kernel reads through frame_tensor (a torch view)
+        # without mutating, so returning a view of the cached array is safe.
+        if pre_frames is not None and pre_n > 0:
+            nonlocal pre_idx
+            f = pre_frames[pre_idx % pre_n]
+            pre_idx += 1
+            return True, f
         ok, f = src.read()
         if not ok:
             src.reset()
@@ -408,27 +470,52 @@ def _prep_process_worker(
             # cv2.VideoCapture.read() releases GIL during H.264 decode.
             pending_read = read_pool.submit(_read_next)
 
-            # C++ fused tile ranges via ThreadPoolExecutor.
+            # C++ fused tile ranges via ThreadPoolExecutor (bf16 path).
+            # uint8 path (SAHI_UINT8=1): use the pure-Python helper that
+            # writes uint8 directly into the shared buffer, skipping the
+            # LUT/normalisation step (the SFPU does it on-device).
             shm_tensor = shm_tensor_bufs[prep_frame_idx % 2]
             frame_tensor = torch.from_numpy(frame)
             N = max(grid.n_tiles, total_devices)
             chunk = (N + 7) // 8
+            _is_uint8 = shm_tensor.dtype == torch.uint8
 
-            def _cpp_range(thread_id):
-                start = thread_id * chunk
-                end = min(start + chunk, N)
-                if start < end:
-                    _fused_ext.fused_convert_tile_range(
-                        frame_tensor,
-                        shm_tensor,
-                        tile_specs,
-                        start,
-                        end,
-                        True,
-                    )
+            if _is_uint8:
 
-            t0 = time.perf_counter()
-            list(slice_pool.map(_cpp_range, range(8)))
+                def _slice_one(i):
+                    if i >= len(grid.tiles):
+                        shm_tensor[i].zero_()
+                        return
+                    ts = grid.tiles[i]
+                    if ts.needs_pad:
+                        shm_tensor[i].fill_(_PAD_VALUE)
+                    src = frame[
+                        ts.row_start : ts.row_start + ts.src_h,
+                        ts.col_start : ts.col_start + ts.src_w,
+                    ]
+                    shm_tensor[i, 0, : ts.src_h, : ts.src_w] = torch.from_numpy(src[:, :, 2].copy())
+                    shm_tensor[i, 1, : ts.src_h, : ts.src_w] = torch.from_numpy(src[:, :, 1].copy())
+                    shm_tensor[i, 2, : ts.src_h, : ts.src_w] = torch.from_numpy(src[:, :, 0].copy())
+
+                t0 = time.perf_counter()
+                list(slice_pool.map(_slice_one, range(N)))
+            else:
+
+                def _cpp_range(thread_id):
+                    start = thread_id * chunk
+                    end = min(start + chunk, N)
+                    if start < end:
+                        _fused_ext.fused_convert_tile_range(
+                            frame_tensor,
+                            shm_tensor,
+                            tile_specs,
+                            start,
+                            end,
+                            True,
+                        )
+
+                t0 = time.perf_counter()
+                list(slice_pool.map(_cpp_range, range(8)))
 
             # Whole-frame context tile: resize full frame to (tile_h, tile_w),
             # overwrite the WF slot written by the C++ kernel.  Catches objects
@@ -437,10 +524,12 @@ def _prep_process_worker(
                 tile_h = grid.tile_h
                 tile_w = grid.tile_w
                 wf_bgr = cv2.resize(frame, (tile_w, tile_h), interpolation=cv2.INTER_LINEAR)
-                # BGR->RGB + HWC->CHW + bf16/255, write into WF slot of shm_tensor
                 wf_chw = torch.from_numpy(wf_bgr[:, :, ::-1].transpose(2, 0, 1).copy())
-                shm_tensor[wf_slot].copy_(wf_chw)
-                shm_tensor[wf_slot].mul_(_INV_255)
+                if _is_uint8:
+                    shm_tensor[wf_slot].copy_(wf_chw)  # uint8 → uint8, /255 happens on-device
+                else:
+                    shm_tensor[wf_slot].copy_(wf_chw)  # bf16 ← uint8, then host /255
+                    shm_tensor[wf_slot].mul_(_INV_255)
 
             t_sp = (time.perf_counter() - t0) * 1000
             sp_timings = {"slice_ms": t_sp, "preprocess_ms": 0.0}
@@ -1574,6 +1663,9 @@ def run_sahi_640_pipelined(args):
         f"{TAG} Building YOLOv8lPerformantRunner " f"({_TILE_SIZE_640}x{_TILE_SIZE_640}, batch={total_devices})...",
         flush=True,
     )
+    _uint8_input = os.environ.get("SAHI_UINT8") == "1"
+    if _uint8_input:
+        print(f"{TAG} *** uint8 PCIe input enabled (SAHI_UINT8=1) ***", flush=True)
     runner = YOLOv8lPerformantRunner(
         mesh_device,
         device_batch_size=total_devices,
@@ -1584,6 +1676,7 @@ def run_sahi_640_pipelined(args):
         weights_mesh_mapper=weights_mesh_mapper,
         compact_output=True,
         staging_ring=3,
+        uint8_input=_uint8_input,
     )
     # Perf ceiling measurement: SAHI_SKIP_H2D=1 makes the runner reuse the
     # device-side input every frame.  Detection results become stale (don't
@@ -1760,13 +1853,14 @@ def run_sahi_640_pipelined(args):
     bg_proc.start()
 
     # --- Shared memory: prep process buffers --------------------------------
-    # Double-buffered bfloat16 shared memory — prep writes normalized bf16
-    # into buffer[prep_frame_idx % 2], main reads buffer[main_frame_idx % 2].
-    # bf16 conversion runs in the prep process to keep the main process's
-    # L3 cache clean for PCIe DMA (h2d reads from_torch's host buffer,
-    # which is hot in L3 only when no other large writes have polluted it).
-    _shm_buf0 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
-    _shm_buf1 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
+    # Double-buffered shared memory — prep writes into buffer[prep_frame_idx % 2],
+    # main reads buffer[main_frame_idx % 2].  When SAHI_UINT8=1, ship uint8
+    # over PCIe (half the bytes) and let the runner's in-trace SFPU kernel do
+    # u8→bf16+/255 on-device.  Otherwise the prep worker normalises to bf16
+    # host-side via fused_tile_convert.
+    _shm_dtype = torch.uint8 if os.environ.get("SAHI_UINT8") == "1" else torch.bfloat16
+    _shm_buf0 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=_shm_dtype).share_memory_()
+    _shm_buf1 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=_shm_dtype).share_memory_()
     shm_tensor_bufs = [_shm_buf0, _shm_buf1]  # indexed by frame parity
     # Per-tile affine transform: (scale_x, scale_y, offset_x, offset_y).
     # Real crop tile: (1, 1, col_start, row_start). Whole-frame tile:

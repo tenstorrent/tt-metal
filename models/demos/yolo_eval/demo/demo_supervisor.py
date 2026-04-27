@@ -309,9 +309,18 @@ class Supervisor:
             # = 32 tiles on the full 8x4 mesh. Split delivery only; same
             # detection tuning as single-stream video mode so confidence
             # behaviour is familiar.
+            #
+            # If --video-multi points at a directory, switch the pipeline to
+            # `--inputs-dir`: each stream loops its own clip independently
+            # (filename "1.mp4" → stream 0, "8.mp4" → stream 7).  Otherwise
+            # fall back to the legacy single-source `--input` (broadcast 8x).
+            video_multi_arg = (
+                ["--inputs-dir", self.video_multi_path]
+                if Path(self.video_multi_path).is_dir()
+                else ["--input", self.video_multi_path]
+            )
             argv += [
-                "--input",
-                self.video_multi_path,
+                *video_multi_arg,
                 "--serve",
                 "--serve-split",
                 "--conf",
@@ -374,6 +383,10 @@ class Supervisor:
             "n_frames": self.n_frames,
             "n_streams": self.n_streams,
             "tiles_per_stream": self.tiles_per_stream,
+            # True when --video-multi is a directory (each stream loops its
+            # own clip).  Browser uses this to decide whether to attach
+            # 8 <video> elements (one per cell) or a single master video.
+            "per_stream_sources": (self.transport == "multi" and Path(self.video_multi_path).is_dir()),
             "uptime_s": (time.time() - self.start_t) if self.start_t else 0.0,
             "url": f"http://{_connect_host(self.pipeline_host)}:{self.pipeline_port}/",
             "kind": "webrtc",
@@ -496,7 +509,16 @@ class Supervisor:
                 # Multi-stream dims are fixed at MULTI_STREAM_W x MULTI_STREAM_H.
                 # fps / n_frames come from the multi-stream source file so the
                 # browser's per-stream <video loop> can key dets by frame_id.
-                w, h, fps, n_frames = _peek_video_meta(self.video_multi_path)
+                # When --video-multi points at a directory, use any one of the
+                # numbered files (they all share the same dims/fps post-transcode).
+                meta_src = self.video_multi_path
+                if Path(meta_src).is_dir():
+                    for i in range(1, 9):
+                        candidate = Path(meta_src) / f"{i}.mp4"
+                        if candidate.exists():
+                            meta_src = str(candidate)
+                            break
+                w, h, fps, n_frames = _peek_video_meta(meta_src)
                 width, height = MULTI_STREAM_W, MULTI_STREAM_H
             else:
                 self.last_error = f"unknown transport {transport}"
@@ -776,12 +798,55 @@ async def _proxy_source_mp4(req: web.Request) -> web.StreamResponse:
     if sup.transport == "video":
         path = Path(sup.video_path)
     elif sup.transport == "multi":
-        path = Path(sup.video_multi_path)
+        # Multi-stream may point at either a directory (per-stream files) or
+        # a single file (legacy broadcast).  When it's a directory, the
+        # browser should request /source-N.mp4 instead — return any of the
+        # numbered files for back-compat consumers that still hit /source.mp4.
+        mp = Path(sup.video_multi_path)
+        if mp.is_dir():
+            for i in range(1, 9):
+                cand = mp / f"{i}.mp4"
+                if cand.exists():
+                    mp = cand
+                    break
+        path = mp
     else:
         return web.json_response(
             {"error": f"/source.mp4 not available in transport={sup.transport!r}"},
             status=503,
         )
+    if not path.exists():
+        return web.Response(status=404, text=f"source missing: {path}\n")
+    resp = web.FileResponse(path=str(path), chunk_size=1 << 16)
+    resp.content_type = "video/mp4"
+    return resp
+
+
+async def _proxy_source_mp4_n(req: web.Request) -> web.StreamResponse:
+    """Per-stream source for the multi-stream demo.
+
+    /source-1.mp4 .. /source-8.mp4 — only valid when --video-multi is a
+    directory.  When --video-multi is a single file, all stream indices
+    return that same file (so the launch page works either way).
+    """
+    sup: Supervisor = req.app["sup"]
+    if sup.transport != "multi":
+        return web.json_response(
+            {"error": f"/source-N.mp4 only valid in transport=multi (got {sup.transport!r})"},
+            status=503,
+        )
+    try:
+        n = int(req.match_info.get("n", "0"))
+    except ValueError:
+        return web.Response(status=400, text="bad stream index\n")
+    if n < 1 or n > MULTI_N_STREAMS:
+        return web.Response(status=400, text=f"stream index out of range (1..{MULTI_N_STREAMS})\n")
+    mp = Path(sup.video_multi_path)
+    if mp.is_dir():
+        path = mp / f"{n}.mp4"
+    else:
+        # Single-file fallback: same content for every stream.
+        path = mp
     if not path.exists():
         return web.Response(status=404, text=f"source missing: {path}\n")
     resp = web.FileResponse(path=str(path), chunk_size=1 << 16)
@@ -876,6 +941,7 @@ def build_app(sup: Supervisor) -> web.Application:
     app.router.add_post("/offer", _proxy_offer)
     app.router.add_get("/stream", _proxy_stream)
     app.router.add_get("/source.mp4", _proxy_source_mp4)
+    app.router.add_get(r"/source-{n:\d+}.mp4", _proxy_source_mp4_n)
     app.router.add_get("/dets", _proxy_dets)
     app.router.add_get("/assets/{name:[A-Za-z0-9_.\\-]+}", _asset)
     app.on_cleanup.append(_on_cleanup)
