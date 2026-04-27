@@ -49,6 +49,10 @@ void kernel_main() {
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(33);
+    constexpr RingProxyCase proxy_mode = static_cast<RingProxyCase>(get_compile_time_arg_val(34));
+    constexpr bool chain_enabled = get_compile_time_arg_val(35) == 1;
+    constexpr bool flatten_work = proxy_uses_flat_work(proxy_mode);
+    constexpr bool flat_use_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -57,13 +61,27 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
     const uint32_t num_phases = get_arg_val<uint32_t>(7);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(8);
     uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(9);
+    // Tail args (phase-2, flat-work, chain) are read in the order the host emits them; each pair
+    // is gated by the matching host predicate so slots never collide.
+    uint32_t argidx = 10;
     uint32_t chunked_q_chunk_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(10);
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
+    }
+
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    if constexpr (flatten_work) {
+        global_q_start = get_arg_val<uint32_t>(argidx++);
+        global_q_count = get_arg_val<uint32_t>(argidx++);
+    }
+
+    uint32_t is_chain_participant = 0;
+    if constexpr (chain_enabled) {
+        is_chain_participant = get_arg_val<uint32_t>(argidx++);
     }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
@@ -194,15 +212,23 @@ void kernel_main() {
             cb_wait_front(cb_mask_in, 2);
         }
 
-        for (uint32_t phase = 0; phase < num_phases; ++phase) {
-            if (phase == 0) {
-                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
-            } else {
-                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
-            }
+        // Flat work folds (nb, nq, q_iter) into one global range. Reader/writer decode (nb, nq)
+        // per work-item from global_q_start, so compute only needs q_chunk via proxy_q_chunk
+        // inside sdpa_inner_loop. Collapse the (nb, nq) loop to a single iteration in flat mode
+        // so there's one call-site for sdpa_standard.
+        const uint32_t iter_q_start = flatten_work ? global_q_start : 0;
+        const uint32_t iter_q_end = flatten_work ? global_q_start + global_q_count : q_chunks_per_core;
+        const uint32_t sdpa_local_q_start = flatten_work ? 0u : local_q_start;
+        const uint32_t batch_start_eff = flatten_work ? 0u : local_batch_start;
+        const uint32_t batch_end_eff = flatten_work ? 1u : local_batch_end;
+        const uint32_t nh_start_eff = flatten_work ? 0u : local_nh_start;
+        const uint32_t nh_end_eff = flatten_work ? 1u : local_nh_end;
 
-            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+        for (uint32_t phase = 0; phase < num_phases; ++phase) {
+            chunked_q_chunk_offset = (phase == 0) ? chunked_q_chunk_offset_phase_1 : chunked_q_chunk_offset_phase_2;
+
+            for (uint32_t nb = batch_start_eff; nb < batch_end_eff; ++nb) {
+                for (uint32_t nq = nh_start_eff; nq < nh_end_eff; ++nq) {
                     sdpa_standard<
                         cb_qk_im,
                         cb_identity_scale_in,
@@ -218,7 +244,9 @@ void kernel_main() {
                         is_chunked,
                         scale_fp32,
                         sliding_window_size,
-                        use_lightweight_causal_mask>(
+                        use_lightweight_causal_mask,
+                        flatten_work,
+                        proxy_mode>(
                         Skt,
                         qk_in0_block_w,
                         qk_subblock_w,
@@ -232,10 +260,10 @@ void kernel_main() {
                         out_in0_num_subblocks,
                         out_in1_num_subblocks,
                         out_num_blocks,
-                        0,                  // iter_q_start
-                        q_chunks_per_core,  // iter_q_end
+                        iter_q_start,
+                        iter_q_end,
                         q_num_chunks,
-                        local_q_start,
+                        sdpa_local_q_start,
                         chunked_q_chunk_offset,
                         k_num_chunks,
                         q_chunk_tiles,
@@ -256,7 +284,9 @@ void kernel_main() {
                         cb_sum_B,
                         cb_exp_max_diff,
                         cb_out,
-                        lw_mask);
+                        lw_mask,
+                        /*use_zigzag_balancing=*/flat_use_zigzag,
+                        /*is_chain_participant=*/is_chain_participant != 0);
                 }
             }
         }

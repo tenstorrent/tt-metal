@@ -243,6 +243,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         .append_to(reader_compile_time_args);                  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
+    reader_compile_time_args.push_back(0);  // proxy_case (None / hierarchical)
+    reader_compile_time_args.push_back(0);  // chain_enabled (off)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -272,6 +274,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(0);  // proxy_case (None / hierarchical)
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -307,6 +310,10 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         0,          //(std::uint32_t)use_attention_sink,
         0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
+        0,          // arg 32: uniform_dataformat (unused, no streaming)
+        0,          // arg 33: k_partial_col (no partial mask)
+        0,          // arg 34: proxy_case (None / hierarchical)
+        0,          // arg 35: chain_enabled (off)
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 

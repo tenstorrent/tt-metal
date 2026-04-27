@@ -98,7 +98,11 @@ public:
     }
 };
 
-template <uint32_t tile_bytes, typename ReaderType, bool push_num_tiles = true>
+// enable_mid_barrier=true (default) preserves the original mid-loop threshold barrier.
+// enable_mid_barrier=false skips it; callers that know their read volume fits the NOC queue
+// can opt in for better overlap with compute (matches ring_joint_reader's fetch_block pattern,
+// ~20% faster on the single-chip MLA DOWN proxy).
+template <uint32_t tile_bytes, typename ReaderType, bool push_num_tiles = true, bool enable_mid_barrier = true>
 uint32_t read_chunk_with_padding(
     const ReaderType& reader,
     const uint32_t cb_id,
@@ -107,7 +111,7 @@ uint32_t read_chunk_with_padding(
     const uint32_t src_cols,
     const uint32_t dst_rows,
     const uint32_t dst_cols,
-    const uint32_t barrier_threshold,
+    [[maybe_unused]] const uint32_t barrier_threshold,
     const bool transpose = false,
     const uint32_t skip_src_cols = 0) {
     /*
@@ -124,7 +128,7 @@ uint32_t read_chunk_with_padding(
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
-    uint32_t barrier_count = 0;
+    [[maybe_unused]] uint32_t barrier_count = 0;
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
@@ -132,9 +136,11 @@ uint32_t read_chunk_with_padding(
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
-            if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
+            if constexpr (enable_mid_barrier) {
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
+                }
             }
         }
         start_tile_id += skip_src_cols;

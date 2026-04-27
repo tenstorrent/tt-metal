@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <tt-metalium/core_coord.hpp>
 
+#include "ttnn/operations/transformer/sdpa/device/ring_proxy_case.hpp"
+
 namespace ttnn::operations::transformer {
 
 struct SDPAProgramConfig {
@@ -16,6 +18,7 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    RingProxyCase ring_proxy_case = RingProxyCase::None;
 };
 
 }  // namespace ttnn::operations::transformer

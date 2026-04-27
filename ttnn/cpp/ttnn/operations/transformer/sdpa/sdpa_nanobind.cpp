@@ -244,7 +244,10 @@ void bind_sdpa(nb::module_& mod) {
 
 
         Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+            ttnn.Tensor: the output tensor [b x nqh x s x dh_v] (dh_v = V's last dim; equals dh for standard SDPA, can be smaller for MLA-style inputs).
+
+        Note:
+            MLA-style inputs are supported: when ``input_tensor_v`` has a smaller head dim than Q/K (i.e. ``dh_v < dh``), the op runs in multi-latent attention mode. The head dim of V is inferred from the V tensor shape, consistent with how Q and K head dims are derived.
 
         )doc";
 
