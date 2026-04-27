@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
     log_validation_results,
     visualize_expert_dispatch_table,
 )
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -171,39 +172,74 @@ def test_ttnn_moe(
     )
 
     # ========================================
-    # Step 1: Create weights (with torch-level caching)
+    # Step 1: Create weights (cache-aware)
     # ========================================
     moe_cache_dir = Path(
-        f"/tmp/tt_moe_test_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
+        f"/tmp/deepseek_v3_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
     )
     moe_cache_dir.mkdir(parents=True, exist_ok=True)
 
+    init_checker(moe_cache_dir)
+    ttnn_cache_complete = TtMoe.check_cache_complete(moe_cache_dir, layer_idx=0, experts_per_chip=experts_per_chip)
+    need_torch_weights = not ttnn_cache_complete or run_pcc_check
+    logger.info(f"Cache status: TTNN={ttnn_cache_complete}, need_torch_weights={need_torch_weights}")
+
     torch_weights_cache = moe_cache_dir / "torch_weights.pt"
-    if torch_weights_cache.exists():
-        logger.info(f"Loading cached torch weights from {torch_weights_cache}")
-        profiler.start("weights_loading")
-        cached = torch.load(torch_weights_cache, weights_only=True)
-        all_routed_weights = cached["routed"] if run_pcc_check else None
-        shared_expert_weights = cached["shared"] if run_pcc_check else None
-        gate_weights = cached["gate"]
-        profiler.end("weights_loading")
-    else:
-        logger.info("Creating torch weights (cold cache)...")
-        if run_pcc_check:
-            profiler.start("weights_creation")
-            all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
-            shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
-            profiler.end("weights_creation")
+    if need_torch_weights:
+        if torch_weights_cache.exists():
+            logger.info(f"Loading cached torch weights from {torch_weights_cache}")
+            profiler.start("weights_loading")
+            cached = torch.load(torch_weights_cache, weights_only=True)
+            all_routed_weights = cached["routed"]
+            shared_expert_weights = cached["shared"]
+            gate_weights = cached["gate"]
+            profiler.end("weights_loading")
         else:
+            logger.info("Creating torch weights (cold cache)...")
+            profiler.start("weights_creation")
+            if run_pcc_check:
+                all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
+                shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
+            else:
+                all_routed_weights = None
+                shared_expert_weights = None
+            gate_weights = create_gate_weights(num_routed_experts, emb_dim)
+            profiler.end("weights_creation")
+
+            logger.info(f"Saving torch weights to {torch_weights_cache}")
+            torch.save(
+                {"routed": all_routed_weights, "shared": shared_expert_weights, "gate": gate_weights},
+                torch_weights_cache,
+            )
+
+        # Build TTNN cache if not already complete
+        if not ttnn_cache_complete:
+            logger.info("Building TTNN cache...")
+            profiler.start("ttnn_cache_build")
+            TtMoe.build_ttnn_cache(
+                gate_weights=gate_weights,
+                routed_expert_weights=all_routed_weights,
+                shared_expert_weights=shared_expert_weights,
+                experts_per_chip=experts_per_chip,
+                emb_dim=emb_dim,
+                hidden_dim=hidden_dim,
+                mesh_device=mesh_device,
+                routed_expert_weights_dtype=ttnn.bfloat4_b,
+                shared_expert_weights_dtype=ttnn.bfloat8_b,
+                cache_path=moe_cache_dir,
+                layer_idx=0,
+            )
+            profiler.end("ttnn_cache_build")
+
+        # For non-PCC runs, free the heavy weights now that TTNN cache is built
+        if not run_pcc_check:
             all_routed_weights = None
             shared_expert_weights = None
-
-        gate_weights = create_gate_weights(num_routed_experts, emb_dim)
-
-        logger.info(f"Saving torch weights to {torch_weights_cache}")
-        torch.save(
-            {"routed": all_routed_weights, "shared": shared_expert_weights, "gate": gate_weights}, torch_weights_cache
-        )
+    else:
+        logger.info("TTNN cache complete, skipping torch weight creation")
+        all_routed_weights = None
+        shared_expert_weights = None
+        gate_weights = None
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
