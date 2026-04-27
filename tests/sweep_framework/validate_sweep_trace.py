@@ -40,219 +40,8 @@ IGNORED_KEYS = frozenset(
         "sweep_source_hash",
         "device_ids",
         "mesh_device",
-        # CCL infrastructure args: the current all_gather_async API requires
-        # semaphores/persistent buffers as positional args, but the master
-        # traces were recorded when they were optional.  Strip them so the
-        # sweep trace (which must pass them to execute) still matches.
-        "multi_device_global_semaphore",
-        "persistent_output_buffer",
-        "subdevice_id",
-        "barrier_semaphore",
-        "chunks_per_sync",
-        "num_workers_per_link",
-        "num_buffers_per_channel",
     }
 )
-
-# Keys inside tensor descriptors (argN dicts) that differ between DB-stored
-# master traces and live sweep traces due to different serialization versions.
-# Master traces store tensor_placement but not dtype/shape; sweep traces store
-# dtype/shape but not tensor_placement.  Both describe the same tensor.
-_TENSOR_DESCRIPTOR_NOISE_KEYS = frozenset(
-    {"tensor_placement", "dtype", "shape", "shard_spec"}
-)
-
-
-def _normalize_distribution_shape(value: Any) -> Any:
-    """Canonicalize distribution_shape to total device count.
-
-    The master trace may record a 1D shape like [32] while the sweep
-    records [4, 8] (or vice-versa).  Both represent the same 32-device
-    mesh so we normalize to a single canonical form: the product.
-
-    Handles both parsed lists ([4, 8]) and string-encoded values ("[4, 8]").
-    """
-    import ast as _ast
-
-    if isinstance(value, str):
-        try:
-            parsed = _ast.literal_eval(value)
-        except Exception:
-            return value
-    elif isinstance(value, list):
-        parsed = value
-    else:
-        return value
-
-    if isinstance(parsed, (list, tuple)) and all(isinstance(x, (int, float)) for x in parsed):
-        product = 1
-        for x in parsed:
-            product *= int(x)
-        return str([product]) if isinstance(value, str) else [product]
-    return value
-
-
-def _normalize_placement(value: Any) -> Any:
-    """Canonicalize all-replicate placement lists.
-
-    1D ['PlacementReplicate'] and 2D ['PlacementReplicate', 'PlacementReplicate']
-    are semantically equivalent — canonicalize to a single-entry list.
-
-    Handles both parsed lists and string-encoded values.
-    """
-    import ast as _ast
-
-    if isinstance(value, str):
-        try:
-            parsed = _ast.literal_eval(value)
-        except Exception:
-            return value
-    elif isinstance(value, list):
-        parsed = value
-    else:
-        return value
-
-    if isinstance(parsed, (list, tuple)) and all(isinstance(x, str) for x in parsed):
-        if all(x == "PlacementReplicate" for x in parsed):
-            canonical = ["PlacementReplicate"]
-            return str(canonical) if isinstance(value, str) else canonical
-    return value
-
-
-def _normalize_mesh_device_shape(value: Any) -> Any:
-    """Canonicalize mesh_device_shape to total device count.
-
-    The master trace may record [1, 32] while the sweep records [4, 8].
-    Both represent the same 32-device mesh, so we normalize to product form.
-
-    Handles both parsed lists ([4, 8]) and string-encoded values ("[4, 8]").
-    """
-    import ast as _ast
-
-    if isinstance(value, str):
-        try:
-            parsed = _ast.literal_eval(value)
-        except Exception:
-            return value
-    elif isinstance(value, list):
-        parsed = value
-    else:
-        return value
-
-    if isinstance(parsed, (list, tuple)) and all(isinstance(x, (int, float)) for x in parsed):
-        product = 1
-        for x in parsed:
-            product *= int(x)
-        return str([product]) if isinstance(value, str) else [product]
-    return value
-
-
-def _normalize_original_shape(value: Any) -> Any:
-    """Normalize original_shape to account for TILE_LAYOUT padding.
-
-    TILE_LAYOUT pads the last 2 dimensions to multiples of 32.  On mesh
-    devices, logical_shape() may return padded dimensions (e.g. 8→32, 1→32).
-    Normalize the last 2 dims to tile boundaries so padded and unpadded
-    shapes compare as equal.
-
-    Handles both parsed lists and string-encoded values.
-    """
-    import ast as _ast
-    import math
-
-    if isinstance(value, str):
-        try:
-            parsed = _ast.literal_eval(value)
-        except Exception:
-            return value
-    elif isinstance(value, (list, tuple)):
-        parsed = list(value)
-    else:
-        return value
-
-    if isinstance(parsed, (list, tuple)) and len(parsed) >= 2:
-        parsed = list(parsed)
-        # Strip leading 1s so [1, 1, 131072, 64] and [131072, 64] compare equal.
-        # Keep at least 2 dims (the meaningful data dimensions).
-        while len(parsed) > 2 and parsed[0] == 1:
-            parsed.pop(0)
-        # Round last 2 dims up to next multiple of 32 (tile boundary)
-        for i in (-2, -1):
-            dim = parsed[i]
-            if isinstance(dim, (int, float)):
-                dim = int(dim)
-                parsed[i] = math.ceil(dim / 32) * 32 if dim > 0 else dim
-        return str(parsed) if isinstance(value, str) else parsed
-    return value
-
-
-def _normalize_ccl_positional_args(args: dict, op_name: str) -> dict:
-    """Remap positional args for CCL ops whose API changed since the master trace.
-
-    The master trace for all_gather_async was recorded when ``dim`` was a keyword
-    argument.  The current C++ binding requires ``persistent_output_buffer`` and
-    ``multi_device_global_semaphore`` as positional args before ``dim``, shifting
-    it from a keyword to ``arg2``.  This function remaps positional args to their
-    original named-keyword form so the comparison matches.
-
-    Positional→keyword mappings (all_gather_async / reduce_scatter_async):
-        arg1 → persistent_output_buffer  (new, None → stripped by normalize)
-        arg2 → dim                       (was keyword, now positional)
-        arg3 → multi_device_global_semaphore  (new infra arg → stripped)
-    """
-    _CCL_OPS = {
-        "ttnn.experimental.all_gather_async",
-        "ttnn.experimental.reduce_scatter_async",
-    }
-    if op_name not in _CCL_OPS:
-        return args
-
-    result = dict(args)
-
-    # Remap arg2 → dim (if dim is not already present as a named key)
-    if "arg2" in result and "dim" not in result:
-        result["dim"] = result.pop("arg2")
-
-    # Strip infrastructure positional args (persistent_output_buffer, semaphore)
-    for key in ("arg1", "arg3"):
-        result.pop(key, None)
-
-    return result
-
-
-def _normalize_paged_sdpa_args(args: dict, op_name: str) -> dict:
-    """Remap positional args for paged SDPA ops whose API changed since the master trace.
-
-    The master trace for paged_scaled_dot_product_attention_decode recorded
-    ``page_table_tensor`` as a named keyword argument.  The current binding
-    takes it as positional ``arg3``.  This function remaps positional args to
-    their original named-keyword form so the comparison matches.
-
-    Additionally, ``attention_sink`` and ``is_causal`` may be present in only
-    one side (master or sweep) depending on API version, and ``memory_config``
-    may be absent from the sweep when the default is used.  These keys are
-    stripped so they don't cause false diffs.
-    """
-    _PAGED_SDPA_OPS = {
-        "ttnn.transformer.paged_scaled_dot_product_attention_decode",
-    }
-    if op_name not in _PAGED_SDPA_OPS:
-        return args
-
-    result = dict(args)
-
-    # Remap arg3 → page_table_tensor (if page_table_tensor is not already present)
-    if "arg3" in result and "page_table_tensor" not in result:
-        result["page_table_tensor"] = result.pop("arg3")
-
-    # Strip keys that may differ between API versions.
-    # - attention_sink: present in newer API, absent in older traces
-    # - is_causal: present in sweep but absent in master (default value)
-    # - memory_config: master serializes the default DRAM config, sweep omits it
-    for key in ("attention_sink", "is_causal", "memory_config"):
-        result.pop(key, None)
-
-    return result
 
 
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
@@ -264,52 +53,14 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """
     if isinstance(obj, dict):
         result = {}
-        # Detect if this dict is a tensor descriptor.  Tensor descriptors
-        # appear under positional arg keys (argN) *and* named tensor kwargs
-        # (output_tensor, weight, bias, page_table, cur_pos_tensor, etc.).
-        # The most reliable signal is the presence of "type": "ttnn.Tensor".
-        _is_tensor_desc = bool(
-            _parent_key and (
-                (_parent_key.startswith("arg") and _parent_key[3:].isdigit())
-                or obj.get("type") == "ttnn.Tensor"
-            )
-        )
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
-                continue
-            # Strip tensor-descriptor-specific noise keys (only inside argN dicts)
-            if _is_tensor_desc and k in _TENSOR_DESCRIPTOR_NOISE_KEYS:
                 continue
             # memory_config.hash is a device pointer — always differs between runs; skip numeric values only
             if k == "hash" and isinstance(v, (int, float)):
                 continue
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
-                continue
-            # Filter None-valued keys — treat None as equivalent to absent.
-            # This handles cases like compute_kernel_config=None vs absent.
-            # Also treat the string "None" the same way — the operation_tracer
-            # uses json.dump(default=str) which converts Python None to "None".
-            if v is None or v == "None":
-                continue
-            # storage_type can differ between HOST and DEVICE when running on
-            # a different topology than the trace was captured on — ignore it.
-            if k == "storage_type":
-                continue
-            # Normalize distribution_shape and placement (may be strings or lists)
-            if k == "distribution_shape":
-                result[k] = _normalize_distribution_shape(v)
-                continue
-            if k == "placement":
-                result[k] = _normalize_placement(v)
-                continue
-            # Normalize mesh_device_shape to product (topology-independent)
-            if k == "mesh_device_shape":
-                result[k] = _normalize_mesh_device_shape(v)
-                continue
-            # Normalize original_shape to tile boundaries (TILE_LAYOUT padding)
-            if k == "original_shape":
-                result[k] = _normalize_original_shape(v)
                 continue
             result[k] = normalize(v, _parent_key=k)
         return result
@@ -499,36 +250,32 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
 
-            # CCL ops: remap positional args to named kwargs before normalizing.
-            # The master trace was recorded with dim as a keyword arg, but the
-            # current API takes it positionally (after persistent_buf and semaphore).
-            sweep_args = _normalize_ccl_positional_args(sweep_args, op_name)
-
-            # Paged SDPA ops: remap positional args and strip API-version-specific keys.
-            sweep_args = _normalize_paged_sdpa_args(sweep_args, op_name)
-            master_args = _normalize_paged_sdpa_args(master_args, op_name)
-
             norm_master = normalize(master_args)
             norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
-                # Arguments match after normalization — report as match.
-                # The config_hash may legitimately differ when the master trace
-                # and sweep trace were captured on meshes with different topology
-                # layouts (e.g. 1D [32] vs 2D [4,8]).  Since topology-dependent
-                # fields (distribution_shape, mesh_device_shape, placement) are
-                # stripped during argument normalization, matching normalized
-                # args confirms semantic equivalence regardless of hash.
-                report.results.append(
-                    ConfigResult(
-                        config_hash=source_hash,
-                        op_name=op_name,
-                        master_config_id=master_cid,
-                        sweep_config_id=sweep_cid,
-                        status="match",
-                        sweep_config_hash=sweep_config_hash,
+                # Arguments match — check if config_hash computation also agrees
+                if sweep_config_hash and sweep_config_hash != source_hash:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="hash_mismatch",
+                            sweep_config_hash=sweep_config_hash,
+                        )
                     )
-                )
+                else:
+                    report.results.append(
+                        ConfigResult(
+                            config_hash=source_hash,
+                            op_name=op_name,
+                            master_config_id=master_cid,
+                            sweep_config_id=sweep_cid,
+                            status="match",
+                        )
+                    )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
