@@ -1386,8 +1386,67 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // its poll loop, status address stays at 0x00000000, and Phase 5 throws:
     //   "Fabric health check failed — 4 ERISC channel(s) not at READY_FOR_TRAFFIC (0x00000000)"
     //
-    // ETH cores must NOT have deassert_risc_reset_at_core called here — their BRISC was not
-    // halted in Phase 2 (resetting ERISC tears down the ETH PHY link on WH).
+    // FIX AR (#42429): Pass 0 — deassert Phase-2.5 force-reset channels BEFORE writing
+    // launch messages, then sleep briefly to let base UMD firmware complete .bss init.
+    // See launch_eth_cores_for_quiesce for the detailed root-cause explanation.
+    // ETH cores not in p25 force-reset must NOT have deassert called — their BRISC was
+    // never halted in Phase 2 (resetting ERISC tears down the ETH PHY link on WH).
+    if (!pending_phase25_force_reset_chans_.empty()) {
+        for (uint32_t p0_idx = 0; p0_idx < logical_cores_used.size(); p0_idx++) {
+            if (hal.get_core_type(p0_idx) != CoreType::ETH) {
+                continue;
+            }
+            for (const auto& lc0 : logical_cores_used[p0_idx]) {
+                try {
+                    auto eth_chan_0 = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(lc0.x, lc0.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (!pending_phase25_force_reset_chans_.count(eth_chan_0)) {
+                        continue;
+                    }
+                    auto phys_core_0 = this->virtual_core_from_logical_core(lc0, CoreType::ETH);
+                    env_impl.get_cluster().deassert_risc_reset_at_core(
+                        tt_cxy_pair(this->id(), phys_core_0), tt::umd::RiscType::ALL);
+                    log_info(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR): "
+                        "deassert_risc_reset(ALL) for Phase-2.5-halted ETH logical ({},{}) "
+                        "channel {} — ERISC now booting into base UMD firmware",
+                        this->id(),
+                        lc0.x,
+                        lc0.y,
+                        eth_chan_0);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR): "
+                        "deassert_risc_reset(ALL) failed for ETH logical ({},{}): {}",
+                        this->id(),
+                        lc0.x,
+                        lc0.y,
+                        e.what());
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR): "
+                        "deassert_risc_reset(ALL) failed (unknown) for ETH logical ({},{})",
+                        this->id(),
+                        lc0.x,
+                        lc0.y);
+                }
+            }
+        }
+        constexpr uint32_t kForceResetBootWaitMs = 50;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetBootWaitMs));
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR) complete — "
+            "{} force-reset channel(s) deasserted; waited {}ms for base UMD firmware boot",
+            this->id(),
+            pending_phase25_force_reset_chans_.size(),
+            kForceResetBootWaitMs);
+    }
+
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
         CoreType core_type = hal.get_core_type(pct_idx);
         if (core_type != CoreType::ETH) {
@@ -1434,6 +1493,9 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             // Pre-launch status read: confirm ERISC is in TERMINATED (0xA4B4C4D4) or 0x0
             // before we send the launch message.  Any other value means Phase 2.5 didn't
             // terminate the ERISC cleanly and we may be overwriting a live core.
+            // FIX-3 (#42429): gate launch on ERISC being in a quiesced state.
+            // FIX AR (#42429): after Pass-0 deassert + 50ms boot sleep, force-reset channels
+            // will show 0x49706550 (UMD relay firmware canary) — allow that for them.
             {
                 const auto [erisc_sync_addr_pre, unused_pre] =
                     builder_ctx.get_fabric_router_sync_address_and_status();
@@ -1469,6 +1531,48 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     logical_core.x,
                     logical_core.y,
                     pre_launch_buf[0]);
+
+                constexpr uint32_t terminated_val =
+                    static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+                constexpr uint32_t umd_relay_canary = 0x49706550U;
+                bool is_force_reset_chan_inline = false;
+                if (!pending_phase25_force_reset_chans_.empty()) {
+                    try {
+                        auto eth_chan_chk = soc_desc_q.get_eth_channel_for_core(
+                            tt::umd::CoreCoord(
+                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            CoordSystem::LOGICAL);
+                        is_force_reset_chan_inline =
+                            pending_phase25_force_reset_chans_.count(eth_chan_chk) > 0;
+                    } catch (...) {
+                    }
+                }
+                const bool status_ok_inline = (pre_launch_buf[0] == 0x0) ||
+                                              (pre_launch_buf[0] == terminated_val) ||
+                                              (is_force_reset_chan_inline &&
+                                               pre_launch_buf[0] == umd_relay_canary);
+                if (!status_ok_inline) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} Phase 3: ETH logical ({},{}) "
+                        "pre_status=0x{:08x} ({}) — ERISC not quiesced, skipping "
+                        "write_launch_msg_to_core to prevent firmware-init stall. "
+                        "Marking channel as dead.  (FIX-3: #42429)",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y,
+                        pre_launch_buf[0],
+                        edm_status_str(pre_launch_buf[0]));
+                    try {
+                        auto eth_chan_dead = soc_desc_q.get_eth_channel_for_core(
+                            tt::umd::CoreCoord(
+                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            CoordSystem::LOGICAL);
+                        pending_quiesce_newly_dead_eth_chans_.insert(eth_chan_dead);
+                    } catch (...) {
+                    }
+                    continue;
+                }
             }
 
             tt::llrt::write_launch_msg_to_core(
@@ -1485,43 +1589,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 this->id(),
                 logical_core.x,
                 logical_core.y);
-
-            // FIX AI-2 (#42429): Deassert RISCs for channels that Phase 2.5 force-halted
-            // with assert_risc_reset(ALL).  Without this, the ERISC stays in hardware reset
-            // and never picks up the launch message written above.  Phase 5 would timeout
-            // waiting for READY_FOR_TRAFFIC on these channels.
-            if (!pending_phase25_force_reset_chans_.empty()) {
-                try {
-                    auto eth_chan_for_deassert = soc_desc_q.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
-                    if (pending_phase25_force_reset_chans_.count(eth_chan_for_deassert)) {
-                        env_impl.get_cluster().deassert_risc_reset_at_core(
-                            tt_cxy_pair(this->id(), physical_core), tt::umd::RiscType::ALL);
-                        log_info(
-                            tt::LogMetal,
-                            "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
-                            "deassert_risc_reset(ALL) for Phase-2.5-halted ETH logical ({},{}) "
-                            "channel {} — ERISC can now pick up launch message",
-                            this->id(),
-                            logical_core.x,
-                            logical_core.y,
-                            eth_chan_for_deassert);
-                    }
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
-                        "deassert_risc_reset failed for Phase-2.5-halted ETH logical ({},{}) — "
-                        "ERISC may remain halted: {}",
-                        this->id(),
-                        logical_core.x,
-                        logical_core.y,
-                        e.what());
-                }
-            }
         }
     }
+    // FIX AR (#42429): clear force-reset set after inline ETH launch pass — channels are
+    // now either launched or skipped; no further deassert needed.
+    pending_phase25_force_reset_chans_.clear();
 
     // FIX P REMOVED (#42429): The per-device MAGIC injection (FIX P) was removed because it
     // caused a regression when BOTH MMIO and non-MMIO devices have
@@ -1612,7 +1684,7 @@ void Device::launch_eth_cores_for_quiesce() {
     // Take a local copy of the dead channels set so we can clear the member early.
     const auto newly_dead = std::move(pending_quiesce_newly_dead_eth_chans_);
     pending_quiesce_newly_dead_eth_chans_.clear();
-    // FIX AI-2 (#42429): Take local copy of Phase 2.5 force-reset channels for deassert.
+    // FIX AR (#42429): Take local copy of Phase 2.5 force-reset channels for Pass-0 deassert.
     const auto p25_force_reset = std::move(pending_phase25_force_reset_chans_);
     pending_phase25_force_reset_chans_.clear();
 
@@ -1624,6 +1696,81 @@ void Device::launch_eth_cores_for_quiesce() {
         this->is_mmio_capable(),
         newly_dead.size(),
         p25_force_reset.size());
+
+    // FIX AR (#42429): Deassert Phase-2.5 force-reset channels BEFORE writing launch
+    // messages, then sleep briefly to let base UMD firmware complete .bss init.
+    //
+    // Root cause of the "status=0x0 in Phase 5" second-quiesce failure:
+    //   Phase 2.5 force-halts stuck ERISCs via assert_risc_reset_at_core(ALL).
+    //   FIX AI-2 wrote the launch message first (while ERISC was halted), then
+    //   deasserted.  On hardware reset the base UMD firmware re-runs its C-runtime
+    //   startup, which zeroes .bss — including the HalL1MemAddrType::LAUNCH mailbox
+    //   area — before entering the polling loop.  The launch message is cleared
+    //   before the ERISC ever reads it.  The ERISC enters the poll loop, finds
+    //   nothing, stays in base firmware, and edm_status remains 0x0 forever.
+    //   Phase 5 times out and sets fabric_relay_path_broken_=true.
+    //
+    // Fix: deassert all force-reset channels in Pass 0, sleep to let .bss init and
+    // polling start, then write launch messages in Pass 1.  At that point the ERISC
+    // is already in the polling loop (exactly like TERMINATED channels) and picks up
+    // the message immediately.
+    if (!p25_force_reset.empty()) {
+        for (uint32_t p0_idx = 0; p0_idx < logical_cores_used.size(); p0_idx++) {
+            if (hal.get_core_type(p0_idx) != CoreType::ETH) {
+                continue;
+            }
+            for (const auto& lc0 : logical_cores_used[p0_idx]) {
+                try {
+                    auto eth_chan_0 = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(lc0.x, lc0.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (!p25_force_reset.count(eth_chan_0)) {
+                        continue;
+                    }
+                    auto phys_core_0 = this->virtual_core_from_logical_core(lc0, CoreType::ETH);
+                    env_impl.get_cluster().deassert_risc_reset_at_core(
+                        tt_cxy_pair(this->id(), phys_core_0), tt::umd::RiscType::ALL);
+                    log_info(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR): "
+                        "deassert_risc_reset(ALL) for Phase-2.5-halted ETH logical ({},{}) "
+                        "channel {} — ERISC now booting into base UMD firmware",
+                        this->id(),
+                        lc0.x,
+                        lc0.y,
+                        eth_chan_0);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR): "
+                        "deassert_risc_reset(ALL) failed for ETH logical ({},{}): {}",
+                        this->id(),
+                        lc0.x,
+                        lc0.y,
+                        e.what());
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR): "
+                        "deassert_risc_reset(ALL) failed (unknown) for ETH logical ({},{})",
+                        this->id(),
+                        lc0.x,
+                        lc0.y);
+                }
+            }
+        }
+        // Wait for base UMD firmware to complete .bss init (which zeroes the LAUNCH mailbox)
+        // and enter its polling loop before Pass 1 writes launch messages.
+        constexpr uint32_t kForceResetBootWaitMs = 50;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetBootWaitMs));
+        log_info(
+            tt::LogMetal,
+            "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR) complete — "
+            "{} force-reset channel(s) deasserted; waited {}ms for base UMD firmware boot",
+            this->id(),
+            p25_force_reset.size(),
+            kForceResetBootWaitMs);
+    }
 
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
         CoreType core_type = hal.get_core_type(pct_idx);
@@ -1713,7 +1860,26 @@ void Device::launch_eth_cores_for_quiesce() {
                 // FIX-3: gate launch on ERISC being in a quiesced state.
                 constexpr uint32_t terminated_val =
                     static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-                if (pre_launch_buf[0] != 0x0 && pre_launch_buf[0] != terminated_val) {
+                // FIX AR (#42429): after Pass-0 deassert + 50ms boot sleep, force-reset channels
+                // will have completed base UMD .bss init and show 0x49706550 (UMD relay firmware
+                // canary) at edm_status_address.  This is an expected quiesced state for those
+                // channels — allow it through so we don't incorrectly mark them dead.
+                constexpr uint32_t umd_relay_canary = 0x49706550U;
+                bool is_force_reset_chan = false;
+                if (!p25_force_reset.empty()) {
+                    try {
+                        auto eth_chan_check = soc_desc_q.get_eth_channel_for_core(
+                            tt::umd::CoreCoord(
+                                logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                            CoordSystem::LOGICAL);
+                        is_force_reset_chan = p25_force_reset.count(eth_chan_check) > 0;
+                    } catch (...) {
+                    }
+                }
+                const bool status_ok = (pre_launch_buf[0] == 0x0) ||
+                                       (pre_launch_buf[0] == terminated_val) ||
+                                       (is_force_reset_chan && pre_launch_buf[0] == umd_relay_canary);
+                if (!status_ok) {
                     log_warning(
                         tt::LogMetal,
                         "launch_eth_cores_for_quiesce: Device {} Phase 3: ETH logical ({},{}) "
@@ -1755,37 +1921,6 @@ void Device::launch_eth_cores_for_quiesce() {
                 logical_core.x,
                 logical_core.y);
 
-            // FIX AI-2 (#42429): Deassert RISCs for channels that Phase 2.5 force-halted.
-            if (!p25_force_reset.empty()) {
-                try {
-                    auto eth_chan_for_deassert = soc_desc_q.get_eth_channel_for_core(
-                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
-                        CoordSystem::LOGICAL);
-                    if (p25_force_reset.count(eth_chan_for_deassert)) {
-                        env_impl.get_cluster().deassert_risc_reset_at_core(
-                            tt_cxy_pair(this->id(), physical_core), tt::umd::RiscType::ALL);
-                        log_info(
-                            tt::LogMetal,
-                            "launch_eth_cores_for_quiesce: Device {} Phase 3: "
-                            "deassert_risc_reset(ALL) for Phase-2.5-halted ETH logical ({},{}) "
-                            "channel {} — ERISC can now pick up launch message",
-                            this->id(),
-                            logical_core.x,
-                            logical_core.y,
-                            eth_chan_for_deassert);
-                    }
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "launch_eth_cores_for_quiesce: Device {} Phase 3: "
-                        "deassert_risc_reset failed for Phase-2.5-halted ETH logical ({},{}) — "
-                        "ERISC may remain halted: {}",
-                        this->id(),
-                        logical_core.x,
-                        logical_core.y,
-                        e.what());
-                }
-            }
         }
     }
 
