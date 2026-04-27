@@ -257,11 +257,15 @@ _COMMON_ZEROS_RM_INT32_1 = [
 
 
 def _expand_common_recipes():
+    """Per-side runtime slots, *minus* the K/V cache slots.
+
+    K and V buffers now live on `Gemma4Caches` (Phase 2) — layers read
+    them via `self.k_cache`/`self.v_cache` rather than from input slots.
+    The lists `_COMMON_ZEROS_TILE_BF16_*` are kept intact for now as a
+    historical inventory of where the caches used to live, but they no
+    longer feed `_expand_common_recipes`.
+    """
     rows = []
-    for s in _COMMON_ZEROS_TILE_BF16_4x256x256:
-        rows.append((s, (1, 4, 256, 256), "BFLOAT16", "TILE", 0.0))
-    for s in _COMMON_ZEROS_TILE_BF16_1x256x512:
-        rows.append((s, (1, 1, 256, 512), "BFLOAT16", "TILE", 0.0))
     for s in _COMMON_ZEROS_RM_INT32_1:
         rows.append((s, (1,), "INT32", "ROW_MAJOR", 0))
     rows.append((26, (1, 256), "INT32", "ROW_MAJOR", 1))

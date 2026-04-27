@@ -10,6 +10,7 @@ list (KV caches, position IDs, token IDs).
 import gemma4
 from gemma4 import utils
 from gemma4 import weights as gw
+from gemma4.caches import Gemma4Caches
 from gemma4.layer_table import LAYER_TABLE_DECODE, LAYER_TABLE_PREFILL
 
 import ttnn
@@ -38,6 +39,7 @@ class Gemma4ForCausalLM:
         full_prelude,
         l58,
         l59,
+        caches,
     ):
         self._is_decode = is_decode
         self.scaled_embedding = scaled_embedding
@@ -53,15 +55,41 @@ class Gemma4ForCausalLM:
         # bf16 (1,1,256,1) one_hot helper used to build the causal mask
         # at the top of _call_*.
         self.causal_mask_one_hot = causal_mask_one_hot
+        # Per-layer KV cache buffers. Each layer also holds direct refs
+        # to its slice (set in from_state_dict); reset_kv_caches keeps
+        # both views in sync.
+        self.caches = caches
+
+    def reset_kv_caches(self):
+        """Re-zero every per-layer K/V buffer. Call between independent
+        generation sessions; Phase 2 also calls it at the start of each
+        forward pass for PCC reproducibility (this will be relaxed when
+        the Generator owns multi-step state in Phase 5).
+        """
+        self.caches.reset()
+        # Re-distribute fresh refs. Layer iteration covers L0..L57 (decode
+        # adds L58); l58 and l59 specials are reattached explicitly.
+        for layer in self.layers:
+            layer.k_cache = self.caches.k_caches[layer.layer_idx]
+            layer.v_cache = self.caches.v_caches[layer.layer_idx]
+        if self.l58 is not None:
+            self.l58.k_cache = self.caches.k_caches[self.l58.layer_idx]
+            self.l58.v_cache = self.caches.v_caches[self.l58.layer_idx]
+        self.l59.k_cache = self.caches.k_caches[self.l59.layer_idx]
+        self.l59.v_cache = self.caches.v_caches[self.l59.layer_idx]
 
     def __call__(self, input):
+        # Phase 2 temporary: reset on every call so single-shot PCC tests
+        # see the same zero initial state as the legacy input-slot path.
+        # Phase 5 will move this responsibility to the Generator.
+        self.reset_kv_caches()
         if self._is_decode:
             return self._call_decode(input)
         else:
             return self._call_prefill(input)
 
     @classmethod
-    def from_state_dict(cls, hf, mesh_device, *, is_decode, seq_len=19):
+    def from_state_dict(cls, hf, mesh_device, *, is_decode, seq_len=19, caches=None):
         """Build the full model from an HfWeights bundle. Every weight
         and scalar constant becomes an instance attribute; nothing is
         kept around as a runtime dict.
@@ -71,8 +99,17 @@ class Gemma4ForCausalLM:
         seq_len is always 1). To change it, the caller must also build
         the runtime input list at the same seq_len (see
         `synthesize_prefill_inputs`).
+
+        `caches` is an optional pre-built `Gemma4Caches` to share across
+        a prefill+decode pair (Phase 5 generator). If None, allocate
+        fresh zero caches for this instance.
         """
         layer_table = LAYER_TABLE_DECODE if is_decode else LAYER_TABLE_PREFILL
+        if caches is None:
+            caches = Gemma4Caches(
+                mesh_device,
+                [layer_table[i]["type"] for i in range(60)],
+            )
 
         # Build the no-input scalar constants and RoPE inv_freq tables into
         # a transient dict. apply_hf_scalar_overrides covers all the simple
@@ -117,6 +154,8 @@ class Gemma4ForCausalLM:
                     mesh_device,
                     is_decode=is_decode,
                     runtime_slots=slots,
+                    k_cache=caches.k_caches[i],
+                    v_cache=caches.v_caches[i],
                     rms_eps_tensor=rms_eps_tensor,
                     seq_len=seq_len,
                 )
@@ -129,6 +168,8 @@ class Gemma4ForCausalLM:
                     is_decode=is_decode,
                     runtime_slots=slots,
                     update_idxs_slot=update_idxs_slot,
+                    k_cache=caches.k_caches[i],
+                    v_cache=caches.v_caches[i],
                     rms_eps_tensor=rms_eps_tensor,
                     seq_len=seq_len,
                 )
@@ -177,6 +218,8 @@ class Gemma4ForCausalLM:
                 mesh_device,
                 is_decode=False,
                 runtime_slots=tuple(layer_table[58]["runtime_inputs"]),
+                k_cache=caches.k_caches[58],
+                v_cache=caches.v_caches[58],
                 rms_eps_tensor=rms_eps_tensor,
                 seq_len=seq_len,
             )
@@ -196,6 +239,8 @@ class Gemma4ForCausalLM:
             is_decode=is_decode,
             runtime_slots=l59_slots,
             update_idxs_slot=l59_update_idxs_slot,
+            k_cache=caches.k_caches[59],
+            v_cache=caches.v_caches[59],
             rms_eps_tensor=rms_eps_tensor,
             is_terminal=True,
             seq_len=seq_len,
@@ -222,6 +267,7 @@ class Gemma4ForCausalLM:
             full_prelude=full_prelude,
             l58=l58,
             l59=l59,
+            caches=caches,
         )
 
     def _call_decode(self, input):

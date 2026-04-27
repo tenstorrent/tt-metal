@@ -83,6 +83,8 @@ class SlidingDecoderLayer:
         layer_idx,
         is_decode,
         runtime_slots,
+        k_cache,
+        v_cache,
         attention,
         feed_forward,
         input_layernorm,
@@ -93,7 +95,11 @@ class SlidingDecoderLayer:
     ):
         self.layer_idx = layer_idx
         self._is_decode = is_decode
-        self.runtime_slots = runtime_slots  # (k_cache_slot, v_cache_slot, pos_ids_slot)
+        # runtime_slots is (k, v, pos) historically; only the pos slot is read
+        # now — K and V flow through self.k_cache / self.v_cache.
+        self.runtime_slots = runtime_slots
+        self.k_cache = k_cache
+        self.v_cache = v_cache
         self.attention = attention
         self.feed_forward = feed_forward
         self.input_layernorm = input_layernorm
@@ -104,8 +110,8 @@ class SlidingDecoderLayer:
 
     def __call__(self, hidden_state, *, sliding_state, full_state, input, shared):
         del full_state
-        k_slot, v_slot, pos_slot = self.runtime_slots
-        kv = (input[k_slot], input[v_slot], input[pos_slot])
+        pos_slot = self.runtime_slots[2]
+        kv = (self.k_cache, self.v_cache, input[pos_slot])
         if self._is_decode:
             return self._decode_body(hidden_state, kv=kv, shared=shared, **sliding_state)
         else:
@@ -113,7 +119,17 @@ class SlidingDecoderLayer:
 
     @classmethod
     def from_state_dict(
-        cls, state_dict, layer_idx, mesh_device, *, is_decode, runtime_slots, rms_eps_tensor, seq_len=19
+        cls,
+        state_dict,
+        layer_idx,
+        mesh_device,
+        *,
+        is_decode,
+        runtime_slots,
+        k_cache,
+        v_cache,
+        rms_eps_tensor,
+        seq_len=19,
     ):
         attention = Attention.from_state_dict_sliding(
             state_dict,
@@ -132,6 +148,8 @@ class SlidingDecoderLayer:
             layer_idx=layer_idx,
             is_decode=is_decode,
             runtime_slots=runtime_slots,
+            k_cache=k_cache,
+            v_cache=v_cache,
             attention=attention,
             feed_forward=feed_forward,
             layer_scalar=layer_scalar,
@@ -294,6 +312,8 @@ class FullDecoderLayer:
         is_decode,
         runtime_slots,
         update_idxs_slot,
+        k_cache,
+        v_cache,
         attention,
         feed_forward,
         input_layernorm,
@@ -305,13 +325,13 @@ class FullDecoderLayer:
     ):
         self.layer_idx = layer_idx
         self._is_decode = is_decode
-        # When is_terminal=False (regular full layer), runtime_slots is
-        # (k, v, pos). When True (L59), runtime_slots is (k, v) — no pos_ids
-        # slot exists; the body skips the position-increment computation and
-        # the final layer_scalar multiply (LMHead's last_layer_scalar absorbs
-        # it). update_idxs is still provided for paged_update_cache.
+        # runtime_slots historically held (k, v, pos) (or (k, v) for L59).
+        # K and V now flow through self.k_cache / self.v_cache; only the
+        # pos slot is still read from input (regular full layer only).
         self.runtime_slots = runtime_slots
         self.update_idxs_slot = update_idxs_slot  # decode-only: previous sliding layer's pos_ids slot
+        self.k_cache = k_cache
+        self.v_cache = v_cache
         self.attention = attention
         self.feed_forward = feed_forward
         self.input_layernorm = input_layernorm
@@ -324,11 +344,10 @@ class FullDecoderLayer:
     def __call__(self, hidden_state, *, sliding_state, full_state, input, shared):
         del sliding_state
         if self.is_terminal:
-            k_slot, v_slot = self.runtime_slots
-            kv = (input[k_slot], input[v_slot], None)
+            kv = (self.k_cache, self.v_cache, None)
         else:
-            k_slot, v_slot, pos_slot = self.runtime_slots
-            kv = (input[k_slot], input[v_slot], input[pos_slot])
+            pos_slot = self.runtime_slots[2]
+            kv = (self.k_cache, self.v_cache, input[pos_slot])
         if self._is_decode:
             update_idxs = input[self.update_idxs_slot] if self.update_idxs_slot is not None else None
             return self._decode_body(hidden_state, kv=kv, update_idxs=update_idxs, shared=shared, **full_state)
@@ -345,6 +364,8 @@ class FullDecoderLayer:
         is_decode,
         runtime_slots,
         update_idxs_slot,
+        k_cache,
+        v_cache,
         rms_eps_tensor,
         is_terminal=False,
         seq_len=19,
@@ -367,6 +388,8 @@ class FullDecoderLayer:
             is_decode=is_decode,
             runtime_slots=runtime_slots,
             update_idxs_slot=update_idxs_slot,
+            k_cache=k_cache,
+            v_cache=v_cache,
             attention=attention,
             feed_forward=feed_forward,
             layer_scalar=layer_scalar,
