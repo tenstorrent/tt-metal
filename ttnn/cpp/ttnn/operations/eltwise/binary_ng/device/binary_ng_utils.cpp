@@ -681,6 +681,10 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
             if (dtype == DataType::UINT32) {
                 return static_cast<uint32_t>(v);
             }
+            if (dtype == DataType::UINT16) {
+                auto val = static_cast<uint16_t>(static_cast<float>(v));
+                return (static_cast<uint32_t>(val) << 16) | val;
+            }
             // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
             auto scalar_bf16 = bfloat16::truncate(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
