@@ -35,13 +35,11 @@ def main():
     )
     tts_model = model.model
     talker = tts_model.talker
-    code_predictor = talker.code_predictor
 
     # Load reference weights
     print("\n[2] Loading reference weights...")
     from huggingface_hub import snapshot_download
     from safetensors.torch import load_file
-    from transformers import AutoTokenizer
 
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     model_path = snapshot_download(model_id, allow_patterns=["*.safetensors"])
@@ -60,7 +58,6 @@ def main():
         rms_norm,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     talker_weights = extract_talker_weights(main_dict)
     codec_head = main_dict["talker.codec_head.weight"]
     codec_embed_weight = main_dict["talker.model.codec_embedding.weight"]
@@ -121,7 +118,7 @@ def main():
     hook1 = talker.model.register_forward_pre_hook(capture_inputs, with_kwargs=True)
     hook2 = talker.model.register_forward_hook(capture_outputs, with_kwargs=True)
 
-    wavs, sr = model.generate_voice_clone(
+    _, _ = model.generate_voice_clone(
         text=target_text,
         language="English",
         ref_audio=ref_audio_path,
