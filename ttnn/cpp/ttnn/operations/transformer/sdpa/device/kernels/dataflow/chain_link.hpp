@@ -168,6 +168,7 @@ public:
             uint64_t mcast_addr = mcast_base_noc_addr_ | cb_addr;
             noc_async_write_multicast(cb_addr, mcast_addr, num_tiles * tile_bytes, mcast_num_dests_, true);
             noc_semaphore_set_multicast(valid_sem_addr_, mcast_sem_noc_addr_, mcast_num_dests_);
+            noc_async_writes_flushed();
         } else {
             noc_semaphore_wait(sender_sem_ptr_, 1);
             noc_semaphore_set(sender_sem_ptr_, 0);
