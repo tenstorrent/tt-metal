@@ -263,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+        num_slots=args.num_slots,
     )
     print(file=sys.stdout, flush=True)
     return 0

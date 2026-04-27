@@ -49,6 +49,13 @@ def get_env_int(name: str, default: int) -> int:
     return parse_positive_env_int(name, value)
 
 
+def get_optional_env_int(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return None
+    return parse_positive_env_int(name, value)
+
+
 def get_num_links_env_params(
     env_name: str,
     defaults: list[int],

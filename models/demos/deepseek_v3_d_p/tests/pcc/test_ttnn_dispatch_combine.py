@@ -214,7 +214,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
+    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
 def test_ttnn_dispatch_combine(
     mesh_device,
@@ -287,7 +287,7 @@ def test_ttnn_dispatch_combine(
     tt_x = ttnn.from_torch(
         x,
         mesh_mapper=mesh_mapper_dispatch_inputs,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
@@ -540,7 +540,7 @@ def test_ttnn_dispatch_combine_overflow(
     hang. After the fix, dispatch should complete (tokens silently dropped).
     """
     seq_len_per_chip = 256
-    emb_dim = 128
+    emb_dim = 256
     num_routed_experts = 16
     num_experts_per_tok = 2
     capacity_factor = 1
@@ -575,7 +575,7 @@ def test_ttnn_dispatch_combine_overflow(
     tt_x = ttnn.from_torch(
         x,
         mesh_mapper=mesh_mapper_dispatch_inputs,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
@@ -679,7 +679,7 @@ def test_ttnn_dispatch_combine_overflow(
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
+    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
 def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched_buffer_layout):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""

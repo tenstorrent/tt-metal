@@ -226,7 +226,22 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
         ([4, 4, 256, 512], [2, 1, 255, 511]),
         ([4, 4, 256, 512], [2, 1, 126, 255]),
         ([4, 3, 64, 64], [2, 0, 31, 31]),
-        ([4, 4, 3, 64, 64], [2, 3, 0, 31, 31]),
+        # Blocked until reshape supports ND-sharded tensors without going through
+        # ttnn::experimental::view. The rank>4 wrapper in untilize_with_unpadding
+        # (build_ndiml_untilize_val -> squeeze_from_ND_to_4D -> ttnn::reshape) routes
+        # through PerformView -> view_device, which rejects ND-sharded inputs for any
+        # rank change other than 0D/1D -> 2D expansion. See:
+        #   - ttnn/core/tensor/tensor_ops.cpp view_device (TT_FATAL on ND_SHARDED)
+        #   - ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.cpp PerformView
+        #   - ttnn/cpp/ttnn/operations/data_movement/common/common.cpp squeeze_from_ND_to_4D
+        # GitHub issue: #36172
+        pytest.param(
+            [4, 4, 3, 64, 64],
+            [2, 3, 0, 31, 31],
+            marks=pytest.mark.skip(
+                reason="blocked until reshape supports ND-sharded tensors without using ttnn::experimental::view"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -701,3 +716,126 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_legacy_shard(
     else:
         slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
         assert_equal(input_torch_tensor[slices], ttnn.to_torch(ttnn_output_tensor))
+
+
+# ---------------------------------------------------------------------------
+# Regression test for a bug in UntilizeWithUnpaddingMultiCoreShardedProgramFactory
+# when:
+#   * input is legacy HEIGHT_SHARDED (no NdShardSpec needed to reproduce)
+#   * tensor has outer dim > 1 (i.e. global_batch > 1)
+#   * inner H is NOT tile-aligned (so each outer-dim slice carries its own 2-row
+#     tile-padding tail in the physical shard)
+#   * output is INTERLEAVED (L1 or DRAM)
+#
+# The factory's interleaved-output runtime args (see
+# ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/factories/
+# untilize_with_unpadding_multi_core_sharded_program_factory.cpp lines 243-254)
+# assume tile padding only exists at the very end of the flattened sharded image
+# and thus write all `num_rows_block` rows for every core EXCEPT the last. That's
+# correct for a HEIGHT_SHARDED tensor whose outer product fits in a single shard,
+# but wrong when each shard contains its own outer-dim slice: rows 30..31 of each
+# non-final shard are tile padding that should NOT be written to the output, and
+# logical rows 28..29 of the final shard's slice get dropped instead.
+
+# For now, such cases where the upper (non last 2 dims) are > 1 and height (second last tensor dim)
+# is not tile-aligned are rejected with the TT_FATAL in the validate_on_program_cache_miss function
+# in the untilize_with_unpadding_device_operation.cpp file, just like the existing behavior of how multi-batched width sharded
+# inputs are rejected.
+#
+# Expected behavior: bitwise match (assert_equal passes). Buggy behavior: PCC ~
+# 1 / outer_dim (e.g. 0.49 for [2,1,30,64], 0.22 for [4,1,30,64]).
+# ---------------------------------------------------------------------------
+
+
+# Cases with outer_dim > 1 + non-tile-aligned H + interleaved output hit the
+# "Can only write unbatched output interleaved" TT_FATAL in the device op validator
+# (for HEIGHT_SHARDED, WIDTH_SHARDED, and BLOCK_SHARDED). Mark them xfail so they
+# signal if the guard is ever relaxed / the factory is fixed (strict=True causes
+# xpass to fail the test, prompting xfail removal).
+_batched_interleaved_xfail = pytest.mark.xfail(
+    raises=RuntimeError,
+    reason='TT_FATAL: "Can only write unbatched output interleaved" '
+    "(pre-emptive guard for multi-batch sharded -> interleaved untilize_with_unpadding; "
+    "the underlying factory mishandles per-outer-dim tile padding).",
+    strict=True,
+)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "shard_layout, tensor_shape, output_end, shard_shape, num_cores",
+    [
+        # --- HEIGHT_SHARDED ---
+        # Baseline (no outer dim): should pass even on buggy factory.
+        # Tensor [1,1,30,64] padded [1,1,32,64] => single shard of (32, 64).
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [1, 1, 30, 64], [0, 0, 29, 63], (32, 64), 1),
+        # Smallest reproducer: outer dim 2 on dim 0.
+        # Tensor [2,1,30,64] padded [2,1,32,64] => physical (64, 64) = 2 shards of (32, 64).
+        # Each shard is one batch slice (32 rows including 2 tile-padded tail rows).
+        pytest.param(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [2, 1, 30, 64],
+            [1, 0, 29, 63],
+            (32, 64),
+            2,
+            marks=_batched_interleaved_xfail,
+        ),
+        # Stronger signal: outer dim 4 -> PCC drops to ~0.25 if buggy.
+        pytest.param(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [4, 1, 30, 64],
+            [3, 0, 29, 63],
+            (32, 64),
+            4,
+            marks=_batched_interleaved_xfail,
+        ),
+        # Outer product spread across dims 0 and 1 (2 x 2 = 4 slices).
+        pytest.param(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [2, 2, 30, 64],
+            [1, 1, 29, 63],
+            (32, 64),
+            4,
+            marks=_batched_interleaved_xfail,
+        ),
+    ],
+    ids=lambda p: str(p).replace(" ", "") if isinstance(p, list) else None,
+)
+@pytest.mark.parametrize(
+    "output_buffer_type",
+    [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+    ids=["dram", "l1"],
+)
+def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
+    device, dtype, shard_layout, tensor_shape, output_end, shard_shape, num_cores, output_buffer_type
+):
+    """Regression test: legacy 2D sharded input (HEIGHT_SHARDED or WIDTH_SHARDED) +
+    non-tile-aligned H + outer_dim > 1 + interleaved output.
+
+    When the factory bug is active, the interleaved-output runtime args assume tile
+    padding only exists at the very end of the flattened sharded image. For tensors
+    whose outer product is spread across multiple tile-padded slices, this writes
+    per-slice tile-padding tail rows into the output and drops real rows from the
+    last slice. Expected result: bitwise match; buggy result: PCC ~ 1 / outer_dim.
+    """
+    torch.manual_seed(42)
+    torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
+    input_shard_spec = ttnn.ShardSpec(shard_core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_memory_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, input_shard_spec)
+
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
+
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
+    )
+    result = ttnn.to_torch(untilized)
+
+    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+    torch_result = torch_tensor[slices]
+
+    assert_equal(result, torch_result)
