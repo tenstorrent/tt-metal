@@ -385,8 +385,8 @@ class DecoderBlock:
             moe_brisc_ct = _patch_named_compile_time_args(
                 moe_brisc_ct,
                 {
-                    "reduce_brisc_rt_arg_base": reduce_rt_arg_base,
-                    "reduce_brisc_fabric_rt_arg_base": reduce_rt_arg_base,
+                    "reduce_brisc_worker_core_rt_arg_base": reduce_rt_arg_base,
+                    "reduce_brisc_fabric_core_rt_arg_base": reduce_rt_arg_base,
                 },
             )
             merged_ucd = ctx["unified_compile_time_core_descriptors"] + moe.device_unified_core_descs

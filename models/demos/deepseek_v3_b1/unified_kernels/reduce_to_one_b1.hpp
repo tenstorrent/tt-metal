@@ -56,13 +56,23 @@ struct ReduceToOneB1 {
     // ========================================================================
 
     // Reader (NCRISC) compile-time args
-    template <uint32_t deviceRole, uint32_t numTiles, uint32_t localCb, uint32_t receivedCb, uint32_t isFabricCore>
+    template <
+        uint32_t deviceRole,
+        uint32_t numTiles,
+        uint32_t localCb,
+        uint32_t receivedCb,
+        uint32_t isWorkerCore,
+        uint32_t isFabricCore,
+        uint32_t isFabricSyncCore>
     struct ReaderCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t received_cb = receivedCb;
-        static constexpr uint32_t is_fabric_core = isFabricCore == 1;
+
+        static constexpr bool is_worker_core = isWorkerCore == 1;
+        static constexpr bool is_fabric_core = isFabricCore == 1;
+        static constexpr bool is_fabric_sync_core = isFabricSyncCore == 1;
     };
 
     // Writer (BRISC) compile-time args
@@ -80,22 +90,23 @@ struct ReduceToOneB1 {
         uint32_t outputCoreNocY,
         uint32_t numWorkers,
         uint32_t slotSizeBytes,
-        uint32_t isFabricCore,
         uint32_t enableDownstreamSocket,
         uint32_t totalNumWorkers,
         uint32_t forwardMetadataSizeBytes,
-        uint32_t isAggregatorCore,
         uint32_t aggOutputSizeBytes,
         uint32_t aggSemL1Addr,
         uint32_t aggCoreNocX,
         uint32_t aggCoreNocY,
-        uint32_t isFabricSyncCore,
         uint32_t fabricSyncCoreNoCX,
         uint32_t fabricSyncCoreNoCY,
         uint32_t fabricSyncSemAddr,
         uint32_t numFabricCores,
-        uint32_t fabricRtArgBase,
-        uint32_t doTearDownSync>
+        uint32_t briscWorkerCoreRTArgBase,
+        uint32_t briscFabricCoreRTArgBase,
+        uint32_t doTearDownSync,
+        uint32_t isWorkerCore,
+        uint32_t isFabricCore,
+        uint32_t isFabricSyncCore>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -110,22 +121,24 @@ struct ReduceToOneB1 {
         static constexpr uint32_t output_core_noc_y = outputCoreNocY;
         static constexpr uint32_t num_workers = numWorkers;
         static constexpr uint32_t slot_size_bytes = slotSizeBytes;
-        static constexpr bool is_fabric_core = isFabricCore == 1;
         static constexpr bool enable_downstream_socket = enableDownstreamSocket == 1;
         static constexpr uint32_t total_num_workers = totalNumWorkers;
         static constexpr uint32_t forward_metadata_size_bytes = forwardMetadataSizeBytes;
-        static constexpr bool is_aggregator_core = isAggregatorCore == 1;
         static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
         static constexpr uint32_t agg_sem_l1_addr = aggSemL1Addr;
         static constexpr uint32_t agg_core_noc_x = aggCoreNocX;
         static constexpr uint32_t agg_core_noc_y = aggCoreNocY;
-        static constexpr bool is_fabric_sync_core = isFabricSyncCore == 1;
         static constexpr uint32_t fabric_sync_core_noc_x = fabricSyncCoreNoCX;
         static constexpr uint32_t fabric_sync_core_noc_y = fabricSyncCoreNoCY;
         static constexpr uint32_t fabric_sync_sem_addr = fabricSyncSemAddr;
         static constexpr uint32_t num_fabric_cores = numFabricCores;
-        static constexpr uint32_t fabric_rt_arg_base = fabricRtArgBase;
+        static constexpr uint32_t brisc_worker_core_rt_arg_base = briscWorkerCoreRTArgBase;
+        static constexpr uint32_t brisc_fabric_core_rt_arg_base = briscFabricCoreRTArgBase;
         static constexpr bool do_tear_down_sync = doTearDownSync == 1;
+
+        static constexpr bool is_worker_core = isWorkerCore == 1;
+        static constexpr bool is_fabric_core = isFabricCore == 1;
+        static constexpr bool is_fabric_sync_core = isFabricSyncCore == 1;
     };
 
     // Compute (TRISC) compile-time args
@@ -136,7 +149,9 @@ struct ReduceToOneB1 {
         uint32_t receivedCb,
         uint32_t outputCb,
         uint32_t scratchCb,
-        uint32_t isFabricCore>
+        uint32_t isWorkerCore,
+        uint32_t isFabricCore,
+        uint32_t isFabricSyncCore>
     struct ComputeCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -144,7 +159,10 @@ struct ReduceToOneB1 {
         static constexpr uint32_t received_cb = receivedCb;
         static constexpr uint32_t output_cb = outputCb;
         static constexpr uint32_t scratch_cb = scratchCb;
-        static constexpr uint32_t is_fabric_core = isFabricCore == 1;
+
+        static constexpr bool is_worker_core = isWorkerCore == 1;
+        static constexpr bool is_fabric_core = isFabricCore == 1;
+        static constexpr bool is_fabric_sync_core = isFabricSyncCore == 1;
     };
 
     // ========================================================================
@@ -268,7 +286,7 @@ struct ReduceToOneB1 {
                     // Non-Root1
 
                     // Read worker semaphore addresses from runtime args
-                    size_t arg_idx = CTArgs::fabric_rt_arg_base;
+                    size_t arg_idx = CTArgs::brisc_fabric_core_rt_arg_base;
                     uint32_t worker_sem_addr[CTArgs::num_workers];
                     for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
                         worker_sem_addr[i] = get_arg_val<uint32_t>(arg_idx++);
@@ -322,7 +340,7 @@ struct ReduceToOneB1 {
                         CTArgs::device_role == MESH_ROOT1 ? 1 : CTArgs::num_fabric_cores - 1;
                     volatile tt_l1_ptr uint32_t* wait_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fabric_sync_sem_addr);
-                    noc_semaphore_wait_min(wait_sem_ptr, 1);
+                    noc_semaphore_wait_min(wait_sem_ptr, wait_value);
                     unified_kernels::semaphore_dec(wait_sem_ptr);
                 }
             } else {
@@ -342,7 +360,7 @@ struct ReduceToOneB1 {
                             return;
                         }
 
-                        if constexpr (CTArgs::is_aggregator_core) {
+                        if (my_x[noc_index] == CTArgs::agg_core_noc_x && my_y[noc_index] == CTArgs::agg_core_noc_y) {
                             volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::agg_sem_l1_addr);
                             noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);

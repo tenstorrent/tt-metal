@@ -63,7 +63,7 @@ class MoeSem:
     DOWN_PROJ_MCAST_RECEIVER = 11
     REDUCE_WORKER_FABRIC_BASE = 12  # 12, 13, 14, 15 per worker slot
     REDUCE_SYNC = 16
-    REDUCE_AGG_SYNC = 17
+    REDUCE_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
     NUM_SEMAPHORES = 19
 
@@ -1717,8 +1717,8 @@ class MoeRoutedExpertOp:
             # ReduceToOne writer args (CB indices + RT arg bases)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
-            ("reduce_brisc_rt_arg_base", 0),
-            ("reduce_brisc_fabric_rt_arg_base", 0),
+            ("reduce_brisc_worker_core_rt_arg_base", 0),
+            ("reduce_brisc_fabric_core_rt_arg_base", 0),
             ("reduce_persistent_fabric_rt_arg_base", 18),
             # Broadcast (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
@@ -1925,8 +1925,8 @@ class MoeRoutedExpertOp:
                 other_value=0,
             ),
             UnifiedCompileTimeCoreDescriptor(
-                named_compile_time_arg="is_reduce_persistent_fabric_core",
-                core_range=ttnn.CoreRangeSet([]),  # Set per-device on ROOT1
+                named_compile_time_arg="is_reduce_fabric_sync_core",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
                 value=1,
                 other_value=0,
             ),
@@ -4007,6 +4007,14 @@ class MoeOp:
 
         output_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["output_core"])
 
+        num_reduce_fabric_cores = len(reduce_params["fabric_cores"])
+
+        aggregator_core = reduce_params["worker_cores_list"][0]
+        fabric_sync_core = reduce_params["fabric_cores"][0]
+        agg_core_phys = routed_ctx.device.worker_core_from_logical_core(aggregator_core)
+        fabric_sync_core_phys = routed_ctx.device.worker_core_from_logical_core(fabric_sync_core)
+        sync_sem_addr = self.sem_addrs[MoeSem.REDUCE_SYNC]
+
         # Compile-time args
         self.ncrisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
         self.brisc_args.extend(
@@ -4014,6 +4022,7 @@ class MoeOp:
                 ("reduce_device_role", device_role),
                 ("reduce_num_tiles", reduce_params["num_tiles"]),
                 ("reduce_payload_size_bytes", reduce_params["payload_size_bytes"]),
+                ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
                 ("reduce_num_hops", 1),
                 ("reduce_dst_fabric_node_chip_id", dest_fabric_node_id.chip_id),
                 ("reduce_dst_fabric_node_mesh_id", int(dest_fabric_node_id.mesh_id)),
@@ -4021,17 +4030,25 @@ class MoeOp:
                 ("reduce_output_core_noc_y", output_core_phys.y),
                 ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                 ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
-                ("reduce_total_num_workers", reduce_params["num_workers"]),
-                ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
-                ("reduce_forward_metadata_size_bytes", self._forward_metadata_size_bytes),
-                ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
                 ("reduce_enable_downstream_socket", 1 if self.downstream_sockets else 0),
+                ("reduce_total_num_workers", reduce_params["num_workers"]),
+                ("reduce_forward_metadata_size_bytes", self._forward_metadata_size_bytes),
+                ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
+                ("reduce_agg_sem_l1_addr", sync_sem_addr),
+                ("reduce_agg_core_noc_x", agg_core_phys.x),
+                ("reduce_agg_core_noc_y", agg_core_phys.y),
+                ("reduce_fabric_sync_core_noc_x", fabric_sync_core_phys.x),
+                ("reduce_fabric_sync_core_noc_y", fabric_sync_core_phys.y),
+                ("reduce_fabric_sync_sem_addr", sync_sem_addr),
+                ("reduce_num_fabric_cores", num_reduce_fabric_cores),
+                ("reduce_do_tear_down_sync", True),
             ]
         )
         self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
 
         # Update fabric core descriptor
         fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
+        fabric_sync_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(fabric_sync_core, fabric_sync_core)])
         for i, desc in enumerate(self.device_unified_core_descs):
             if desc.named_compile_time_arg == "is_reduce_fabric_core":
                 self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
@@ -4040,7 +4057,13 @@ class MoeOp:
                     value=1,
                     other_value=0,
                 )
-                break
+            elif desc.named_compile_time_arg == "is_reduce_fabric_sync_core":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_reduce_fabric_sync_core",
+                    core_range=fabric_sync_core_set,
+                    value=1,
+                    other_value=0,
+                )
 
         # NCRISC common runtime args (semaphore addresses)
         self.ncrisc_common_rt_args.extend(
@@ -4053,7 +4076,6 @@ class MoeOp:
 
         # Reduce-to-sender sync CT args (reduce fabric cores → sender core NCRISC)
         sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
-        num_reduce_fabric_cores = len(reduce_params["fabric_cores"])
         reduce_sync_sem_addr = self.sem_addrs[MoeSem.REDUCE_SYNC]
         self.ncrisc_args.extend(
             [
@@ -4075,46 +4097,6 @@ class MoeOp:
             self.sem_addrs[MoeSem.REDUCE_WORKER_FABRIC_BASE + i] for i in range(reduce_params["num_workers_per_column"])
         ]
 
-        # Per-core runtime args for reduce worker and fabric cores
-        # Persistent-signal sync: first worker (shard_idx==0) coordinates persistent signaling
-        agg_sem_addr = self.sem_addrs[MoeSem.REDUCE_AGG_SYNC]
-        persistent_core_noc_x = 0
-        persistent_core_noc_y = 0
-        if device_role == MESH_ROOT1:
-            persistent_core_phys = routed_ctx.device.worker_core_from_logical_core(
-                reduce_params["worker_cores_list"][0]
-            )
-            persistent_core_noc_x = persistent_core_phys.x
-            persistent_core_noc_y = persistent_core_phys.y
-
-        # Persistent signal: on ROOT1, aggregator worker signals a fabric core via local NOC,
-        # then the fabric core sends a fabric atomic inc to the bcast sender on the entry device.
-        persistent_enable_root1 = device_role == MESH_ROOT1
-        persistent_dst_noc_x = 0
-        persistent_dst_noc_y = 0
-        persistent_dst_sem_addr = 0
-        self._persistent_fabric_core = None
-        persistent_fabric_signal_sem_addr = 0
-        if persistent_enable_root1:
-            persistent_fabric_core = reduce_params["fabric_cores"][0]
-            persistent_fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(persistent_fabric_core)
-            persistent_fabric_signal_sem_addr = self.sem_addrs[MoeSem.REDUCE_PERSISTENT_FABRIC_SIGNAL]
-            persistent_dst_noc_x = persistent_fabric_core_phys.x
-            persistent_dst_noc_y = persistent_fabric_core_phys.y
-            persistent_dst_sem_addr = persistent_fabric_signal_sem_addr
-            self._persistent_fabric_core = persistent_fabric_core
-
-            # Set the CTA descriptor so the chosen fabric core gets its own kernel group
-            for i, desc in enumerate(self.device_unified_core_descs):
-                if desc.named_compile_time_arg == "is_reduce_persistent_fabric_core":
-                    self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_reduce_persistent_fabric_core",
-                        core_range=ttnn.CoreRangeSet([ttnn.CoreRange(persistent_fabric_core, persistent_fabric_core)]),
-                        value=1,
-                        other_value=0,
-                    )
-                    break
-
         reduce_brisc_per_core_args = []
         for core_idx, core in enumerate(reduce_params["worker_cores_list"]):
             fabric_core = reduce_params["column_to_fabric_core"][core.x]
@@ -4123,21 +4105,13 @@ class MoeOp:
             shard_idx = reduce_params["core_to_shard_idx"][(core.x, core.y)]
 
             socket_config_addr = 0
-            worker_agg_sem_addr = 0
-            worker_agg_noc_x = 0
-            worker_agg_noc_y = 0
             worker_metadata_addr = 0
 
             if device_role == MESH_ROOT1:
-                worker_agg_sem_addr = agg_sem_addr
-                worker_agg_noc_x = persistent_core_noc_x
-                worker_agg_noc_y = persistent_core_noc_y
                 if self.downstream_sockets is not None:
                     socket_config_addr = self.downstream_sockets[shard_idx].get_config_buffer_address()
                 if self._metadata_l1_addr != 0:
                     worker_metadata_addr = self._metadata_l1_addr
-
-            is_persistent_agg = device_role == MESH_ROOT1 and shard_idx == 0
 
             reduce_brisc_per_core_args.append(
                 (
@@ -4153,23 +4127,12 @@ class MoeOp:
                         shard_idx,
                         socket_config_addr,
                         worker_metadata_addr,
-                        worker_agg_sem_addr,
-                        worker_agg_noc_x,
-                        worker_agg_noc_y,
-                        int(is_persistent_agg),
-                        persistent_dst_noc_x if is_persistent_agg else 0,
-                        persistent_dst_noc_y if is_persistent_agg else 0,
-                        persistent_dst_sem_addr if is_persistent_agg else 0,
                     ],
                 )
             )
 
-        # Fabric core per-core args (worker sem addrs first, then persistent args if applicable)
         for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
-            fc_args = list(reduce_worker_fabric_sem_addrs)
-            if persistent_enable_root1 and fc_idx == 0:
-                fc_args.extend([persistent_fabric_signal_sem_addr])
-            reduce_brisc_per_core_args.append((fc, fc_args))
+            reduce_brisc_per_core_args.append((fc, list(reduce_worker_fabric_sem_addrs)))
 
         self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(brisc_args=reduce_brisc_per_core_args)
 

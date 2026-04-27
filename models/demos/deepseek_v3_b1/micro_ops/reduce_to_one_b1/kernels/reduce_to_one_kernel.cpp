@@ -22,7 +22,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("num_tiles"),
         get_named_compile_time_arg_val("local_cb"),
         get_named_compile_time_arg_val("received_cb"),
-        get_named_compile_time_arg_val("is_fabric_core")>;
+        get_named_compile_time_arg_val("is_worker_core"),
+        get_named_compile_time_arg_val("is_fabric_core"),
+        get_named_compile_time_arg_val("is_fabric_sync_core")>;
 
     // Reader runtime args (from common args)
     ReduceToOne::ReaderArgs rt_args{
@@ -47,38 +49,40 @@ void kernel_main() {
         get_named_compile_time_arg_val("output_core_noc_y"),
         get_named_compile_time_arg_val("num_workers"),
         get_named_compile_time_arg_val("slot_size_bytes"),
-        get_named_compile_time_arg_val("is_fabric_core"),
         get_named_compile_time_arg_val("enable_downstream_socket"),
         get_named_compile_time_arg_val("total_num_workers"),
         get_named_compile_time_arg_val("forward_metadata_size_bytes"),
-        get_named_compile_time_arg_val("is_aggregator_core"),
         get_named_compile_time_arg_val("agg_output_size_bytes"),
         get_named_compile_time_arg_val("agg_sem_l1_addr"),
         get_named_compile_time_arg_val("agg_core_noc_x"),
         get_named_compile_time_arg_val("agg_core_noc_y"),
-        get_named_compile_time_arg_val("is_fabric_sync_core"),
         get_named_compile_time_arg_val("fabric_sync_core_noc_x"),
         get_named_compile_time_arg_val("fabric_sync_core_noc_y"),
         get_named_compile_time_arg_val("fabric_sync_sem_addr"),
         get_named_compile_time_arg_val("num_fabric_cores"),
-        get_named_compile_time_arg_val("fabric_rt_arg_base"),
-        get_named_compile_time_arg_val("do_tear_down_sync")>;
+        get_named_compile_time_arg_val("brisc_worker_core_rt_arg_base"),
+        get_named_compile_time_arg_val("brisc_fabric_core_rt_arg_base"),
+        get_named_compile_time_arg_val("do_tear_down_sync"),
+        get_named_compile_time_arg_val("is_worker_core"),
+        get_named_compile_time_arg_val("is_fabric_core"),
+        get_named_compile_time_arg_val("is_fabric_sync_core")>;
 
     // Writer runtime args for worker cores only (from per-core args)
     // Fabric cores have different args (sem IDs + fabric connection) read inside the op
     ReduceToOne::WorkerWriterArgs rt_args{};
-    if constexpr (CTArgs::is_fabric_core == 0) {
+    if constexpr (CTArgs::is_worker_core == 1) {
+        constexpr size_t brisc_worker_core_rt_arg_base = CTArgs::brisc_worker_core_rt_arg_base;
         rt_args = {
-            get_arg_val<uint32_t>(0),  // fabric_core_noc_x
-            get_arg_val<uint32_t>(1),  // fabric_core_noc_y
-            get_arg_val<uint32_t>(2),  // my_slot_idx
-            get_arg_val<uint32_t>(3),  // worker_sem_addr
-            get_arg_val<uint32_t>(4),  // dst_l1_addr
-            get_arg_val<uint32_t>(5),  // dst_sem_addr
-            get_arg_val<uint32_t>(6),  // output_base_addr
-            get_arg_val<uint32_t>(7),  // shard_idx
-            get_arg_val<uint32_t>(8),  // socket_config_addr
-            get_arg_val<uint32_t>(9),  // metadata_addr
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 0),  // fabric_core_noc_x
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 1),  // fabric_core_noc_y
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 2),  // my_slot_idx
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 3),  // worker_sem_addr
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 4),  // dst_l1_addr
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 5),  // dst_sem_addr
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 6),  // output_base_addr
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 7),  // shard_idx
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 8),  // socket_config_addr
+            get_arg_val<uint32_t>(brisc_worker_core_rt_arg_base + 9),  // metadata_addr
         };
     }
 
@@ -91,7 +95,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("received_cb"),
         get_named_compile_time_arg_val("output_cb"),
         get_named_compile_time_arg_val("scratch_cb"),
-        get_named_compile_time_arg_val("is_fabric_core")>;
+        get_named_compile_time_arg_val("is_worker_core"),
+        get_named_compile_time_arg_val("is_fabric_core"),
+        get_named_compile_time_arg_val("is_fabric_sync_core")>;
 
     // Compute has no runtime args
     ReduceToOne::ComputeArgs rt_args{};

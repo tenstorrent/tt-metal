@@ -309,6 +309,7 @@ class ReduceToOneB1:
 
                 # Create core range sets
                 fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in fabric_cores])
+                worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in input_cores_list])
                 all_cores_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in input_cores_list + fabric_cores])
 
                 # Determine destination coordinate based on role
@@ -399,8 +400,9 @@ class ReduceToOneB1:
                     ("fabric_sync_core_noc_x", fabric_sync_core_phys.x),
                     ("fabric_sync_core_noc_y", fabric_sync_core_phys.y),
                     ("fabric_sync_sem_addr", sync_sem_addr),
-                    ("num_fabric_cores", len(fabric_cores) - 1),
-                    ("fabric_rt_arg_base", 0),
+                    ("num_fabric_cores", len(fabric_cores)),
+                    ("brisc_worker_core_rt_arg_base", 0),
+                    ("brisc_fabric_core_rt_arg_base", 0),
                     ("do_tear_down_sync", do_tear_down_sync),
                     ("num_loop_iters", num_iterations),
                 ]
@@ -534,14 +536,14 @@ class ReduceToOneB1:
                 # Build unified compile-time core descriptors
                 unified_ct_core_descriptors = [
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_fabric_core",
-                        core_range=fabric_core_set,
+                        named_compile_time_arg="is_worker_core",
+                        core_range=worker_core_set,
                         value=1,
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_aggregator_core",
-                        core_range=ttnn.CoreRangeSet([ttnn.CoreRange(aggregator_core, aggregator_core)]),
+                        named_compile_time_arg="is_fabric_core",
+                        core_range=fabric_core_set,
                         value=1,
                         other_value=0,
                     ),

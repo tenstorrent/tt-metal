@@ -1501,7 +1501,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
                 get_named_compile_time_arg_val("reduce_received_cb"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+                get_named_compile_time_arg_val("is_reduce_worker_core"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("is_reduce_fabric_sync_core")>;
 
             // Reader runtime args (common RT args at configurable base)
             deepseek_b1_ops::ReduceToOneB1::ReaderArgs reduce_rt_args{
@@ -1785,14 +1787,23 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_output_core_noc_y"),
                 get_named_compile_time_arg_val("reduce_num_workers"),
                 get_named_compile_time_arg_val("reduce_slot_size_bytes"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core"),
                 get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
-                get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
+                get_named_compile_time_arg_val("reduce_forward_metadata_size_bytes"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
-                get_named_compile_time_arg_val("is_reduce_persistent_fabric_core"),
-                get_named_compile_time_arg_val("reduce_forward_metadata_size_bytes")>;
+                get_named_compile_time_arg_val("reduce_agg_sem_l1_addr"),
+                get_named_compile_time_arg_val("reduce_agg_core_noc_x"),
+                get_named_compile_time_arg_val("reduce_agg_core_noc_y"),
+                get_named_compile_time_arg_val("reduce_fabric_sync_core_noc_x"),
+                get_named_compile_time_arg_val("reduce_fabric_sync_core_noc_y"),
+                get_named_compile_time_arg_val("reduce_fabric_sync_sem_addr"),
+                get_named_compile_time_arg_val("reduce_num_fabric_cores"),
+                get_named_compile_time_arg_val("reduce_brisc_worker_core_rt_arg_base"),
+                get_named_compile_time_arg_val("reduce_brisc_fabric_core_rt_arg_base"),
+                get_named_compile_time_arg_val("reduce_do_tear_down_sync"),
+                get_named_compile_time_arg_val("is_reduce_worker_core"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("is_reduce_fabric_sync_core")>;
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -1927,26 +1938,20 @@ void kernel_main() {
 
 #ifdef ENABLE_REDUCE_TO_ONE
     // Populate BRISC reduce runtime args (must be outside struct initializer)
-    constexpr size_t reduce_brisc_arg_start = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
+    constexpr size_t reduce_brisc_worker_core_arg_start =
+        get_named_compile_time_arg_val("reduce_brisc_worker_core_rt_arg_base");
     if constexpr (Core::is_reduce_worker_core) {
         moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),   // fabric_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),   // fabric_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),   // my_slot_idx
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),   // worker_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),   // dst_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),   // dst_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),   // output_base_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),   // shard_idx
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),   // socket_config_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // metadata_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // agg_sem_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // agg_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // agg_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_enable
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 0),  // fabric_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 1),  // fabric_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 2),  // my_slot_idx
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 3),  // worker_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 4),  // dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 5),  // dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 6),  // output_base_addr
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 7),  // shard_idx
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 8),  // socket_config_addr
+            get_arg_val<uint32_t>(reduce_brisc_worker_core_arg_start + 9),  // metadata_addr
         };
     }
 #endif
@@ -2093,7 +2098,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_received_cb"),
                 get_named_compile_time_arg_val("reduce_output_cb"),
                 get_named_compile_time_arg_val("reduce_scratch_cb"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+                get_named_compile_time_arg_val("is_reduce_worker_core"),
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("is_reduce_fabric_sync_core")>;
 
             // Compute has no runtime args
             deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
@@ -2984,7 +2991,7 @@ void kernel_main() {
 
         // Reduce fabric cores signal sender core that fabric sends are done.
         // Sender core NCRISC waits before starting next iteration.
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_BRISC)  // TODO: (GR) minimize
         if constexpr (Core::is_reduce_fabric_core) {
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
             constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("reduce_sync_noc_x");
