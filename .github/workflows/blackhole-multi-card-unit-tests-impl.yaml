@@ -122,6 +122,7 @@ jobs:
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short
             timeout: 30
             test-type: loudbox
             owner_id: U09LK84G4TF # Nikola Milicevic
