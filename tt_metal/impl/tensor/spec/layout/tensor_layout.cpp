@@ -73,22 +73,13 @@ Alignment legacyShapeToAlignment(
     if (alignment_can_be_2D) {
         ttsl::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
-        if (page_config.get_layout() == Layout::TILE) {
-            // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
-            const auto& tile = page_config.get_tile();
-            if (alignment_size == 1) {
-                values[0] = width_overpadded ? legacy_padded_shape[-1] : tile.get_width();
-            } else {
-                values[alignment_size - 2] = height_overpadded ? legacy_padded_shape[-2] : tile.get_height();
-                values[alignment_size - 1] = width_overpadded ? legacy_padded_shape[-1] : tile.get_width();
-            }
-        } else {
-            if (alignment_size >= 1) {
-                values[alignment_size - 1] = legacy_padded_shape[-1];
-            }
-            if (alignment_size == 2) {
-                values[alignment_size - 2] = legacy_padded_shape[-2];
-            }
+        if (alignment_size >= 1) {
+            values[alignment_size - 1] =
+                width_overpadded ? legacy_padded_shape[-1] : page_config.get_tile().get_width();
+        }
+        if (alignment_size == 2) {
+            values[alignment_size - 2] =
+                height_overpadded ? legacy_padded_shape[-2] : page_config.get_tile().get_height();
         }
         Alignment result(std::move(values));
         return result;
@@ -98,13 +89,10 @@ Alignment legacyShapeToAlignment(
     // NOTE: Rank > 2 is guaranteed in this case
     ttsl::SmallVector<uint32_t> values(padded_rank);
 
-    if (page_config.get_layout() == Layout::TILE) {
-        // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
-        // for the innermost alignment; otherwise use the legacy padded H/W.
-        const auto& tile = page_config.get_tile();
-        values[padded_rank - 1] = width_overpadded ? legacy_padded_shape[-1] : tile.get_width();
-        values[padded_rank - 2] = height_overpadded ? legacy_padded_shape[-2] : tile.get_height();
-    }
+    // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
+    // for the innermost alignment; otherwise use the legacy padded H/W.
+    values[padded_rank - 1] = width_overpadded ? legacy_padded_shape[-1] : page_config.get_tile().get_width();
+    values[padded_rank - 2] = height_overpadded ? legacy_padded_shape[-2] : page_config.get_tile().get_height();
 
     uint32_t cumulative_padded_volume = legacy_padded_shape[-2];
     for (int dim = padded_rank - 3; dim >= 0; dim--) {
