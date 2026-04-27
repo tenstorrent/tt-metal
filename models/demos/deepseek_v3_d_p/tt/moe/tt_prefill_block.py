@@ -359,11 +359,9 @@ class TtPrefillBlock(LightweightModule):
     def _moe_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
-        moe_input = ttnn.to_layout(moe_input, ttnn.ROW_MAJOR_LAYOUT)
 
         moe_out, _ = self.ffn(moe_input)
 
-        moe_out = ttnn.to_layout(moe_out, ttnn.TILE_LAYOUT)
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
         return moe_out
 

@@ -95,12 +95,6 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     vector<uint32_t> in0_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, in0_pages_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
-    // Clear all matmul cores L1 with zeros before writing in0 input
-    vector<uint32_t> zeros(((in0_pages_bytes + in1_pages_bytes) << 1) / sizeof(uint32_t), 0);
-    for (const auto& core : matmul_cores_list) {
-        detail::WriteToDeviceL1(device, core, l1_base_address, zeros);
-    }
-
     // Write in0 input to L1 of the first column of cores
     vector<uint32_t> in0_per_core_pages;
     unordered_map<uint32_t, vector<uint32_t>> dim_r_to_in0_pages_map;
@@ -134,16 +128,17 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     // in1_per_core_read_addr stores the memory address where each core should read from DRAM bank
     vector<uint32_t> in1_per_core_read_addr;
     in1_per_core_read_addr.reserve(test_config.num_subblocks_c_dim);
-for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
+    for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
         in1_per_core_read_addr.push_back(input_dram_address + i * in1_per_core_read_size_bytes);
     }
     // in0_mcast_output_addr is the memory address where each core will leave the in0 mcast output in L1
-    uint32_t in0_mcast_output_addr = l1_base_address + pages_per_core_size_bytes + 0x10;
+    uint32_t in0_mcast_output_addr = l1_base_address + pages_per_core_size_bytes + matmul::L1_DEBUG_PADDING_BYTES;
 
     // in1_output_addr is the memory address where each core will leave the in1 read output in L1. It is placed after
     // in0 mcast output in L1. Must be aligned to NOC_DRAM_READ_ALIGNMENT_BYTES (64 on Blackhole) so the low bits match
     // the DRAM source address.
-    uint32_t in1_output_addr_unaligned = l1_base_address + ((pages_per_core_size_bytes + 0x10) << 1);
+    uint32_t in1_output_addr_unaligned =
+        l1_base_address + ((pages_per_core_size_bytes + matmul::L1_DEBUG_PADDING_BYTES) << 1);
     uint32_t in1_output_addr = (in1_output_addr_unaligned + 63) & ~63U;
 
     // ---- in0 multicast semaphores ----
@@ -244,6 +239,8 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
             num_cores,                             // 6  Total number of cores in barrier
             risc1_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
             risc1_barrier_done_sem_id,             // 8  Barrier done semaphore ID
+            1,                                     // 9  Profiling: number of transactions
+            in1_per_core_read_size_bytes,          // 10 Profiling: transaction size in bytes
         };
         tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, i, risc0_core_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, risc1_kernel, i, risc1_core_runtime_args);
@@ -313,19 +310,54 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
 }
 
 bool run_single_test(const shared_ptr<distributed::MeshDevice>& mesh_device, MatmulTestConfig test_config) {
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
-    test_config.page_size_bytes = bytes_per_page;
+    test_config.test_id += unit_tests::dm::matmul::MATMUL_1D_TEST_ID_OFFSET;
+    test_config.page_size_bytes = 2048;
     test_config.end_logical_core = CoreCoord(
         test_config.start_logical_core.x + test_config.num_subblocks_c_dim - 1,
         test_config.start_logical_core.y + test_config.num_subblocks_r_dim - 1);
     return run_dm_1d_matmul(mesh_device, test_config);
 }
 
+bool run_multiple_test(const shared_ptr<distributed::MeshDevice>& mesh_device, const MatmulTestConfig& test_config) {
+    auto or_scalar = [](const std::vector<uint32_t>& v, uint32_t scalar) {
+        return v.empty() ? std::vector<uint32_t>{scalar} : v;
+    };
+
+    auto nr_vals = or_scalar(test_config.num_subblocks_r_dim_sweep, test_config.num_subblocks_r_dim);
+    auto nc_vals = or_scalar(test_config.num_subblocks_c_dim_sweep, test_config.num_subblocks_c_dim);
+    auto nk_vals = or_scalar(test_config.num_subblocks_k_dim_sweep, test_config.num_subblocks_k_dim);
+    auto sr_vals = or_scalar(test_config.subblock_r_dim_sweep, test_config.subblock_r_dim);
+    auto sc_vals = or_scalar(test_config.subblock_c_dim_sweep, test_config.subblock_c_dim);
+    auto sk_vals = or_scalar(test_config.subblock_k_dim_sweep, test_config.subblock_k_dim);
+
+    bool all_pass = true;
+    for (uint32_t nr : nr_vals) {
+        for (uint32_t nc : nc_vals) {
+            for (uint32_t nk : nk_vals) {
+                for (uint32_t sr : sr_vals) {
+                    for (uint32_t sc : sc_vals) {
+                        for (uint32_t sk : sk_vals) {
+                            MatmulTestConfig single = test_config;
+                            single.num_subblocks_r_dim = nr;
+                            single.num_subblocks_c_dim = nc;
+                            single.num_subblocks_k_dim = nk;
+                            single.subblock_r_dim = sr;
+                            single.subblock_c_dim = sc;
+                            single.subblock_k_dim = sk;
+                            all_pass &= run_single_test(mesh_device, single);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return all_pass;
+}
+
 }  // namespace unit_tests::dm::one_d_matmul
 
 TEST_P(Matmul1DParamFixture, Test1DMatmul) {
-    EXPECT_TRUE(unit_tests::dm::one_d_matmul::run_single_test(get_mesh_device(), GetParam()));
+    EXPECT_TRUE(unit_tests::dm::one_d_matmul::run_multiple_test(get_mesh_device(), GetParam()));
 }
 
 INSTANTIATE_TEST_SUITE_P(

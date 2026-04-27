@@ -356,8 +356,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
 
     def tp4_merged_fusion_group_spec(
         self,
-        o_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
-        mla_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
+        o_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
+        mla_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
     ) -> FusionGroupSpec:
         """Build merged spec: TP4 o_proj + gate_mm + norms + q_ab + kv_a in one buffer."""
         q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
@@ -401,7 +401,7 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
         default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             raw_tensor_shape=(8192, 512),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             tp_dim=(None, 0),
         )
@@ -415,7 +415,7 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
                 }
             ),
             raw_tensor_shape=(512, 8192),
-            dtype=ttnn.DataType.BFLOAT8_B,
+            dtype=ttnn.DataType.BFLOAT4_B,
             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             tp_dim=(None, 0),
         )

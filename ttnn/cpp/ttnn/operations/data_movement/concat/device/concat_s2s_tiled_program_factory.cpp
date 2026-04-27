@@ -19,16 +19,8 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     using namespace tt::tt_metal;
 
     const std::vector<Tensor>& input_tensors = tensor_args.input_tensors;
-    const uint32_t dim = operation_attributes.dim;
     const unsigned int groups = operation_attributes.groups;
     Tensor& output = tensor_return_value;
-    // If we end up here for concat with more than 2 tensors on any other dim we should have
-    // taken another path
-    TT_FATAL(dim == 3, "Sharded concat with tiled inputs only supports dim=3 (was {})", dim);
-    TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors (was {})", input_tensors.size());
-    TT_FATAL(input_tensors[0].shard_spec().has_value(), "Input tensor 0 must be sharded");
-    TT_FATAL(input_tensors[1].shard_spec().has_value(), "Input tensor 1 must be sharded");
-    TT_FATAL(output.shard_spec().has_value(), "Output must be sharded");
 
     TT_FATAL(
         input_tensors[0].logical_shape()[-1] == input_tensors[0].padded_shape()[-1],

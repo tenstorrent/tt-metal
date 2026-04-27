@@ -242,11 +242,11 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 }
 
 void Device::init_command_queue_host() {
-    // SystemMemoryManager now has internal stubs for mock devices
+    // SystemMemoryManager now has internal stubs for mock/emulated devices
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, this->num_hw_cqs());
 
-    // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
-    if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
+    if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -849,7 +849,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 
         const auto& hal = MetalEnvAccessor(*env_).impl().get_hal();
         bool noc_translation_enabled = true;
-        if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (!MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
             noc_translation_enabled =
                 MetalEnvAccessor(*env_).impl().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
                     this->id());
@@ -875,12 +875,14 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             }
         }
         // Get the physical rows and cols  (y, x) in the worker grid
-        std::vector<uint32_t> worker_phy_y = std::vector<uint32_t>(num_cores_y);
+        std::vector<uint32_t> worker_phy_y;
+        worker_phy_y.reserve(num_cores_y);
         for (int i = 0; i < num_cores_y; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
-            worker_phy_y.at(i) = core_phy.y;
+            worker_phy_y.push_back(core_phy.y);
         }
-        std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
+        std::vector<uint32_t> worker_phy_x;
+        worker_phy_x.reserve(num_cores_x);
         for (int i = 0; i < num_cores_x; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
             worker_phy_x.push_back(core_phy.x);

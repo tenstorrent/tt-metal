@@ -37,4 +37,8 @@ include(GNUInstallDirs)
 set(TT_METAL_DEFAULT_INSTALL_ROOT "/usr/${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium")
 target_compile_definitions(llrt PRIVATE TT_METAL_INSTALL_ROOT="${TT_METAL_DEFAULT_INSTALL_ROOT}")
 
+if(TT_METAL_USE_EMULE)
+    target_compile_definitions(llrt PRIVATE TT_METAL_USE_EMULE=1)
+endif()
+
 message(STATUS "TT_METAL_INSTALL_ROOT == ${TT_METAL_DEFAULT_INSTALL_ROOT}")
