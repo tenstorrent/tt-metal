@@ -32,7 +32,7 @@ TIMEOUT = 300
 try:
     NUM_DEVICES = ttnn.get_num_devices()
 except Exception:
-    NUM_DEVICES = 0
+    NUM_DEVICES = 0  # Headless runner (vector generation only)
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
