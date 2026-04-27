@@ -6,13 +6,30 @@
 
 #include <functional>
 #include <optional>
+#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "layernorm_post_all_gather_program_factory.hpp"
 
 #include "layernorm_post_all_gather_device_operation_types.hpp"
 
 namespace ttnn::prim {
+
+// Program factory for normal (non-Welford) operation
+struct LayerNormPostAllGatherProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormPostAllGatherParams& operation_attributes,
+        const LayerNormPostAllGatherInputs& tensor_args,
+        Tensor& output);
+};
+
+// Program factory for Welford algorithm (layernorm only)
+struct LayerNormPostAllGatherWelfordProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormPostAllGatherParams& operation_attributes,
+        const LayerNormPostAllGatherInputs& tensor_args,
+        Tensor& output);
+};
 
 struct LayerNormPostAllGatherDeviceOperation {
     using operation_attributes_t = LayerNormPostAllGatherParams;
