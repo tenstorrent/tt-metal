@@ -170,6 +170,21 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     }
 }
 
+// Update ALU_ACC_CTRL_Zero_Flag_disabled_src after a data-format reconfig.
+//
+// The zero-src flag causes the hardware to substitute 0 for values whose bit
+// pattern matches -0.0f in bfloat16 (e.g. 0x8000).  configure_unpack_AB
+// disables the flag whenever either dest format is uint16, because 0x8000 is a
+// valid uint16 value (32768) that must not be zeroed.  The same adjustment is
+// needed every time formats are reconfigured; call this function after
+// reconfiguring both srca and srcb so the OR of the new formats is applied.
+inline void _llk_unpack_reconfig_zero_src_flag_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    const bool disable =
+        (srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
+}
+
 // TODO NC: Remove as a part of tt-metal#36411
 inline void _llk_unpack_dbg_feature_disable_()
 {
