@@ -17,6 +17,7 @@ the 8x4 ground-truth test is the reference the approximation is compared against
 
 import pytest
 
+from conftest import is_galaxy
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_model_device_perf_test_with_merge,
     run_moe_perf_with_approximation,
@@ -52,6 +53,7 @@ def test_deepseek_v3_moe_perf_loudbox():
 
 
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.skipif(not is_galaxy(), reason="8x4 mesh requires galaxy")
 def test_deepseek_v3_moe_perf_galaxy():
     """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
     run_model_device_perf_test_with_merge(
