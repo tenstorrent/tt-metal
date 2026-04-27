@@ -902,11 +902,14 @@ def create_dram_expert_tensors_multi_device(
     subblock_n: int = 1,
     k_parallel_per_bank: int = 1,
     allocate_in1_backing: bool = True,
+    primary_worker_cores=None,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
     Calls create_dram_expert_metadata once per device in the mesh.
     Assumes homogeneous DRAM bank topology across all devices.
+    ``primary_worker_cores`` can override the canonical bank-worker order; callers
+    that pass per-core bank IDs must use the same order here.
 
     When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
     allocated (caller provides their own — e.g. the fused MoE kernel overlays
@@ -922,7 +925,15 @@ def create_dram_expert_tensors_multi_device(
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    if primary_worker_cores is None:
+        primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    else:
+        primary_cores_list = list(primary_worker_cores)
+        expected_num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
+        assert len(primary_cores_list) == expected_num_banks, (
+            f"primary_worker_cores length ({len(primary_cores_list)}) must match "
+            f"DRAM bank count ({expected_num_banks})"
+        )
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):

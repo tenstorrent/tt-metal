@@ -88,7 +88,9 @@ class MoeSem:
     UP_PROJ_PIPELINE = 20
     DOWN_PROJ_PIPELINE = 21
     SRAM_ROUTED_DOWN_MCAST_RECEIVER = 22
-    NUM_SEMAPHORES = 23
+    SRAM_AG_GATHER = 23
+    SRAM_BG_GATHER = 24
+    NUM_SEMAPHORES = 25
 
 
 @dataclass
@@ -498,6 +500,7 @@ class MoeRoutedExpertOp:
         num_total_experts=None,
         cores_per_dram_bank=1,
         accum_experts=0,
+        primary_worker_cores=None,
     ):
         """Set up MatmulExpertCompressedDRAM infrastructure for one projection (Phase 1B).
 
@@ -572,6 +575,7 @@ class MoeRoutedExpertOp:
             n_parallel_per_bank=cores_per_dram_bank,
             num_total_experts=num_total_experts,
             is_dram_flags=is_dram_flags,
+            primary_worker_cores=primary_worker_cores,
         )
 
         # dram_results layout (one entry per mesh coordinate) is pr42896's 15-element tuple:
@@ -1683,6 +1687,7 @@ class MoeRoutedExpertOp:
                 cts_list=gate_proj_weights_tensor,
                 num_subblocks_k=8,
                 num_active_experts=8,
+                primary_worker_cores=gate_proj_worker_cores,
             )
         else:
             gate_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
@@ -1704,6 +1709,7 @@ class MoeRoutedExpertOp:
                 cts_list=up_proj_weights_tensor,
                 num_subblocks_k=8,
                 num_active_experts=8,
+                primary_worker_cores=gate_proj_worker_cores,
             )
         else:
             up_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
@@ -1800,8 +1806,8 @@ class MoeRoutedExpertOp:
             src_num_pages=max(1, sram_gate_proj_params["per_core_n"]) * sram_routed_num_slots,
             dst_cb=sram_ag_dst_cb,
             dst_tensor=sram_ag_dst_tensor,
-            noc0_receiver_semaphore_addr=sem_addrs[MoeSem.AG_GATHER],
-            noc1_receiver_semaphore_addr=sem_addrs[MoeSem.AG_GATHER],
+            noc0_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_AG_GATHER],
+            noc1_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_AG_GATHER],
             row_major=True,
             use_explicit_sender_index=True,
         )
@@ -1815,8 +1821,8 @@ class MoeRoutedExpertOp:
             src_num_pages=max(1, sram_up_proj_params["per_core_n"]) * sram_routed_num_slots,
             dst_cb=sram_bg_dst_cb,
             dst_tensor=sram_bg_dst_tensor,
-            noc0_receiver_semaphore_addr=sem_addrs[MoeSem.BG_GATHER],
-            noc1_receiver_semaphore_addr=sem_addrs[MoeSem.BG_GATHER],
+            noc0_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_BG_GATHER],
+            noc1_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_BG_GATHER],
             row_major=True,
             use_explicit_sender_index=True,
         )
@@ -1961,6 +1967,7 @@ class MoeRoutedExpertOp:
                 num_subblocks_k=2,
                 num_active_experts=8,
                 accum_experts=1,
+                primary_worker_cores=gate_proj_worker_cores,
             )
         else:
             down_proj_params = MoeRoutedExpertOp.setup_dram_matmul(

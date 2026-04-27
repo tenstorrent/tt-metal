@@ -1597,6 +1597,7 @@ void kernel_main() {
         // 6. gate_proj: DRAM Matmul Expert Compressed + SiLU (PopIn0=false: keep input for up_proj).
         //    ResetCBIn1=true so the kernel's SW write-ptr wrap aligns with the CB's
         //    physical wrap — required because GP and UP share cb_in1 back-to-back.
+        DPRINT << "GP0" << ENDL();
         {
             DeviceZoneScopedN("GATE_PROJ");
             constexpr uint32_t gp_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
@@ -1605,6 +1606,7 @@ void kernel_main() {
                     gate_proj_mm;
             gate_proj_mm();
         }
+        DPRINT << "GP1" << ENDL();
 
         // 7a. SRAM up_proj (hot experts): runs on 64 is_sram_up_compute_core cores,
         //     which OVERLAP with is_gate_proj_core (DRAM up is last in0 consumer there).
@@ -1624,6 +1626,7 @@ void kernel_main() {
 
         // 7. up_proj: DRAM Matmul Expert Compressed (PopIn0=true: last consumer of gate input; PopIndex=false).
         //    Same cb_in1 as gate_proj → use gate_proj_in1_buf_addr as CBIn1ResetAddr.
+        DPRINT << "UP0" << ENDL();
         {
             DeviceZoneScopedN("UP_PROJ");
             constexpr uint32_t up_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
@@ -1632,8 +1635,8 @@ void kernel_main() {
                     up_proj;
             up_proj();
         }
+        DPRINT << "UP1" << ENDL();
 
-        DPRINT << "P6c" << ENDL();
         // 6c. SRAM gate gather: 64 sram_gate cores → is_shared_gated_reduce_core.
         //     Receiver pushes into sram_ag_dst_cb, consumed by step 7d (GatedReduce).
         {
@@ -1647,7 +1650,7 @@ void kernel_main() {
             sram_gate_gather(moe.routed.sram_ag_args);
         }
 
-        DPRINT << "P7c" << ENDL();
+        DPRINT << "7c" << ENDL();
         // 7c. SRAM up gather: 64 sram_up cores → is_shared_gated_reduce_core.
         //     Receiver pushes into sram_bg_dst_cb, consumed by step 7d (GatedReduce).
         {
@@ -1660,14 +1663,17 @@ void kernel_main() {
                 sram_up_gather;
             sram_up_gather(moe.routed.sram_bg_args);
         }
+        DPRINT << "8" << ENDL();
 
         // 8. Mul: Element-wise multiply (up_proj * gate_proj * expert_scale)
+        DPRINT << "MUL0" << ENDL();
         {
             DeviceZoneScopedN("MUL");
             deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
             mul_op();
         }
-        DPRINT << "P9" << ENDL();
+        DPRINT << "MUL1" << ENDL();
+        DPRINT << "9" << ENDL();
 
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
@@ -1682,7 +1688,7 @@ void kernel_main() {
                 shared_down_mcast;
             shared_down_mcast(moe.shared.down_mcast_args);
         }
-        DPRINT << "P9b" << ENDL();
+        DPRINT << "9b" << ENDL();
 
         // 9b. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
         {
@@ -1715,6 +1721,7 @@ void kernel_main() {
             shared_residual_add(moe.shared.residual_add_args);
         }
 
+        DPRINT << "9d" << ENDL();
         // 9d. Shared: Output Gather — 112 matmul cores → sender core
         {
             DeviceZoneScopedN("SHARED_OUTPUT_GATHER");
@@ -1727,6 +1734,7 @@ void kernel_main() {
             shared_output_gather(moe.shared.og_args);
         }
 
+        DPRINT << "9e" << ENDL();
         // 9e. Shared: Output Mcast — sender core → 130 cores (DRAM cores receive into add_cb_in1)
         {
             DeviceZoneScopedN("SHARED_OUTPUT_MCAST");
@@ -1741,6 +1749,7 @@ void kernel_main() {
             shared_output_mcast(moe.shared.output_mcast_args);
         }
 
+        DPRINT << "10a" << ENDL();
         // 10a. SRAM Routed Gated Reduce — runs on is_gated_reduce_core.
         //      Reduces each SRAM expert independently and writes expert-major face tiles.
         //      Consumes sram_ag_dst_cb / sram_bg_dst_cb, writes sram_routed_mcast_src_cb.
@@ -1752,6 +1761,7 @@ void kernel_main() {
             sram_routed_gated_reduce(moe.routed.sram_routed_gated_reduce_args);
         }
 
+        DPRINT << "10b" << ENDL();
         // 10b. SRAM Routed Down Mcast — sender → SRAM down compute cores.
         //      Receivers (is_sram_down_compute_core) consume in step 12a SRAM_DOWN_PROJ.
         {
@@ -1766,6 +1776,7 @@ void kernel_main() {
             sram_routed_down_mcast(moe.routed.sram_routed_down_mcast_args);
         }
 
+        DPRINT << "11a" << ENDL();
         // 11a. down_proj Gather: gather cold-path mul output from gate_proj cores to sender core.
         {
             DeviceZoneScopedN("DOWN_PROJ_GATHER");
@@ -1774,6 +1785,7 @@ void kernel_main() {
             down_proj_gather(moe.routed.down_proj_gather_args);
         }
 
+        DPRINT << "11b" << ENDL();
         // 11b. DRAM down_proj Mcast: broadcast gathered cold-path output back to gate_proj cores.
         {
             DeviceZoneScopedN("DOWN_PROJ_MCAST");
@@ -1788,6 +1800,7 @@ void kernel_main() {
             down_proj_mcast(moe.routed.down_proj_mcast_args);
         }
 
+        DPRINT << "12a" << ENDL();
         // 12a. SRAM down_proj: hot-expert SRAM matmul on is_sram_down_compute_core.
         //      Reads sram_routed_down_mcast_dst_cb (from 10b), writes sram_down_proj_cb_out.
         {
@@ -1803,6 +1816,7 @@ void kernel_main() {
             sram_down_proj_mm();
         }
 
+        DPRINT << "12b" << ENDL();
         // 12b. DRAM down_proj: cold-expert matmul on gate_proj cores (PopIndex=true: last consumer).
         {
             DeviceZoneScopedN("DOWN_PROJ");
@@ -1812,6 +1826,7 @@ void kernel_main() {
             down_proj();
         }
 
+        DPRINT << "13" << ENDL();
         // 13. Eltwise Add: down_proj + shared_expert_output  (+ sram_down_proj_cb_out when 3-way)
         {
             DeviceZoneScopedN("ELTWISE_ADD");
