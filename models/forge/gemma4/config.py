@@ -11,6 +11,7 @@ class Gemma4Config:
     and consteval scalar values); the dataclass is purely for readability
     and to avoid magic numbers in the new `gemma4/` classes.
     """
+
     hidden_size: int = 5376
     intermediate_size: int = 21504
     num_layers: int = 60
@@ -21,15 +22,27 @@ class Gemma4Config:
     rms_eps: float = 1e-6
     softcap: float = 30.0
     sliding_window: int = 1024
-    layer_types: List[str] = field(default_factory=lambda: (
-        ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-        + ["sliding"] * 5 + ["full"]
-    ))
+    layer_types: List[str] = field(
+        default_factory=lambda: (
+            ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+            + ["sliding"] * 5
+            + ["full"]
+        )
+    )

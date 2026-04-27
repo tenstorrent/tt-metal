@@ -1,7 +1,7 @@
 """Postlude: final RMSNorm + lm_head matmul + softcap."""
-import ttnn
-
 from gemma4.rms_norm import RMSNorm
+
+import ttnn
 
 
 class LMHead:
@@ -14,8 +14,7 @@ class LMHead:
     Composes RMSNorm internally for the final norm step.
     """
 
-    def __init__(self, last_layer_scalar, rms_eps, norm_weight,
-                 lm_head_weight, softcap):
+    def __init__(self, last_layer_scalar, rms_eps, norm_weight, lm_head_weight, softcap):
         self.last_layer_scalar = last_layer_scalar
         self.rms_eps = rms_eps
         self.norm_weight = norm_weight
@@ -28,9 +27,7 @@ class LMHead:
             last_layer_residual,
             self.last_layer_scalar,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(last_layer_residual, False)
 
@@ -41,9 +38,7 @@ class LMHead:
         flat = ttnn.reshape(
             normed,
             [seq_len, 1344],
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(normed, False)
         gathered_in = ttnn.all_gather(
@@ -51,9 +46,7 @@ class LMHead:
             dim=1,
             cluster_axis=1,
             subdevice_id=None,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             num_links=None,
             topology=ttnn.Topology.Ring,
         )
@@ -63,9 +56,7 @@ class LMHead:
             self.lm_head_weight,
             transpose_a=False,
             transpose_b=True,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -77,9 +68,7 @@ class LMHead:
         logits_3d = ttnn.reshape(
             logits_local,
             [1, seq_len, 65536],
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(logits_local, False)
         gathered_out = ttnn.all_gather(
@@ -87,9 +76,7 @@ class LMHead:
             dim=2,
             cluster_axis=1,
             subdevice_id=None,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             num_links=None,
             topology=ttnn.Topology.Ring,
         )
@@ -98,33 +85,26 @@ class LMHead:
             gathered_out,
             self.softcap,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(gathered_out, False)
         tanhed = ttnn.tanh(
             divided,
             fast_and_approximate_mode=False,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(divided, False)
         capped = ttnn.multiply(
             tanhed,
             self.softcap,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(tanhed, False)
         return capped
 
     @classmethod
-    def from_consteval(cls, cached_main, last_layer_scalar_ce, rms_eps,
-                       norm_weight_ce, lm_head_weight_ce, softcap):
+    def from_consteval(cls, cached_main, last_layer_scalar_ce, rms_eps, norm_weight_ce, lm_head_weight_ce, softcap):
         return cls(
             cached_main[f"main_const_eval_{last_layer_scalar_ce}"][0],
             rms_eps,
@@ -134,9 +114,9 @@ class LMHead:
         )
 
     @classmethod
-    def from_state_dict(cls, state_dict, mesh_device, *,
-                        rms_eps, last_layer_scalar, softcap,
-                        lm_head_dtype=None, norm_dtype=None):
+    def from_state_dict(
+        cls, state_dict, mesh_device, *, rms_eps, last_layer_scalar, softcap, lm_head_dtype=None, norm_dtype=None
+    ):
         """Build LMHead from HF state_dict + caller-supplied scalars.
 
         norm_weight comes from `model.language_model.norm.weight`
@@ -152,6 +132,7 @@ class LMHead:
         """
         import torch
         from gemma4 import weights as gw
+
         if lm_head_dtype is None:
             lm_head_dtype = ttnn.DataType.BFLOAT8_B
         if norm_dtype is None:
@@ -160,11 +141,10 @@ class LMHead:
         torch_norm = state_dict["model.language_model.norm.weight"].to(torch.bfloat16)
         norm_weight = ttnn.as_tensor(
             torch_norm,
-            dtype=norm_dtype, layout=ttnn.Layout.TILE,
+            dtype=norm_dtype,
+            layout=ttnn.Layout.TILE,
             device=mesh_device,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             mesh_mapper=gw.mesh_mapper_for_role("norm", mesh_device),
         )
 
@@ -172,21 +152,19 @@ class LMHead:
         # Two-step load to match consteval's bf16→typecast pipeline.
         bf16_lm = ttnn.as_tensor(
             torch_lm,
-            dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.Layout.TILE,
             device=mesh_device,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             mesh_mapper=gw.mesh_mapper_for_role("lm_head", mesh_device),
         )
         if lm_head_dtype == ttnn.DataType.BFLOAT16:
             lm_head_weight = bf16_lm
         else:
             lm_head_weight = ttnn.typecast(
-                bf16_lm, lm_head_dtype,
-                memory_config=ttnn.MemoryConfig(
-                    ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-                ),
+                bf16_lm,
+                lm_head_dtype,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             )
             ttnn.deallocate(bf16_lm, False)
 

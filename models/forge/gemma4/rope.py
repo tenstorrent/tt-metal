@@ -21,16 +21,15 @@ prefill and decode because each side has its own codegen artifact.
 """
 import torch
 
-
 # Per-side cached_main key map for rope-derived consteval entries.
 _ROPE_KEYS = {
     "prefill": {
         "sliding_inv_freq": "main_const_eval_487",
-        "full_inv_freq":    "main_const_eval_129",
+        "full_inv_freq": "main_const_eval_129",
     },
     "decode": {
         "sliding_inv_freq": "main_const_eval_626",
-        "full_inv_freq":    "main_const_eval_75",
+        "full_inv_freq": "main_const_eval_75",
     },
 }
 
@@ -44,19 +43,18 @@ class RoPESetup:
     expects as the LHS of `inv_freq @ position_ids`.
     """
 
-    def __init__(self, *, sliding_inv_freq, full_inv_freq,
-                 mesh_device, is_decode):
+    def __init__(self, *, sliding_inv_freq, full_inv_freq, mesh_device, is_decode):
         import ttnn
+
         self.is_decode = is_decode
         self.mesh_device = mesh_device
-        self._mem_cfg = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-        )
+        self._mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
         self.sliding = self._build(sliding_inv_freq.reshape(1, -1, 1))
         self.full = self._build(full_inv_freq.reshape(1, -1, 1))
 
     def _build(self, torch_t):
         import ttnn
+
         return ttnn.as_tensor(
             torch_t.to(torch.float32),
             dtype=ttnn.DataType.FLOAT32,
@@ -69,12 +67,8 @@ class RoPESetup:
     @classmethod
     def from_hf(cls, hf, mesh_device, *, is_decode):
         return cls(
-            sliding_inv_freq=hf.lifted[
-                "model.rotary_emb.sliding_attention_inv_freq"
-            ],
-            full_inv_freq=hf.lifted[
-                "model.rotary_emb.full_attention_inv_freq"
-            ],
+            sliding_inv_freq=hf.lifted["model.rotary_emb.sliding_attention_inv_freq"],
+            full_inv_freq=hf.lifted["model.rotary_emb.full_attention_inv_freq"],
             mesh_device=mesh_device,
             is_decode=is_decode,
         )

@@ -23,17 +23,13 @@ class RMSNorm:
             x,
             x,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         mean_local = ttnn.mean(
             x_squared,
             [2],
             True,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
             ),
@@ -44,9 +40,7 @@ class RMSNorm:
             dim=2,
             cluster_axis=1,
             subdevice_id=None,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             num_links=None,
             topology=ttnn.Topology.Ring,
         )
@@ -55,9 +49,7 @@ class RMSNorm:
             mean_gathered,
             [2],
             True,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
             ),
@@ -67,35 +59,27 @@ class RMSNorm:
             mean_global,
             self.eps,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(mean_global, False)
         rsqrt = ttnn.rsqrt(
             rms,
             fast_and_approximate_mode=False,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(rms, False)
         normalized = ttnn.multiply(
             x,
             rsqrt,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(rsqrt, False)
         output = ttnn.multiply(
             normalized,
             self.weight,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(normalized, False)
         return output
@@ -108,8 +92,7 @@ class RMSNorm:
         return cls(cached_main[f"main_const_eval_{weight_ce_key}"][0], eps)
 
     @classmethod
-    def from_state_dict(cls, state_dict, hf_key, eps, mesh_device,
-                         *, dtype=None, role=None):
+    def from_state_dict(cls, state_dict, hf_key, eps, mesh_device, *, dtype=None, role=None):
         """Build RMSNorm from an HF state_dict entry.
 
         NOTE: gemma-4's HF RMSNorm convention does NOT use the `1 + w`
@@ -118,6 +101,7 @@ class RMSNorm:
         """
         import torch
         from gemma4 import weights as gw
+
         if dtype is None:
             dtype = ttnn.DataType.BFLOAT16
         if role is None:

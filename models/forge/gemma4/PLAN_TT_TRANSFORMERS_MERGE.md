@@ -155,13 +155,13 @@ These are existing properties that must survive the refactor:
 ```bash
 source python_env/bin/activate
 export TT_METAL_HOME=$(pwd) ARCH_NAME=blackhole
-export PYTHONPATH=$(pwd):$(pwd)/models/forge_generated
+export PYTHONPATH=$(pwd):$(pwd)/models/forge
 ```
 
 PCC test commands:
 ```bash
-pytest models/forge_generated/gemma4/test_prefill.py -v -s
-pytest models/forge_generated/gemma4/test_decode.py -v -s
+pytest models/forge/gemma4/test_prefill.py -v -s
+pytest models/forge/gemma4/test_decode.py -v -s
 ```
 
 Demo:

@@ -21,14 +21,10 @@ class ScaledEmbedding:
         as_uint32 = ttnn.typecast(
             token_ids_tile,
             ttnn.DataType.UINT32,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(token_ids_tile, False)
-        as_row_major = ttnn.to_layout(
-            as_uint32, ttnn.Layout.ROW_MAJOR, None, memory_config=None
-        )
+        as_row_major = ttnn.to_layout(as_uint32, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
         ttnn.deallocate(as_uint32, False)
         looked_up = ttnn.embedding(
             as_row_major,
@@ -36,18 +32,14 @@ class ScaledEmbedding:
             padding_idx=None,
             layout=ttnn.Layout.TILE,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(as_row_major, False)
         scaled = ttnn.multiply(
             looked_up,
             self.embed_scale,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(looked_up, False)
         return scaled
@@ -60,8 +52,7 @@ class ScaledEmbedding:
         )
 
     @classmethod
-    def from_state_dict(cls, state_dict, lifted, mesh_device, *,
-                        weight_dtype=None, scale_dtype=None):
+    def from_state_dict(cls, state_dict, lifted, mesh_device, *, weight_dtype=None, scale_dtype=None):
         """Build ScaledEmbedding from HF state_dict + lifted constants.
 
         embed_weight comes from `model.language_model.embed_tokens.weight`
@@ -72,6 +63,7 @@ class ScaledEmbedding:
         """
         import torch
         from gemma4 import weights as gw
+
         if weight_dtype is None:
             weight_dtype = ttnn.DataType.BFLOAT16
         if scale_dtype is None:
@@ -86,9 +78,7 @@ class ScaledEmbedding:
             dtype=weight_dtype,
             layout=ttnn.Layout.ROW_MAJOR,
             device=mesh_device,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             mesh_mapper=gw.mesh_mapper_for_role("embed_tokens", mesh_device),
         )
         embed_scale = ttnn.as_tensor(
@@ -96,9 +86,7 @@ class ScaledEmbedding:
             dtype=scale_dtype,
             layout=ttnn.Layout.TILE,
             device=mesh_device,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             mesh_mapper=gw.mesh_mapper_for_role("embed_scale", mesh_device),
         )
         return cls(embed_weight, embed_scale)

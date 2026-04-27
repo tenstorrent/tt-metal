@@ -27,9 +27,7 @@ class FeedForward:
         flat = ttnn.reshape(
             x,
             [seq_len, 1344],
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(x, False)
         gathered = ttnn.all_gather(
@@ -37,9 +35,7 @@ class FeedForward:
             dim=1,
             cluster_axis=1,
             subdevice_id=None,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             num_links=None,
             topology=ttnn.Topology.Ring,
         )
@@ -49,9 +45,7 @@ class FeedForward:
             self.gate_proj_w,
             transpose_a=False,
             transpose_b=True,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation="gelu",
@@ -64,9 +58,7 @@ class FeedForward:
             self.up_proj_w,
             transpose_a=False,
             transpose_b=True,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -79,9 +71,7 @@ class FeedForward:
             gate,
             up,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(up, False)
         ttnn.deallocate(gate, False)
@@ -90,9 +80,7 @@ class FeedForward:
             self.down_proj_w,
             transpose_a=False,
             transpose_b=True,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -104,9 +92,7 @@ class FeedForward:
         before_rs = ttnn.reshape(
             down,
             [1, 1, seq_len, 5376],
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(down, False)
         scattered = ttnn.reduce_scatter(
@@ -114,9 +100,7 @@ class FeedForward:
             dim=3,
             cluster_axis=1,
             subdevice_id=None,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             num_links=None,
             topology=ttnn.Topology.Ring,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
@@ -130,9 +114,7 @@ class FeedForward:
         out = ttnn.reshape(
             scattered,
             [1, seq_len, 1344],
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(scattered, False)
         return out
@@ -152,17 +134,13 @@ class FeedForward:
         Default dtype is BFLOAT8_B (verified bit-equal against the
         consteval cache before consteval was retired in Phase 4).
         """
-        import torch
-        from gemma4 import weights as gw
+
         if dtype is None:
             dtype = ttnn.DataType.BFLOAT8_B
         prefix = f"model.language_model.layers.{layer_idx}.mlp"
-        gate = _load_proj(state_dict, f"{prefix}.gate_proj.weight",
-                            "gate_proj", mesh_device, dtype)
-        up = _load_proj(state_dict, f"{prefix}.up_proj.weight",
-                          "up_proj", mesh_device, dtype)
-        down = _load_proj(state_dict, f"{prefix}.down_proj.weight",
-                            "down_proj", mesh_device, dtype)
+        gate = _load_proj(state_dict, f"{prefix}.gate_proj.weight", "gate_proj", mesh_device, dtype)
+        up = _load_proj(state_dict, f"{prefix}.up_proj.weight", "up_proj", mesh_device, dtype)
+        down = _load_proj(state_dict, f"{prefix}.down_proj.weight", "down_proj", mesh_device, dtype)
         return cls(gate, up, down)
 
 
@@ -177,6 +155,7 @@ def _load_proj(state_dict, hf_key, role, mesh_device, dtype):
     """
     import torch
     from gemma4 import weights as gw
+
     torch_w = state_dict[hf_key].to(torch.bfloat16)
     # Step 1: bf16 ttnn tensor on device, TILE layout (matches consteval).
     bf16_ttnn = ttnn.as_tensor(
@@ -184,9 +163,7 @@ def _load_proj(state_dict, hf_key, role, mesh_device, dtype):
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.Layout.TILE,
         device=mesh_device,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-        ),
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         mesh_mapper=gw.mesh_mapper_for_role(role, mesh_device),
     )
     if dtype == ttnn.DataType.BFLOAT16:
@@ -195,9 +172,7 @@ def _load_proj(state_dict, hf_key, role, mesh_device, dtype):
     out = ttnn.typecast(
         bf16_ttnn,
         dtype,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-        ),
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(bf16_ttnn, False)
     return out

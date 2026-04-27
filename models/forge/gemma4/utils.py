@@ -38,9 +38,7 @@ class DeviceGetter:
                 or len(mesh_shape) == 0
                 or not all(isinstance(x, int) and x > 0 for x in mesh_shape)
             ):
-                raise ValueError(
-                    f"mesh_shape must be a non-empty list or tuple of positive integers, got {mesh_shape}"
-                )
+                raise ValueError(f"mesh_shape must be a non-empty list or tuple of positive integers, got {mesh_shape}")
             cls._mesh_shape = mesh_shape
 
             if math.prod(mesh_shape) >= 2:
@@ -53,8 +51,7 @@ class DeviceGetter:
 
         if tuple(cls._mesh_shape) != tuple(mesh_shape):
             raise ValueError(
-                f"Device already initialized with mesh_shape={cls._mesh_shape}, "
-                f"but got mesh_shape={mesh_shape}"
+                f"Device already initialized with mesh_shape={cls._mesh_shape}, " f"but got mesh_shape={mesh_shape}"
             )
 
         return cls._instance
