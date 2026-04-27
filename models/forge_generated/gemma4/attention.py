@@ -462,7 +462,6 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             pad_value=0.0,
         )
-        # Phase 1: keep K cache alive across calls (was: ttnn.deallocate(runtime_a, False))
         ttnn_reshape_36 = ttnn.reshape(
             ttnn_permute_7,
             [256, 1024],
@@ -566,7 +565,6 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             pad_value=0.0,
         )
-        # Phase 1: keep V cache alive across calls (was: ttnn.deallocate(runtime_b, False))
         ttnn_reshape_41 = ttnn.reshape(
             ttnn_permute_10,
             [256, 1024],
@@ -1229,7 +1227,6 @@ class Attention:
         ttnn.deallocate(ttnn_permute_18, False)
         ttnn.deallocate(ttnn_where_9, False)
         ttnn_to_layout_16 = ttnn.to_layout(pos_ids, ttnn.Layout.TILE, None, memory_config=None)
-        # Phase 1: keep pos_ids alive across calls (was: ttnn.deallocate(pos_ids, False))
         ttnn_add_16 = ttnn.add(
             ttnn_to_layout_16,
             var_185,
@@ -1327,7 +1324,6 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_permute_11, False)
-        # Phase 1: keep K cache alive across calls (was: ttnn.deallocate(k_cache, False))
         ttnn_repeat_interleave_2 = ttnn.repeat_interleave(
             ttnn_concat_8,
             2,
@@ -1341,7 +1337,6 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_permute_15, False)
-        # Phase 1: keep V cache alive across calls (was: ttnn.deallocate(v_cache, False))
         ttnn_repeat_interleave_3 = ttnn.repeat_interleave(
             ttnn_concat_9,
             2,
@@ -1715,10 +1710,8 @@ class Attention:
             page_table=None,
         )
         ttnn.deallocate(ttnn_to_memory_config_3, False)
-        # Phase 1: keep update_idxs alive across calls (was: ttnn.deallocate(update_idxs, False))
         if compute_position_increment:
             ttnn_to_layout_58 = ttnn.to_layout(runtime_c, ttnn.Layout.TILE, None, memory_config=None)
-            # Phase 1: keep pos_ids alive across calls (was: ttnn.deallocate(runtime_c, False))
             ttnn_add_115 = ttnn.add(
                 ttnn_to_layout_58,
                 var_185,
@@ -2147,7 +2140,6 @@ class Attention:
         ttnn.deallocate(ttnn_rms_norm_34, False)
         if compute_position_increment:
             ttnn_to_layout_58 = ttnn.to_layout(pos_ids, ttnn.Layout.TILE, None, memory_config=None)
-            # Phase 1: keep pos_ids alive across calls (was: ttnn.deallocate(pos_ids, False))
             ttnn_add_116 = ttnn.add(
                 ttnn_to_layout_58,
                 var_185,

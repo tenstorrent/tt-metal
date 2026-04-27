@@ -1,34 +1,20 @@
 """Runtime input synthesizers for gemma4 prefill / decode.
 
-Phase 4 source-of-truth for the per-call runtime inputs (KV caches,
-position-id arrays, scratch buffers). Produces the same {slot: ttnn.Tensor}
-map that gemma4_{prefill,decode}/main.py:_load_runtime_inputs returns
-from the codegen tensorbins, but built from constants — no fixture files.
+After Phases 2-3 (KV caches lifted onto Gemma4Caches; position scalars
+built from `current_pos` inside `Gemma4ForCausalLM.__call__`), the
+synthesized input dict contains only the slots that are *not*
+managed by the model itself: the (1,256) ones helper at slot 26, the
+prompt token IDs at slot 7, and the bf16 scalar 1.0 at slot 9. All
+other slots are populated by the model's __call__ from runtime kwargs.
 
-Inventory (Phase 4 Task 1):
-    PREFILL: 183 slots — 121 zeros (TILE bf16, KV caches), 60 zeros
-             (ROW_MAJOR int32, position/idx scalars), 1 ones (slot 26,
-             "position helper" int32[1,256]), 1 prompt-token-ids
-             (slot 7, int32[1,19]), 1 bf16 scalar 1.0 (slot 9, shape []).
+Slots are replicated across the (1,4) mesh.
 
-    DECODE:  183 slots — 121 zeros (TILE bf16, KV caches), 61 zeros
-             (ROW_MAJOR int32), 1 ones (slot 26), 1 bf16 scalar 1.0
-             (slot 9, shape []). No prompt token IDs (decode step 0
-             continues from initial KV cache).
-
-All replicated across the (1,4) mesh — verified per-shard via
-`torch.equal` on the loaded tensorbins.
-
-The reference logits at gemma4/reference_logits/{prefill,decode}.pt
-match this initial state exactly (PCC=1.0).
+The reference logits at `gemma4/reference_logits/{prefill,decode}.pt`
+match this initial state exactly (PCC=1.0 for decode, ~0.999 prefill).
 """
 import torch
 
 import ttnn
-
-# -----------------------------------------------------------------------------
-# Special non-zero/non-one inputs (handled out-of-band by the synthesizers).
-# -----------------------------------------------------------------------------
 
 # Prefill prompt token IDs (slot 7), captured from the codegen tensorbin.
 # The reference logits at gemma4/reference_logits/prefill.pt are what the
@@ -55,233 +41,19 @@ _PREFILL_TOKEN_IDS = [
     101,
 ]
 
-# bf16 scalar 1.0 for slot 9 in both sides (0-d tensor, captured from
-# arg9.tensorbin). Likely an attention-scale factor at decode step 0.
+# bf16 scalar 1.0 for slot 9 in both sides. Likely an attention-scale
+# factor at decode step 0.
 _LIFTED_SCALAR_VALUE = 1.0
 
 
-# -----------------------------------------------------------------------------
-# Per-side runtime slot tables.
-# Format: (slot, shape, dtype_name, layout_name, fill).
-# Slots with custom semantics (token IDs, 0-d scalar) are handled in the
-# synthesizer function and excluded from this list.
-# -----------------------------------------------------------------------------
-
-# Slots that need the same recipe across both sides.
-_COMMON_ZEROS_TILE_BF16_4x256x256 = [
-    1,
-    10,
-    13,
-    30,
-    33,
-    47,
-    50,
-    64,
-    67,
-    81,
-    101,
-    115,
-    118,
-    132,
-    135,
-    149,
-    152,
-    166,
-    169,
-    183,
-    202,
-    216,
-    219,
-    233,
-    236,
-    250,
-    253,
-    267,
-    270,
-    284,
-    303,
-    317,
-    320,
-    334,
-    337,
-    351,
-    354,
-    368,
-    371,
-    385,
-    404,
-    418,
-    421,
-    435,
-    438,
-    452,
-    455,
-    469,
-    472,
-    486,
-    505,
-    519,
-    522,
-    536,
-    539,
-    553,
-    556,
-    570,
-    573,
-    587,
-    606,
-    620,
-    623,
-    637,
-    640,
-    654,
-    657,
-    671,
-    674,
-    688,
-    707,
-    721,
-    724,
-    738,
-    741,
-    755,
-    758,
-    772,
-    775,
-    789,
-    808,
-    822,
-    825,
-    839,
-    842,
-    856,
-    859,
-    873,
-    876,
-    890,
-    909,
-    923,
-    926,
-    940,
-    943,
-    957,
-    960,
-    974,
-    977,
-    991,
-]
-_COMMON_ZEROS_TILE_BF16_1x256x512 = [
-    98,
-    99,
-    199,
-    200,
-    300,
-    301,
-    401,
-    402,
-    502,
-    503,
-    603,
-    604,
-    704,
-    705,
-    805,
-    806,
-    906,
-    907,
-    1007,
-    1008,
-]
-_COMMON_ZEROS_RM_INT32_1 = [
-    0,
-    12,
-    32,
-    49,
-    66,
-    83,
-    100,
-    117,
-    134,
-    151,
-    168,
-    185,
-    201,
-    218,
-    235,
-    252,
-    269,
-    286,
-    302,
-    319,
-    336,
-    353,
-    370,
-    387,
-    403,
-    420,
-    437,
-    454,
-    471,
-    488,
-    504,
-    521,
-    538,
-    555,
-    572,
-    589,
-    605,
-    622,
-    639,
-    656,
-    673,
-    690,
-    706,
-    723,
-    740,
-    757,
-    774,
-    791,
-    807,
-    824,
-    841,
-    858,
-    875,
-    892,
-    908,
-    925,
-    942,
-    959,
-    976,
-    993,
-]
-
-
 def _expand_common_recipes():
-    """Per-side runtime slots, minus the K/V cache slots and the
-    position-scalar slots.
-
-    K and V buffers now live on `Gemma4Caches` (Phase 2) — layers read
-    them via `self.k_cache`/`self.v_cache` rather than from input slots.
-    Position scalars (slot 0 + every layer's pos_ids slot, listed in
-    `_COMMON_ZEROS_RM_INT32_1`) are now built by the model from a
-    `current_pos` kwarg at __call__ time (Phase 3). Both lists are
-    kept as a historical inventory but no longer feed this function.
-
-    Only the int32 (1, 256) ones helper at slot 26 (consumed by the
-    sliding prelude) is still produced here.
-    """
-    rows = []
-    rows.append((26, (1, 256), "INT32", "ROW_MAJOR", 1))
-    return rows
+    """Per-side common runtime slots — currently just slot 26."""
+    return [(26, (1, 256), "INT32", "ROW_MAJOR", 1)]
 
 
-_RUNTIME_SLOTS_PREFILL = _expand_common_recipes() + [
-    # slot 7 = prompt token IDs, shape [1, 19] — special-cased in synthesizer.
-    # slot 9 = bf16 scalar 1.0, shape [] — special-cased in synthesizer.
-]
+_RUNTIME_SLOTS_PREFILL = _expand_common_recipes()
 _RUNTIME_SLOTS_DECODE = _expand_common_recipes() + [
     (7, (1, 1), "INT32", "ROW_MAJOR", 0),
-    # slot 9 = bf16 scalar 1.0, shape [] — special-cased in synthesizer.
 ]
 
 
@@ -301,7 +73,7 @@ def _build_slot(shape, dtype_name, layout_name, fill, mesh_device):
     """Build one ttnn.Tensor for a runtime slot. All slots are replicated
     across the (1,4) mesh. The fill argument is one of:
       0/1/float — torch.full(shape, fill, dtype)
-      ("token_ids", list_of_ints)        — torch.tensor(list).reshape(shape)
+      ("token_ids", list_of_ints) — torch.tensor(list).reshape(shape)
     """
     ttnn_dt, torch_dt = _DT_MAP[dtype_name]
     if isinstance(fill, tuple) and fill[0] == "token_ids":

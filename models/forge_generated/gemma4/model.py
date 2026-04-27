@@ -15,7 +15,7 @@ import torch
 from gemma4 import utils
 from gemma4 import weights as gw
 from gemma4.caches import Gemma4Caches
-from gemma4.layer_table import LAYER_TABLE_DECODE
+from gemma4.layer_table import LAYER_TABLE
 
 import ttnn
 
@@ -144,9 +144,7 @@ class Gemma4ForCausalLM:
         `caches` is an optional pre-built `Gemma4Caches` to share across
         a generator session. If None, allocate fresh zero caches.
         """
-        # Layer slot layout is identical in both LAYER_TABLE_PREFILL and
-        # LAYER_TABLE_DECODE (verified in Phase 0 recon); use either.
-        layer_table = LAYER_TABLE_DECODE
+        layer_table = LAYER_TABLE
         if caches is None:
             caches = Gemma4Caches(
                 mesh_device,

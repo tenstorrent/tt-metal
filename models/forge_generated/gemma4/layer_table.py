@@ -1,76 +1,16 @@
-"""Per-side LAYER_TABLE dicts mapping layer_idx → layer-type and runtime
-input slot indices.
+"""LAYER_TABLE: layer_idx → layer-type and runtime input slot indices.
 
 Each entry has:
   - "type": "sliding" or "full"
-  - "runtime_inputs": per-call input list indices (KV caches + position
-    helpers) consumed by the layer's __call__.
+  - "runtime_inputs": per-call input list indices originally consumed
+    by the layer's __call__. After the Phase 2-3 lift, only the third
+    element (the pos_ids slot) is still read; K and V live on
+    Gemma4Caches. The first two slots are kept for documentation and
+    for the Phase 5 Generator's eventual cache-write surgery.
+
+Prefill and decode share the same slot layout (verified Phase 0).
 """
-LAYER_TABLE_PREFILL = {
-    0: {"type": "sliding", "runtime_inputs": [1, 10, 12]},
-    1: {"type": "sliding", "runtime_inputs": [13, 30, 32]},
-    2: {"type": "sliding", "runtime_inputs": [33, 47, 49]},
-    3: {"type": "sliding", "runtime_inputs": [50, 64, 66]},
-    4: {"type": "sliding", "runtime_inputs": [67, 81, 83]},
-    5: {"type": "full", "runtime_inputs": [98, 99, 100]},
-    6: {"type": "sliding", "runtime_inputs": [101, 115, 117]},
-    7: {"type": "sliding", "runtime_inputs": [118, 132, 134]},
-    8: {"type": "sliding", "runtime_inputs": [135, 149, 151]},
-    9: {"type": "sliding", "runtime_inputs": [152, 166, 168]},
-    10: {"type": "sliding", "runtime_inputs": [169, 183, 185]},
-    11: {"type": "full", "runtime_inputs": [199, 200, 201]},
-    12: {"type": "sliding", "runtime_inputs": [202, 216, 218]},
-    13: {"type": "sliding", "runtime_inputs": [219, 233, 235]},
-    14: {"type": "sliding", "runtime_inputs": [236, 250, 252]},
-    15: {"type": "sliding", "runtime_inputs": [253, 267, 269]},
-    16: {"type": "sliding", "runtime_inputs": [270, 284, 286]},
-    17: {"type": "full", "runtime_inputs": [300, 301, 302]},
-    18: {"type": "sliding", "runtime_inputs": [303, 317, 319]},
-    19: {"type": "sliding", "runtime_inputs": [320, 334, 336]},
-    20: {"type": "sliding", "runtime_inputs": [337, 351, 353]},
-    21: {"type": "sliding", "runtime_inputs": [354, 368, 370]},
-    22: {"type": "sliding", "runtime_inputs": [371, 385, 387]},
-    23: {"type": "full", "runtime_inputs": [401, 402, 403]},
-    24: {"type": "sliding", "runtime_inputs": [404, 418, 420]},
-    25: {"type": "sliding", "runtime_inputs": [421, 435, 437]},
-    26: {"type": "sliding", "runtime_inputs": [438, 452, 454]},
-    27: {"type": "sliding", "runtime_inputs": [455, 469, 471]},
-    28: {"type": "sliding", "runtime_inputs": [472, 486, 488]},
-    29: {"type": "full", "runtime_inputs": [502, 503, 504]},
-    30: {"type": "sliding", "runtime_inputs": [505, 519, 521]},
-    31: {"type": "sliding", "runtime_inputs": [522, 536, 538]},
-    32: {"type": "sliding", "runtime_inputs": [539, 553, 555]},
-    33: {"type": "sliding", "runtime_inputs": [556, 570, 572]},
-    34: {"type": "sliding", "runtime_inputs": [573, 587, 589]},
-    35: {"type": "full", "runtime_inputs": [603, 604, 605]},
-    36: {"type": "sliding", "runtime_inputs": [606, 620, 622]},
-    37: {"type": "sliding", "runtime_inputs": [623, 637, 639]},
-    38: {"type": "sliding", "runtime_inputs": [640, 654, 656]},
-    39: {"type": "sliding", "runtime_inputs": [657, 671, 673]},
-    40: {"type": "sliding", "runtime_inputs": [674, 688, 690]},
-    41: {"type": "full", "runtime_inputs": [704, 705, 706]},
-    42: {"type": "sliding", "runtime_inputs": [707, 721, 723]},
-    43: {"type": "sliding", "runtime_inputs": [724, 738, 740]},
-    44: {"type": "sliding", "runtime_inputs": [741, 755, 757]},
-    45: {"type": "sliding", "runtime_inputs": [758, 772, 774]},
-    46: {"type": "sliding", "runtime_inputs": [775, 789, 791]},
-    47: {"type": "full", "runtime_inputs": [805, 806, 807]},
-    48: {"type": "sliding", "runtime_inputs": [808, 822, 824]},
-    49: {"type": "sliding", "runtime_inputs": [825, 839, 841]},
-    50: {"type": "sliding", "runtime_inputs": [842, 856, 858]},
-    51: {"type": "sliding", "runtime_inputs": [859, 873, 875]},
-    52: {"type": "sliding", "runtime_inputs": [876, 890, 892]},
-    53: {"type": "full", "runtime_inputs": [906, 907, 908]},
-    54: {"type": "sliding", "runtime_inputs": [909, 923, 925]},
-    55: {"type": "sliding", "runtime_inputs": [926, 940, 942]},
-    56: {"type": "sliding", "runtime_inputs": [943, 957, 959]},
-    57: {"type": "sliding", "runtime_inputs": [960, 974, 976]},
-    58: {"type": "sliding", "runtime_inputs": [977, 991, 993]},
-    59: {"type": "full", "runtime_inputs": [1007, 1008]},
-}
-
-
-LAYER_TABLE_DECODE = {
+LAYER_TABLE = {
     0: {"type": "sliding", "runtime_inputs": [1, 10, 12]},
     1: {"type": "sliding", "runtime_inputs": [13, 30, 32]},
     2: {"type": "sliding", "runtime_inputs": [33, 47, 49]},
