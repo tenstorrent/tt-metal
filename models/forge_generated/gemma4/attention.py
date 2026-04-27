@@ -71,6 +71,7 @@ class Attention:
         q_norm_w,
         k_norm_w,
         o_proj_w,
+        seq_len=19,
     ):
         assert layer_type in ("sliding", "full"), layer_type
         if layer_type == "sliding":
@@ -86,6 +87,9 @@ class Attention:
         self.q_norm_w = q_norm_w
         self.k_norm_w = k_norm_w
         self.o_proj_w = o_proj_w
+        # Prefill sequence length. Decode bodies are seq_len=1 (not parameterized).
+        # Default 19 matches the codegen-baked artifact.
+        self.seq_len = seq_len
 
     def __call__(self, x, *, is_decode, **kwargs):
         if self.layer_type == "sliding":
@@ -100,29 +104,16 @@ class Attention:
                 return self._full_prefill(x, **kwargs)
 
     @classmethod
-    def from_consteval_sliding(cls, *, fused_qkv_w, q_norm_w, k_norm_w, o_proj_w):
-        return cls(
-            layer_type="sliding",
-            fused_qkv_w=fused_qkv_w,
-            q_norm_w=q_norm_w,
-            k_norm_w=k_norm_w,
-            o_proj_w=o_proj_w,
-        )
-
-    @classmethod
-    def from_consteval_full(cls, *, q_proj_w, k_proj_w, q_norm_w, k_norm_w, o_proj_w):
-        return cls(
-            layer_type="full",
-            q_proj_w=q_proj_w,
-            k_proj_w=k_proj_w,
-            q_norm_w=q_norm_w,
-            k_norm_w=k_norm_w,
-            o_proj_w=o_proj_w,
-        )
-
-    @classmethod
     def from_state_dict_sliding(
-        cls, state_dict, layer_idx, mesh_device, *, proj_dtype=None, norm_dtype=None, mesh_size=4
+        cls,
+        state_dict,
+        layer_idx,
+        mesh_device,
+        *,
+        proj_dtype=None,
+        norm_dtype=None,
+        mesh_size=4,
+        seq_len=19,
     ):
         """Build a sliding-attention layer from HF state_dict.
 
@@ -184,10 +175,11 @@ class Attention:
             q_norm_w=q_norm_w,
             k_norm_w=k_norm_w,
             o_proj_w=o_proj_w,
+            seq_len=seq_len,
         )
 
     @classmethod
-    def from_state_dict_full(cls, state_dict, layer_idx, mesh_device, *, proj_dtype=None, norm_dtype=None):
+    def from_state_dict_full(cls, state_dict, layer_idx, mesh_device, *, proj_dtype=None, norm_dtype=None, seq_len=19):
         """Build a full-attention layer from HF state_dict.
 
         Separate q_proj + k_proj (no v — k_eq_v=True). Stored in HF
@@ -239,6 +231,7 @@ class Attention:
             q_norm_w=q_norm_w,
             k_norm_w=k_norm_w,
             o_proj_w=o_proj_w,
+            seq_len=seq_len,
         )
 
     def _sliding_decode(
@@ -919,7 +912,7 @@ class Attention:
 
         ttnn_reshape_30 = ttnn.reshape(
             x,
-            [19, 1344],
+            [self.seq_len, 1344],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(x, False)
@@ -950,28 +943,28 @@ class Attention:
         ttnn_slice_8 = ttnn.slice(
             ttnn_matmul_8,
             [0, 0],
-            [19, 1024],
+            [self.seq_len, 1024],
             [1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn_slice_9 = ttnn.slice(
             ttnn_matmul_8,
             [0, 1024],
-            [19, 3072],
+            [self.seq_len, 3072],
             [1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn_slice_10 = ttnn.slice(
             ttnn_matmul_8,
             [0, 3072],
-            [19, 4096],
+            [self.seq_len, 4096],
             [1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_matmul_8, False)
         ttnn_reshape_31 = ttnn.reshape(
             ttnn_slice_8,
-            [1, 19, 4, 256],
+            [1, self.seq_len, 4, 256],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_slice_8, False)
@@ -1000,7 +993,7 @@ class Attention:
         ttnn_slice_11 = ttnn.slice(
             ttnn_rms_norm_3,
             [0, 0, 0, 128],
-            [1, 19, 4, 256],
+            [1, self.seq_len, 4, 256],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1012,7 +1005,7 @@ class Attention:
         ttnn_slice_12 = ttnn.slice(
             ttnn_rms_norm_3,
             [0, 0, 0, 0],
-            [1, 19, 4, 128],
+            [1, self.seq_len, 4, 128],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1047,7 +1040,7 @@ class Attention:
         )
         ttnn_reshape_32 = ttnn.reshape(
             ttnn_add_15,
-            [19, 1024],
+            [self.seq_len, 1024],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_add_15, False)
@@ -1128,7 +1121,7 @@ class Attention:
         ttnn.deallocate(ttnn_where_7, False)
         ttnn_reshape_36 = ttnn.reshape(
             ttnn_slice_10,
-            [1, 19, 4, 256],
+            [1, self.seq_len, 4, 256],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_slice_10, False)
@@ -1156,7 +1149,7 @@ class Attention:
         )
         ttnn_reshape_37 = ttnn.reshape(
             ttnn_rms_norm_4,
-            [19, 1024],
+            [self.seq_len, 1024],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_rms_norm_4, False)
@@ -1246,7 +1239,7 @@ class Attention:
         ttnn.deallocate(ttnn_to_layout_16, False)
         ttnn_reshape_41 = ttnn.reshape(
             ttnn_slice_9,
-            [1, 19, 8, 256],
+            [1, self.seq_len, 8, 256],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_slice_9, False)
@@ -1282,7 +1275,7 @@ class Attention:
         ttnn_slice_13 = ttnn.slice(
             ttnn_rms_norm_5,
             [0, 0, 0, 128],
-            [1, 19, 8, 256],
+            [1, self.seq_len, 8, 256],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1294,7 +1287,7 @@ class Attention:
         ttnn_slice_14 = ttnn.slice(
             ttnn_rms_norm_5,
             [0, 0, 0, 0],
-            [1, 19, 8, 128],
+            [1, self.seq_len, 8, 128],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1474,7 +1467,7 @@ class Attention:
         ttnn.deallocate(ttnn_typecast_19, False)
         ttnn_reshape_42 = ttnn.reshape(
             ttnn_transformer_concatenate_heads_1,
-            [19, 2048],
+            [self.seq_len, 2048],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_transformer_concatenate_heads_1, False)
@@ -1494,7 +1487,7 @@ class Attention:
         ttnn.deallocate(ttnn_reshape_42, False)
         ttnn_reshape_43 = ttnn.reshape(
             ttnn_matmul_11,
-            [1, 1, 19, 5376],
+            [1, 1, self.seq_len, 5376],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_matmul_11, False)
@@ -1516,7 +1509,7 @@ class Attention:
         ttnn.deallocate(ttnn_reshape_43, False)
         ttnn_reshape_44 = ttnn.reshape(
             ttnn_reduce_scatter_2,
-            [1, 19, 1344],
+            [1, self.seq_len, 1344],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_reduce_scatter_2, False)
@@ -2036,7 +2029,7 @@ class Attention:
 
         ttnn_reshape_204 = ttnn.reshape(
             x,
-            [19, 1344],
+            [self.seq_len, 1344],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(x, False)
@@ -2065,7 +2058,7 @@ class Attention:
         )
         ttnn_reshape_205 = ttnn.reshape(
             ttnn_matmul_80,
-            [1, 1, 19, 512],
+            [1, 1, self.seq_len, 512],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_matmul_80, False)
@@ -2093,7 +2086,7 @@ class Attention:
         ttnn_slice_75 = ttnn.slice(
             ttnn_rms_norm_33,
             [0, 0, 0, 256],
-            [1, 1, 19, 512],
+            [1, 1, self.seq_len, 512],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2105,7 +2098,7 @@ class Attention:
         ttnn_slice_76 = ttnn.slice(
             ttnn_rms_norm_33,
             [0, 0, 0, 0],
-            [1, 1, 19, 256],
+            [1, 1, self.seq_len, 256],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2180,7 +2173,7 @@ class Attention:
         ttnn.deallocate(ttnn_all_gather_67, False)
         ttnn_reshape_206 = ttnn.reshape(
             ttnn_matmul_81,
-            [1, 19, 8, 512],
+            [1, self.seq_len, 8, 512],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_matmul_81, False)
@@ -2216,7 +2209,7 @@ class Attention:
         ttnn_slice_77 = ttnn.slice(
             ttnn_rms_norm_35,
             [0, 0, 0, 256],
-            [1, 19, 8, 512],
+            [1, self.seq_len, 8, 512],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2228,7 +2221,7 @@ class Attention:
         ttnn_slice_78 = ttnn.slice(
             ttnn_rms_norm_35,
             [0, 0, 0, 0],
-            [1, 19, 8, 256],
+            [1, self.seq_len, 8, 256],
             [1, 1, 1, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2392,7 +2385,7 @@ class Attention:
         ttnn.deallocate(ttnn_typecast_72, False)
         ttnn_reshape_207 = ttnn.reshape(
             ttnn_transformer_concatenate_heads_11,
-            [19, 4096],
+            [self.seq_len, 4096],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_transformer_concatenate_heads_11, False)
@@ -2412,7 +2405,7 @@ class Attention:
         ttnn.deallocate(ttnn_reshape_207, False)
         ttnn_reshape_208 = ttnn.reshape(
             ttnn_matmul_84,
-            [1, 1, 19, 5376],
+            [1, 1, self.seq_len, 5376],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_matmul_84, False)
@@ -2434,7 +2427,7 @@ class Attention:
         ttnn.deallocate(ttnn_reshape_208, False)
         ttnn_reshape_209 = ttnn.reshape(
             ttnn_reduce_scatter_22,
-            [1, 19, 1344],
+            [1, self.seq_len, 1344],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_reduce_scatter_22, False)

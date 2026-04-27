@@ -112,11 +112,14 @@ class SlidingDecoderLayer:
             return self._prefill_body(hidden_state, kv=kv, shared=shared, **sliding_state)
 
     @classmethod
-    def from_state_dict(cls, state_dict, layer_idx, mesh_device, *, is_decode, runtime_slots, rms_eps_tensor):
+    def from_state_dict(
+        cls, state_dict, layer_idx, mesh_device, *, is_decode, runtime_slots, rms_eps_tensor, seq_len=19
+    ):
         attention = Attention.from_state_dict_sliding(
             state_dict,
             layer_idx,
             mesh_device,
+            seq_len=seq_len,
         )
         feed_forward = FeedForward.from_state_dict(
             state_dict,
@@ -344,11 +347,13 @@ class FullDecoderLayer:
         update_idxs_slot,
         rms_eps_tensor,
         is_terminal=False,
+        seq_len=19,
     ):
         attention = Attention.from_state_dict_full(
             state_dict,
             layer_idx,
             mesh_device,
+            seq_len=seq_len,
         )
         feed_forward = FeedForward.from_state_dict(
             state_dict,

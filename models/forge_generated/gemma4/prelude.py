@@ -458,11 +458,12 @@ class SlidingPreludePrefill:
     reshape_18, to_layout_11, typecast_11) — eight outputs.
     """
 
-    def __init__(self, *, c_0, c_242, c_487, c_627, c_401, c_544, c_490, c_622):
-        self.c_0 = c_0  # 3-tuple (prefill: arange(-237..18), full=19)
+    def __init__(self, *, seq_len, c_0, c_242, c_487, c_627, c_401, c_544, c_490, c_622):
+        self.seq_len = seq_len  # prefill sequence length (default 19; codegen-baked)
+        self.c_0 = c_0  # 3-tuple (prefill: arange(-(256-seq_len)..seq_len-1), full=seq_len)
         self.c_242 = c_242  # int32 (1,) fill=256 (var_189 prefill)
         self.c_487 = c_487  # sliding_attention_inv_freq reshaped, fp32 [1,128,1]
-        self.c_627 = c_627  # int32 (19,) arange(0..18)
+        self.c_627 = c_627  # int32 (seq_len,) arange(0..seq_len-1)
         self.c_401 = c_401  # int32 (256,) arange(0..255)
         self.c_544 = c_544  # int32 (1,1) zeros
         self.c_490 = c_490  # bf16 (1,1,1,1) zeros (lifted_tensor_0)
@@ -492,7 +493,7 @@ class SlidingPreludePrefill:
         )
         ttnn_reshape_3 = ttnn.reshape(
             ttnn_typecast_1,
-            [1, 1, 19],
+            [1, 1, self.seq_len],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_typecast_1, False)
@@ -518,7 +519,7 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_matmul_1, False)
         ttnn_reshape_4 = ttnn.reshape(
             ttnn_permute_0,
-            [1, 19, 1, 128],
+            [1, self.seq_len, 1, 128],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_permute_0, False)
@@ -551,12 +552,12 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_sin_0, False)
         ttnn_reshape_15 = ttnn.reshape(
             ttnn_typecast_2,
-            [1, 1, 19, 256],
+            [1, 1, self.seq_len, 256],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn_reshape_16 = ttnn.reshape(
             ttnn_typecast_3,
-            [1, 1, 19, 256],
+            [1, 1, self.seq_len, 256],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn_slice_7 = ttnn.slice(
@@ -600,7 +601,7 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_ge_0, False)
         ttnn_reshape_18 = ttnn.reshape(
             ttnn_add_2,
-            [1, 1, 19, 1],
+            [1, 1, self.seq_len, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn_reshape_19 = ttnn.reshape(
@@ -631,7 +632,7 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_add_2, False)
         ttnn_reshape_20 = ttnn.reshape(
             ttnn_subtract_1,
-            [1, 1, 19, 1],
+            [1, 1, self.seq_len, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_subtract_1, False)
@@ -782,8 +783,9 @@ class SlidingPreludePrefill:
         )
 
     @classmethod
-    def from_consteval(cls, cached_main):
+    def from_consteval(cls, cached_main, *, seq_len=19):
         return cls(
+            seq_len=seq_len,
             c_0=cached_main["main_const_eval_0"],
             c_242=cached_main["main_const_eval_242"][0],
             c_487=cached_main["main_const_eval_487"][0],
@@ -801,7 +803,8 @@ class FullPreludePrefill:
     Returns (reshape_104, reshape_105, typecast_39).
     """
 
-    def __init__(self, *, c_123, c_129, c_217, c_335, c_510):
+    def __init__(self, *, seq_len, c_123, c_129, c_217, c_335, c_510):
+        self.seq_len = seq_len
         self.c_123 = c_123  # uint32 (1,256) arange(0..255) ROW_MAJOR (NOT same as decode's c_123)
         self.c_129 = c_129  # full_attention_inv_freq reshaped, fp32 [1,256,1]
         self.c_217 = c_217  # bf16 (1,1,1,1) -inf
@@ -854,7 +857,7 @@ class FullPreludePrefill:
         ttnn.deallocate(ttnn_cos_1, False)
         ttnn_reshape_104 = ttnn.reshape(
             ttnn_typecast_35,
-            [1, 1, 19, 512],
+            [1, 1, self.seq_len, 512],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_typecast_35, False)
@@ -871,7 +874,7 @@ class FullPreludePrefill:
         ttnn.deallocate(ttnn_sin_1, False)
         ttnn_reshape_105 = ttnn.reshape(
             ttnn_typecast_36,
-            [1, 1, 19, 512],
+            [1, 1, self.seq_len, 512],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_typecast_36, False)
@@ -931,8 +934,9 @@ class FullPreludePrefill:
         )
 
     @classmethod
-    def from_consteval(cls, cached_main):
+    def from_consteval(cls, cached_main, *, seq_len=19):
         return cls(
+            seq_len=seq_len,
             c_123=cached_main["main_const_eval_123"][0],
             c_129=cached_main["main_const_eval_129"][0],
             c_217=cached_main["main_const_eval_217"][0],

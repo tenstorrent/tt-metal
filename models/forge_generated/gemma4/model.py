@@ -61,10 +61,16 @@ class Gemma4ForCausalLM:
             return self._call_prefill(input)
 
     @classmethod
-    def from_state_dict(cls, hf, mesh_device, *, is_decode):
+    def from_state_dict(cls, hf, mesh_device, *, is_decode, seq_len=19):
         """Build the full model from an HfWeights bundle. Every weight
         and scalar constant becomes an instance attribute; nothing is
         kept around as a runtime dict.
+
+        `seq_len` is the prefill sequence length (default 19, matching
+        the codegen-baked artifact). Decode mode ignores it (decode
+        seq_len is always 1). To change it, the caller must also build
+        the runtime input list at the same seq_len (see
+        `synthesize_prefill_inputs`).
         """
         layer_table = LAYER_TABLE_DECODE if is_decode else LAYER_TABLE_PREFILL
 
@@ -75,7 +81,7 @@ class Gemma4ForCausalLM:
         # The dict is only used for prelude construction below; nothing
         # references it after that.
         transient_cm: dict = {}
-        gw.apply_hf_scalar_overrides(transient_cm, hf, mesh_device, is_decode=is_decode)
+        gw.apply_hf_scalar_overrides(transient_cm, hf, mesh_device, is_decode=is_decode, seq_len=seq_len)
         gemma4.RoPESetup.from_hf(hf, mesh_device, is_decode=is_decode).populate_cached_main(transient_cm)
 
         # Per-RMSNorm eps tensor.
@@ -112,6 +118,7 @@ class Gemma4ForCausalLM:
                     is_decode=is_decode,
                     runtime_slots=slots,
                     rms_eps_tensor=rms_eps_tensor,
+                    seq_len=seq_len,
                 )
             else:
                 update_idxs_slot = layer_table[i - 1]["runtime_inputs"][2] if is_decode else None
@@ -123,6 +130,7 @@ class Gemma4ForCausalLM:
                     runtime_slots=slots,
                     update_idxs_slot=update_idxs_slot,
                     rms_eps_tensor=rms_eps_tensor,
+                    seq_len=seq_len,
                 )
             layers.append(layer)
 
@@ -155,8 +163,8 @@ class Gemma4ForCausalLM:
             sliding_prelude = gemma4.SlidingPreludeDecode.from_consteval(transient_cm)
             full_prelude = gemma4.FullPreludeDecode.from_consteval(transient_cm)
         else:
-            sliding_prelude = gemma4.SlidingPreludePrefill.from_consteval(transient_cm)
-            full_prelude = gemma4.FullPreludePrefill.from_consteval(transient_cm)
+            sliding_prelude = gemma4.SlidingPreludePrefill.from_consteval(transient_cm, seq_len=seq_len)
+            full_prelude = gemma4.FullPreludePrefill.from_consteval(transient_cm, seq_len=seq_len)
 
         # L58 (sliding) special — only used in prefill mode (decode runs L58
         # through the regular layer loop).
@@ -170,6 +178,7 @@ class Gemma4ForCausalLM:
                 is_decode=False,
                 runtime_slots=tuple(layer_table[58]["runtime_inputs"]),
                 rms_eps_tensor=rms_eps_tensor,
+                seq_len=seq_len,
             )
 
         # L59 (full) — terminal layer in both modes:
@@ -189,6 +198,7 @@ class Gemma4ForCausalLM:
             update_idxs_slot=l59_update_idxs_slot,
             rms_eps_tensor=rms_eps_tensor,
             is_terminal=True,
+            seq_len=seq_len,
         )
 
         # LMHead: norm_weight and lm_head_weight (tied to embed_tokens)

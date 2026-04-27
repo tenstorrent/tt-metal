@@ -185,7 +185,7 @@ def role_for_hf_key(hf_key: str) -> str:
     raise ValueError(f"unknown HF key for role lookup: {hf_key!r}")
 
 
-def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: bool) -> None:
+def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: bool, seq_len: int = 19) -> None:
     """Override no-input scalar consteval keys with HF-config-derived
     ttnn.Tensors.
 
@@ -308,7 +308,7 @@ def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: 
             # zeros / fills
             ("main_const_eval_186", [(1, 1, 1, 1), "FLOAT32", {"fill": 0.0}]),
             ("main_const_eval_217", [(1, 1, 1, 1), "BFLOAT16", {"fill": float("-inf")}]),
-            ("main_const_eval_240", [(1, 19, 1), "BFLOAT16", {"fill": rms_eps}]),
+            ("main_const_eval_240", [(1, seq_len, 1), "BFLOAT16", {"fill": rms_eps}]),
             ("main_const_eval_242", [(1,), "INT32", {"fill": 256}]),
             ("main_const_eval_314", [(1, 1, 1), "BFLOAT16", {"fill": softcap}]),
             ("main_const_eval_335", [(1, 1, 1, 1), "BFLOAT16", {"fill": 0.0}]),
@@ -322,11 +322,11 @@ def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: 
             ("main_const_eval_123", [(1, 256), "UINT32", {"arange_start": 0, "layout": "ROW_MAJOR"}]),
             (
                 "main_const_eval_266",
-                [(1, 256), "UINT32", {"arange_start": 19, "arange_mod": 256, "layout": "ROW_MAJOR"}],
+                [(1, 256), "UINT32", {"arange_start": seq_len, "arange_mod": 256, "layout": "ROW_MAJOR"}],
             ),
             ("main_const_eval_401", [(256,), "INT32", {"arange_start": 0}]),
             ("main_const_eval_510", [(1, 1, 1, 256), "INT32", {"arange_start": 0}]),
-            ("main_const_eval_627", [(19,), "INT32", {"arange_start": 0}]),
+            ("main_const_eval_627", [(seq_len,), "INT32", {"arange_start": 0}]),
             # one-hot mask helper
             ("main_const_eval_536", [(1, 1, 256, 1), "BFLOAT16", {"one_hot_last": True}]),
         ]
@@ -348,9 +348,9 @@ def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: 
         ce0_clamp = (0, 0)
         ce0_full_fill = 1
     else:
-        ce0_arange_start = -237
-        ce0_clamp = (0, 18)
-        ce0_full_fill = 19
+        ce0_arange_start = -(256 - seq_len)
+        ce0_clamp = (0, seq_len - 1)
+        ce0_full_fill = seq_len
     cached_main["main_const_eval_0"] = [
         _build((1,), "INT32", fill=0),
         _build((1,), "INT32", fill=ce0_full_fill),
