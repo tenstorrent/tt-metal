@@ -16,8 +16,8 @@ DEFAULT_MODEL_TARGETS_PATH = str(Path(__file__).resolve().parents[2] / "model_ta
 
 _SKU_ALIASES = {
     "wormhole": {"n300", "n150", "wh_n150", "wh_n300", "tg", "wh_llmbox_perf", "wh_galaxy_perf"},
-    "t3k": {"t3k" },
-    "glx": {"glx", "bhglx" },
+    "t3k": {"t3k"},
+    "glx": {"glx", "bhglx"},
     "blackhole": {"blackhole", "bh", "p150", "p300", "p150x8"},
 }
 
