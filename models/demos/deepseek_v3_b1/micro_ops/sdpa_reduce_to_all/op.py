@@ -11,16 +11,16 @@ Torus/Ring topology only. Single-run correctness (no trace replay).
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.config import (
+    SDPA_REDUCE_DEFAULT_NUM_LINKS,
+    resolve_sdpa_reduce_config,
+)
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
-
-
-def _round_up(value: int, alignment: int) -> int:
-    return ((value + alignment - 1) // alignment) * alignment
 
 
 def _get_neighbor_coord(mesh_shape, row, col, offset, cluster_axis=0):
@@ -46,41 +46,34 @@ def compute_forwarder_scratch_size(
     tile_height: int = 8,
     tile_width: int = 32,
     bytes_per_element: int = 2,
-    num_links: int = 2,
+    num_links: int = SDPA_REDUCE_DEFAULT_NUM_LINKS,
+    max_payload_size_bytes: int | None = None,
+    num_l_chunks_override: int | None = None,
+    compute_block_size_override: int | None = None,
 ):
     """
     Compute the total forwarder scratch buffer size in bytes for SDPA reduce-to-all.
 
     This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
     """
-    input_page_size_bytes = tile_height * tile_width * bytes_per_element
-    input_l_num_pages = (batch_size // tile_height) * (l_width // tile_width)
+    if max_payload_size_bytes is None:
+        max_payload_size_bytes = ttnn.get_tt_fabric_max_payload_size_bytes()
 
-    PNH = 8
-    DH = input_l_num_pages * tile_width
-    DHt = DH // tile_width
-    PNHt = PNH // tile_height
-    out_tiles = PNHt * DHt
+    config = resolve_sdpa_reduce_config(
+        batch_size=batch_size,
+        l_width=l_width,
+        num_cores=num_cores,
+        tile_height=tile_height,
+        tile_width=tile_width,
+        bytes_per_element=bytes_per_element,
+        num_links=num_links,
+        packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
+        max_payload_size_bytes=max_payload_size_bytes,
+        num_l_chunks_override=num_l_chunks_override,
+        compute_block_size_override=compute_block_size_override,
+    )
 
-    max_tiles_per_chunk = 8
-    min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
-    num_l_chunks = max(min_num_l_chunks, 4)
-    if out_tiles % num_l_chunks != 0:
-        raise ValueError("out_tiles must be divisible by num_l_chunks")
-
-    tiles_per_l_chunk = out_tiles // num_l_chunks
-    l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
-
-    header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
-    l1_alignment = 16
-    slot_size = _round_up(header_size + l_chunk_size_bytes, l1_alignment)
-
-    num_workers_per_link = num_cores // num_links
-    workers_per_type = num_workers_per_link // 2
-    slots_per_worker = 1 + num_l_chunks
-    slots_per_round = workers_per_type * slots_per_worker
-
-    return 2 * slots_per_round * slot_size * 2
+    return 2 * config.slots_per_round * config.slot_size * 2
 
 
 class SdpaReduceToAll:
@@ -225,6 +218,8 @@ class SdpaReduceToAll:
         scatter_dest_grid=None,
         position_id_tensor_mesh=None,
         per_device_chunk_size=0,
+        num_l_chunks_override=None,
+        compute_block_size_override=None,
     ):
         mesh_device = input_tensor_l_mesh.device()
         mesh_shape = mesh_device.shape
@@ -296,51 +291,39 @@ class SdpaReduceToAll:
                 tile = input_l_device.tile
                 tile_height, tile_width = tile.tile_shape
                 element_size_bytes = _get_element_size_bytes(input_l_device.dtype)
-                input_page_size_bytes = element_size_bytes * tile_height * tile_width
                 l1_alignment = 16
-                aligned_page_size = _round_up(input_page_size_bytes, l1_alignment)
-
-                input_l_num_pages = (shard_spec.shape[0] // tile_height) * (shard_spec.shape[1] // tile_width)
-
-                PNH = 8
-                DH = input_l_num_pages * tile_width
-                DHt = DH // tile_width
-                PNHt = PNH // tile_height
-                Sq_chunk_t = PNHt
-                out_tiles = Sq_chunk_t * DHt
-
-                max_tiles_per_chunk = 8
-                min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) // max_tiles_per_chunk
-                num_l_chunks = max(min_num_l_chunks, 4)
-                if out_tiles % num_l_chunks != 0:
-                    raise ValueError("out_tiles must be divisible by num_l_chunks")
-
-                tiles_per_l_chunk = out_tiles // num_l_chunks
-                l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
-                ms_tile_size_bytes = aligned_page_size
-
-                if l_chunk_size_bytes > max_fabric_payload_size:
-                    raise ValueError("L chunk payload exceeds fabric max payload size")
-
-                # Slots are sized for the largest payload (L chunk); MS uses slot 0.
-                header_cb_size = _round_up(packet_header_size_bytes, l1_alignment)
-                slot_size = _round_up(packet_header_size_bytes + l_chunk_size_bytes, l1_alignment)
-
                 num_links = 2
-                num_workers_per_link = num_shard_cores // num_links
-                workers_per_type = num_workers_per_link // 2
-                slots_per_worker = 1 + num_l_chunks
-                # Bit-packed forwarder semaphores support up to 32 slots per round.
-                slots_per_round = workers_per_type * slots_per_worker
 
-                if slots_per_round > 32:
-                    raise ValueError("slots_per_round exceeds 32-bit semaphore capacity")
+                sdpa_config = resolve_sdpa_reduce_config(
+                    batch_size=shard_spec.shape[0],
+                    l_width=shard_spec.shape[1],
+                    num_cores=num_shard_cores,
+                    tile_height=tile_height,
+                    tile_width=tile_width,
+                    bytes_per_element=element_size_bytes,
+                    num_links=num_links,
+                    packet_header_size_bytes=packet_header_size_bytes,
+                    l1_alignment=l1_alignment,
+                    max_payload_size_bytes=max_fabric_payload_size,
+                    num_l_chunks_override=num_l_chunks_override,
+                    compute_block_size_override=compute_block_size_override,
+                )
+                input_page_size_bytes = sdpa_config.input_page_size_bytes
+                aligned_page_size = sdpa_config.aligned_page_size
+                out_tiles = sdpa_config.out_tiles
+                num_l_chunks = sdpa_config.num_l_chunks
+                tiles_per_l_chunk = sdpa_config.tiles_per_l_chunk
+                l_chunk_size_bytes = sdpa_config.l_chunk_size_bytes
+                compute_block_size = sdpa_config.compute_block_size
+                ms_tile_size_bytes = sdpa_config.ms_tile_size_bytes
+                slot_size = sdpa_config.slot_size
+                slots_per_worker = sdpa_config.slots_per_worker
+                slots_per_round = sdpa_config.slots_per_round
 
                 # Per-core forwarder buffer layout: BRISC [R1][R2], NCRISC after BRISC.
                 # forwarder_buffer_base is per-core L1; scratch size must be per-core.
-                r2_buffer_offset = slots_per_round * slot_size
-                brisc_buffer_size = 2 * slots_per_round * slot_size
-                ncrisc_buffer_offset = brisc_buffer_size
+                r2_buffer_offset = sdpa_config.r2_buffer_offset
+                ncrisc_buffer_offset = sdpa_config.ncrisc_buffer_offset
                 forwarder_buffer_base = fwd_scratch_device.buffer_address()
 
                 scale_val = float_to_uint32(scale_fp32)
@@ -420,6 +403,7 @@ class SdpaReduceToAll:
                     ("scale_fp32", scale_val),
                     ("tiles_per_l_chunk", tiles_per_l_chunk),
                     ("num_l_chunks", num_l_chunks),
+                    ("compute_block_size", compute_block_size),
                     ("position_enabled", 1 if position_enabled else 0),
                     ("per_device_chunk_size", per_device_chunk_size),
                     # When position_enabled, final_reduction is decided at runtime from the
