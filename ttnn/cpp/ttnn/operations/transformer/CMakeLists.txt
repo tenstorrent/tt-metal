@@ -1,5 +1,3 @@
-include(sources.cmake)
-
 add_library(ttnn_op_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Transformer ALIAS ttnn_op_transformer)
 
@@ -13,12 +11,7 @@ set_target_properties(
             api
 )
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    sdpa/device/kernels/*
-    sdpa_decode/device/kernels/*
-    sdpa_windowed/device/kernels/*
-)
+file(GLOB_RECURSE kernels)
 target_sources(
     ttnn_op_transformer
     PUBLIC
@@ -26,23 +19,22 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
-            sdpa_config.hpp
-            attention_softmax/attention_softmax.hpp
-            concatenate_heads/concatenate_heads.hpp
-            sdpa/sdpa.hpp
-            sdpa_decode/sdpa_decode.hpp
-            sdpa_windowed/sdpa_windowed.hpp
-            split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        ${TTNN_OP_TRANSFORMER_SRCS}
+        concatenate_heads/concatenate_heads.cpp
+        split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp
 )
 
 target_include_directories(ttnn_op_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_transformer PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_link_libraries(
+    ttnn_op_transformer
+    PRIVATE
+        TT::Metalium
+        TTNN::Core
+)
 
 install(
     TARGETS
@@ -54,4 +46,3 @@ install(
 )
 
 install(TARGETS ttnn_op_transformer LIBRARY COMPONENT tar)
-install(TARGETS ttnn_op_transformer FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
