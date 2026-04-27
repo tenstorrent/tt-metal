@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
 import time
 
@@ -43,32 +44,36 @@ from qwen_omni_utils import process_mm_info
 from models.common.utility_functions import comp_pcc
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
-from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiveMoE, TTNNQwen3TalkerMoE
+from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerMoE, TTNNQwen3TalkerMoE
 from models.experimental.tt_symbiote.core.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
-from models.experimental.tt_symbiote.modules.attention import TTNNQwenAudioAttention
-from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniMoeCode2WavAttention
-from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
-from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
-from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
+from models.experimental.tt_symbiote.modules.qwen_omni_attention import (
+    TTNNQwen3Attention,
+    TTNNQwen3OmniAttention,
+    TTNNQwen3OmniMoeCode2WavAttention,
+    TTNNQwen3VLMoeVisionAttention,
+    TTNNQwenAudioAttention,
+)
 from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
 from models.experimental.tt_symbiote.modules.embedding import TTNNQwen3OmniMoeCodecPredictorEmbedding
-from models.experimental.tt_symbiote.modules.activation import (
-    TTNNGelu,
+from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
+from models.experimental.tt_symbiote.modules.qwen_omni_activation import (
     TTNNQwen3OmniMoeCausalConvNet,
     TTNNQwen3OmniMoeCausalTransConvNet,
     TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     TTNNQwen3OmniMoeConvNeXtBlock,
-    TTNNSilu,
     TTNNSnakeBeta,
 )
 
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNQwen3OmniMoeAudioEncoderConvOutLinear,
+)
+from models.experimental.tt_symbiote.modules.qwen_omni_mlp import (
     TTNNQwen3OmniTalkerResizeMLP,
     TTNNQwen3OmniVisionMLP,
 )
-from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNQwenLayerNorm
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
+from models.experimental.tt_symbiote.modules.qwen_omni_normalization import TTNNQwenLayerNorm
 from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
     TTNNQwenOmniThinkerLmHead,
     replace_code_predictor_lm_head_with_ttnn,
@@ -92,36 +97,65 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
-_ALLOWED_SYMBIOTE_RUN_MODES = frozenset({"CPU", "NORMAL", "NORMAL_WITH_FALLBACK"})
+logger = logging.getLogger(__name__)
 
 _QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ = 24000
 
-# HF ACT2FN/nn activations → TTNN (GELUTanh → ttnn.gelu); SnakeBeta in code2wav (modeling_qwen3_omni_moe).
-_QWEN_OMNI_ACTIVATION_NN_TO_TTNN = {
+# ``torch.nn`` primitives → TTNN (register on thinker / talker / code2wav / code_predictor).
+# On each subtree, register :class:`nn_to_ttnn2` **before** ``nn_to_ttnn1`` so HF composite modules
+# (e.g. ``Qwen3OmniMoeCausalTransConvNet``) are replaced in one ``from_torch``; otherwise nested
+# ``ConvTranspose1d`` / ``Linear`` are swapped first and parent ``from_torch`` breaks.
+# Install :class:`TTNNQwenOmniThinkerLmHead` before any ``nn_to_ttnn1`` pass or lm_head prefill OOMs.
+nn_to_ttnn1 = {
     torch.nn.SiLU: TTNNSilu,
     torch.nn.GELU: TTNNGelu,
-    SiLUActivation: TTNNSilu,
-    GELUActivation: TTNNGelu,
-    GELUTanh: TTNNGelu,
-    SnakeBeta: TTNNSnakeBeta,
-}
-
-# HF LayerNorm → TTNNQwenLayerNorm; from_torch keeps HF LN when dim % 32 != 0.
-_QWEN_OMNI_LAYERNORM_NN_TO_TTNN = {
     torch.nn.LayerNorm: TTNNQwenLayerNorm,
-}
-
-# Thinker Conv2d (HF NCHW) → TTNNQwenOmniConv2dNHWC (tile alignment without changing TTNNConv2dNHWC).
-_QWEN_OMNI_CONV_NN_TO_TTNN = {
     torch.nn.Conv2d: TTNNQwenOmniConv2dNHWC,
     torch.nn.Conv3d: TTNNConv3d,
     torch.nn.Conv1d: TTNNConv1d,
     torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
+    torch.nn.Linear: TTNNLinear,
 }
 
-# Thinker nn.Linear → TTNNLinear (replace primitives inside HF modules, not whole VisionPatchMerger). Register replace_thinker_lm_head_with_ttnn before this dict or lm_head prefill OOMs.
-_QWEN_OMNI_LINEAR_NN_TO_TTNN = {
-    torch.nn.Linear: TTNNLinear,
+# Legacy ``NN_TO_TTNN_CODE2WAV`` only had activations / LayerNorm / conv — not Linear (would replace
+# ConvNeXt ``nn.Linear`` pwconvs and break audio decode). Codec-predictor ``Embedding`` is ``nn_to_ttnn3`` only.
+nn_to_ttnn1_code2wav = {k: v for k, v in nn_to_ttnn1.items() if k is not torch.nn.Linear}
+
+# HF / custom module classes → TTNN (``Qwen3OmniMoeTalkerCodePredictorAttention`` still maps to :class:`TTNNQwen3Attention`).
+nn_to_ttnn2 = {
+    SiLUActivation: TTNNSilu,
+    GELUActivation: TTNNGelu,
+    GELUTanh: TTNNGelu,
+    SnakeBeta: TTNNSnakeBeta,
+    Qwen3OmniMoeThinkerTextAttention: TTNNQwen3OmniAttention,
+    Qwen3OmniMoeThinkerTextSparseMoeBlock: TTNNQwen3OmniThinkerMoE,
+    Qwen3OmniMoeThinkerTextMLP: TTNNGlm4MoeMLP,
+    Qwen3OmniMoeMLP: TTNNGlm4MoeMLP,
+    Qwen3OmniMoeThinkerTextRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeTextRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
+    Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
+    Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
+    Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+    Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
+    Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
+    Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
+    Qwen3OmniMoeConvNeXtBlock: TTNNQwen3OmniMoeConvNeXtBlock,
+    Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
+    Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
+    Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
+    Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
+    Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
+    Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
+    Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
+    Qwen3OmniMoeTalkerRotaryEmbedding: TTNNQwen3OmniMoeTalkerRotaryEmbedding,
+}
+
+# Codec predictor subtree only (legacy ``NN_TO_TTNN_CODE_PREDICTOR`` embedding entry); not thinker/talker/code2wav.
+nn_to_ttnn3 = {
+    torch.nn.Embedding: TTNNQwen3OmniMoeCodecPredictorEmbedding,
 }
 
 
@@ -142,21 +176,7 @@ def _upgrade_audio_encoder_conv_out_linear(thinker):
     tower._modules["conv_out"] = new_co
 
 
-def _qwen_omni_ttft_probe_s(model, inputs: dict, *, use_audio_in_video: bool, mesh_device) -> float:
-    """Thinker-only 1-token generate wall time (2× thinker forward → high DRAM); opt-in TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE=1."""
-    t0 = time.perf_counter()
-    with torch.no_grad():
-        model.generate(
-            **inputs,
-            return_audio=False,
-            thinker_max_new_tokens=1,
-            use_audio_in_video=use_audio_in_video,
-        )
-    ttnn.synchronize_device(mesh_device)
-    return time.perf_counter() - t0
-
-
-def _print_qwen_omni_performance_metrics(
+def _log_qwen_omni_performance_metrics(
     *,
     prompt_tokens: int,
     text_ids: torch.Tensor,
@@ -165,7 +185,7 @@ def _print_qwen_omni_performance_metrics(
     prefill_proxy_s: float | None,
     mesh_device,
 ) -> None:
-    """Print text throughput metrics plus audio duration / RTF for multimodal output."""
+    """Log text throughput metrics plus audio duration / RTF for multimodal output."""
     seq_len = int(text_ids.shape[-1])
     generated_tokens = max(0, seq_len - prompt_tokens)
 
@@ -177,101 +197,52 @@ def _print_qwen_omni_performance_metrics(
     decode_throughput = generated_tokens / decode_time_s if decode_time_s > 0 else 0.0
     ms_per_tok = (decode_time_s / generated_tokens * 1000.0) if generated_tokens > 0 else 0.0
 
-    print(f"\n{'=' * 80}")
-    print("QWEN-OMNI PERFORMANCE METRICS")
-    print(f"{'=' * 80}")
-    print("  --- Thinker text (full pipeline wall clock) ---")
-    print(f"  Prompt tokens:        {prompt_tokens}")
-    print(f"  Generated tokens:     {generated_tokens}")
+    logger.info("\n%s", "=" * 80)
+    logger.info("QWEN-OMNI PERFORMANCE METRICS")
+    logger.info("%s", "=" * 80)
+    logger.info("  --- Thinker text (full pipeline wall clock) ---")
+    logger.info("  Prompt tokens:        %s", prompt_tokens)
+    logger.info("  Generated tokens:     %s", generated_tokens)
     if prefill_proxy_s is not None:
-        print(
-            f"  TTFT proxy (thinker, 1 tok, no audio): {prefill_proxy_s:.3f}s  "
-            "(extra full thinker forward; can OOM on multimodal — default is off)"
+        logger.info(
+            "  TTFT proxy (thinker, 1 tok, no audio): %.3fs  "
+            "(extra full thinker forward; can OOM on multimodal — default is off)",
+            prefill_proxy_s,
         )
     else:
-        print(
+        logger.info(
             "  TTFT proxy:            (skipped; set TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE=1 to enable — "
             "uses ~2× peak DRAM)"
         )
-    print(f"  Total time (e2e):     {total_time_s:.3f}s")
-    print(
-        f"  Decode time (heur.):  {decode_time_s:.3f}s  "
-        "(total − TTFT proxy when probe ran; remainder includes talker + code2wav)"
+    logger.info("  Total time (e2e):     %.3fs", total_time_s)
+    logger.info(
+        "  Decode time (heur.):  %.3fs  " "(total − TTFT proxy when probe ran; remainder includes talker + code2wav)",
+        decode_time_s,
     )
-    print(f"  E2E text throughput:  {e2e_throughput:.2f} tokens/s")
-    print(f"  Decode text thruput:  {decode_throughput:.2f} tokens/s")
-    print(f"  Decode ms/token:      {ms_per_tok:.2f}ms")
+    logger.info("  E2E text throughput:  %.2f tokens/s", e2e_throughput)
+    logger.info("  Decode text thruput:  %.2f tokens/s", decode_throughput)
+    logger.info("  Decode ms/token:      %.2fms", ms_per_tok)
 
     if audio is not None:
         n_samples = int(audio.reshape(-1).numel())
         audio_duration_s = n_samples / _QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ
         rtf = total_time_s / audio_duration_s if audio_duration_s > 0 else 0.0
-        print("  --- Audio output ---")
-        print(f"  Audio samples:        {n_samples}")
-        print(f"  Audio duration:       {audio_duration_s:.3f}s @ {_QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ} Hz")
-        print(f"  RTF (e2e / audio len): {rtf:.3f}x")
+        logger.info("  --- Audio output ---")
+        logger.info("  Audio samples:        %s", n_samples)
+        logger.info(
+            "  Audio duration:       %.3fs @ %s Hz",
+            audio_duration_s,
+            _QWEN_OMNI_AUDIO_SAMPLE_RATE_HZ,
+        )
+        logger.info("  RTF (e2e / audio len): %.3fx", rtf)
     else:
-        print("  --- Audio output ---")
-        print("  (none; return_audio=False or no talker)")
+        logger.info("  --- Audio output ---")
+        logger.info("  (none; return_audio=False or no talker)")
 
-    print("  --- Device ---")
-    print(f"  Mesh devices:         {mesh_device.get_num_devices()}")
-    print(f"{'=' * 80}\n")
+    logger.info("  --- Device ---")
+    logger.info("  Mesh devices:         %s", mesh_device.get_num_devices())
+    logger.info("%s\n", "=" * 80)
 
-
-# Static HF → TTNN maps
-NN_TO_TTNN_THINKER = {
-    Qwen3OmniMoeThinkerTextSparseMoeBlock: TTNNQwen3OmniThinkerNaiveMoE,
-    Qwen3OmniMoeThinkerTextAttention: TTNNQwen3OmniAttention,
-    Qwen3OmniMoeThinkerTextMLP: TTNNGlm4MoeMLP,
-    Qwen3OmniMoeMLP: TTNNGlm4MoeMLP,
-    # Mesh RMSNorm: use TTNNDistributedRMSNorm (gamma matches AG path), not full-width TTNNRMSNorm.
-    Qwen3OmniMoeThinkerTextRMSNorm: TTNNDistributedRMSNorm,
-    Qwen3OmniMoeTextRMSNorm: TTNNDistributedRMSNorm,
-    Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
-    Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
-    # Audio: keep HF encoder stack; primitives via maps below; _upgrade_audio_encoder_conv_out_linear retags conv_out.
-    Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
-    Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
-    Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
-    **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
-    **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
-    **_QWEN_OMNI_CONV_NN_TO_TTNN,
-    **_QWEN_OMNI_LINEAR_NN_TO_TTNN,
-}
-NN_TO_TTNN_CODE2WAV = {
-    Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
-    Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
-    Qwen3OmniMoeConvNeXtBlock: TTNNQwen3OmniMoeConvNeXtBlock,
-    Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
-    Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
-    Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
-    Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
-    # ``code2wav.pre_transformer.rotary_emb`` (same HF class as code_predictor 1D RoPE)
-    Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
-    **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
-    **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
-    **_QWEN_OMNI_CONV_NN_TO_TTNN,
-}
-NN_TO_TTNN_TALKER = {
-    Qwen3OmniMoeTalkerTextSparseMoeBlock: TTNNQwen3TalkerMoE,
-    Qwen3OmniMoeThinkerTextAttention: TTNNQwen3Attention,
-    Qwen3OmniMoeThinkerTextRMSNorm: TTNNDistributedRMSNorm,
-    Qwen3OmniMoeThinkerTextMLP: TTNNGlm4MoeMLP,
-    Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
-    Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
-    Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
-    Qwen3OmniMoeTalkerRotaryEmbedding: TTNNQwen3OmniMoeTalkerRotaryEmbedding,
-    **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
-    **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
-}
-
-# Code predictor shares most talker mappings plus ``Qwen3OmniMoeRotaryEmbedding`` (not MRoPE).
-NN_TO_TTNN_CODE_PREDICTOR = {
-    **NN_TO_TTNN_TALKER,
-    Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
-    torch.nn.Embedding: TTNNQwen3OmniMoeCodecPredictorEmbedding,
-}
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 
@@ -307,7 +278,12 @@ def _register_code2wav_nn_to_ttnn(model) -> dict:
     code2wav = getattr(model, "code2wav", None)
     if code2wav is None or getattr(code2wav, "pre_transformer", None) is None:
         return {}
-    return register_module_replacement_dict(code2wav, NN_TO_TTNN_CODE2WAV, model_config=None)
+    # ``nn_to_ttnn2`` must run before ``nn_to_ttnn1_code2wav``: otherwise nested ``nn.ConvTranspose1d``
+    # inside ``Qwen3OmniMoeCausalTransConvNet`` is replaced first and ``TTNNQwen3OmniMoeCausalTransConvNet.from_torch``
+    # sees a ``TTNNConvTranspose1d`` (legacy single ``NN_TO_TTNN_CODE2WAV`` replaced the parent in one step).
+    m_hf = register_module_replacement_dict(code2wav, nn_to_ttnn2, model_config=None)
+    m_prim = register_module_replacement_dict(code2wav, nn_to_ttnn1_code2wav, model_config=None)
+    return {**m_hf, **m_prim}
 
 
 def _register_code_predictor_nn_to_ttnn(model) -> dict:
@@ -316,14 +292,10 @@ def _register_code_predictor_nn_to_ttnn(model) -> dict:
     cp = getattr(talker, "code_predictor", None) if talker is not None else None
     if cp is None:
         return {}
-    return register_module_replacement_dict(cp, NN_TO_TTNN_CODE_PREDICTOR, model_config=None)
-
-
-def _require_symbiote_run_mode():
-    mode = os.environ.get("TT_SYMBIOTE_RUN_MODE")
-    assert (
-        mode in _ALLOWED_SYMBIOTE_RUN_MODES
-    ), f"Set TT_SYMBIOTE_RUN_MODE to one of {_ALLOWED_SYMBIOTE_RUN_MODES}, got {mode!r}"
+    m_hf = register_module_replacement_dict(cp, nn_to_ttnn2, model_config=None)
+    m_prim = register_module_replacement_dict(cp, nn_to_ttnn1, model_config=None)
+    m_emb = register_module_replacement_dict(cp, nn_to_ttnn3, model_config=None)
+    return {**m_hf, **m_prim, **m_emb}
 
 
 def _patch_module_symbiote_device_dtype_placeholder(module, *, cpu_device, dtype):
@@ -366,24 +338,6 @@ def _patch_thinker_talker_device_dtype(model):
         _patch_module_symbiote_device_dtype_placeholder(sub, cpu_device=_cpu, dtype=_dtype)
 
 
-_MESH_SHAPE_BY_ENV = {
-    "N150": (1, 1),
-    "N300": (1, 2),
-    "N150x4": (1, 4),
-    "T3K": (1, 8),
-    "TG": (8, 4),
-    "P150": (1, 1),
-    "P300": (1, 2),
-    "P150x4": (1, 4),
-    "P150x8": (1, 8),
-    "BHGLX": (8, 4),
-}
-
-
-def _mesh_param_for_request():
-    return _MESH_SHAPE_BY_ENV.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-
-
 def _force_t3k_runtime_guard_for_pcc(mesh_device):
     """Thinker/talker MoE PCC runs TTNN paths tagged for T3K; require an 8-device mesh."""
     if mesh_device.get_num_devices() < 8:
@@ -391,10 +345,6 @@ def _force_t3k_runtime_guard_for_pcc(mesh_device):
             f"PCC MoE tests expect an 8-device T3K-class mesh (got {mesh_device.get_num_devices()}); "
             "set MESH_DEVICE=T3K."
         )
-
-
-def _replicate_mesh_mapper(mesh_device):
-    return ttnn.ReplicateTensorToMesh(mesh_device)
 
 
 def _rotary_cos_sin_mesh_mapper(mesh_device, cos_torch: torch.Tensor):
@@ -408,29 +358,7 @@ def _rotary_cos_sin_mesh_mapper(mesh_device, cos_torch: torch.Tensor):
             f"PCC needs rotary_dim ({rotary_dim}) divisible by mesh size ({n}) for width-sharded "
             "cos/sin upload; use a different mesh or checkpoint."
         )
-    return _replicate_mesh_mapper(mesh_device)
-
-
-def _shape_int_tuple(shape):
-    """Mesh / ttnn logical shapes may expose dims as tensors; ``torch.empty`` needs ``int``."""
-    out = []
-    for s in shape:
-        if isinstance(s, torch.Tensor):
-            s = int(s.item())
-        else:
-            s = int(s)
-        out.append(s)
-    return tuple(out)
-
-
-def _to_plain_torch_tensor(x: torch.Tensor) -> torch.Tensor:
-    """Copy tensor subclasses (e.g. ``TorchTTNNTensor``) into a plain ``torch.Tensor`` for ``comp_pcc``."""
-    x = x.detach().contiguous()
-    if type(x) is torch.Tensor:
-        return x.clone()
-    out = torch.empty(_shape_int_tuple(x.shape), dtype=x.dtype, device=x.device)
-    out.copy_(x)
-    return out
+    return ttnn.ReplicateTensorToMesh(mesh_device)
 
 
 def _resolve_torch_tensor_for_pcc(x, mesh_device=None, tuple_first: bool = True):
@@ -466,19 +394,14 @@ def _resolve_torch_tensor_for_pcc(x, mesh_device=None, tuple_first: bool = True)
         raise TypeError("_resolve_torch_tensor_for_pcc: could not convert to torch tensor")
     if not isinstance(x, torch.Tensor):
         return torch.as_tensor(x).detach().clone().contiguous()
-    return _to_plain_torch_tensor(x)
-
-
-def _to_torch_output(x, mesh_device, tuple_first: bool = True):
-    """Backward-compatible alias for PCC tests (unwrap TTNN output to torch)."""
-    return _resolve_torch_tensor_for_pcc(x, mesh_device, tuple_first=tuple_first)
-
-
-def _comp_pcc_in_test(golden, calculated, mesh_device=None, pcc=0.99):
-    # Golden: HF tensor. Calculated: ``(attn, …)``, ``[attn, None]`` from symbiote, or raw ttnn.
-    g = _resolve_torch_tensor_for_pcc(golden, mesh_device=None, tuple_first=False)
-    c = _resolve_torch_tensor_for_pcc(calculated, mesh_device, tuple_first=True)
-    return comp_pcc(g, c, pcc=pcc)
+    # Copy tensor subclasses (e.g. ``TorchTTNNTensor``) into a plain tensor; dims may be tensors.
+    x = x.detach().contiguous()
+    if type(x) is torch.Tensor:
+        return x.clone()
+    _shape_ints = tuple(int(s.item()) if isinstance(s, torch.Tensor) else int(s) for s in x.shape)
+    out = torch.empty(_shape_ints, dtype=x.dtype, device=x.device)
+    out.copy_(x)
+    return out
 
 
 @pytest.fixture(scope="module")
@@ -494,14 +417,6 @@ def full_omni_model_for_pcc():
     )
 
 
-def _first_talker_moe_layer_index(model):
-    ref_cls = type(model.talker.model.layers[0].mlp)
-    for i, layer in enumerate(model.talker.model.layers):
-        if type(layer.mlp) == ref_cls:
-            return i
-    return 0
-
-
 pytestmark = [
     pytest.mark.parametrize(
         "device_params",
@@ -514,13 +429,29 @@ pytestmark = [
         ],
         indirect=True,
     ),
-    pytest.mark.parametrize("mesh_device", [_mesh_param_for_request()], indirect=True),
+    pytest.mark.parametrize(
+        "mesh_device",
+        [
+            {
+                "N150": (1, 1),
+                "N300": (1, 2),
+                "N150x4": (1, 4),
+                "T3K": (1, 8),
+                "TG": (8, 4),
+                "P150": (1, 1),
+                "P300": (1, 2),
+                "P150x4": (1, 4),
+                "P150x8": (1, 8),
+                "BHGLX": (8, 4),
+            }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+        ],
+        indirect=True,
+    ),
 ]
 
 
 def test_qwen_omni_thinker_lm_head_pcc(mesh_device, full_omni_model_for_pcc):
     """Thinker lm_head: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_lm = m.thinker.lm_head
     tt_lm = TTNNQwenOmniThinkerLmHead.from_torch(torch_lm)
@@ -537,16 +468,18 @@ def test_qwen_omni_thinker_lm_head_pcc(mesh_device, full_omni_model_for_pcc):
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=_replicate_mesh_mapper(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_ret = tt_lm(tt_x)
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_ret, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_ret, mesh_device, tuple_first=True),
+    )
     assert passing, f"Thinker lm_head PCC too low: {pcc}"
 
 
 def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
     """Thinker self-attention: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.thinker.model.layers[0].self_attn
     torch_attn.rotary_emb = m.thinker.model.rotary_emb
@@ -566,14 +499,13 @@ def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
             hidden_states, position_embeddings=(cos, sin), attention_mask=None, past_key_values=None
         )
     # Hidden states: replicate (vision / audio attention PCC). Cos/sin:
-    _repl = _replicate_mesh_mapper(mesh_device)
     _rot_mapper = _rotary_cos_sin_mesh_mapper(mesh_device, cos)
     tt_hs = ttnn.from_torch(
         hidden_states,
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=_repl,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_cos = ttnn.from_torch(
         cos, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT, mesh_mapper=_rot_mapper
@@ -587,18 +519,20 @@ def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
         attention_mask=None,
         past_key_values=None,
     )
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_ret, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_ret, mesh_device, tuple_first=True),
+    )
     assert passing, f"Thinker attention PCC too low: {pcc}"
 
 
 def test_qwen_omni_talker_attention_pcc(mesh_device, full_omni_model_for_pcc):
     """Talker self-attention: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.talker.model.layers[0].self_attn
     torch_attn.rotary_emb = m.talker.model.rotary_emb
     text_config = m.config.talker_config.text_config
-    tt_attn = TTNNQwen3Attention.from_torch(torch_attn)
+    tt_attn = TTNNQwen3OmniAttention.from_torch(torch_attn)
     set_device(tt_attn, mesh_device)
     tt_attn.preprocess_weights()
     tt_attn.move_weights_to_device()
@@ -611,14 +545,13 @@ def test_qwen_omni_talker_attention_pcc(mesh_device, full_omni_model_for_pcc):
         torch_out, _ = torch_attn(
             hidden_states, position_embeddings=(cos, sin), attention_mask=None, past_key_values=None
         )
-    _repl = _replicate_mesh_mapper(mesh_device)
     _rot_mapper = _rotary_cos_sin_mesh_mapper(mesh_device, cos)
     tt_hs = ttnn.from_torch(
         hidden_states,
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=_repl,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_cos = ttnn.from_torch(
         cos, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT, mesh_mapper=_rot_mapper
@@ -632,13 +565,15 @@ def test_qwen_omni_talker_attention_pcc(mesh_device, full_omni_model_for_pcc):
         attention_mask=None,
         past_key_values=None,
     )
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_ret, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_ret, mesh_device, tuple_first=True),
+    )
     assert passing, f"Talker attention PCC too low: {pcc}"
 
 
 def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
     """Vision block attention: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.thinker.visual.blocks[0].attn
     config = m.config.thinker_config.vision_config
@@ -667,7 +602,6 @@ def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
             position_embeddings=(cos, sin),
         )
 
-    _repl = _replicate_mesh_mapper(mesh_device)
     # Vision attn AGs cos/sin on last dim; shard rotary upload when dim % n_dev == 0 so AG matches Q/K width.
     _rot_mapper = _rotary_cos_sin_mesh_mapper(mesh_device, cos)
 
@@ -676,7 +610,7 @@ def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=_repl,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     tt_cos = ttnn.from_torch(
@@ -701,14 +635,16 @@ def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
         position_embeddings=(tt_cos, tt_sin),
     )
 
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_out, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_out, mesh_device, tuple_first=True),
+    )
 
     assert passing, f"Vision attention PCC too low: {pcc}"
 
 
 def test_qwen_omni_audio_attention_pcc(mesh_device, full_omni_model_for_pcc):
     """Audio tower self-attention: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.thinker.audio_tower.layers[0].self_attn
     config = m.config.thinker_config.audio_config
@@ -723,16 +659,23 @@ def test_qwen_omni_audio_attention_pcc(mesh_device, full_omni_model_for_pcc):
     cu_seqlens = torch.tensor([0, seq_len], dtype=torch.long)
     with torch.no_grad():
         torch_out = torch_attn(inp, cu_seqlens=cu_seqlens)
-    _repl = _replicate_mesh_mapper(mesh_device)
-    tt_inp = ttnn.from_torch(inp, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT, mesh_mapper=_repl)
+    tt_inp = ttnn.from_torch(
+        inp,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
     tt_out = tt_attn(tt_inp, cu_seqlens=cu_seqlens)
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_out, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_out, mesh_device, tuple_first=True),
+    )
     assert passing, f"Audio attention PCC too low: {pcc}"
 
 
 def test_qwen_omni_code2wav_attention_pcc(mesh_device, full_omni_model_for_pcc):
     """Code2Wav pre_transformer self-attention: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     code2wav = getattr(m, "code2wav", None)
     if code2wav is None or getattr(code2wav, "pre_transformer", None) is None:
@@ -760,13 +703,15 @@ def test_qwen_omni_code2wav_attention_pcc(mesh_device, full_omni_model_for_pcc):
         position_embeddings=(TorchTTNNTensor(cos), TorchTTNNTensor(sin)),
         attention_mask=None,
     )
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_ret, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_ret, mesh_device, tuple_first=True),
+    )
     assert passing, f"Code2Wav attention PCC too low: {pcc}"
 
 
 def test_qwen_omni_thinker_moe_pcc(mesh_device, full_omni_model_for_pcc):
     """Thinker MoE MLP: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     _force_t3k_runtime_guard_for_pcc(mesh_device)
     m = full_omni_model_for_pcc
     torch_mlp = m.thinker.model.layers[0].mlp
@@ -781,16 +726,23 @@ def test_qwen_omni_thinker_moe_pcc(mesh_device, full_omni_model_for_pcc):
     with torch.no_grad():
         torch_out = torch_mlp(x)
         tt_out = tt_mlp(x)
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_out, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_out, mesh_device, tuple_first=True),
+    )
     assert passing, f"Thinker MoE PCC too low: {pcc}"
 
 
 def test_qwen_omni_talker_moe_pcc(mesh_device, full_omni_model_for_pcc):
     """Talker MoE MLP: HF vs TTNN PCC."""
-    _require_symbiote_run_mode()
     _force_t3k_runtime_guard_for_pcc(mesh_device)
     m = full_omni_model_for_pcc
-    idx = _first_talker_moe_layer_index(m)
+    _ref_mlp_cls = type(m.talker.model.layers[0].mlp)
+    idx = 0
+    for i, layer in enumerate(m.talker.model.layers):
+        if type(layer.mlp) == _ref_mlp_cls:
+            idx = i
+            break
     torch_mlp = m.talker.model.layers[idx].mlp
     text_config = m.config.talker_config.text_config
 
@@ -803,13 +755,15 @@ def test_qwen_omni_talker_moe_pcc(mesh_device, full_omni_model_for_pcc):
     with torch.no_grad():
         torch_out = torch_mlp(x)
         tt_out = tt_mlp(TorchTTNNTensor(x))
-    passing, pcc = _comp_pcc_in_test(torch_out, tt_out, mesh_device)
+    passing, pcc = comp_pcc(
+        _resolve_torch_tensor_for_pcc(torch_out, mesh_device=None, tuple_first=False),
+        _resolve_torch_tensor_for_pcc(tt_out, mesh_device, tuple_first=True),
+    )
     assert passing, f"Talker MoE PCC too low: {pcc}"
 
 
 def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     """Load model, nn_to_ttnn; assert TTNN modules (incl. vision)."""
-    _require_symbiote_run_mode()
     apply_qwen3_omni_talker_prepare_inputs_fix()
 
     MODEL_PATH = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -822,14 +776,16 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
         i for i, layer in enumerate(model.talker.model.layers) if type(layer.mlp) == talker_moe_class
     ]
 
-    # LM heads are ``nn.Linear``: install :class:`TTNNQwenOmniThinkerLmHead` *before* thinker ``torch.nn.Linear`` → :class:`TTNNLinear` in ``NN_TO_TTNN_THINKER``, or the op map steals ``lm_head`` and a single ``ttnn.linear`` allocates full prefill logits (~GB) on device.
+    # LM heads are ``nn.Linear``: install :class:`TTNNQwenOmniThinkerLmHead` *before* ``nn_to_ttnn1`` Linear replacement, or the op map steals ``lm_head`` and a single ``ttnn.linear`` allocates full prefill logits (~GB) on device.
     replace_thinker_lm_head_with_ttnn(model.thinker)
-    register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
+    register_module_replacement_dict(model.thinker, nn_to_ttnn2, model_config=None)
+    register_module_replacement_dict(model.thinker, nn_to_ttnn1, model_config=None)
     _upgrade_audio_encoder_conv_out_linear(model.thinker)
     replace_code_predictor_lm_head_with_ttnn(model.talker)
     replace_talker_codec_head_with_ttnn(model.talker)
     _register_code_predictor_nn_to_ttnn(model)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
+    register_module_replacement_dict(model.talker, nn_to_ttnn2, model_config=None)
+    register_module_replacement_dict(model.talker, nn_to_ttnn1, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
@@ -862,8 +818,8 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     n_talker = len(model.talker.model.layers)
     for i, layer in enumerate(model.talker.model.layers):
         assert isinstance(
-            layer.self_attn, TTNNQwen3Attention
-        ), f"talker.layers[{i}].self_attn expected TTNNQwen3Attention, got {type(layer.self_attn)}"
+            layer.self_attn, TTNNQwen3OmniAttention
+        ), f"talker.layers[{i}].self_attn expected TTNNQwen3OmniAttention, got {type(layer.self_attn)}"
 
     cp = getattr(model.talker, "code_predictor", None)
     n_cp = 0
@@ -915,17 +871,21 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
                 layer.self_attn, TTNNQwen3OmniMoeCode2WavAttention
             ), f"code2wav.pre_transformer.layers[{i}].self_attn expected TTNNQwen3OmniMoeCode2WavAttention, got {type(layer.self_attn)}"
 
-    print(
-        f"Replacements OK: thinker {n_thinker} (MoE+attn), vision {n_vision} (TTNN attn), talker MoE+attn "
-        f"(mesh {mesh_device.get_num_devices()} device(s)); "
-        f"audio_attn {n_audio}, code2wav {n_code2wav}, code_predictor {n_cp} (TTNN attn), talker {n_talker} layers"
+    logger.info(
+        "Replacements OK: thinker %s (MoE+attn), vision %s (TTNN attn), talker MoE+attn "
+        "(mesh %s device(s)); audio_attn %s, code2wav %s, code_predictor %s (TTNN attn), talker %s layers",
+        n_thinker,
+        n_vision,
+        mesh_device.get_num_devices(),
+        n_audio,
+        n_code2wav,
+        n_cp,
+        n_talker,
     )
 
 
 def test_qwen_omni(mesh_device):
     """Qwen3-Omni TTNN run (nn_to_ttnn); same as test_qwen_omni with vision TTNN."""
-    _require_symbiote_run_mode()
-
     # HF: talker prepare_inputs_for_generation vs GenerationMixin next_sequence_length (transformers >= 4.49)
     apply_qwen3_omni_talker_prepare_inputs_fix()
 
@@ -958,12 +918,14 @@ def test_qwen_omni(mesh_device):
 
     print("Registering TTNN module replacements...")
     replace_thinker_lm_head_with_ttnn(model.thinker)
-    register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
+    register_module_replacement_dict(model.thinker, nn_to_ttnn2, model_config=None)
+    register_module_replacement_dict(model.thinker, nn_to_ttnn1, model_config=None)
     _upgrade_audio_encoder_conv_out_linear(model.thinker)
     replace_code_predictor_lm_head_with_ttnn(model.talker)
     replace_talker_codec_head_with_ttnn(model.talker)
     _register_code_predictor_nn_to_ttnn(model)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
+    register_module_replacement_dict(model.talker, nn_to_ttnn2, model_config=None)
+    register_module_replacement_dict(model.talker, nn_to_ttnn1, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
 
     # Set device for all TTNN modules
@@ -1003,9 +965,17 @@ def test_qwen_omni(mesh_device):
     prefill_proxy_s = None
     if run_ttft_probe:
         print("TTFT probe: thinker-only, 1 new token (no audio)...")
-        prefill_proxy_s = _qwen_omni_ttft_probe_s(
-            model, inputs, use_audio_in_video=USE_AUDIO_IN_VIDEO, mesh_device=mesh_device
-        )
+        # Thinker-only 1-token generate wall time (extra full thinker forward → high DRAM).
+        _t0_ttft = time.perf_counter()
+        with torch.no_grad():
+            model.generate(
+                **inputs,
+                return_audio=False,
+                thinker_max_new_tokens=1,
+                use_audio_in_video=USE_AUDIO_IN_VIDEO,
+            )
+        ttnn.synchronize_device(mesh_device)
+        prefill_proxy_s = time.perf_counter() - _t0_ttft
 
     DispatchManager.clear_timings()
 
@@ -1037,7 +1007,7 @@ def test_qwen_omni(mesh_device):
     print(f"QWEN-OMNI OUTPUT: {text}")
     print(f"{'=' * 80}")
 
-    _print_qwen_omni_performance_metrics(
+    _log_qwen_omni_performance_metrics(
         prompt_tokens=prompt_tokens,
         text_ids=text_ids,
         audio=audio,

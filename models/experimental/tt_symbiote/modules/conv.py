@@ -584,11 +584,27 @@ class TTNNConvTranspose1d(TTNNModule):
     def __init__(self):
         super().__init__()
         self.conv2d_t = None
+        self.in_channels = None
+        self.out_channels = None
+        self.kernel_size = None
+        self.stride = None
+        self.padding = None
+        self.output_padding = None
+        self.dilation = None
+        self.groups = None
 
     @classmethod
     def from_torch(cls, conv1d: nn.ConvTranspose1d, slice_config=None):
         new = cls()
         new._fallback_torch_layer = conv1d
+        new.in_channels = conv1d.in_channels
+        new.out_channels = conv1d.out_channels
+        new.kernel_size = conv1d.kernel_size
+        new.stride = conv1d.stride
+        new.padding = conv1d.padding
+        new.output_padding = conv1d.output_padding
+        new.dilation = conv1d.dilation
+        new.groups = conv1d.groups
         equiv = _conv_transpose1d_to_height1_conv_transpose2d(conv1d)
         new.conv2d_t = TTNNConvTranspose2dNHWC.from_torch(equiv, slice_config=slice_config)
         return new

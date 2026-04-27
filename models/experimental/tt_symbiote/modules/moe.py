@@ -2453,7 +2453,3 @@ class TTNNQwen3OmniThinkerMoE(TTNNModule):
 
         out_torch = self._moe_from_tiled_4d(hidden_states_tt, b, s, h, orig_batch, out_dtype)
         return out_torch.reshape(orig_shape)
-
-
-# Historical name used by symbiote tests and ``test_qwen_omni`` registration.
-TTNNQwen3OmniThinkerNaiveMoE = TTNNQwen3OmniThinkerMoE

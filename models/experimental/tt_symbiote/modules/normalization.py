@@ -173,6 +173,26 @@ class TTNNDistributedRMSNorm(TTNNModule):
     """
 
     @property
+    def weight(self):
+        """HF RMSNorm / ``_tied_weights_keys`` / init code expect ``.weight`` on the module."""
+        tl = self.torch_layer
+        if tl is not None and hasattr(tl, "weight"):
+            return tl.weight
+        raise AttributeError(f"{type(self).__name__} has no attribute 'weight'")
+
+    @property
+    def variance_epsilon(self):
+        """HF ``Qwen3OmniMoeRMSNorm`` and helpers read ``variance_epsilon`` (some norms use ``eps``)."""
+        tl = self.torch_layer
+        if tl is None:
+            raise AttributeError(f"{type(self).__name__} has no attribute 'variance_epsilon'")
+        if hasattr(tl, "variance_epsilon"):
+            return tl.variance_epsilon
+        if hasattr(tl, "eps"):
+            return tl.eps
+        raise AttributeError(f"{type(self).__name__} has no attribute 'variance_epsilon'")
+
+    @property
     def _is_distributed(self):
         """True when running on a multi-device mesh (col-sharded activations; CCL not required for output metadata)."""
         return self.device is not None and self.device.get_num_devices() > 1
