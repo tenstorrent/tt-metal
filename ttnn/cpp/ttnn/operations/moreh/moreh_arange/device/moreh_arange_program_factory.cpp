@@ -5,6 +5,9 @@
 #include "moreh_arange_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/assert.hpp>
+
+#include <bit>
 
 namespace ttnn::operations::moreh::moreh_arange {
 
@@ -54,7 +57,7 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
         case DataType::BFLOAT16: writer_defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
         case DataType::INT32: writer_defines.emplace_back("OUTPUT_DTYPE_INT32", "1"); break;
         case DataType::FLOAT32: writer_defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
-        default: break;
+        default: TT_THROW("moreh_arange: unsupported output dtype {}", dtype);
     }
 
     KernelDescriptor::CompileTimeArgs writer_ct_args;
@@ -88,8 +91,8 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
                 output.buffer()->address(),
                 tile_offset,
                 num_tiles_per_core,
-                *reinterpret_cast<uint32_t*>(&start),
-                *reinterpret_cast<uint32_t*>(&step),
+                std::bit_cast<uint32_t>(start),
+                std::bit_cast<uint32_t>(step),
                 output.element_size()});
 
         tile_offset += num_tiles_per_core;
