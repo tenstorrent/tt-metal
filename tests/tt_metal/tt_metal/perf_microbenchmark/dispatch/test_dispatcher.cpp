@@ -1124,9 +1124,7 @@ public:
             raw.size());
 
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
-        const uint32_t dispatch_l1_unreserved_base =
-            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-        const uint32_t l1_buf_base = tt::align(dispatch_l1_unreserved_base, page_size);
+        const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
 
         const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
         TT_FATAL(raw.size() + l1_buf_base <= soc_desc.worker_l1_size, "SD command buffer too large for L1");
@@ -1151,13 +1149,13 @@ public:
         const uint32_t prefetch_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_spoof_prefetch_core}, 0);
 
         const std::vector<uint32_t> spoof_args = {
-            l1_buf_base,                               // 0: dispatch_cb_base
-            Common::SD_LOG_DISPATCH_BUFFER_PAGE_SIZE,  // 1
-            dispatch_buffer_pages,                     // 2
-            dispatch_core_sem_id,                      // 3
-            l1_buf_base,                               // 4: cmd_cb_base (same region, pre-loaded)
-            cmd_cb_pages,                              // 5
-            Common::SD_PREFETCHER_PAGE_BATCH_SIZE,     // 6
+            l1_buf_base,                                                    // 0: dispatch_cb_base
+            tt::tt_metal::DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,  // 1
+            dispatch_buffer_pages,                                          // 2
+            dispatch_core_sem_id,                                           // 3
+            l1_buf_base,                                                    // 4: cmd_cb_base (same region, pre-loaded)
+            cmd_cb_pages,                                                   // 5
+            Common::SD_PREFETCHER_PAGE_BATCH_SIZE,                          // 6
         };
         const std::map<std::string, std::string> prefetch_defines = {
             {"DISPATCH_NOC_X", std::to_string(phys_disp.x)},
@@ -1177,7 +1175,6 @@ public:
 
         auto dispatch_defines = Common::make_sd_dispatch_defines(
             this->device_,
-            l1_buf_base,
             dispatch_buffer_pages,
             dispatch_core_sem_id,
             prefetch_sync_sem,

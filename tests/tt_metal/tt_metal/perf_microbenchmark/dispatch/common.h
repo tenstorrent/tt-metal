@@ -923,14 +923,15 @@ inline uint32_t clamp_to_max_fetch(
 }  // namespace PackedWriteUtils
 
 // SD (slow dispatch) dispatch-buffer constants — consumed by execute_generated_commands.
+// Page size and block count reuse the canonical DispatchSettings values.
 // pages-per-block is derived inside cq_dispatch.cpp as DISPATCH_CB_PAGES / DISPATCH_CB_BLOCKS.
-static constexpr uint32_t SD_LOG_DISPATCH_BUFFER_PAGE_SIZE = 12;
-static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << SD_LOG_DISPATCH_BUFFER_PAGE_SIZE;
-static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BLOCKS = 4;
+static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BYTES = 768 * 1024;
 static constexpr uint32_t SD_PREFETCHER_PAGE_BATCH_SIZE = 1;
 static_assert(SD_DISPATCH_BUFFER_SIZE_BYTES % SD_DISPATCH_BUFFER_PAGE_SIZE == 0);
-static_assert((SD_DISPATCH_BUFFER_SIZE_BYTES / SD_DISPATCH_BUFFER_PAGE_SIZE) % SD_DISPATCH_BUFFER_SIZE_BLOCKS == 0);
+static_assert(
+    (SD_DISPATCH_BUFFER_SIZE_BYTES / SD_DISPATCH_BUFFER_PAGE_SIZE) % DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS ==
+    0);
 // spoof_prefetch loop uses (cmd_cb_pages-1)/page_batch_size with no remainder handling
 static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 
@@ -1179,17 +1180,22 @@ protected:
 inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
 inline constexpr CoreCoord sd_dispatch_core = {4, 0};
 
-// cq_dispatch.cpp requires every define present at compile time; SD passes "0" for fields it
-// does not drive (e.g. fabric-mux)
+// Builds the compile-time defines required by cq_dispatch.cpp for the SD (spoof-prefetch) path.
+// SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
+// fields are zeroed since the spoof path never uses them.
+//
+// KEEP IN SYNC WITH: tt_metal/impl/dispatch/kernel_config/dispatch.cpp (the defines block starting
+// around "Add all the dispatch-specific defines"). If a new define is added or removed there,
+// update this map to match - the failure mode is a kernel compile error.
 inline std::map<std::string, std::string> make_sd_dispatch_defines(
     tt_metal::IDevice* device_,
-    uint32_t l1_buf_base,
     uint32_t dispatch_buffer_pages,
     uint32_t dispatch_core_sem_id,
     uint32_t prefetch_sync_sem,
     const CoreCoord& phys_spoof,
     const CoreCoord& phys_disp,
     const tt_metal::DispatchMemMap& memmap) {
+    const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
     const uint32_t num_compute_cores =
         device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
     const auto my_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_disp);
@@ -1198,11 +1204,11 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
 
     return {
         {"DISPATCH_CB_BASE", std::to_string(l1_buf_base)},
-        {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(SD_LOG_DISPATCH_BUFFER_PAGE_SIZE)},
+        {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
         {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
-        {"DISPATCH_CB_BLOCKS", std::to_string(SD_DISPATCH_BUFFER_SIZE_BLOCKS)},
+        {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
         {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
         {"COMMAND_QUEUE_BASE_ADDR", "0"},
         {"COMPLETION_QUEUE_BASE_ADDR", "0"},
@@ -1277,14 +1283,4 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     };
 }
 
-// Executes pre-built dispatch commands via the spoof_prefetch kernel in SD mode.
-// Serializes commands to a flat L1 buffer, launches spoof_prefetch + cq_dispatch,
-// then validates results against device_data.
-//
-// Layout contract: HostMemDeviceCommand prepends a CQPrefetchCmd relay-inline header and appends
-// pcie padding. FD's prefetcher strips both, so in SD, we must do the same too. We rely on relay_inline.length holding
-// the exact dispatch payload size (set by DeviceCommand, before pcie padding).
-//
-// num_cores_to_log / wait_for_* are accepted to match the FD virtual signature but unused —
-// LaunchProgram is synchronous.
 }  // namespace tt::tt_metal::tt_dispatch_tests::Common
