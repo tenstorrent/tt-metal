@@ -1224,22 +1224,33 @@ def test_optimized_moe_decode_block(
         else:
             topk_experts_weights = tt_dispatch_input_expert_scores_tensors[iteration]
 
-        topk_experts_weights = ttnn.permute(
-            topk_experts_weights, (3, 1, 0, 2), memory_config=scaled_output_memory_config
-        )
-        topk_experts_weights = ttnn.to_layout(
-            topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config
-        )
-        tt_scaled_output = ttnn.mul(
-            tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
-        )
+        use_nc_fused = 1
 
-        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-            tt_scaled_output,
-            dim=0,
-            split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
-            output_memory_config=fast_reduce_output_memory_config,
-        )
+        if not use_nc_fused:
+            topk_experts_weights = ttnn.permute(
+                topk_experts_weights, (3, 1, 0, 2), memory_config=scaled_output_memory_config
+            )
+            topk_experts_weights = ttnn.to_layout(
+                topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config
+            )
+            tt_scaled_output = ttnn.mul(
+                tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
+            )
+
+            tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                tt_scaled_output,
+                dim=0,
+                split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
+                output_memory_config=fast_reduce_output_memory_config,
+            )
+        else:
+            tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
+                tt_unsqueezed_output,
+                reduce_dim=0,
+                split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
+                output_memory_config=fast_reduce_output_memory_config,
+                scores_tensors=topk_experts_weights,
+            )
 
         # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
         if mesh_shape[1 - cluster_axis] == 8:
