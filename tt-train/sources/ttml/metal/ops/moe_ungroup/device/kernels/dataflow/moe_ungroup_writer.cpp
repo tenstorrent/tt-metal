@@ -225,12 +225,11 @@ void kernel_main() {
         // expert to touch a row writes, the rest accumulate.
         bool is_first[TILE_H];
 
-        for (uint32_t step = 0; step < tile_rows_per_core_per_expert; ++step) {
-            bool active = step < my_real_count;
+        for (uint32_t step = 0; step < my_real_count; ++step) {
             uint32_t tr_global = expert_start_tr + my_start_in_e + step;
 
-            // Pre-fetch plan slice + metadata + scores for active steps only.
-            if (active) {
+            // Pre-fetch plan slice + metadata + scores.
+            {
                 uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tr_global * TILE_H * sizeof(uint32_t);
                 noc_async_read(plan_noc, plan_buf_addr, TILE_H * sizeof(uint32_t));
                 noc_async_read_barrier();
@@ -291,7 +290,7 @@ void kernel_main() {
                     }
                     is_first[r] = !has_earlier;
                 }
-            }  // close if (active) for prefetch
+            }
 
             // Per chunk:
             //   1. Build w_tile (32×32 broadcast w[r]) → cb_w
@@ -308,17 +307,15 @@ void kernel_main() {
                 {
                     volatile tt_l1_ptr uint16_t* w_tile =
                         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_w));
-                    if (active) {
-                        for (uint32_t face = 0; face < 4U; ++face) {
-                            uint32_t face_r_offset = (face / 2U) * 16U;
-                            uint32_t face_base = face * 256U;
-                            for (uint32_t in_r = 0; in_r < 16U; ++in_r) {
-                                uint32_t r = face_r_offset + in_r;
-                                uint16_t w_bf = fp32_to_bf16(w_buf[r]);
-                                uint32_t row_off = face_base + in_r * 16U;
-                                for (uint32_t in_c = 0; in_c < 16U; ++in_c) {
-                                    w_tile[row_off + in_c] = w_bf;
-                                }
+                    for (uint32_t face = 0; face < 4U; ++face) {
+                        uint32_t face_r_offset = (face / 2U) * 16U;
+                        uint32_t face_base = face * 256U;
+                        for (uint32_t in_r = 0; in_r < 16U; ++in_r) {
+                            uint32_t r = face_r_offset + in_r;
+                            uint16_t w_bf = fp32_to_bf16(w_buf[r]);
+                            uint32_t row_off = face_base + in_r * 16U;
+                            for (uint32_t in_c = 0; in_c < 16U; ++in_c) {
+                                w_tile[row_off + in_c] = w_bf;
                             }
                         }
                     }
@@ -329,25 +326,19 @@ void kernel_main() {
                 // CB has 32 pages per chunk (asymmetric, one page per row).
                 cb_reserve_back(cb_existing_rm, TILE_H);
                 uint32_t existing_l1 = get_write_ptr(cb_existing_rm);
-                if (active) {
-                    for (uint32_t r = 0; r < TILE_H; ++r) {
-                        uint32_t flat = plan_buf[r];
-                        uint32_t row_idx = tr_global * TILE_H + r;
-                        uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
-                        if (flat == SENTINEL || row_idx >= active_end_row) {
-                            // Skipped row — fill via NOC DMA so tilize sees zeros.
-                            fill_zeros_async(row_buf, hidden_chunk_bytes);
-                            continue;
-                        }
-                        uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;
-                        noc_async_read(dst_noc, row_buf, write_bytes);
+                for (uint32_t r = 0; r < TILE_H; ++r) {
+                    uint32_t flat = plan_buf[r];
+                    uint32_t row_idx = tr_global * TILE_H + r;
+                    uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
+                    if (flat == SENTINEL || row_idx >= active_end_row) {
+                        // Skipped row — fill via NOC DMA so tilize sees zeros.
+                        fill_zeros_async(row_buf, hidden_chunk_bytes);
+                        continue;
                     }
-                    noc_async_read_barrier();
-                } else {
-                    // Inactive step: NOC-DMA zero whole buffer.
-                    fill_zeros_async(existing_l1, tiles_per_chunk * TILE_H * TILE_W * 2U);
-                    noc_async_read_barrier();
+                    uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;
+                    noc_async_read(dst_noc, row_buf, write_bytes);
                 }
+                noc_async_read_barrier();
                 cb_push_back(cb_existing_rm, TILE_H);
 
                 // (3) Wait for compute's combined+untilized output.
@@ -355,7 +346,7 @@ void kernel_main() {
 
                 // (4) NOC-write cb_out0 rows back to ungrouped DRAM. Pure data
                 // movement — no scalar arithmetic.
-                if (active) {
+                {
                     uint32_t src_l1 = get_read_ptr(cb_out0);
                     for (uint32_t r = 0; r < TILE_H; ++r) {
                         uint32_t flat = plan_buf[r];

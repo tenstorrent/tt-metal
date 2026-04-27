@@ -32,6 +32,7 @@ constexpr uint32_t kCbExistingRm = tt::CBIndex::c_6;    // row-major existing ro
 constexpr uint32_t kCbExistingTile = tt::CBIndex::c_7;  // tilized existing (compute internal)
 constexpr uint32_t kCbCombined = tt::CBIndex::c_8;      // mul+add output tiles (untilize input)
 constexpr uint32_t kCbScaled = tt::CBIndex::c_9;        // scaled-only tiles (mul output, add input)
+constexpr uint32_t kCbCtrl = tt::CBIndex::c_10;         // NCRISC->compute: per-core active-block count
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 
@@ -160,6 +161,15 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             .set_page_size(kCbScaled, bf16_tile_bytes);
     CreateCircularBuffer(program, worker_all, cb_scaled_cfg);
 
+    // cb_ctrl: NCRISC reader publishes per-core active-block count once at
+    // startup; compute reads it to size its outer loop. 16B page (one uint32
+    // padded to L1 alignment), single-page CB.
+    constexpr uint32_t cb_ctrl_bytes = 16U;
+    tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
+        tt::tt_metal::CircularBufferConfig(cb_ctrl_bytes, {{kCbCtrl, tt::DataFormat::UInt32}})
+            .set_page_size(kCbCtrl, cb_ctrl_bytes);
+    CreateCircularBuffer(program, worker_all, cb_ctrl_cfg);
+
     // cb_scratch: writer's big scratch — zero buf + offsets + counts + leids + plan + md + sc + w + rmw_buf
     const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
     auto round_up = [l1_align](uint32_t x) { return ((x + l1_align - 1U) / l1_align) * l1_align; };
@@ -197,11 +207,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     uint32_t down_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
     uint32_t brisc_done_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
     uint32_t brisc_release_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
-    // total_blocks: NCRISC reader computes per-core block count from offsets at
-    // runtime and writes here; compute kernel polls + reads to determine its
-    // untilize iteration count. Lets reader/writer/compute all iterate
-    // my_real_count per expert with zero padding.
-    uint32_t total_blocks_sem_id = tt::tt_metal::CreateSemaphore(program, worker_all, 0U);
 
     // -------------------------------------------------------------------------
     // Buffer pointers
@@ -253,7 +258,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         mcast_ex,                       // 19
         mcast_ey,                       // 20
         mcast_num_dests_incl_self,      // 21
-        total_blocks_sem_id,            // 22
+        kCbCtrl,                        // 22
     };
     tt::tt_metal::TensorAccessorArgs(expert_out_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(reader_ct_args);
@@ -282,7 +287,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         brisc_done_sem_id,              // 11
         brisc_release_sem_id,           // 12
     };
-    (void)total_blocks_sem_id;  // writer doesn't read total_blocks (reader computes, compute reads).
     tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
@@ -316,7 +320,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
          kCbExistingTile,
          kCbCombined,
          kCbScaled,
-         kCbZero},
+         kCbCtrl},
         {},
         kComputeKernelPath,
         false);
@@ -340,7 +344,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             kComputeKernelPath,
             false);
     }
-    (void)total_blocks_sem_id;
 
     // -------------------------------------------------------------------------
     // Per-core RT args

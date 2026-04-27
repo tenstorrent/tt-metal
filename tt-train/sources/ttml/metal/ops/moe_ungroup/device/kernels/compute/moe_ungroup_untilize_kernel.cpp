@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/cb_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
@@ -32,11 +33,20 @@ void kernel_main() {
     constexpr uint32_t cb_id_existing_tile = get_compile_time_arg_val(8);
     constexpr uint32_t cb_id_combined = get_compile_time_arg_val(9);
     constexpr uint32_t cb_id_scaled = get_compile_time_arg_val(10);
-    (void)get_compile_time_arg_val(11);  // unused (cb_zero — reserved for future runtime bound)
+    constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(11);
 
-    constexpr uint32_t total_blocks = total_tile_rows * num_chunks * e_local;
+    (void)total_tile_rows;
+    (void)num_chunks;
+    (void)e_local;
 
     binary_op_init_common(cb_id_src, cb_id_w, cb_id_scaled);
+
+    // NCRISC reader publishes per-core active block count after reading offsets.
+    // read_tile_value uses the unpack→math/pack mailbox so all three threads
+    // see the same value before the loop. Replaces the CT worst-case bound.
+    cb_wait_front(cb_id_ctrl, 1U);
+    uint32_t total_blocks = read_tile_value(cb_id_ctrl, 0U, 0U);
+    cb_pop_front(cb_id_ctrl, 1U);
 
     for (uint32_t blk = 0; blk < total_blocks; ++blk) {
         // ---- Phase A: tilize existing_rm → existing_tile ----

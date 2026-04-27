@@ -46,7 +46,7 @@ constexpr uint32_t mcast_sy = get_compile_time_arg_val(18);
 constexpr uint32_t mcast_ex = get_compile_time_arg_val(19);
 constexpr uint32_t mcast_ey = get_compile_time_arg_val(20);
 constexpr uint32_t mcast_num_dests_incl_self = get_compile_time_arg_val(21);
-constexpr uint32_t total_blocks_sem_id = get_compile_time_arg_val(22);
+constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(22);
 
 constexpr auto expert_out_args = TensorAccessorArgs<23>();
 constexpr auto offsets_args = TensorAccessorArgs<expert_out_args.next_compile_time_args_offset()>();
@@ -111,7 +111,32 @@ void kernel_main() {
     noc_async_read(get_noc_addr(0, offsets_addrgen), scratch_l1, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
     cb_push_back(cb_zero, 1U);
-    (void)total_blocks_sem_id;
+
+    // Walk offsets ONCE to compute this core's active step count per expert
+    // (same math as the per-expert loop below) and publish the total block
+    // count (steps × num_chunks) to compute via cb_ctrl. Compute, reader,
+    // writer all then iterate exactly that many blocks — no zero padding.
+    uint32_t my_real_count_per_expert[64];  // upper bound on E_local
+    uint32_t my_total_active_steps = 0U;
+    for (uint32_t e = 0; e < e_local; ++e) {
+        uint32_t expert_total_tr = (offsets_l1[e + 1U] - offsets_l1[e]) / TILE_H;
+        uint32_t my_count_e = (expert_total_tr + num_total_cores - 1U) / num_total_cores;
+        uint32_t my_start = my_core_idx * my_count_e;
+        uint32_t my_end = my_start + my_count_e;
+        if (my_end > expert_total_tr) {
+            my_end = expert_total_tr;
+        }
+        if (my_start > expert_total_tr) {
+            my_start = expert_total_tr;
+        }
+        uint32_t rc = my_end - my_start;
+        my_real_count_per_expert[e] = rc;
+        my_total_active_steps += rc;
+    }
+    cb_reserve_back(cb_id_ctrl, 1U);
+    volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_ctrl));
+    ctrl_l1[0] = my_total_active_steps * num_chunks;
+    cb_push_back(cb_id_ctrl, 1U);
 
     for (uint32_t e = 0; e < e_local; ++e) {
         // Handshake BEFORE pushing this expert's tiles. BRISC has just
@@ -124,41 +149,28 @@ void kernel_main() {
         handshake_then_barrier_then_release(my_core_idx);
 
         uint32_t expert_start_tr = offsets_l1[e] / TILE_H;
-        uint32_t expert_end_tr = offsets_l1[e + 1U] / TILE_H;
-        uint32_t expert_total_tr = expert_end_tr - expert_start_tr;
-
+        uint32_t expert_total_tr = (offsets_l1[e + 1U] - offsets_l1[e]) / TILE_H;
         uint32_t my_count_e = (expert_total_tr + num_total_cores - 1U) / num_total_cores;
         uint32_t my_start_in_e = my_core_idx * my_count_e;
-        uint32_t my_end_in_e = my_start_in_e + my_count_e;
-        if (my_end_in_e > expert_total_tr) {
-            my_end_in_e = expert_total_tr;
-        }
         if (my_start_in_e > expert_total_tr) {
             my_start_in_e = expert_total_tr;
         }
-        uint32_t my_real_count = my_end_in_e - my_start_in_e;
+        uint32_t my_real_count = my_real_count_per_expert[e];
 
-        // Iterate the CT bound (tile_rows_per_core_per_expert) so all cores'
-        // compute kernels see a uniform stream of total_blocks chunks. Active
-        // steps do real reads; inactive steps zero-fill (writer skips them).
-        for (uint32_t step = 0; step < tile_rows_per_core_per_expert; ++step) {
-            bool active = step < my_real_count;
+        // Only iterate active steps now — writer/compute use the same per-core
+        // count via cb_ctrl, so there's no need to pad with zero-fill.
+        for (uint32_t step = 0; step < my_real_count; ++step) {
             uint32_t tr_global = expert_start_tr + my_start_in_e + step;
 
             for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
                 cb_reserve_back(cb_src0, tiles_per_chunk);
                 uint32_t dst_l1 = get_write_ptr(cb_src0);
-                if (active) {
-                    uint32_t tile_id_base = tr_global * Wt + chunk * tiles_per_chunk;
-                    for (uint32_t t = 0; t < tiles_per_chunk; ++t) {
-                        uint64_t src_noc = get_noc_addr(tile_id_base + t, expert_out_addrgen);
-                        noc_async_read(src_noc, dst_l1 + t * TILE_BYTES, TILE_BYTES);
-                    }
-                    noc_async_read_barrier();
-                } else {
-                    fill_zeros_async(dst_l1, tiles_per_chunk * TILE_BYTES);
-                    noc_async_read_barrier();
+                uint32_t tile_id_base = tr_global * Wt + chunk * tiles_per_chunk;
+                for (uint32_t t = 0; t < tiles_per_chunk; ++t) {
+                    uint64_t src_noc = get_noc_addr(tile_id_base + t, expert_out_addrgen);
+                    noc_async_read(src_noc, dst_l1 + t * TILE_BYTES, TILE_BYTES);
                 }
+                noc_async_read_barrier();
                 cb_push_back(cb_src0, tiles_per_chunk);
             }
         }
