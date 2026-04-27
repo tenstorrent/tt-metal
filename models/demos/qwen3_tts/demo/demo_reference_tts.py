@@ -31,6 +31,16 @@ import soundfile as sf
 import torch
 
 
+def _existing_user_audio_path(path: str) -> Path:
+    p = Path(path).expanduser()
+    if ".." in p.parts:
+        raise ValueError(f"Invalid audio path: {path!r}")
+    p = p.resolve()
+    if not p.is_file():
+        raise FileNotFoundError(path)
+    return p
+
+
 def load_audio(path: str, target_sr: int = 24000) -> torch.Tensor:
     """Load audio file and resample to target sample rate."""
     from scipy import signal
@@ -76,8 +86,10 @@ def run_reference_tts_demo(
     print(f"Reference TTS Demo ({'TTNN' if use_ttnn else 'PyTorch Reference'})")
     print("=" * 80)
 
-    if not Path(audio_path).exists():
-        print(f"ERROR: Audio file not found: {audio_path}")
+    try:
+        _existing_user_audio_path(audio_path)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"ERROR: {e}")
         return
 
     # Import reference implementations
@@ -132,8 +144,7 @@ def run_reference_tts_demo(
 
     # Load weights
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-    model_path = snapshot_download(model_id, allow_patterns=["model.safetensors"])
-    model_path = Path(model_path)
+    model_path = Path(snapshot_download(model_id, allow_patterns=["model.safetensors"])).resolve()
     main_dict = load_file(model_path / "model.safetensors")
     speaker_weights = extract_speaker_encoder_weights(main_dict)
     print(f"  Loaded {len(speaker_weights)} speaker encoder weights")

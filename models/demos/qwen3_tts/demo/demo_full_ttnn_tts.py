@@ -19,7 +19,6 @@ KV Cache Optimization:
 - This reduces complexity from O(n^2) to O(n) for generation
 
 Usage:
-    export TT_METAL_HOME=$(pwd) && export PYTHONPATH=$(pwd) && source python_env/bin/activate
     python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
         --text "Hello, how are you today?" \
         --ref-audio /path/to/reference.wav \
@@ -41,6 +40,13 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+
+
+def _user_path_no_dotdot(path: str) -> Path:
+    p = Path(path).expanduser()
+    if ".." in p.parts:
+        raise ValueError("paths must not contain '..' path components")
+    return p.resolve()
 
 
 def allocate_kv_cache(
@@ -145,7 +151,7 @@ def load_weights():
     from safetensors.torch import load_file
 
     print("Loading model weights...")
-    model_path = Path(snapshot_download("Qwen/Qwen3-TTS-12Hz-1.7B-Base", allow_patterns=["*.safetensors"]))
+    model_path = Path(snapshot_download("Qwen/Qwen3-TTS-12Hz-1.7B-Base", allow_patterns=["*.safetensors"])).resolve()
 
     # Main model weights
     main_dict = {}
@@ -178,10 +184,14 @@ def encode_reference_audio(
         ref_codes: [seq_len, 16] - RVQ codes
         audio_data: [num_samples] - raw waveform (for TTNN speaker encoder)
     """
-    from pathlib import Path
+    audio_p = _user_path_no_dotdot(audio_path)
+    if not audio_p.is_file():
+        raise FileNotFoundError(audio_path)
 
     if cache_path is None:
-        cache_path = str(Path(audio_path).with_suffix("")) + ".refcache.pt"
+        cache_path = str(audio_p.with_suffix("")) + ".refcache.pt"
+    else:
+        cache_path = str(_user_path_no_dotdot(cache_path))
 
     # Load from cache if available
     if Path(cache_path).exists():
@@ -204,7 +214,7 @@ def encode_reference_audio(
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_wav = tmp.name
     subprocess.run(
-        ["ffmpeg", "-y", "-i", audio_path, "-ac", "1", "-ar", "24000", "-f", "wav", tmp_wav],
+        ["ffmpeg", "-y", "-i", str(audio_p), "-ac", "1", "-ar", "24000", "-f", "wav", tmp_wav],
         check=True,
         capture_output=True,
     )

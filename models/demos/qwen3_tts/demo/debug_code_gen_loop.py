@@ -49,8 +49,8 @@ def main():
     )
 
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-    model_path = snapshot_download(model_id, allow_patterns=["*.safetensors"])
-    main_dict = load_file(Path(model_path) / "model.safetensors")
+    model_path = Path(snapshot_download(model_id, allow_patterns=["*.safetensors"])).resolve()
+    main_dict = load_file(model_path / "model.safetensors")
     main_dict = {k: v.float() for k, v in main_dict.items()}
 
     codec_embed_weight = main_dict["talker.model.codec_embedding.weight"]
@@ -83,9 +83,6 @@ def main():
     ref_text = "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you."
     target_text = "Hello."
 
-    # Capture talker's last hidden state
-    captured = {"past_hidden": None, "generated_codes": None}
-
     # Hook to capture code_predictor.generate input/output
     cp_inputs = []
     cp_outputs = []
@@ -111,7 +108,7 @@ def main():
 
     hook3 = talker.model.register_forward_hook(capture_talker_output, with_kwargs=True)
 
-    wavs, sr = model.generate_voice_clone(
+    _, _ = model.generate_voice_clone(
         text=target_text,
         language="English",
         ref_audio=ref_audio_path,

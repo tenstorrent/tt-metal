@@ -43,8 +43,7 @@ def main():
     from safetensors.torch import load_file
 
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-    model_path = snapshot_download(model_id, allow_patterns=["speech_tokenizer/*"])
-    model_path = Path(model_path)
+    model_path = Path(snapshot_download(model_id, allow_patterns=["speech_tokenizer/*"])).resolve()
     speech_tokenizer_path = model_path / "speech_tokenizer" / "model.safetensors"
     raw_dict = load_file(speech_tokenizer_path)
 
@@ -95,7 +94,7 @@ def main():
     # Get reference embeddings by calling the full decoder and capturing intermediate
     # Actually let's just compare the shapes and ranges
     print(f"  TTNN codebook output: shape={ttnn_embeddings.shape}")
-    print(f"  Expected for pre-transformer input: [batch, seq_len, 1024]")
+    print("  Expected for pre-transformer input: [batch, seq_len, 1024]")
 
     if tt_decoder.has_pre_transformer:
         print("\n  TTNN pre-transformer available")
@@ -109,19 +108,7 @@ def main():
             device=device,
         )
         seq_len = ttnn_embeddings.shape[1]
-        cos, sin = tt_decoder._compute_rope(seq_len, ttnn_embeddings.device)
-        cos_ttnn = ttnn_module.from_torch(
-            cos.unsqueeze(0).unsqueeze(0),
-            dtype=tt_decoder.dtype,
-            layout=ttnn_module.TILE_LAYOUT,
-            device=device,
-        )
-        sin_ttnn = ttnn_module.from_torch(
-            sin.unsqueeze(0).unsqueeze(0),
-            dtype=tt_decoder.dtype,
-            layout=ttnn_module.TILE_LAYOUT,
-            device=device,
-        )
+        cos_ttnn, sin_ttnn = tt_decoder._compute_rope(seq_len)
 
         # Forward through pre-transformer
         hidden_ttnn = tt_decoder.pre_transformer(embeddings_ttnn, cos_ttnn, sin_ttnn)

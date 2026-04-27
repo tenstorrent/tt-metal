@@ -8,11 +8,22 @@ Uses Whisper word-level timestamps to detect where the target text actually star
 in the generated audio, identifying any prefix content from reference audio bleeding.
 """
 
+from pathlib import Path
 from typing import Dict, Tuple
 
 import numpy as np
 import soundfile as sf
 from transformers import pipeline
+
+
+def _safe_audio_path(path: str, *, must_exist: bool) -> Path:
+    p = Path(path).expanduser()
+    if ".." in p.parts:
+        raise ValueError(f"Path must not contain '..': {path!r}")
+    p = p.resolve()
+    if must_exist and not p.is_file():
+        raise FileNotFoundError(path)
+    return p
 
 
 def detect_bleed(
@@ -37,7 +48,8 @@ def detect_bleed(
             - bleed_content: Transcribed content before target word
             - recommended_trim_frames: Recommended trim value in codec frames (12Hz)
     """
-    audio, sr = sf.read(audio_path)
+    audio_in = _safe_audio_path(audio_path, must_exist=True)
+    audio, sr = sf.read(str(audio_in))
     duration = len(audio) / sr
 
     # Run Whisper
@@ -46,7 +58,7 @@ def detect_bleed(
         model=whisper_model,
         return_timestamps="word",
     )
-    result = pipe(audio_path)
+    result = pipe(str(audio_in))
 
     # Extract word timestamps
     word_timestamps = []
@@ -79,7 +91,7 @@ def detect_bleed(
     recommended_trim = int(np.ceil(bleed_duration * frames_per_second)) + 2
 
     return {
-        "audio_path": audio_path,
+        "audio_path": str(audio_in),
         "audio_duration": duration,
         "transcription": result["text"],
         "word_timestamps": word_timestamps,
@@ -107,11 +119,14 @@ def trim_audio(
     Returns:
         Output path
     """
-    audio, sr = sf.read(audio_path)
+    src = _safe_audio_path(audio_path, must_exist=True)
+    dst = _safe_audio_path(output_path, must_exist=False)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    audio, sr = sf.read(str(src))
     trim_samples = int(trim_seconds * sr)
     trimmed = audio[trim_samples:]
-    sf.write(output_path, trimmed, sr)
-    return output_path
+    sf.write(str(dst), trimmed, sr)
+    return str(dst)
 
 
 def auto_trim_bleed(
@@ -132,25 +147,29 @@ def auto_trim_bleed(
     Returns:
         Tuple of (output_path, detection_results)
     """
+    src = _safe_audio_path(audio_path, must_exist=True)
+    dst = _safe_audio_path(output_path, must_exist=False)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
     # Detect bleed
-    results = detect_bleed(audio_path, target_first_word)
+    results = detect_bleed(str(src), target_first_word)
 
     bleed = results["bleed_duration"]
     if bleed > 0.1:
         # Trim with small margin
         trim_time = max(0, bleed - margin_seconds)
-        trim_audio(audio_path, output_path, trim_time)
+        trim_audio(str(src), str(dst), trim_time)
         results["trimmed"] = True
         results["trim_seconds"] = trim_time
     else:
         # No significant bleed, just copy
         import shutil
 
-        shutil.copy(audio_path, output_path)
+        shutil.copy(str(src), str(dst))
         results["trimmed"] = False
         results["trim_seconds"] = 0
 
-    return output_path, results
+    return str(dst), results
 
 
 def print_bleed_report(results: Dict):

@@ -35,6 +35,22 @@ from models.demos.qwen3_tts.tt.speech_tokenizer import (
 )
 
 
+def _optional_hf_cache_dir(cache_dir: Optional[str]) -> Optional[str]:
+    if cache_dir is None:
+        return None
+    p = Path(cache_dir).expanduser()
+    if ".." in p.parts:
+        raise ValueError("cache_dir must not contain '..' path components")
+    return str(p.resolve())
+
+
+def _cli_filesystem_path(path: str) -> Path:
+    p = Path(path).expanduser()
+    if ".." in p.parts:
+        raise ValueError("Path must not contain '..' path components")
+    return p.resolve()
+
+
 def load_hf_weights(model_id: str, cache_dir: Optional[str] = None) -> dict:
     """
     Load weights from HuggingFace model.
@@ -57,12 +73,14 @@ def load_hf_weights(model_id: str, cache_dir: Optional[str] = None) -> dict:
     # Download model files
     from huggingface_hub import snapshot_download
 
-    model_path = snapshot_download(
-        model_id,
-        cache_dir=cache_dir,
-        allow_patterns=["*.safetensors", "*.json"],
-    )
-    model_path = Path(model_path)
+    safe_cache = _optional_hf_cache_dir(cache_dir)
+    model_path = Path(
+        snapshot_download(
+            model_id,
+            cache_dir=safe_cache,
+            allow_patterns=["*.safetensors", "*.json"],
+        )
+    ).resolve()
 
     # Load safetensors
     state_dict = {}
@@ -96,12 +114,14 @@ def load_speech_tokenizer_weights(model_id: str, cache_dir: Optional[str] = None
 
     print(f"Loading speech tokenizer weights from: {model_id}")
 
-    model_path = snapshot_download(
-        model_id,
-        cache_dir=cache_dir,
-        allow_patterns=["speech_tokenizer/*.safetensors"],
-    )
-    model_path = Path(model_path)
+    safe_cache = _optional_hf_cache_dir(cache_dir)
+    model_path = Path(
+        snapshot_download(
+            model_id,
+            cache_dir=safe_cache,
+            allow_patterns=["speech_tokenizer/*.safetensors"],
+        )
+    ).resolve()
 
     speech_tokenizer_path = model_path / "speech_tokenizer" / "model.safetensors"
     if not speech_tokenizer_path.exists():
@@ -142,8 +162,9 @@ def save_audio(audio: torch.Tensor, output_path: str, sample_rate: int = 24000):
     audio = audio.detach().cpu().float().numpy()
     audio = (audio * 32767).astype("int16")
 
-    wavfile.write(output_path, sample_rate, audio)
-    print(f"Audio saved to: {output_path}")
+    out_path = _cli_filesystem_path(output_path)
+    wavfile.write(str(out_path), sample_rate, audio)
+    print(f"Audio saved to: {out_path}")
 
 
 def run_prefill(
@@ -305,7 +326,7 @@ def run_demo(
 
         # Weight cache path
         if weight_cache_path:
-            weight_cache_path = Path(weight_cache_path)
+            weight_cache_path = _cli_filesystem_path(weight_cache_path)
             weight_cache_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize model
@@ -417,22 +438,11 @@ def run_demo(
             print(f"\n--- Run {run + 1}/{num_inference_runs} ---")
 
             # PREFILL (TTFT measurement)
-            if use_trace:
-                # Note: traced mode currently only supports codec embedding (benchmark mode)
-                if use_text_embedding:
-                    print("  Warning: Tracing not yet supported with text embedding, using non-traced mode")
-                    logits_list, prefill_time = run_prefill(
-                        model,
-                        input_ids,
-                        device,
-                        talker_config,
-                        code_predictor_config,
-                        talker_trans_mat,
-                        cp_trans_mat,
-                        use_text_embedding=use_text_embedding,
-                    )
-                else:
-                    logits_list, prefill_time = run_prefill_traced(generator, input_ids, device)
+            # Traced prefill only for codec-embedding mode; text embedding falls back to non-traced.
+            if use_trace and use_text_embedding:
+                print("  Warning: Tracing not yet supported with text embedding, using non-traced mode")
+            if use_trace and not use_text_embedding:
+                logits_list, prefill_time = run_prefill_traced(generator, input_ids, device)
             else:
                 logits_list, prefill_time = run_prefill(
                     model,

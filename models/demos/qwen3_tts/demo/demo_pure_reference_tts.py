@@ -35,6 +35,16 @@ import torch
 import torch.nn.functional as F
 
 
+def _existing_user_audio_path(path: str) -> Path:
+    p = Path(path).expanduser()
+    if ".." in p.parts:
+        raise ValueError(f"Invalid audio path: {path!r}")
+    p = p.resolve()
+    if not p.is_file():
+        raise FileNotFoundError(path)
+    return p
+
+
 @dataclass
 class TTSConfig:
     """Configuration for TTS generation - from actual model config."""
@@ -113,8 +123,7 @@ def load_weights(*, use_bfloat16: bool = False):
     if use_bfloat16:
         print("  (bfloat16 weights — lower memory)")
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-    model_path = snapshot_download(model_id, allow_patterns=["*.safetensors"])
-    model_path = Path(model_path)
+    model_path = Path(snapshot_download(model_id, allow_patterns=["*.safetensors"])).resolve()
 
     def _to_compute_dtype(t):
         return t.to(torch.bfloat16) if use_bfloat16 else t.float()
@@ -739,8 +748,10 @@ def main():
     print()
 
     # Verify reference audio exists
-    if not Path(ref_audio).exists():
-        print(f"ERROR: Reference audio not found: {ref_audio}")
+    try:
+        _existing_user_audio_path(ref_audio)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"ERROR: {e}")
         return
 
     # Load weights
