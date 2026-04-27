@@ -366,7 +366,7 @@ class ReduceToOneB1:
 
                 # Writer (BRISC) compile-time args
                 aggregator_core = input_cores_list[0]
-                fabric_sync_core = fabric_cores[0]  # TODO: (GR) check it's the right core
+                fabric_sync_core = fabric_cores[0]
                 agg_core_phys = device.worker_core_from_logical_core(aggregator_core)
                 fabric_sync_core_phys = device.worker_core_from_logical_core(fabric_sync_core)
 

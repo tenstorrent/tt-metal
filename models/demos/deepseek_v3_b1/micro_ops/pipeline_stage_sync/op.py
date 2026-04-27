@@ -11,7 +11,10 @@ This module implements a multi-device synchronization on an arbitrary mesh.
 
 
 import ttnn
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
 
 
 def build_signalling_path(src_device_mesh_coord, dst_device_mesh_coord, mesh_rows, mesh_cols):
@@ -198,25 +201,29 @@ class PipelineStageSync:
                     brisc_named_compile_time_args=writer_named_ct_args,
                     ncrisc_common_runtime_args=[],
                     brisc_common_runtime_args=[],
-                    per_core_compile_time_descriptors=[
-                        PerCoreCompileTimeDescriptor(
+                    unified_compile_time_core_descriptors=[
+                        UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="run_signalling_logic_on_ncrisc",
-                            core_values=[(signalling_core, run_signalling_logic_on_ncrisc)],
+                            core_range=signalling_core,
+                            value=run_signalling_logic_on_ncrisc,
                             other_value=0,
                         ),
-                        PerCoreCompileTimeDescriptor(
+                        UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="run_signalling_logic_on_brisc",
-                            core_values=[(signalling_core, run_signalling_logic_on_brisc)],
+                            core_range=signalling_core,
+                            value=run_signalling_logic_on_brisc,
                             other_value=0,
                         ),
-                        PerCoreCompileTimeDescriptor(
+                        UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="run_stalling_logic_on_ncrisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_ncrisc)],
+                            core_range=stalling_core,
+                            value=run_stalling_logic_on_ncrisc,
                             other_value=0,
                         ),
-                        PerCoreCompileTimeDescriptor(
+                        UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="run_stalling_logic_on_brisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_brisc)],
+                            core_range=stalling_core,
+                            value=run_stalling_logic_on_brisc,
                             other_value=0,
                         ),
                     ],
