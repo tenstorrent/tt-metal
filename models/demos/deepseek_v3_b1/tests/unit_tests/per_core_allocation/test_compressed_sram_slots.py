@@ -220,14 +220,20 @@ def test_sram_slot_fmt_tensors(device):
         **_no_trim_budget(device),
     )
 
-    tiles_per_core = (K // TILE_W) * (N // NUM_CORES // TILE_W)
-    fmt_tensors = create_expert_fmt_tensors(slots.gate_proj, device, core_grid, tiles_per_core)
+    num_tiles_k = K // TILE_W
+    per_core_n_tiles = N // NUM_CORES // TILE_W
+    fmt_tensors, base_addr_tensors = create_expert_fmt_tensors(
+        slots.gate_proj, device, core_grid, num_tiles_k, per_core_n_tiles
+    )
 
     assert len(fmt_tensors) > 0
+    assert len(base_addr_tensors) == len(fmt_tensors)
     for coord, core_tensors in fmt_tensors.items():
         assert len(core_tensors) == NUM_CORES, f"Expected {NUM_CORES} core entries, got {len(core_tensors)}"
         for idx, t in core_tensors.items():
             assert ttnn.is_tensor_storage_on_device(t), f"fmt tensor core {idx} not on device"
+        for idx, t in base_addr_tensors[coord].items():
+            assert ttnn.is_tensor_storage_on_device(t), f"base_addr tensor core {idx} not on device"
     logger.info(f"fmt_tensors created for {len(fmt_tensors)} device coords, {NUM_CORES} cores each")
 
 
@@ -249,8 +255,10 @@ def test_sram_slot_selection_meta(device):
     assert all(flags[i] == 1 for i in range(num_total) if i not in {2, 7})
 
     encoded = encode_expert_indices([2, 7, 0, 15], flags)
-    assert encoded[0] == 0x8000 | 2  # SRAM expert 2
-    assert encoded[1] == 0x8000 | 7  # SRAM expert 7
+    # SRAM experts encode the compact slot index (not the global expert id) in
+    # bits 0-14, with bit 15 set: expert 2 → slot 0, expert 7 → slot 1.
+    assert encoded[0] == 0x8000 | 0  # SRAM expert 2 → slot 0
+    assert encoded[1] == 0x8000 | 1  # SRAM expert 7 → slot 1
     assert encoded[2] == 0  # DRAM expert 0
     assert encoded[3] == 15  # DRAM expert 15
 
@@ -601,7 +609,6 @@ _PROJ_SHAPES = [_GATE_UP_SHAPE, _GATE_UP_SHAPE, _DOWN_SHAPE]  # indexed by proj_
 
 # Projection index constants matching BSPM file convention.
 _PROJ_GATE = 0
-_PROJ_UP = 1
 _PROJ_DOWN = 2
 
 # Core counts: N must be divisible by num_cores and N/num_cores must be
@@ -797,19 +804,25 @@ def test_sram_slot_fmt_tensors_bspm(device):
     )
 
     K_gate, N_gate = _GATE_UP_SHAPE
-    tiles_per_core = (K_gate // TILE_W) * (N_gate // _GATE_UP_NUM_CORES // TILE_W)
-    fmt_tensors = create_expert_fmt_tensors(slots.gate_proj, device, core_grids.gate, tiles_per_core)
+    num_tiles_k = K_gate // TILE_W
+    per_core_n_tiles = N_gate // _GATE_UP_NUM_CORES // TILE_W
+    fmt_tensors, base_addr_tensors = create_expert_fmt_tensors(
+        slots.gate_proj, device, core_grids.gate, num_tiles_k, per_core_n_tiles
+    )
 
     assert len(fmt_tensors) > 0
+    assert len(base_addr_tensors) == len(fmt_tensors)
     for coord, core_tensors in fmt_tensors.items():
         assert (
             len(core_tensors) == _GATE_UP_NUM_CORES
         ), f"Expected {_GATE_UP_NUM_CORES} core entries, got {len(core_tensors)}"
         for idx, t in core_tensors.items():
             assert ttnn.is_tensor_storage_on_device(t), f"fmt tensor core {idx} not on device"
+        for idx, t in base_addr_tensors[coord].items():
+            assert ttnn.is_tensor_storage_on_device(t), f"base_addr tensor core {idx} not on device"
     logger.info(
         f"BSPM fmt_tensors: {len(fmt_tensors)} device coords, "
-        f"{_GATE_UP_NUM_CORES} cores each, tiles_per_core={tiles_per_core}"
+        f"{_GATE_UP_NUM_CORES} cores each, num_tiles_k={num_tiles_k}, per_core_n_tiles={per_core_n_tiles}"
     )
 
 
