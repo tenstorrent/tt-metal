@@ -331,21 +331,21 @@ class PerfConfig(TestConfig):
         ]
 
         super().__init__(
-            test_name,
-            formats,
-            templates,
-            runtimes,
-            variant_stimuli,
-            BootMode.DEFAULT,
-            ProfilerBuild.Yes,
-            1,  # L1_2_L1s
-            unpack_to_dest,
-            unpack_to_srcs,
-            disable_format_inference,
-            dest_acc,
-            l1_acc,
-            skip_build_header,
-            compile_time_formats,
+            test_name=test_name,
+            formats=formats,
+            templates=templates,
+            runtimes=runtimes,
+            variant_stimuli=variant_stimuli,
+            boot_mode=BootMode.DEFAULT,
+            profiler_build=ProfilerBuild.Yes,
+            L1_to_L1_iterations=1,
+            unpack_to_dest=unpack_to_dest,
+            unpack_to_srcs=unpack_to_srcs,
+            disable_format_inference=disable_format_inference,
+            dest_acc=dest_acc,
+            l1_acc=l1_acc,
+            skip_build_header=skip_build_header,
+            compile_time_formats=compile_time_formats,
         )
 
     @staticmethod
