@@ -47,8 +47,16 @@ targets:
             accuracy: {}
       wh_llmbox_perf:
         entries:
-          - batch_size: null
-            seq_len: null
+          - batch_size: 1
+            seq_len: 131072
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+          - batch_size: 32
+            seq_len: 131072
             status: TODO
             perf: {}
             accuracy: {}
@@ -239,7 +247,7 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
+          - batch_size: 1
             seq_len: null
             status: TODO
             perf: {}
@@ -251,7 +259,7 @@ targets:
     skus:
       wh_galaxy_perf:
         entries:
-          - batch_size: null
+          - batch_size: 1
             seq_len: null
             status: TODO
             perf: {}
@@ -263,8 +271,15 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
+          - batch_size: 1
             seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U03FJB5TM5Y # Colman Glagovich
+            team: models
+          - batch_size: 32
+            seq_len: 128
             status: TODO
             perf: {}
             accuracy: {}
@@ -275,7 +290,7 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
+          - batch_size: 1
             seq_len: null
             status: TODO
             perf: {}
@@ -287,8 +302,8 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
-            seq_len: null
+          - batch_size: 32
+            seq_len: 131072
             status: TODO
             perf: {}
             accuracy: {}
@@ -311,7 +326,7 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
+          - batch_size: 1
             seq_len: null
             status: TODO
             perf: {}
@@ -323,7 +338,7 @@ targets:
     skus:
       wh_galaxy_perf:
         entries:
-          - batch_size: null
+          - batch_size: 1
             seq_len: null
             status: TODO
             perf: {}
@@ -347,7 +362,7 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
+          - batch_size: 32
             seq_len: null
             status: TODO
             perf: {}
@@ -383,7 +398,7 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
+          - batch_size: 32
             seq_len: null
             status: TODO
             perf: {}
@@ -395,7 +410,7 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
+          - batch_size: 32
             seq_len: null
             status: TODO
             perf: {}
@@ -408,7 +423,7 @@ targets:
       wh_n150:
         entries:
           - batch_size: null
-            seq_len: null
+            seq_len: 1024
             status: TODO
             perf: {}
             accuracy: {}
@@ -420,7 +435,7 @@ targets:
       wh_llmbox_perf:
         entries:
           - batch_size: null
-            seq_len: null
+            seq_len: 128
             status: TODO
             perf: {}
             accuracy: {}
@@ -431,7 +446,7 @@ targets:
     skus:
       wh_galaxy_perf:
         entries:
-          - batch_size: null
+          - batch_size: 128
             seq_len: null
             status: TODO
             perf: {}
@@ -455,8 +470,8 @@ targets:
     skus:
       wh_n150:
         entries:
-          - batch_size: null
-            seq_len: null
+          - batch_size: 32
+            seq_len: 128
             status: TODO
             perf: {}
             accuracy: {}
