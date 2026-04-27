@@ -302,10 +302,10 @@ PoolCBSizes calculate_pool_cb_sizes(
     // back to the worst case (3 uint16 indices per output element + 2-byte segment count).
     sizes.config_tensor_l1_size = 0;
     if (config_tensor_in_dram) {
-        const uint32_t reader_indices_worst_case = (output_shard_shape[0] * 6) + 2;
+        const uint32_t reader_indices_worst_case = (output_shard_shape[0] * 3 * sizeof(uint16_t)) + 2;
         sizes.config_tensor_l1_size += reader_indices_actual_page_size.value_or(reader_indices_worst_case);
         if (!one_scalar_per_core) {
-            const uint32_t scalar_config_worst_case = output_shard_shape[0] * 6;
+            const uint32_t scalar_config_worst_case = output_shard_shape[0] * 3 * sizeof(uint16_t);
             sizes.config_tensor_l1_size += scalar_config_actual_page_size.value_or(scalar_config_worst_case);
         }
     }
