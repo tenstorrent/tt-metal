@@ -589,18 +589,22 @@ class ReduceToOneB1:
 
                 # Add fabric connection args for fabric cores (must be done after program creation)
                 # ROOT1 doesn't send via fabric for exit socket, so skip that fabric setup
-                if not is_root1:
-                    for fc_idx, fc in enumerate(fabric_cores):
-                        link_idx = 0 if fc_idx < num_columns // 2 else 1
-                        fc_kernel_idx = None
-                        for group in kernel_result.groups:
-                            if group.compile_time_arg_values.get(
-                                "is_fabric_core"
-                            ) == 1 and group.core_range_set.contains(fc):
-                                fc_kernel_idx = group.brisc_kernel_index
-                                break
+                for fc_idx, fc in enumerate(fabric_cores):
+                    fc_kernel_idx = None
+                    for group in kernel_result.groups:
+                        if group.compile_time_arg_values.get("is_fabric_core") == 1 and group.core_range_set.contains(
+                            fc
+                        ):
+                            fc_kernel_idx = group.brisc_kernel_index
+                            break
 
-                        fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
+                    fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
+
+                    if is_root1:
+                        # append empty args to maintain rt arg length consistency across all devices
+                        fabric_conn_args = [0, 0, 0]
+                    else:
+                        link_idx = 0 if fc_idx < num_columns // 2 else 1
                         fabric_conn_args = ttnn.setup_fabric_connection(
                             fabric_node_id,
                             dest_fabric_node_id,
@@ -608,7 +612,8 @@ class ReduceToOneB1:
                             program,
                             fc,
                         )
-                        fabric_rt_args_ref.extend(fabric_conn_args)
+
+                    fabric_rt_args_ref.extend(fabric_conn_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 

@@ -387,8 +387,10 @@ class DecoderBlock:
                 {
                     "reduce_brisc_worker_core_rt_arg_base": reduce_rt_arg_base,
                     "reduce_brisc_fabric_core_rt_arg_base": reduce_rt_arg_base,
+                    "pipeline_stage_sync_rt_arg_base": reduce_rt_arg_base + 7,
                 },
             )
+
             merged_ucd = ctx["unified_compile_time_core_descriptors"] + moe.device_unified_core_descs
             merged_pcd = ctx["per_core_compile_time_descriptors"] + moe.device_per_core_descs
             mesh_coord_args = [("mesh_row", row), ("mesh_col", col)]

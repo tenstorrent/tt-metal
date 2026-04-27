@@ -1719,7 +1719,7 @@ class MoeRoutedExpertOp:
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
             ("reduce_brisc_worker_core_rt_arg_base", 0),
             ("reduce_brisc_fabric_core_rt_arg_base", 0),
-            ("reduce_persistent_fabric_rt_arg_base", 18),
+            ("pipeline_stage_sync_rt_arg_base", 7),
             # Broadcast (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
         ]
@@ -4263,41 +4263,44 @@ class MoeOp:
         if ctx.enable_reduce_to_one:
             use_torus = self.is_torus and reduce_root_coord[0] in [0, 3]
             device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
-            if device_role != MESH_ROOT1:
-                reduce_params = ctx.reduce_params
-                mesh_device = ctx.mesh_device
-                if device_role == MESH_LEAF:
-                    if use_torus:
-                        dest_coord = (
-                            ttnn.MeshCoordinate(row - 1, col) if row == 1 else ttnn.MeshCoordinate(row + 1, col)
-                        )
-                    else:
-                        dest_coord = (
-                            ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
-                        )
-                elif device_role == MESH_ROOT3:
-                    dest_coord = ttnn.MeshCoordinate(reduce_root_coord[0], col)
+
+            reduce_params = ctx.reduce_params
+            mesh_device = ctx.mesh_device
+            if device_role == MESH_LEAF:
+                if use_torus:
+                    dest_coord = ttnn.MeshCoordinate(row - 1, col) if row == 1 else ttnn.MeshCoordinate(row + 1, col)
                 else:
-                    dest_coord = reduce_root_coord
+                    dest_coord = ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
+            elif device_role == MESH_ROOT3:
+                dest_coord = ttnn.MeshCoordinate(reduce_root_coord[0], col)
+            else:
+                dest_coord = reduce_root_coord
 
-                fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
-                num_columns = reduce_params["num_columns"]
+            fabric_node_id = mesh_device.get_fabric_node_id(coord)
+            dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
+            num_columns = reduce_params["num_columns"]
 
-                for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
+            for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
+                fc_kernel_idx = None
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get(
+                        "is_reduce_fabric_core"
+                    ) == 1 and group.core_range_set.contains(fc):
+                        fc_kernel_idx = group.brisc_kernel_index
+                        break
+
+                fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
+
+                if device_role == MESH_ROOT1:
+                    # append empty args to maintain rt arg length consistency across all devices
+                    fabric_conn_args = [0, 0, 0]
+                else:
                     link_idx = 0 if fc_idx < num_columns // 2 else 1
-                    fc_kernel_idx = None
-                    for group in kernel_result.groups:
-                        if group.compile_time_arg_values.get(
-                            "is_reduce_fabric_core"
-                        ) == 1 and group.core_range_set.contains(fc):
-                            fc_kernel_idx = group.brisc_kernel_index
-                            break
-                    fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
                     fabric_conn_args = ttnn.setup_fabric_connection(
                         fabric_node_id, dest_fabric_node_id, link_idx, program, fc
                     )
-                    fabric_rt_args_ref.extend(fabric_conn_args)
+
+                fabric_rt_args_ref.extend(fabric_conn_args)
 
         # Broadcast fabric connections
         if ctx.enable_bcast and len(self.bcast_dst_nodes) > 0:
