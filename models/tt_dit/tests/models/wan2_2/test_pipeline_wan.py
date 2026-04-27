@@ -14,6 +14,7 @@ from PIL import Image
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, apply_quant_config
+from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 
 from ....utils.test import line_params, ring_params
 
@@ -147,13 +148,8 @@ def test_pipeline_inference(
 
         return frames
 
-    if no_prompt:
-        frames = run(prompt=prompt, number=0, seed=42)
-
-        # CLIP evaluation (rank 0 only)
+    def evaluate_output_with_clip(prompt, frames):
         if int(ttnn.distributed_context_get_rank()) == 0:
-            from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
-
             # Sample ~8 evenly-spaced frames from the video
             total_frames = frames.shape[0]
             indices = np.linspace(0, total_frames - 1, min(8, total_frames), dtype=int)
@@ -177,6 +173,10 @@ def test_pipeline_inference(
                 f"Mean CLIP score {clip_mean:.2f} is below threshold 24.0. "
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
+
+    if no_prompt:
+        frames = run(prompt=prompt, number=0, seed=42)
+        evaluate_output_with_clip(prompt, frames)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -184,4 +184,5 @@ def test_pipeline_inference(
                 prompt = new_prompt
             if prompt[0] == "q":
                 break
-            run(prompt=prompt, number=i, seed=i)
+            frames = run(prompt=prompt, number=i, seed=i)
+            evaluate_output_with_clip(prompt, frames)
