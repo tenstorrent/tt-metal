@@ -62,7 +62,7 @@ class DatacopyFpu(Fpu):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
         num_faces = operation.output.tile_shape.total_num_faces()
-        is_int_fpu_en = dest_acc
+        is_int_fpu_en = "false"
 
         return (
             f"    // Operation {stage}: Datacopy FPU\n"
@@ -99,4 +99,5 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, false>();\n"
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
+        return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, {unpack_to_dest}>();\n"

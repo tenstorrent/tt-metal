@@ -20,6 +20,7 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
     Transpose,
+    UnpackToDest,
 )
 from pydantic import (
     BaseModel,
@@ -144,6 +145,7 @@ class FpuMathSchema(BaseModel):
     unpack_transpose_within_face: Transpose = Transpose.No
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
+    unpack_to_dest: UnpackToDest = UnpackToDest.No
     src_a: str = Field(..., min_length=1)
     src_b: str = Field(..., min_length=1)
 
@@ -333,6 +335,8 @@ class FpuMathSchema(BaseModel):
             kwargs["clear_fp32_dst_acc"] = clear_fp32_dst_acc
         if self.acc_to_dest:
             kwargs["acc_to_dest"] = self.acc_to_dest
+        if self.unpack_to_dest:
+            kwargs["unpack_to_dest"] = self.unpack_to_dest
 
         return ComputeNode(
             fpu=fpu, src_a=src_a, src_b=src_b, output=output, sfpu=None, **kwargs

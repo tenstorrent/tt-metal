@@ -135,7 +135,7 @@ class UnpackerA(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        unpack_to_dest = "true" if operation.unpack_to_dest else "false"
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
@@ -157,7 +157,7 @@ class UnpackerA(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        unpack_to_dest = "true" if operation.unpack_to_dest else "false"
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value

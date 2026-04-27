@@ -60,7 +60,7 @@ class DatacopyFpu(Fpu):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
         num_faces = operation.output.tile_shape.total_num_faces()
-        is_int_fpu_en = dest_acc
+        is_int_fpu_en = "false"
 
         return (
             f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}>(\n"
@@ -78,7 +78,7 @@ class DatacopyFpu(Fpu):
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        unpack_to_dest = "true" if operation.unpack_to_dest else "false"
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
 
         code = (
@@ -96,5 +96,6 @@ class DatacopyFpu(Fpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, false>();\n"
+        return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, {unpack_to_dest}>();\n"
