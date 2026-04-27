@@ -1392,6 +1392,9 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // ETH cores not in p25 force-reset must NOT have deassert called — their BRISC was
     // never halted in Phase 2 (resetting ERISC tears down the ETH PHY link on WH).
     if (!pending_phase25_force_reset_chans_.empty()) {
+        // FIX AS (#42429): track which logical cores were successfully deasserted so we can
+        // poll each one individually rather than sleeping a fixed 50ms.
+        std::vector<CoreCoord> deasserted_lcs_inline;
         for (uint32_t p0_idx = 0; p0_idx < logical_cores_used.size(); p0_idx++) {
             if (hal.get_core_type(p0_idx) != CoreType::ETH) {
                 continue;
@@ -1416,6 +1419,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         lc0.x,
                         lc0.y,
                         eth_chan_0);
+                    deasserted_lcs_inline.push_back(lc0);
                 } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
@@ -1436,15 +1440,85 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 }
             }
         }
-        constexpr uint32_t kForceResetBootWaitMs = 50;
-        std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetBootWaitMs));
+        // FIX AS (#42429): per-channel poll replacing blind 50ms sleep.
+        // Wait for each deasserted ERISC to reach UMD relay canary (0x49706550) or TERMINATED
+        // before writing launch messages — prevents race with .bss init zeroing edm_status.
+        constexpr uint32_t kForceResetPollIntervalMs_inline = 5;
+        constexpr uint32_t kForceResetPollTimeoutMs_inline = 500;
+        constexpr uint32_t umd_relay_canary_p0 = 0x49706550U;
+        constexpr uint32_t terminated_val_p0 =
+            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+        const auto erisc_sync_addr_p0 =
+            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        uint32_t total_waited_ms_p0 = 0;
+        bool all_ready_p0 = deasserted_lcs_inline.empty();
+        while (!all_ready_p0 && total_waited_ms_p0 < kForceResetPollTimeoutMs_inline) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kForceResetPollIntervalMs_inline));
+            total_waited_ms_p0 += kForceResetPollIntervalMs_inline;
+            all_ready_p0 = true;
+            for (const auto& lc_poll : deasserted_lcs_inline) {
+                std::vector<uint32_t> poll_buf(1, 0U);
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, lc_poll, erisc_sync_addr_p0, 4, poll_buf, CoreType::ETH);
+                } catch (...) {
+                    poll_buf[0] = 0U;
+                }
+                if (poll_buf[0] != umd_relay_canary_p0 && poll_buf[0] != terminated_val_p0) {
+                    all_ready_p0 = false;
+                }
+            }
+        }
+        // Report final per-channel state; mark channels still at 0x0 as dead.
+        for (const auto& lc_rpt : deasserted_lcs_inline) {
+            std::vector<uint32_t> final_buf(1, 0U);
+            try {
+                detail::ReadFromDeviceL1(
+                    this, lc_rpt, erisc_sync_addr_p0, 4, final_buf, CoreType::ETH);
+            } catch (...) {
+                final_buf[0] = 0U;
+            }
+            const bool ready_p0 =
+                (final_buf[0] == umd_relay_canary_p0 || final_buf[0] == terminated_val_p0);
+            if (ready_p0) {
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AS): "
+                    "ETH logical ({},{}) reached ready state 0x{:08x} after {}ms",
+                    this->id(),
+                    lc_rpt.x,
+                    lc_rpt.y,
+                    final_buf[0],
+                    total_waited_ms_p0);
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AS): "
+                    "ETH logical ({},{}) NOT ready after {}ms (status=0x{:08x}) — "
+                    "marking channel dead",
+                    this->id(),
+                    lc_rpt.x,
+                    lc_rpt.y,
+                    total_waited_ms_p0,
+                    final_buf[0]);
+                try {
+                    auto dead_chan_inline = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(
+                            lc_rpt.x, lc_rpt.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    pending_quiesce_newly_dead_eth_chans_.insert(dead_chan_inline);
+                } catch (...) {
+                }
+            }
+        }
         log_info(
             tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR) complete — "
-            "{} force-reset channel(s) deasserted; waited {}ms for base UMD firmware boot",
+            "quiesce_and_restart_fabric_workers: Device {} Pass-0 (FIX AR+AS) complete — "
+            "{} channel(s) deasserted; waited {}ms for UMD firmware boot",
             this->id(),
-            pending_phase25_force_reset_chans_.size(),
-            kForceResetBootWaitMs);
+            deasserted_lcs_inline.size(),
+            total_waited_ms_p0);
     }
 
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
@@ -1547,10 +1621,13 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     } catch (...) {
                     }
                 }
-                const bool status_ok_inline = (pre_launch_buf[0] == 0x0) ||
-                                              (pre_launch_buf[0] == terminated_val) ||
-                                              (is_force_reset_chan_inline &&
-                                               pre_launch_buf[0] == umd_relay_canary);
+                // FIX AS (#42429): force-reset channels must show UMD canary or TERMINATED —
+                // NOT 0x0, which means .bss init hasn't completed and edm_status would get
+                // zeroed after we write the launch message (the root cause of the race).
+                const bool status_ok_inline =
+                    (pre_launch_buf[0] == terminated_val) ||
+                    (!is_force_reset_chan_inline && pre_launch_buf[0] == 0x0) ||
+                    (is_force_reset_chan_inline && pre_launch_buf[0] == umd_relay_canary);
                 if (!status_ok_inline) {
                     log_warning(
                         tt::LogMetal,
@@ -1715,6 +1792,8 @@ void Device::launch_eth_cores_for_quiesce() {
     // is already in the polling loop (exactly like TERMINATED channels) and picks up
     // the message immediately.
     if (!p25_force_reset.empty()) {
+        // Collect the logical cores that were successfully deasserted so we can poll them.
+        std::vector<CoreCoord> deasserted_lcs;
         for (uint32_t p0_idx = 0; p0_idx < logical_cores_used.size(); p0_idx++) {
             if (hal.get_core_type(p0_idx) != CoreType::ETH) {
                 continue;
@@ -1739,6 +1818,7 @@ void Device::launch_eth_cores_for_quiesce() {
                         lc0.x,
                         lc0.y,
                         eth_chan_0);
+                    deasserted_lcs.push_back(lc0);
                 } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
@@ -1759,17 +1839,95 @@ void Device::launch_eth_cores_for_quiesce() {
                 }
             }
         }
-        // Wait for base UMD firmware to complete .bss init (which zeroes the LAUNCH mailbox)
-        // and enter its polling loop before Pass 1 writes launch messages.
-        constexpr uint32_t kForceResetBootWaitMs = 50;
-        std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetBootWaitMs));
+        // FIX AS (#42429): Replace blind 50 ms sleep with per-channel polling for the UMD relay
+        // canary (0x49706550) at erisc_sync_addr. The 50 ms sleep was a heuristic for the time
+        // needed for the ERISC C-runtime .bss init to complete and UMD relay firmware to enter
+        // its polling loop (at which point it writes 0x49706550 to erisc_sync_addr). If .bss init
+        // takes longer than 50 ms, the launch message written in Phase 3 is overwritten by the
+        // .bss zeroing, the ERISC enters UMD mode and never writes STARTED, Phase 5 times out
+        // with status=0x0 and incorrectly marks the relay path broken on an MMIO device.
+        //
+        // Fix: poll each deasserted channel until it shows the UMD canary (0x49706550) or
+        // TERMINATED (0xA4B4C4D4), up to kForceResetPollTimeoutMs. Channels that remain at 0x0
+        // after the timeout are dead/non-booting; mark them in pending_quiesce_newly_dead_eth_chans_
+        // so Phase 5 and subsequent quiesce operations skip them.
+        constexpr uint32_t kForceResetPollIntervalMs = 5;
+        constexpr uint32_t kForceResetPollTimeoutMs = 500;
+        constexpr uint32_t umd_relay_canary_poll = 0x49706550U;
+        constexpr uint32_t terminated_val_poll =
+            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+        const auto erisc_sync_addr_poll =
+            builder_ctx.get_fabric_router_sync_address_and_status().first;
+
+        uint32_t total_waited_ms = 0;
+        bool all_ready = deasserted_lcs.empty();
+        while (!all_ready && total_waited_ms < kForceResetPollTimeoutMs) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kForceResetPollIntervalMs));
+            total_waited_ms += kForceResetPollIntervalMs;
+            all_ready = true;
+            for (const auto& lc_poll : deasserted_lcs) {
+                std::vector<uint32_t> poll_buf(1, 0U);
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, lc_poll, erisc_sync_addr_poll, 4, poll_buf, CoreType::ETH);
+                } catch (...) {
+                    poll_buf[0] = 0U;
+                }
+                if (poll_buf[0] != umd_relay_canary_poll && poll_buf[0] != terminated_val_poll) {
+                    all_ready = false;
+                }
+            }
+        }
+
+        // Report outcome per channel; mark channels still at 0x0 as dead.
+        for (const auto& lc_rpt : deasserted_lcs) {
+            std::vector<uint32_t> rpt_buf(1, 0U);
+            try {
+                detail::ReadFromDeviceL1(
+                    this, lc_rpt, erisc_sync_addr_poll, 4, rpt_buf, CoreType::ETH);
+            } catch (...) {
+                rpt_buf[0] = 0U;
+            }
+            const bool ready =
+                (rpt_buf[0] == umd_relay_canary_poll || rpt_buf[0] == terminated_val_poll);
+            if (ready) {
+                log_info(
+                    tt::LogMetal,
+                    "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AS): "
+                    "ETH logical ({},{}) UMD ready after {}ms — status=0x{:08x}",
+                    this->id(),
+                    lc_rpt.x,
+                    lc_rpt.y,
+                    total_waited_ms,
+                    rpt_buf[0]);
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AS): "
+                    "ETH logical ({},{}) did NOT reach UMD ready after {}ms (status=0x{:08x}) — "
+                    "marking dead, skipping launch",
+                    this->id(),
+                    lc_rpt.x,
+                    lc_rpt.y,
+                    total_waited_ms,
+                    rpt_buf[0]);
+                try {
+                    auto dead_chan = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(lc_rpt.x, lc_rpt.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    pending_quiesce_newly_dead_eth_chans_.insert(dead_chan);
+                } catch (...) {
+                }
+            }
+        }
+
         log_info(
             tt::LogMetal,
-            "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR) complete — "
+            "launch_eth_cores_for_quiesce: Device {} Pass-0 (FIX AR+AS) complete — "
             "{} force-reset channel(s) deasserted; waited {}ms for base UMD firmware boot",
             this->id(),
             p25_force_reset.size(),
-            kForceResetBootWaitMs);
+            total_waited_ms);
     }
 
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
@@ -1876,9 +2034,13 @@ void Device::launch_eth_cores_for_quiesce() {
                     } catch (...) {
                     }
                 }
-                const bool status_ok = (pre_launch_buf[0] == 0x0) ||
-                                       (pre_launch_buf[0] == terminated_val) ||
-                                       (is_force_reset_chan && pre_launch_buf[0] == umd_relay_canary);
+                // FIX AS (#42429): force-reset channels must show UMD canary or TERMINATED —
+                // NOT 0x0, which means .bss init hasn't completed and edm_status would be
+                // zeroed after the launch message write (root cause of the race condition).
+                const bool status_ok =
+                    (pre_launch_buf[0] == terminated_val) ||
+                    (!is_force_reset_chan && pre_launch_buf[0] == 0x0) ||
+                    (is_force_reset_chan && pre_launch_buf[0] == umd_relay_canary);
                 if (!status_ok) {
                     log_warning(
                         tt::LogMetal,
