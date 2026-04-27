@@ -394,7 +394,7 @@ def test_attention_block(
     # KV Cache Branch RMSNorm gamma
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
 
-    # Folded weights for kernel: gamma pre-multiplied into projection weights (_folded_gamma pattern).
+    # Folded weights for kernel: gamma pre-multiplied into projection weights.
     # Kernel uses folded weights + do_gamma=false in RMSNorm.
     # Golden uses original weights + explicit gamma in RMSNorm (see AttentionBlock.golden).
     torch_matmul_weights_folded = torch_matmul_weights * torch_gamma.reshape(-1, 1)
