@@ -8,6 +8,66 @@
 #include "api/dataflow/dataflow_api.h"
 
 /**
+ * ChainConfig: Runtime args for store-and-forward chain configuration.
+ * Mirrors the append_to_args() layout in ring_joint_sdpa_program_factory.cpp.
+ */
+struct ChainConfig {
+    bool participates = false;
+    bool is_injector = false;
+    bool is_sink = false;
+    uint32_t batch = 0;
+    uint32_t head = 0;
+    uint32_t prev_physical_x = 0;
+    uint32_t prev_physical_y = 0;
+    uint32_t next_physical_x = 0;
+    uint32_t next_physical_y = 0;
+    uint32_t next_core_q_chunks = 0;
+    uint32_t mcast_start_x = 0;
+    uint32_t mcast_start_y = 0;
+    uint32_t mcast_end_x = 0;
+    uint32_t mcast_end_y = 0;
+    uint32_t injector_physical_x = 0;
+    uint32_t injector_physical_y = 0;
+    uint32_t mcast_num_dests = 0;
+    uint32_t mcast_sender_wait = 0;
+
+    // Read 18 args in canonical order matching append_to_args()
+    static ChainConfig read_from_args(uint32_t& argidx) {
+        ChainConfig cfg;
+        cfg.participates = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
+        cfg.is_injector = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
+        cfg.is_sink = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
+        cfg.batch = get_arg_val<uint32_t>(argidx++);
+        cfg.head = get_arg_val<uint32_t>(argidx++);
+        cfg.prev_physical_x = get_arg_val<uint32_t>(argidx++);
+        cfg.prev_physical_y = get_arg_val<uint32_t>(argidx++);
+        cfg.next_physical_x = get_arg_val<uint32_t>(argidx++);
+        cfg.next_physical_y = get_arg_val<uint32_t>(argidx++);
+        cfg.next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_start_x = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_start_y = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_end_x = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_end_y = get_arg_val<uint32_t>(argidx++);
+        cfg.injector_physical_x = get_arg_val<uint32_t>(argidx++);
+        cfg.injector_physical_y = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_num_dests = get_arg_val<uint32_t>(argidx++);
+        cfg.mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+        return cfg;
+    }
+
+    // Compute signal target based on mcast mode
+    template <bool mcast_enabled>
+    uint32_t signal_target_x() const {
+        return mcast_enabled ? injector_physical_x : prev_physical_x;
+    }
+
+    template <bool mcast_enabled>
+    uint32_t signal_target_y() const {
+        return mcast_enabled ? injector_physical_y : prev_physical_y;
+    }
+};
+
+/**
  * ChainLink: Unified abstraction for store-and-forward chaining.
  *
  * Each core in a chain is a "link" that can receive from upstream and forward downstream.

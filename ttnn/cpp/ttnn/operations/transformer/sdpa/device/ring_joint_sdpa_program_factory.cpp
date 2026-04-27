@@ -478,16 +478,26 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
     };
 
-    const auto head_sems = ChainSemaphores::create(program, core_grid);   // head chain (V, optionally K)
-    const auto batch_sems = ChainSemaphores::create(program, core_grid);  // batch chain (K in MLA mode)
+    // K chain selection: batch chain when NHK == 1 (MLA mode), else head chain
+    // Computed early to gate resource allocation
+    const bool k_uses_batch_chain = (NHK == 1);
+
+    const auto head_sems = ChainSemaphores::create(program, core_grid);  // head chain (V, optionally K)
+    // Only create batch semaphores for MLA mode (NHK == 1)
+    std::optional<ChainSemaphores> batch_sems;
+    if (k_uses_batch_chain) {
+        batch_sems = ChainSemaphores::create(program, core_grid);  // batch chain (K in MLA mode)
+    }
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
+    // Kernel derives k_uses_batch_chain from NHK, so batch chain args are conditionally present
     const auto sem_args_offset = reader_compile_time_args.size();
     head_sems.append_to_compile_args(reader_compile_time_args);
     reader_compile_time_args.push_back(0);  // head_mcast_enabled placeholder (patched after chain construction)
-    batch_sems.append_to_compile_args(reader_compile_time_args);
-    reader_compile_time_args.push_back(0);  // batch_mcast_enabled placeholder (patched after chain construction)
-    reader_compile_time_args.push_back(0);  // k_uses_batch_chain placeholder (patched after chain construction)
+    if (k_uses_batch_chain) {
+        batch_sems->append_to_compile_args(reader_compile_time_args);
+        reader_compile_time_args.push_back(0);  // batch_mcast_enabled placeholder (patched after chain construction)
+    }
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -1262,15 +1272,14 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
     }
 
-    // Update mcast and chain selection compile-time args
+    // Update mcast compile-time args
     const bool head_mcast_enabled = (mcast_chains > 0);
-    const bool k_uses_batch_chain = (NHK == 1);  // MLA mode: K uses batch chain; otherwise uses head chain
 
     reader_compile_time_args[sem_args_offset + 3] = head_mcast_enabled ? 1 : 0;
-    // When K uses head chain (non-MLA), align batch_mcast_enabled with head_mcast_enabled so types match
-    reader_compile_time_args[sem_args_offset + 7] =
-        k_uses_batch_chain ? (k_mcast_enabled ? 1 : 0) : (head_mcast_enabled ? 1 : 0);
-    reader_compile_time_args[sem_args_offset + 8] = k_uses_batch_chain ? 1 : 0;
+    // Batch chain args only present when k_uses_batch_chain (NHK == 1)
+    if (k_uses_batch_chain) {
+        reader_compile_time_args[sem_args_offset + 7] = k_mcast_enabled ? 1 : 0;
+    }
 
     log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
     if (k_uses_batch_chain) {
@@ -1357,9 +1366,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         // Head chain (V chain, optionally K in non-MLA): 18 args via unified layout
         head_chain.append_to_args(reader_args);
 
-        // Batch chain (K chain in MLA mode): 18 args via unified layout + 1 for loop padding
-        batch_chain.append_to_args(reader_args);
-        reader_args.push_back(max_global_q_count);  // For K mcast loop padding
+        // Batch chain (K chain in MLA mode): 18 args + 1 for loop padding (only when NHK == 1)
+        if (k_uses_batch_chain) {
+            batch_chain.append_to_args(reader_args);
+            reader_args.push_back(max_global_q_count);  // For K mcast loop padding
+        }
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);

@@ -12,6 +12,9 @@ void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t NHK = get_compile_time_arg_val(2);
+    // K chain selection: batch chain when NHK == 1 (MLA mode), else head chain
+    // Derived from NHK to enable conditional arg layout (saves resources when unused)
+    constexpr bool k_uses_batch_chain = (NHK == 1);
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
@@ -56,48 +59,16 @@ void kernel_main() {
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
-    // Head chain runtime args (unified layout: participates, is_injector, is_sink,
-    // batch, head, prev_x/y, next_x/y, next_q_chunks, mcast_start_x/y, mcast_end_x/y,
-    // injector_x/y, mcast_num_dests, mcast_sender_wait)
-    const uint32_t v_is_chain_participant = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_is_injector = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_is_sink = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_batch = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_head = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_prev_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_prev_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_next_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_next_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_mcast_start_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_mcast_start_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_mcast_end_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_mcast_end_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_injector_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_injector_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_mcast_num_dests = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+    // Head chain runtime args (always present)
+    const ChainConfig head_cfg = ChainConfig::read_from_args(argidx);
 
-    // Batch chain runtime args (same unified layout; head field is unused for batch-level chains)
-    const uint32_t k_is_chain_participant = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_is_injector = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_is_sink = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_chain_batch = get_arg_val<uint32_t>(argidx++);
-    argidx++;  // head field unused for batch-level K chain
-    const uint32_t k_prev_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_prev_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_next_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_next_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_next_core_total_reads = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_mcast_start_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_mcast_start_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_mcast_end_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_mcast_end_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_injector_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_injector_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_mcast_num_dests = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
-    const uint32_t max_q_per_core = get_arg_val<uint32_t>(argidx++);
+    // Batch chain runtime args (only present when k_uses_batch_chain / NHK == 1)
+    ChainConfig batch_cfg;  // default zero-initialized
+    uint32_t max_q_per_core = 0;
+    if constexpr (k_uses_batch_chain) {
+        batch_cfg = ChainConfig::read_from_args(argidx);
+        max_q_per_core = get_arg_val<uint32_t>(argidx++);
+    }
 
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
@@ -115,18 +86,28 @@ void kernel_main() {
         get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2));
     constexpr bool head_mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
 
-    // Batch chain semaphores (batch-level chain, only active when NHK == 1)
-    uint32_t batch_sender_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4));
-    uint32_t batch_receiver_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5));
-    uint32_t batch_valid_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6));
-    constexpr bool batch_mcast_enabled =
-        get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7) == 1;
+    // Batch chain semaphores (only present when k_uses_batch_chain / NHK == 1)
+    // Initialize to 0; will be overwritten if k_uses_batch_chain
+    uint32_t batch_sender_semaphore_addr = 0;
+    uint32_t batch_receiver_semaphore_addr = 0;
+    uint32_t batch_valid_semaphore_addr = 0;
 
-    // K chain selection: batch chain when NHK == 1, else head chain
-    constexpr bool k_uses_batch_chain = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 8) == 1;
+    // batch_mcast_enabled: read from compile-time args if present, else false (for template instantiation)
+    constexpr bool batch_mcast_enabled = []() {
+        if constexpr (k_uses_batch_chain) {
+            return get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7) == 1;
+        }
+        return false;
+    }();
+
+    if constexpr (k_uses_batch_chain) {
+        batch_sender_semaphore_addr =
+            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4));
+        batch_receiver_semaphore_addr =
+            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5));
+        batch_valid_semaphore_addr =
+            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6));
+    }
 
     // TODO: CB indices below are hardcoded and duplicated from the program factory.
     // They should be passed as compile-time args so the factory is the single source of truth.
@@ -143,51 +124,51 @@ void kernel_main() {
 
     // Head chain (head-level): matches (batch, head), used by V and optionally K
     ChainLink<head_mcast_enabled, true> head_chain(
-        static_cast<bool>(v_is_chain_participant),
-        static_cast<bool>(v_is_injector),
-        static_cast<bool>(v_is_sink),
+        head_cfg.participates,
+        head_cfg.is_injector,
+        head_cfg.is_sink,
         head_sender_semaphore_addr,
         head_receiver_semaphore_addr,
         head_valid_semaphore_addr,
-        head_mcast_enabled ? v_injector_physical_x : v_prev_physical_x,
-        head_mcast_enabled ? v_injector_physical_y : v_prev_physical_y,  // signal_target
-        v_next_physical_x,
-        v_next_physical_y,  // next_core (unicast target)
-        v_mcast_start_x,
-        v_mcast_start_y,
-        v_mcast_end_x,
-        v_mcast_end_y,
-        v_mcast_num_dests,
-        v_mcast_sender_wait,
+        head_cfg.signal_target_x<head_mcast_enabled>(),
+        head_cfg.signal_target_y<head_mcast_enabled>(),
+        head_cfg.next_physical_x,
+        head_cfg.next_physical_y,
+        head_cfg.mcast_start_x,
+        head_cfg.mcast_start_y,
+        head_cfg.mcast_end_x,
+        head_cfg.mcast_end_y,
+        head_cfg.mcast_num_dests,
+        head_cfg.mcast_sender_wait,
         v_chunk_tiles,
         v_tile_bytes,
-        chain_batch,
-        chain_head,
-        v_next_core_q_chunks);
+        head_cfg.batch,
+        head_cfg.head,
+        head_cfg.next_core_q_chunks);
 
     // Batch chain (batch-level): matches batch only, used by K when NHK == 1 (MLA mode)
     ChainLink<batch_mcast_enabled, false> batch_chain(
-        static_cast<bool>(k_is_chain_participant),
-        static_cast<bool>(k_is_injector),
-        static_cast<bool>(k_is_sink),
+        batch_cfg.participates,
+        batch_cfg.is_injector,
+        batch_cfg.is_sink,
         batch_sender_semaphore_addr,
         batch_receiver_semaphore_addr,
         batch_valid_semaphore_addr,
-        batch_mcast_enabled ? k_injector_physical_x : k_prev_physical_x,
-        batch_mcast_enabled ? k_injector_physical_y : k_prev_physical_y,  // signal_target
-        k_next_physical_x,
-        k_next_physical_y,  // next_core (unicast target)
-        k_mcast_start_x,
-        k_mcast_start_y,  // mcast_start
-        k_mcast_end_x,
-        k_mcast_end_y,  // mcast_end
-        k_mcast_num_dests,
-        k_mcast_sender_wait,
+        batch_cfg.signal_target_x<batch_mcast_enabled>(),
+        batch_cfg.signal_target_y<batch_mcast_enabled>(),
+        batch_cfg.next_physical_x,
+        batch_cfg.next_physical_y,
+        batch_cfg.mcast_start_x,
+        batch_cfg.mcast_start_y,
+        batch_cfg.mcast_end_x,
+        batch_cfg.mcast_end_y,
+        batch_cfg.mcast_num_dests,
+        batch_cfg.mcast_sender_wait,
         k_chunk_tiles,
         k_tile_bytes,
-        k_chain_batch,
+        batch_cfg.batch,
         0,  // chain_head unused for batch-level chain
-        k_next_core_total_reads);
+        batch_cfg.next_core_q_chunks);
 
     // V always uses head chain
     auto& v_chain = head_chain;
