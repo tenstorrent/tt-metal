@@ -205,6 +205,7 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
     ComputeConfigDescriptor compute_config{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
