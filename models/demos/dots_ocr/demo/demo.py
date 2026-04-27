@@ -142,7 +142,9 @@ def run_hf_backend(
 ) -> str:
     logger.info(f"[HF] Loading {model_id}")
     ref = DotsOCRReference(HFLoadSpec(model_id=model_id, use_fast_processor=not use_slow_processor))
-    image = Image.open(image_path).convert("RGB") if os.path.exists(image_path) else None
+    if image_path and not os.path.exists(image_path):
+        raise FileNotFoundError(f"--image path does not exist: {image_path}")
+    image = Image.open(image_path).convert("RGB") if image_path else None
     inputs = ref.preprocess_image_and_prompt(image, prompt)
 
     gen_extras: dict = {}
@@ -527,7 +529,9 @@ def run_ttnn_backend(
             vision_model_args = None
 
         # --- Build inputs ----------------------------------------------------
-        image = Image.open(image_path).convert("RGB") if os.path.exists(image_path) else None
+        if image_path and not os.path.exists(image_path):
+            raise FileNotFoundError(f"--image path does not exist: {image_path}")
+        image = Image.open(image_path).convert("RGB") if image_path else None
         inputs = ref.preprocess_image_and_prompt(image, prompt)
 
         if sanity_text_only:

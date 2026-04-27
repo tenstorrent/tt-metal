@@ -73,12 +73,33 @@ class DotsOCRReference:
         """
 
         def _run_processor(_prompt: str):
-            try:
-                return self.processor(images=image, text=_prompt, return_tensors="pt")
-            except TypeError:
-                if image is not None:
-                    raise
+            # HF processors differ across versions:
+            # - some expect images=<PIL.Image>
+            # - some expect images=[<PIL.Image>]
+            # - some may not return pixel_values unless the image arg matches expected structure
+            if image is None:
                 return self.processor(text=_prompt, return_tensors="pt")
+            errors: list[Exception] = []
+            for img_arg in (image, [image]):
+                try:
+                    out = self.processor(images=img_arg, text=_prompt, return_tensors="pt")
+                    # If processor succeeded but didn't produce vision tensors, keep trying.
+                    pv = None
+                    try:
+                        pv = out.get("pixel_values", None)  # type: ignore[attr-defined]
+                    except Exception:
+                        pv = getattr(out, "pixel_values", None)
+                    if pv is not None:
+                        return out
+                    # No pixel_values; try alternate image form.
+                    last = out
+                except TypeError as exc:
+                    errors.append(exc)
+                    continue
+            # If we got here, processor calls either failed or did not yield pixel_values.
+            if errors:
+                raise errors[-1]
+            return last  # type: ignore[has-type]
 
         # Many multimodal LMs require a chat template to behave correctly (esp. OCR-like transcription).
         # Prefer the *processor* chat template when available (it knows how to insert image placeholders),
@@ -129,15 +150,44 @@ class DotsOCRReference:
                         f"DotsOCR processor produced 0 image tokens for image_token_id={image_token_id}. "
                         f"Tried prefix token={tok!r}. Please include the model's image placeholder token in the prompt."
                     )
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs.get("attention_mask", torch.ones_like(input_ids))
+        try:
+            pixel_values = inputs.get("pixel_values", None)
+        except Exception:
+            pixel_values = getattr(inputs, "pixel_values", None)
+        try:
+            image_grid_thw = inputs.get("image_grid_thw", None)
+        except Exception:
+            image_grid_thw = getattr(inputs, "image_grid_thw", None)
+        # Some processor variants use different key names.
+        if image_grid_thw is None:
+            try:
+                image_grid_thw = inputs.get("grid_thw", None)
+            except Exception:
+                image_grid_thw = getattr(inputs, "grid_thw", None)
+
+        if image is not None and pixel_values is None:
+            # This is a strong indicator that we're accidentally running text-only.
+            keys = []
+            try:
+                keys = list(inputs.keys())  # type: ignore[attr-defined]
+            except Exception:
+                keys = []
+            print(f"[warn] processor returned no pixel_values for image; keys={keys}")
+
+        if pixel_values is not None:
+            try:
+                model_dtype = next(self.model.parameters()).dtype
+            except Exception:
+                model_dtype = pixel_values.dtype
+            pixel_values = pixel_values.to(dtype=model_dtype)
+
         return DotsOCRInputs(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs.get("attention_mask", torch.ones_like(inputs["input_ids"])),
-            pixel_values=(
-                inputs.get("pixel_values").to(dtype=next(self.model.parameters()).dtype)
-                if inputs.get("pixel_values") is not None
-                else None
-            ),
-            image_grid_thw=inputs.get("image_grid_thw"),
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
         )
 
     def decode_generated_suffix(self, full_sequences: torch.Tensor, prompt_input_ids: torch.Tensor) -> str:
