@@ -32,7 +32,7 @@ def _tokenize_prompt(prompt: str, tokenizer) -> list[int]:
     return enc["input_ids"][0].tolist()
 
 
-def run(prompt: str, *, seq_len: int = 64, max_new_tokens: int = 32) -> tuple[list[int], str]:
+def run(prompt: str, *, seq_len: int = 128, max_new_tokens: int = 32) -> tuple[list[int], str]:
     print(f"\n>>> Prompt: {prompt!r}")
     print(f"    seq_len={seq_len}, max_new_tokens={max_new_tokens}\n")
 
@@ -86,7 +86,7 @@ def main():
     parser.add_argument(
         "--seq-len",
         type=int,
-        default=64,
+        default=128,
         help="Prefill sequence length. Must be > prompt token count. "
         "Larger seq_len → more headroom for generation but more compute "
         "per step. Max ≈ 256 (KV cache buffer size).",

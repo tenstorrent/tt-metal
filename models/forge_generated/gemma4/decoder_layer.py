@@ -127,7 +127,7 @@ class SlidingDecoderLayer:
         k_cache,
         v_cache,
         rms_eps_tensor,
-        seq_len=19,
+        seq_len=128,
     ):
         attention = Attention.from_state_dict_sliding(
             state_dict,
@@ -368,7 +368,7 @@ class FullDecoderLayer:
         v_cache,
         rms_eps_tensor,
         is_terminal=False,
-        seq_len=19,
+        seq_len=128,
     ):
         attention = Attention.from_state_dict_full(
             state_dict,

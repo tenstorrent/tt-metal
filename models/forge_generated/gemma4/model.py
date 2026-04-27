@@ -144,14 +144,16 @@ class Gemma4ForCausalLM:
             raise ValueError(f"unknown mode {mode!r}; expected 'prefill' or 'decode'")
 
     @classmethod
-    def from_state_dict(cls, hf, mesh_device, *, seq_len=19, caches=None):
+    def from_state_dict(cls, hf, mesh_device, *, seq_len=128, caches=None):
         """Build a single-instance Gemma4ForCausalLM that serves both modes.
 
-        `seq_len` is the prefill sequence length (default 19, matching
-        the codegen-baked artifact). Decode bodies are seq_len=1 (not
-        parameterized). To change the prefill seq_len, the caller must
-        also build the runtime input list at the same seq_len (see
-        `synthesize_prefill_inputs`).
+        `seq_len` is the prefill sequence length. Default 128 — leaves
+        plenty of headroom for prompts up to a couple sentences plus
+        room for generation up to 256 (the cache row count). The PCC
+        tests pin seq_len=19 explicitly to match the codegen-baked
+        reference logits. Decode bodies are seq_len=1 (not parameterized).
+        Callers must build the runtime input list at the same seq_len
+        (see `synthesize_prefill_inputs`).
 
         `caches` is an optional pre-built `Gemma4Caches` to share across
         a generator session. If None, allocate fresh zero caches.

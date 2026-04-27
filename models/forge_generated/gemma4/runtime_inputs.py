@@ -103,14 +103,15 @@ def _build_lifted_scalar(value, mesh_device):
     )
 
 
-def synthesize_prefill_inputs(mesh_device, *, seq_len=19):
+def synthesize_prefill_inputs(mesh_device, *, seq_len=128):
     """Return the runtime-inputs dict {slot: ttnn.Tensor} for prefill.
 
-    `seq_len` defaults to 19 (the codegen-baked length); at this value
-    the token-ID fill is the canonical sequence and PCC matches the
-    reference logits. For other seq_lens the caller is expected to
-    overwrite `out[7]` with their own token IDs (the synthesizer just
-    sizes the slot correctly).
+    `seq_len` defaults to 128 — matches `Gemma4ForCausalLM.from_state_dict`'s
+    default. Pass `seq_len=19` to get the codegen-baked canonical token
+    sequence at slot 7 (the only seq_len at which the bundled token-IDs
+    fill produces the reference PCC). For other seq_lens the caller
+    overwrites `out[7]` with their own token IDs; the synthesizer just
+    sizes the slot correctly.
     """
     out = {}
     for slot, shape, dt, layout, fill in _RUNTIME_SLOTS_PREFILL:

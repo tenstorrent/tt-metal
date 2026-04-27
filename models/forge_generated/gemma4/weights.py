@@ -185,7 +185,7 @@ def role_for_hf_key(hf_key: str) -> str:
     raise ValueError(f"unknown HF key for role lookup: {hf_key!r}")
 
 
-def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: bool, seq_len: int = 19) -> None:
+def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: bool, seq_len: int = 128) -> None:
     """Override no-input scalar consteval keys with HF-config-derived
     ttnn.Tensors.
 

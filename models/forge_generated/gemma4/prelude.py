@@ -783,7 +783,7 @@ class SlidingPreludePrefill:
         )
 
     @classmethod
-    def from_consteval(cls, cached_main, *, seq_len=19):
+    def from_consteval(cls, cached_main, *, seq_len=128):
         return cls(
             seq_len=seq_len,
             c_0=cached_main["main_const_eval_0"],
@@ -934,7 +934,7 @@ class FullPreludePrefill:
         )
 
     @classmethod
-    def from_consteval(cls, cached_main, *, seq_len=19):
+    def from_consteval(cls, cached_main, *, seq_len=128):
         return cls(
             seq_len=seq_len,
             c_123=cached_main["main_const_eval_123"][0],

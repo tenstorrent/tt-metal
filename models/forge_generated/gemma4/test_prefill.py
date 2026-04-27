@@ -25,14 +25,17 @@ def mesh_device():
 def test_prefill_pcc(mesh_device):
     """End-to-end prefill PCC gate. Uses HF weights + synthesized
     runtime inputs."""
+    # PCC reference logits at gemma4/reference_logits/prefill.pt are
+    # tied to seq_len=19 (the codegen-baked prompt length). Pin both
+    # the model and the synthesized inputs to 19 so the test matches.
     hf = gw.load_hf_weights()
-    runtime = gemma4.synthesize_prefill_inputs(mesh_device)
+    runtime = gemma4.synthesize_prefill_inputs(mesh_device, seq_len=19)
     n_slots = max(runtime) + 1
     input_list = [None] * n_slots
     for slot, t in runtime.items():
         input_list[slot] = t
 
-    model = gemma4.Gemma4ForCausalLM.from_state_dict(hf, mesh_device)
+    model = gemma4.Gemma4ForCausalLM.from_state_dict(hf, mesh_device, seq_len=19)
     model.reset_kv_caches()
     logits = model(input_list, mode="prefill")
 

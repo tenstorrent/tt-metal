@@ -71,7 +71,7 @@ class Attention:
         q_norm_w,
         k_norm_w,
         o_proj_w,
-        seq_len=19,
+        seq_len=128,
     ):
         assert layer_type in ("sliding", "full"), layer_type
         if layer_type == "sliding":
@@ -113,7 +113,7 @@ class Attention:
         proj_dtype=None,
         norm_dtype=None,
         mesh_size=4,
-        seq_len=19,
+        seq_len=128,
     ):
         """Build a sliding-attention layer from HF state_dict.
 
@@ -179,7 +179,7 @@ class Attention:
         )
 
     @classmethod
-    def from_state_dict_full(cls, state_dict, layer_idx, mesh_device, *, proj_dtype=None, norm_dtype=None, seq_len=19):
+    def from_state_dict_full(cls, state_dict, layer_idx, mesh_device, *, proj_dtype=None, norm_dtype=None, seq_len=128):
         """Build a full-attention layer from HF state_dict.
 
         Separate q_proj + k_proj (no v — k_eq_v=True). Stored in HF
