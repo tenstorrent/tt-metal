@@ -23,6 +23,7 @@ target_sources(
         test_thread_pool.cpp
         test_async_teardown_race.cpp
         test_gap5_relay_broken_teardown.cpp
+        test_gap10_channels_not_ready_lifecycle.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
