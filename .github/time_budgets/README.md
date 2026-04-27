@@ -10,7 +10,7 @@ files on every PR that touches pipelines, workflow files, or this directory itse
 
 | File | Purpose |
 |------|---------|
-| `pools.yaml` | Total machine-hours available per hardware SKU per week |
+| `pools.yaml` | Weekly machine-hours per hardware SKU — actual Snowflake observed usage for tt-metal |
 | `allocations.yaml` | Fractional share of each pool allocated to each team (**active — used by the script**) |
 | `allocations_usage_based_pipeline_reorg.yaml` | Usage-derived allocations, pipeline_reorg tests only — reference |
 | `allocations_usage_based_v2.yaml` | Usage-derived allocations, pipeline_reorg + all legacy (bucket-2) workflows — reference |
@@ -23,22 +23,55 @@ files on every PR that touches pipelines, workflow files, or this directory itse
 
 ## How pools.yaml was decided
 
-`pools.yaml` lists the **total weekly machine-hours available** on each hardware SKU.
-These are the denominators in all budget calculations.
+`pools.yaml` lists the **actual observed weekly machine-hours** tt-metal jobs consumed on
+each hardware SKU. These are the denominators in all budget calculations.
 
-```yaml
-N150:   5000   # Wormhole N150 single-card machines
-N300:   2000   # Wormhole N300 single-card machines
-p150b:  1500   # Blackhole P150b machines (bare-metal CIv2 + cloud + multi-card chassis)
-p300b:   800   # Blackhole P300b machines
-LLMBOX:  500   # Wormhole T3000 (4×N300 in LLMBox chassis)
-galaxy:  200   # Wormhole 6U Galaxy chassis
+### Key format
+
+Keys match `.github/sku_config.yaml` exactly, which is the single source of truth for
+SKU → runner label mapping. CIv1 and CIv2 SKUs are separated by comments within a flat
+structure (no nesting). There are no key collisions — CIv2 keys carry a `_civ2` suffix.
+
+### Values — Snowflake actuals (tt-metal only)
+
+```
+Formula: SUM(JOB_EXECUTION_TIME) / 3600 / 28 * 7
+Source:  TTDATASF.SW_TEST.CICD_JOB + CICD_PIPELINE
+Filter:  PROJECT = 'tt-metal', last 28 days
 ```
 
-Numbers are estimates of what the hardware farm can sustain given machine count,
-assumed utilisation (~85 %), and maintenance windows. They are not hard capacity
-ceilings — exceeding them degrades queue depth for other teams. Update these when
-the hardware farm expands or contracts significantly.
+SKU labels are matched to sku_config entries using ILIKE patterns derived from each
+SKU's `runs_on` array. CIv2 labels are single strings (e.g. `tt-ubuntu-2204-N150-viommu-stable`);
+CIv1 labels are comma-separated tag sets (e.g. `arch-wormhole_b0,config-t3000,in-service`).
+
+CIv2 machines are shared across repos and orgs. Using tt-metal-only observed hours as
+the denominator is intentionally conservative — it does not claim capacity beyond what
+tt-metal actually consumed.
+
+~3,800 h/wk is untracked: legacy multi-host runner labels (`multi-host-galaxy`,
+`multi-host-glx-4x`, `multi-host-t3000`, bare hostnames like `g04glx03`) that have no
+entry in sku_config.
+
+### Notable observed values (April 2026)
+
+```
+CIv2:  wh_n300_civ2 5,035 h/wk   bh_p150b_civ2 2,411   wh_n150_civ2 1,053
+CIv1:  wh_n300     12,704 h/wk   wh_galaxy_perf 2,404  wh_llmbox    1,152
+```
+
+`wh_n300` (CIv1 cloud VMs) dominates — it carries the bulk of ttnn-unit-tests and
+fd-nightly. `wh_n300_civ2` (bare-metal CIv2) is a separate pool.
+
+### Updating pools.yaml
+
+Re-run the Snowflake query documented in the header of
+`allocations_usage_based_timeout_x_snowflake_rpw.yaml`, replacing `COUNT(DISTINCT CICD_PIPELINE_ID)`
+with `SUM(JOB_EXECUTION_TIME)/3600`. Update values when the hardware farm changes
+significantly or after major pipeline restructuring.
+
+> **Note**: `budget_check.py` currently resolves pool keys using a `RUNNER_SKU_MAP`
+> dict with aggregated names (`N150`, `N300`, etc.). It needs to be updated to look up
+> per-SKU keys from `sku_config.yaml` before this new format is enforced.
 
 ---
 
@@ -207,6 +240,11 @@ RUNNER_SKU_MAP = {
 }
 ```
 
+> **Pending update**: this map uses aggregated pool names (`N150`, `N300`, …) which no
+> longer match pools.yaml keys. It needs to be rewritten to resolve runner labels to
+> individual sku_config SKU names (e.g. `wh_n150_civ2`, `wh_n300`) using the
+> `runs_on` arrays in `.github/sku_config.yaml`.
+
 Substring match against the runner label string. CPU-only runners
 (`ubuntu-latest`, `large-stable`, etc.) do not match and are silently skipped.
 
@@ -261,9 +299,11 @@ Steps:
 
 ### Adding a new hardware SKU
 
-1. Add it to `pools.yaml` with its weekly machine-hour capacity.
-2. Add team fractions to `allocations.yaml` (must sum to ≤ 1.0).
-3. Add a SKU keyword to `RUNNER_SKU_MAP` in `budget_check.py`.
+1. Add it to `sku_config.yaml` with its `runs_on` labels.
+2. Add it to `pools.yaml` using the same key, with its observed weekly hours from
+   Snowflake (`SUM(JOB_EXECUTION_TIME)/3600/28*7`, filtered to `PROJECT = 'tt-metal'`).
+3. Add team fractions to `allocations.yaml` (must sum to ≤ 1.0).
+4. Add a runner label pattern to `RUNNER_SKU_MAP` in `budget_check.py`.
 
 ### Adding a new team
 
@@ -281,26 +321,34 @@ Answers the question: *if every job ran to its configured timeout at the actual 
 
 - **Timeout** — taken from `tests/pipeline_reorg/*.yaml` (new `skus:` dict format) and from static analysis of legacy impl files in `.github/workflows/`.
 - **Runs/week** — `COUNT(DISTINCT CICD_PIPELINE_ID) / 28 * 7` from Snowflake, summing both main-branch and PR-branch runs.
+- **Team ownership** — read directly from each pipeline_reorg YAML's `team:` field (authoritative); legacy bucket-2 workflows attributed from `CODEOWNERS`.
 
-Use this file when you want a *conservative, cadence-anchored* limit rather than an actuals-based one.  It will flag teams whose timeouts are padded far beyond actual run times.
+Use this file when you want a *conservative, cadence-anchored* limit rather than an actuals-based one. It will flag teams whose timeouts are padded far beyond actual run times.
 
 ```
-N150:   runtime 39%, ttnn 36%, models 19%, llk 6%
-N300:   runtime 50%, ttnn 32%, models 18%
-p150b:  runtime 68%, models 14%, ttnn 14%, llk 3%, scaleout 0%
-p300b:  runtime 91%, models 9%
-LLMBOX: models 60%, scaleout 16%, ttnn 15%, runtime 7%, shield 2%
-galaxy: ttnn 43%, models 36%, scaleout 17%, runtime 3%
+N150:   runtime 37%, ttnn 36%, llk 20%, models 7%
+N300:   ttnn 54%, runtime 35%, models 11%
+p150b:  runtime 46%, ttnn 20%, llk 18%, scaleout 8%, models 8%
+p300b:  runtime 88%, models 12%
+LLMBOX: models 64%, scaleout 24%, ttnn 10%, shield 2%
+galaxy: scaleout 48%, models 26%, ttnn 26%
 ```
 
-Key difference from the v2 actuals file: runtime's N300 share rises from 14% → 50% because
-`t3000-apc-fast-tests` runs 808×/wk and its full timeout is ~2 min/run vs ~12 min actual, so
-the timeout-based model inflates runtime's N300 projection significantly.
+Notable corrections vs. earlier estimates (April 2026 revision):
+- **llk N150/p150b**: raised from 6%/3% → 20%/18% after accounting for actual
+  `llk-test-wormhole`/`llk-test-blackhole` rpw (317.75/wk each).
+- **LLMBOX runtime**: dropped from 7% → 0%. t3k_*.yaml `team:` fields assign those
+  jobs to models, scaleout, ttnn, and shield — not runtime. Historical Snowflake
+  attribution was wrong.
+- **galaxy scaleout**: raised from 17% → 48% after adding `multi-host-glx-2x/4x`
+  (165+51 h/wk) which was missing from earlier estimates.
 
 ### Promoting v2 allocations
 
 When the usage-based allocations are ready to become authoritative:
 1. Replace (or rename) `allocations.yaml` with the content from
    `allocations_usage_based_v2.yaml`.
-2. Update `pools.yaml` to reflect actual measured throughput.
-3. Remove the now-superseded file to avoid confusion.
+2. Verify `pools.yaml` reflects current Snowflake actuals (already updated April 2026).
+3. Update `budget_check.py` to resolve runner labels to per-SKU sku_config keys
+   instead of the aggregated `RUNNER_SKU_MAP`.
+4. Remove the now-superseded file to avoid confusion.
