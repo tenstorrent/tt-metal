@@ -574,12 +574,6 @@ class ReduceToOneB1:
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()
-                fabric_kernel_idx_by_core = {
-                    (c.x, c.y): g.brisc_kernel_index
-                    for g in kernel_result.groups
-                    if g.compile_time_arg_values.get("is_fabric_core") == 1
-                    for c in ttnn.corerange_to_cores(g.core_range_set)
-                }
 
                 # Worker→fabric semaphores are global (created before the loop)
                 semaphore_descriptors = []
@@ -597,10 +591,16 @@ class ReduceToOneB1:
                 # ROOT1 doesn't send via fabric for exit socket, so skip that fabric setup
                 if not is_root1:
                     for fc_idx, fc in enumerate(fabric_cores):
-                        col_idx = fc_idx
-                        link_idx = 0 if col_idx < num_columns // 2 else 1
-                        fabric_kernel_idx = fabric_kernel_idx_by_core[(fc.x, fc.y)]
-                        fabric_rt_args_ref = program.kernels[fabric_kernel_idx].runtime_args[fc.x][fc.y]
+                        link_idx = 0 if fc_idx < num_columns // 2 else 1
+                        fc_kernel_idx = None
+                        for group in kernel_result.groups:
+                            if group.compile_time_arg_values.get(
+                                "is_fabric_core"
+                            ) == 1 and group.core_range_set.contains(fc):
+                                fc_kernel_idx = group.brisc_kernel_index
+                                break
+
+                        fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
                         fabric_conn_args = ttnn.setup_fabric_connection(
                             fabric_node_id,
                             dest_fabric_node_id,
