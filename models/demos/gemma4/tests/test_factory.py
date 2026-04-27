@@ -174,8 +174,13 @@ def parametrize_batch_seq(configs=None, ids=None):
 def parametrize_mesh_with_fabric(mesh_shapes=None):
     """Universal mesh parametrization with FABRIC_1D.
 
-    Generates mesh_device + device_params parametrization for tests at any TP factor.
-    Only includes mesh shapes that fit on the current system.
+    Generates paired mesh_device + device_params parametrization for tests at
+    any TP factor. Only includes mesh shapes that fit on the current system.
+
+    Fabric is enabled (FABRIC_1D) for multi-device shapes, and disabled for
+    (1, 1). Launching fabric on a 1x1 mesh on a multi-device system fails the
+    is_device_active() check because fabric expects every device in the system
+    to be opened, but only device 0 is open in a 1x1 mesh.
 
     Default shapes: (1,1) single card, (1,2) N300, (1,8) T3K.
 
@@ -194,14 +199,25 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
 
     if not mesh_shapes:
-        mesh_shapes = [pytest.param((1, 1), marks=pytest.mark.skip(reason="Not enough devices"))]
-
-    mesh_params = [pytest.param(s, id=f"{s[0]}x{s[1]}") for s in mesh_shapes]
-    fabric_params = [pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D})]
+        params = [
+            pytest.param(
+                (1, 1),
+                {"fabric_config": None},
+                id="1x1",
+                marks=pytest.mark.skip(reason="Not enough devices"),
+            )
+        ]
+    else:
+        params = [
+            pytest.param(
+                s,
+                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D},
+                id=f"{s[0]}x{s[1]}",
+            )
+            for s in mesh_shapes
+        ]
 
     def decorator(func):
-        func = pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)(func)
-        func = pytest.mark.parametrize("device_params", fabric_params, indirect=True)(func)
-        return func
+        return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)
 
     return decorator
