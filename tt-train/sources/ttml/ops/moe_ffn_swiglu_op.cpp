@@ -67,14 +67,14 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     // Per-expert forward: slice grouped once per expert, run gate+up matmuls
     // directly against the per-expert weight tensors (no slicing of weights),
     // silu·multiply on the chunk, then down matmul. One concat at the end.
-    // linear1_e and gate_e are saved per-expert for backward; gated_e is
+    // gate_proj_e and up_proj_e are saved per-expert for backward; activated_e is
     // recomputed in backward.
-    std::vector<ttnn::Tensor> y_parts;
-    std::vector<ttnn::Tensor> linear1_parts;
-    std::vector<ttnn::Tensor> gate_parts;
-    y_parts.reserve(num_experts);
-    linear1_parts.reserve(num_experts);
-    gate_parts.reserve(num_experts);
+    std::vector<ttnn::Tensor> down_proj_parts;
+    std::vector<ttnn::Tensor> gate_proj_parts;
+    std::vector<ttnn::Tensor> up_proj_parts;
+    down_proj_parts.reserve(num_experts);
+    gate_proj_parts.reserve(num_experts);
+    up_proj_parts.reserve(num_experts);
 
     for (uint32_t e = 0; e < num_experts; ++e) {
         const uint32_t row_lo = offsets_host[e];
@@ -88,26 +88,26 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         }
 
         auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
-        const auto& Wg_e = w_gate[e]->get_value();
-        const auto& Wu_e = w_up[e]->get_value();
-        const auto& Wd_e = w_down[e]->get_value();
+        const auto& w_gate_e = w_gate[e]->get_value();
+        const auto& w_up_e = w_up[e]->get_value();
+        const auto& w_down_e = w_down[e]->get_value();
 
-        auto linear1_e = ttnn_fixed::matmul(X_e, Wg_e, false, false);  // [1,1,len,intermediate_dim]
-        auto gate_e = ttnn_fixed::matmul(X_e, Wu_e, false, false);     // [1,1,len,intermediate_dim]
-        auto gated_e = ttnn::multiply(ttnn::silu(linear1_e), gate_e);  // [1,1,len,intermediate_dim]
-        auto y_e = ttnn_fixed::matmul(gated_e, Wd_e, false, false);    // [1,1,len,hidden_dim]
-        gated_e.deallocate();
+        auto gate_proj_e = ttnn_fixed::matmul(X_e, w_gate_e, false, false);          // [1,1,len,intermediate_dim]
+        auto up_proj_e = ttnn_fixed::matmul(X_e, w_up_e, false, false);              // [1,1,len,intermediate_dim]
+        auto activated_e = ttnn::multiply(ttnn::silu(gate_proj_e), up_proj_e);       // [1,1,len,intermediate_dim]
+        auto down_proj_e = ttnn_fixed::matmul(activated_e, w_down_e, false, false);  // [1,1,len,hidden_dim]
+        activated_e.deallocate();
 
-        linear1_parts.push_back(std::move(linear1_e));
-        gate_parts.push_back(std::move(gate_e));
-        y_parts.push_back(std::move(y_e));
+        gate_proj_parts.push_back(std::move(gate_proj_e));
+        up_proj_parts.push_back(std::move(up_proj_e));
+        down_proj_parts.push_back(std::move(down_proj_e));
     }
 
-    if (y_parts.empty()) {
+    if (down_proj_parts.empty()) {
         throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
     }
-    auto y = (y_parts.size() == 1U) ? y_parts.front() : ttnn::concat(y_parts, /*dim=*/2);
-    y_parts.clear();
+    auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
+    down_proj_parts.clear();
 
     auto out = autograd::create_tensor(y);
 
@@ -117,8 +117,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    w_down,
                                    out,
                                    offsets_host = std::move(offsets_host),
-                                   linear1_parts = std::move(linear1_parts),
-                                   gate_parts = std::move(gate_parts),
+                                   gate_proj_parts = std::move(gate_proj_parts),
+                                   up_proj_parts = std::move(up_proj_parts),
                                    num_experts,
                                    hidden_dim]() mutable {
         auto dY = out->get_grad();
@@ -127,52 +127,53 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         std::vector<ttnn::Tensor> dX_parts;
         dX_parts.reserve(num_experts);
 
-        std::size_t saved_idx = 0U;
+        std::size_t nonempty_idx = 0U;
         for (uint32_t e = 0; e < num_experts; ++e) {
             const uint32_t row_lo = offsets_host[e];
             const uint32_t row_hi = offsets_host[e + 1U];
 
             if (row_hi == row_lo) {
-                // Empty expert: zero gradient — nothing to add to w_*[e].
+                // empty expert
                 continue;
             }
 
             auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
             auto dY_e = slice_rows(dY, row_lo, row_hi, hidden_dim);
-            const auto& Wg_e = w_gate[e]->get_value();
-            const auto& Wu_e = w_up[e]->get_value();
-            const auto& Wd_e = w_down[e]->get_value();
+            const auto& w_gate_e = w_gate[e]->get_value();
+            const auto& w_up_e = w_up[e]->get_value();
+            const auto& w_down_e = w_down[e]->get_value();
 
-            // Recompute gated_e from saved linear1_e, gate_e (one eltwise pass).
-            auto& linear1_e = linear1_parts[saved_idx];
-            auto& gate_e = gate_parts[saved_idx];
-            ++saved_idx;
-            auto gated_e = ttnn::multiply(ttnn::silu(linear1_e), gate_e);
+            // Recompute activated_e from saved gate_proj_e, up_proj_e
+            auto& gate_proj_e = gate_proj_parts[nonempty_idx];
+            auto& up_proj_e = up_proj_parts[nonempty_idx];
+            ++nonempty_idx;
+            auto activated_e = ttnn::multiply(ttnn::silu(gate_proj_e), up_proj_e);
 
-            // Down branch:  dgated_e = dY_e @ Wd_e^T,  dW_down_e = gated_e^T @ dY_e
-            auto dgated_e = ttnn_fixed::matmul(dY_e, Wd_e, /*transpose_a=*/false, /*transpose_b=*/true);
-            auto dW_down_e = ttnn_fixed::matmul(gated_e, dY_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // Down branch:  d_activated_e = dY_e @ w_down_e^T,  dW_down_e = activated_e^T @ dY_e
+            auto d_activated_e = ttnn_fixed::matmul(dY_e, w_down_e, /*transpose_a=*/false, /*transpose_b=*/true);
+            auto dW_down_e = ttnn_fixed::matmul(activated_e, dY_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_down[e]->add_grad(dW_down_e);
-            gated_e.deallocate();
+            activated_e.deallocate();
             dY_e.deallocate();
 
-            // SwiGLU eltwise BW (in-place into linear1_e's storage).
-            auto [d_linear1_e, d_gate_e] = ttml::metal::swiglu_elemwise_bw(linear1_e, gate_e, dgated_e, linear1_e);
-            gate_e.deallocate();
-            dgated_e.deallocate();
+            auto [d_gate_proj_e, d_up_proj_e] =
+                ttml::metal::swiglu_elemwise_bw(gate_proj_e, up_proj_e, d_activated_e, gate_proj_e);
+            up_proj_e.deallocate();
+            d_activated_e.deallocate();
 
-            // dW_gate_e = X_e^T @ d_linear1_e,  dW_up_e = X_e^T @ d_gate_e — added directly to per-expert grads.
-            auto dW_gate_e = ttnn_fixed::matmul(X_e, d_linear1_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // dW_gate_e = X_e^T @ d_gate_proj_e,  dW_up_e = X_e^T @ d_up_proj_e — added directly to per-expert grads.
+            auto dW_gate_e = ttnn_fixed::matmul(X_e, d_gate_proj_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_gate[e]->add_grad(dW_gate_e);
-            auto dW_up_e = ttnn_fixed::matmul(X_e, d_gate_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            auto dW_up_e = ttnn_fixed::matmul(X_e, d_up_proj_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_up[e]->add_grad(dW_up_e);
             X_e.deallocate();
 
-            // dX_e = d_linear1_e @ Wg_e^T  +  d_gate_e @ Wu_e^T
-            auto dX_via_gate_e = ttnn_fixed::matmul(d_linear1_e, Wg_e, /*transpose_a=*/false, /*transpose_b=*/true);
-            auto dX_via_up_e = ttnn_fixed::matmul(d_gate_e, Wu_e, /*transpose_a=*/false, /*transpose_b=*/true);
-            d_linear1_e.deallocate();
-            d_gate_e.deallocate();
+            // dX_e = d_gate_proj_e @ w_gate_e^T  +  d_up_proj_e @ w_up_e^T
+            auto dX_via_gate_e =
+                ttnn_fixed::matmul(d_gate_proj_e, w_gate_e, /*transpose_a=*/false, /*transpose_b=*/true);
+            auto dX_via_up_e = ttnn_fixed::matmul(d_up_proj_e, w_up_e, /*transpose_a=*/false, /*transpose_b=*/true);
+            d_gate_proj_e.deallocate();
+            d_up_proj_e.deallocate();
 
             auto dX_e = ttnn::add(dX_via_gate_e, dX_via_up_e);
             dX_via_gate_e.deallocate();
@@ -180,8 +181,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             dX_parts.push_back(std::move(dX_e));
         }
 
-        linear1_parts.clear();
-        gate_parts.clear();
+        gate_proj_parts.clear();
+        up_proj_parts.clear();
 
         auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
         grouped->add_grad(dX);
