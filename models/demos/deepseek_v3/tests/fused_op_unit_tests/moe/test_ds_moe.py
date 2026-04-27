@@ -142,7 +142,13 @@ def test_ds_moe_forward(
     # MoE gate topk fallback performs host IO (to_torch/from_torch), which is illegal during trace capture.
     # Match fused-op trace behavior by forcing pure device topk path when trace_mode is enabled.
     model_config = get_model_config(
-        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=not trace_mode
+        MoE,
+        mode,
+        hf_config,
+        mesh_device,
+        device_params["fabric_config"],
+        batch_size_per_row=USERS_PER_ROW,
+        topk_fallback=not trace_mode,
     )
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
