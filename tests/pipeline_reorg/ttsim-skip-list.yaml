@@ -80,6 +80,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
   - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_typecast_sharded.py
 
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
