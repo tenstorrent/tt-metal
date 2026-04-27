@@ -225,7 +225,7 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
         reader_desc.runtime_args.emplace_back(
             core,
             KernelDescriptor::CoreRuntimeArgs{
-                input_addr, num_tiles, *reinterpret_cast<uint32_t*>(&decimal), origin_h, origin_w});
+                input_addr, num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
 
         // writer
         writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{output_addr, tile_offset});
