@@ -345,7 +345,7 @@
 #     wh_llmbox_perf:
 #       timeout: 15
 #       tier: 2
-#   owner_id: U08TJ70UFRT # Stuti Raizada
+#   owner_id: U08TJ70UFRT # Harry Andrews
 #   team: models
 
 - name: GPT-OSS 120B unit tests (Galaxy, high batch)
@@ -358,7 +358,7 @@
     wh_galaxy_perf:
       timeout: 25
       tier: 1
-  owner_id: U08TJ70UFRT # Stuti Raizada
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Whisper unit tests
