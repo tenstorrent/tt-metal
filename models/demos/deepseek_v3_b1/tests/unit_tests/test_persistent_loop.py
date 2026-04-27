@@ -74,6 +74,9 @@ def test_persistent_loop_non_persistent(mesh_device, max_iterations, num_cycles)
     Validates that PersistentLoop correctly counts iterations in non-persistent
     mode and that the kernel can be re-dispatched multiple times.
     """
+    if not is_slow_dispatch():
+        pytest.skip("Persistent mode requires TT_METAL_SLOW_DISPATCH_MODE=1")
+
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     loop = PersistentLoop(mesh_device, CORE_RANGE_SET, persistent_mode=False)
