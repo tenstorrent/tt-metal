@@ -28,6 +28,7 @@ constexpr uint32_t kCbOut = tt::CBIndex::c_2;
 constexpr uint32_t kCbScan = tt::CBIndex::c_3;
 constexpr uint32_t kCbPlan = tt::CBIndex::c_4;
 constexpr uint32_t kCbOffset = tt::CBIndex::c_5;
+constexpr uint32_t kCbCtrl = tt::CBIndex::c_6;  // NCRISC->compute: per-core active block count
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 
@@ -125,6 +126,15 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
             .set_page_size(kCbOffset, offset_cb_bytes);
     CreateCircularBuffer(program, all_cores, cb_offset_cfg);
 
+    // cb_ctrl: NCRISC reader publishes per-core active-block count after the
+    // worker phase reads offsets[E_local]; compute reads it to size the bulk
+    // tilize call. 16B page (one uint32 padded to L1 alignment).
+    constexpr uint32_t cb_ctrl_bytes = 16U;
+    tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
+        tt::tt_metal::CircularBufferConfig(cb_ctrl_bytes, {{kCbCtrl, tt::DataFormat::UInt32}})
+            .set_page_size(kCbCtrl, cb_ctrl_bytes);
+    CreateCircularBuffer(program, all_cores, cb_ctrl_cfg);
+
     // cb_scan: every core's scratch for scan + shared tables (only meaningful on lead).
     // Layout: [stage 32][leids_buf 32][counts e_local*4][offsets (e_local+1)*4]
     //         [cursors e_local*4]
@@ -219,18 +229,19 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         // Globally-constant values previously passed as RT args — moved to CT
         // so every worker's kernel binary has them baked in and the per-core
         // RT-arg list shrinks.
-        lead_virt.x,                      // 12
-        lead_virt.y,                      // 13
-        scan_phase1_sem_id,               // 14
-        scan_phase2_sem_id,               // 15
-        scan_phase3_sem_id,               // 16
-        plan_ready_sem_id,                // 17
-        shared_tables_offset,             // 18
-        mcast_sx,                         // 19
-        mcast_sy,                         // 20
-        mcast_ex,                         // 21
-        mcast_ey,                         // 22
-        mcast_num_dests_including_self};  // 23
+        lead_virt.x,                     // 12
+        lead_virt.y,                     // 13
+        scan_phase1_sem_id,              // 14
+        scan_phase2_sem_id,              // 15
+        scan_phase3_sem_id,              // 16
+        plan_ready_sem_id,               // 17
+        shared_tables_offset,            // 18
+        mcast_sx,                        // 19
+        mcast_sy,                        // 20
+        mcast_ex,                        // 21
+        mcast_ey,                        // 22
+        mcast_num_dests_including_self,  // 23
+        kCbCtrl};                        // 24
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(combined_ct_args);
     tt::tt_metal::TensorAccessorArgs(dispatched_buf).append_to(combined_ct_args);
     tt::tt_metal::TensorAccessorArgs(metadata_buf).append_to(combined_ct_args);
@@ -270,7 +281,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     [[maybe_unused]] auto compute_g1 = create_compute_kernel(
         program,
         worker_group_1,
-        {kCbSrc0, kCbOut, tiles_group_1, tiles_per_chunk, num_chunks},
+        {kCbSrc0, kCbOut, tiles_group_1, tiles_per_chunk, num_chunks, kCbCtrl},
         {},
         kTilizeKernelPath,
         false);
@@ -278,7 +289,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         [[maybe_unused]] auto compute_g2 = create_compute_kernel(
             program,
             worker_group_2,
-            {kCbSrc0, kCbOut, tiles_group_2, tiles_per_chunk, num_chunks},
+            {kCbSrc0, kCbOut, tiles_group_2, tiles_per_chunk, num_chunks, kCbCtrl},
             {},
             kTilizeKernelPath,
             false);

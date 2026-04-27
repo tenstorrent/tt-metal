@@ -63,22 +63,31 @@ void kernel_main() {
     noc_async_read_barrier();
     uint32_t max_active_tiles = scratch_buf[e_local] / TILE_H;
 
+    // Match the reader's active-block bound — interleaved tile-row layout:
+    // largest active step k satisfies my_start + k*stride < max_active_tiles.
+    uint32_t my_active_count;
+    if (my_start >= max_active_tiles) {
+        my_active_count = 0U;
+    } else {
+        my_active_count = (max_active_tiles - my_start + stride - 1U) / stride;
+    }
+    if (my_active_count > my_count) {
+        my_active_count = my_count;
+    }
+
     uint32_t tile_row = my_start;
-    for (uint32_t step = 0; step < my_count; ++step, tile_row += stride) {
-        bool do_write = tile_row < max_active_tiles;
+    for (uint32_t step = 0; step < my_active_count; ++step, tile_row += stride) {
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             cb_wait_front(cb_out, tiles_per_chunk);
-            if (do_write) {
-                bool is_last_chunk = (chunk == num_chunks - 1U);
-                uint32_t tiles_to_write = is_last_chunk ? last_chunk_tiles : tiles_per_chunk;
-                uint32_t src = get_read_ptr(cb_out);
-                for (uint32_t t = 0; t < tiles_to_write; ++t) {
-                    uint32_t c = chunk * tiles_per_chunk + t;
-                    uint64_t dst_noc = get_noc_addr(tile_row * Wt + c, grouped_addrgen);
-                    noc_async_write(src + t * tile_bytes, dst_noc, tile_bytes);
-                }
-                noc_async_write_barrier();
+            bool is_last_chunk = (chunk == num_chunks - 1U);
+            uint32_t tiles_to_write = is_last_chunk ? last_chunk_tiles : tiles_per_chunk;
+            uint32_t src = get_read_ptr(cb_out);
+            for (uint32_t t = 0; t < tiles_to_write; ++t) {
+                uint32_t c = chunk * tiles_per_chunk + t;
+                uint64_t dst_noc = get_noc_addr(tile_row * Wt + c, grouped_addrgen);
+                noc_async_write(src + t * tile_bytes, dst_noc, tile_bytes);
             }
+            noc_async_write_barrier();
             cb_pop_front(cb_out, tiles_per_chunk);
         }
     }

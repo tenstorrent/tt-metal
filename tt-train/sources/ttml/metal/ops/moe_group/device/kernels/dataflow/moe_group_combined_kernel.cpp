@@ -86,8 +86,9 @@ constexpr uint32_t mcast_sy = get_compile_time_arg_val(20);
 constexpr uint32_t mcast_ex = get_compile_time_arg_val(21);
 constexpr uint32_t mcast_ey = get_compile_time_arg_val(22);
 constexpr uint32_t mcast_num_dests_incl_self = get_compile_time_arg_val(23);
+constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(24);
 
-constexpr auto plan_args = TensorAccessorArgs<24>();
+constexpr auto plan_args = TensorAccessorArgs<25>();
 constexpr auto dispatched_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
 constexpr auto metadata_args = TensorAccessorArgs<dispatched_args.next_compile_time_args_offset()>();
 constexpr auto counts_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
@@ -412,28 +413,38 @@ void kernel_main() {
     noc_async_read_barrier();
     const uint32_t max_active_tiles = stage[e_local] / TILE_H;
 
+    // Compute this core's active iteration count from the interleaved
+    // tile-row layout (tile_row = my_worker_start + step * worker_stride).
+    // Largest active step k satisfies my_worker_start + k*stride < max.
+    // Publish to compute via cb_ctrl so its bulk tilize call only streams
+    // active blocks. Reader and writer drop their tail-skip branches.
+    uint32_t my_active_count;
+    if (my_worker_start >= max_active_tiles) {
+        my_active_count = 0U;
+    } else {
+        my_active_count = (max_active_tiles - my_worker_start + worker_stride - 1U) / worker_stride;
+    }
+    if (my_active_count > my_worker_count) {
+        my_active_count = my_worker_count;  // safety clamp
+    }
+    cb_reserve_back(cb_id_ctrl, 1U);
+    volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_ctrl));
+    ctrl_l1[0] = my_active_count * num_chunks;
+    cb_push_back(cb_id_ctrl, 1U);
+
     // Existing worker-reader logic.
     cb_reserve_back(cb_plan, 1U);
     uint32_t plan_l1_addr = get_write_ptr(cb_plan);
     volatile tt_l1_ptr uint32_t* plan_l1_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_l1_addr);
 
     uint32_t tile_row = my_worker_start;
-    for (uint32_t step = 0; step < my_worker_count; ++step, tile_row += worker_stride) {
-        const bool tile_active = tile_row < max_active_tiles;
-
-        if (tile_active) {
-            uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tile_row * TILE_H * sizeof(uint32_t);
-            noc_async_read(plan_noc, plan_l1_addr, TILE_H * sizeof(uint32_t));
-            noc_async_read_barrier();
-        }
+    for (uint32_t step = 0; step < my_active_count; ++step, tile_row += worker_stride) {
+        uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tile_row * TILE_H * sizeof(uint32_t);
+        noc_async_read(plan_noc, plan_l1_addr, TILE_H * sizeof(uint32_t));
+        noc_async_read_barrier();
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             cb_reserve_back(cb_src0, tiles_per_chunk);
-            if (!tile_active) {
-                // we don't break because compute kernel does a fixed number of steps decided before dispatch
-                cb_push_back(cb_src0, tiles_per_chunk);
-                continue;
-            }
             uint32_t dst = get_write_ptr(cb_src0);
             uint32_t chunk_off_bytes = chunk * hidden_chunk_bytes;
             bool is_last_chunk = (chunk == num_chunks - 1U);
