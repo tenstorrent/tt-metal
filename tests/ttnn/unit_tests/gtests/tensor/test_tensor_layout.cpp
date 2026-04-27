@@ -268,6 +268,45 @@ INSTANTIATE_TEST_SUITE_P(
             .padded_shape = Shape{5, 4, 3, 16, 16},
         }));
 
+struct RowMajorPaddedShapeAlignmentTestParams {
+    Shape shape;
+    Shape padded_shape;
+    tt::tt_metal::Alignment expected_alignment;
+    tt::tt_metal::Shape2D expected_physical_shape;
+    tt::tt_metal::Strides expected_strides;
+};
+
+class TensorLayoutRowMajorPaddedShapeAlignmentTests
+    : public ::testing::TestWithParam<RowMajorPaddedShapeAlignmentTestParams> {};
+
+TEST_P(TensorLayoutRowMajorPaddedShapeAlignmentTests, FromPaddedShape_ComputesFullAlignment) {
+    const auto& params = GetParam();
+    TensorLayout layout = TensorLayout::fromPaddedShape(
+        DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), DefaultMemoryConfig, params.shape, params.padded_shape);
+
+    EXPECT_EQ(layout.get_alignment(), params.expected_alignment);
+    EXPECT_EQ(layout.compute_physical_shape(params.shape), params.expected_physical_shape);
+    EXPECT_EQ(layout.compute_strides(params.shape), params.expected_strides);
+    EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorLayoutTests,
+    TensorLayoutRowMajorPaddedShapeAlignmentTests,
+    ::testing::Values(
+        RowMajorPaddedShapeAlignmentTestParams{
+            .shape = Shape{30, 20, 10},
+            .padded_shape = Shape{32, 32, 32},
+            .expected_alignment = tt::tt_metal::Alignment({1024, 32, 32}),
+            .expected_physical_shape = tt::tt_metal::Shape2D{1024, 32},
+            .expected_strides = tt::tt_metal::Strides({640, 32, 1})},
+        RowMajorPaddedShapeAlignmentTestParams{
+            .shape = Shape{2, 3, 16, 16},
+            .padded_shape = Shape{2, 16, 32, 32},
+            .expected_alignment = tt::tt_metal::Alignment({1024, 512, 32, 32}),
+            .expected_physical_shape = tt::tt_metal::Shape2D{1024, 32},
+            .expected_strides = tt::tt_metal::Strides({1536, 512, 32, 1})}));
+
 // Regression tests for `legacyShapeToAlignment` on TILE-layout tensors that
 // take the "INTERLEAVED with (deprecated) non-height/width padding" branch
 // (i.e. logical and padded shapes differ on outer dimensions).
@@ -365,6 +404,7 @@ INSTANTIATE_TEST_SUITE_P(
 struct Tile2DInterleavedAlignmentTestParams {
     Shape shape;
     Shape padded_shape;
+    Tile tile = Tile();
     tt::tt_metal::Alignment expected_alignment;
 };
 
@@ -374,7 +414,11 @@ class TensorLayoutTile2DInterleavedAlignmentTests
 TEST_P(TensorLayoutTile2DInterleavedAlignmentTests, FromPaddedShape_TileAlignmentUsesTileUnlessOverpadded) {
     const auto& params = GetParam();
     TensorLayout layout = TensorLayout::fromPaddedShape(
-        DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig, params.shape, params.padded_shape);
+        DataType::BFLOAT16,
+        PageConfig(Layout::TILE, params.tile),
+        DefaultMemoryConfig,
+        params.shape,
+        params.padded_shape);
 
     EXPECT_EQ(layout.get_alignment(), params.expected_alignment);
     // Padded shape roundtrip: alignment must still recover the supplied legacy padded shape.
@@ -408,6 +452,26 @@ INSTANTIATE_TEST_SUITE_P(
             .shape = Shape{30, 60},
             .padded_shape = Shape{64, 64},
             .expected_alignment = tt::tt_metal::Alignment({64, 32}),
+        },
+        // Both H/W overpadded beyond minimum tile padding -> keep both legacy padded edges.
+        Tile2DInterleavedAlignmentTestParams{
+            .shape = Shape{30, 60},
+            .padded_shape = Shape{64, 96},
+            .expected_alignment = tt::tt_metal::Alignment({64, 96}),
+        },
+        // Custom tile: minimum tile padding should use the custom tile H/W, not the legacy padded H/W.
+        Tile2DInterleavedAlignmentTestParams{
+            .shape = Shape{15, 60},
+            .padded_shape = Shape{16, 64},
+            .tile = Tile({16, 32}),
+            .expected_alignment = tt::tt_metal::Alignment({16, 32}),
+        },
+        // Custom tile with both H/W overpadded -> preserve overpadded dimensions.
+        Tile2DInterleavedAlignmentTestParams{
+            .shape = Shape{15, 60},
+            .padded_shape = Shape{32, 96},
+            .tile = Tile({16, 32}),
+            .expected_alignment = tt::tt_metal::Alignment({32, 96}),
         }));
 
 struct ConsumedMemoryBytesPerBankTestParams {
