@@ -40,12 +40,6 @@ inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t
     llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_init(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose) {
-    llk_unpack_AB_init<BType>(operandA, operandB, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
-}
-
 /**
  * @brief Unpacks binary operands for SrcA & SrcB
  * @tparam BType: Broadcast type for SrcB. Currently only BroadcastType::NONE is supported on Quasar.
