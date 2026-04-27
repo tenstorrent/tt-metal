@@ -22,12 +22,18 @@ target_sources(
         test_mesh_trace.cpp
         test_thread_pool.cpp
         test_async_teardown_race.cpp
+        test_gap1_three_pass_eth_launch.cpp
+        test_gap2_launch_gate_live_erisc.cpp
+        test_gap3_erisc_heartbeat.cpp
+        test_gap4_partial_mesh_quiesce.cpp
         test_gap5_relay_broken_teardown.cpp
         test_gap6_phase25_relay_broken_cascade.cpp
         test_gap8_init_router_sync_dead_relay.cpp
         test_gap9_parallel_heartbeat_poll.cpp
         test_gap7_mmio_phase5_relay_broken.cpp
         test_gap10_channels_not_ready_lifecycle.cpp
+        test_gap11_relay_timeout_tolerance.cpp
+        test_gap14_teardown_reopen_eth_ordering.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
