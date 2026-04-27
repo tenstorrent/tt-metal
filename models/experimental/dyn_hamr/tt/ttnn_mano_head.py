@@ -294,7 +294,7 @@ def _decoder_block(x, context, p: Dict[str, Any], pre_kv=None):
 
 def _rot6d_to_rotmat_torch(x6: torch.Tensor) -> torch.Tensor:
     """Host-side post-processing — sub-millisecond, kept off the NPU."""
-    x = x6.reshape(-1, 3, 2)
+    x = x6.reshape(-1, 2, 3).permute(0, 2, 1).contiguous()  # (N,3,2): col0=[v0,v1,v2], col1=[v3,v4,v5]
     b1 = F.normalize(x[..., 0], dim=-1)
     b2 = F.normalize(x[..., 1] - (b1 * x[..., 1]).sum(-1, keepdim=True) * b1, dim=-1)
     b3 = torch.cross(b1, b2, dim=-1)

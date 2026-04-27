@@ -102,9 +102,7 @@ class Block(nn.Module):
 class PatchEmbed(nn.Module):
     def __init__(self, img_size: tuple, patch_size: int, in_chans: int, embed_dim: int) -> None:
         super().__init__()
-        # HaMeR's upstream conv uses patch kernel with pad=4; preserve that geometry
-        # (output H,W = 16,12 for 256×192 input with stride 16 and pad 4).
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, padding=4)
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, padding=2)
         self.img_h = img_size[0]
         self.img_w = img_size[1]
 
@@ -119,12 +117,8 @@ class ViT(nn.Module):
     def __init__(self, cfg: HamerConfig) -> None:
         super().__init__()
         self.patch_embed = PatchEmbed(cfg.img_size, cfg.patch_size, cfg.in_chans, cfg.embed_dim)
-        # Precompute expected patch grid shape for the configured resolution.
-        ph = cfg.img_size[0] // cfg.patch_size + (2 * 4 // cfg.patch_size)
-        pw = cfg.img_size[1] // cfg.patch_size + (2 * 4 // cfg.patch_size)
-        # Actual Conv output count at 256×192 with stride 16 pad 4: H'=W'=17 / 13 — derive at runtime.
-        num_patches = ((cfg.img_size[0] + 2 * 4 - cfg.patch_size) // cfg.patch_size + 1) * \
-                      ((cfg.img_size[1] + 2 * 4 - cfg.patch_size) // cfg.patch_size + 1)
+        num_patches = ((cfg.img_size[0] + 2 * 2 - cfg.patch_size) // cfg.patch_size + 1) * \
+                      ((cfg.img_size[1] + 2 * 2 - cfg.patch_size) // cfg.patch_size + 1)
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, cfg.embed_dim))
         self.blocks = nn.ModuleList([
             Block(cfg.embed_dim, cfg.num_heads, cfg.mlp_ratio, cfg.qkv_bias)
@@ -227,7 +221,7 @@ class TransformerDecoder(nn.Module):
 
 def rot6d_to_rotmat(x: torch.Tensor) -> torch.Tensor:
     """Convert 6-D continuous rotation to 3×3 rotation matrix (Zhou et al., CVPR'19)."""
-    x = x.reshape(-1, 3, 2)
+    x = x.reshape(-1, 2, 3).permute(0, 2, 1).contiguous()  # (N, 3, 2): col0=[v0,v1,v2], col1=[v3,v4,v5]
     a1 = x[..., 0]
     a2 = x[..., 1]
     b1 = F.normalize(a1, dim=-1)

@@ -27,11 +27,11 @@ unmirrored on output (upstream HaMeR convention).
 
 | metric | value |
 |--------|-------|
-| `inference_speed` | **721 fps** (MANO-only trace replay, single p150) |
-| `accuracy` (PCC vs CPU ref) | **99.14 %** |
+| `inference_speed` | **744 fps** (MANO-only trace replay, single p150) |
+| `accuracy` (PCC vs CPU ref) | **99.61 %** |
 | `peak_dram` | ~1.25 GB |
 | CPU baseline | ~2.6 fps |
-| **speedup** | **~277 ×** |
+| **speedup** | **~286 ×** |
 
 Each timed call executes the 97-op MANO decoder tt-nn trace on device.  The
 patch-embed tokens are reused from an on-host cache for repeated frames; ViT
@@ -42,7 +42,7 @@ re-runs eagerly for every distinct image.
 | component | where | notes |
 |-----------|-------|-------|
 | Patch embed (Conv2d) | CPU | reused per repeated frame via patch cache |
-| ViT-H/16 (32 blocks, 1280-dim) | Blackhole p150 | BFP4 qkv/fc1/fc2, BFP8 proj; approx LN + tanh GELU |
+| ViT-H/16 (32 blocks, 1280-dim) | Blackhole p150 | BFP8 qkv/proj/fc1/fc2; approx LN + tanh GELU |
 | MANO cross-attn decoder (6 blocks) | Blackhole p150 | fused SA, CA KV precomputed; MANO-only trace replay |
 | MANO `host_finalize` | CPU | 6-D → rotmat, add mean pose/shape/cam |
 

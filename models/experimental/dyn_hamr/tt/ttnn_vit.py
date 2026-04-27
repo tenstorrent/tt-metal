@@ -11,7 +11,7 @@ adjustments vs. the HF-ViT demo:
   three separate Q/K/V projections).
 - No CLS token — positional embedding adds ``pos_embed[:, 1:]`` and
   ``pos_embed[:, :1]`` separately to every patch token.
-- PatchEmbed uses ``Conv2d(kernel=16, stride=16, pad=4)`` producing a
+- PatchEmbed uses ``Conv2d(kernel=16, stride=16, pad=2)`` producing a
   ``16×12`` grid for ``256×192`` input.  On-device we use a ``ttnn.fold``
   → matmul decomposition equivalent to the HF-ViT path but with the
   HaMeR-specific padding pre-baked into the torch-side weight layout.
@@ -137,7 +137,7 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
 
     Patch embedding stays CPU-resident — it's one Conv2d that contributes
     sub-percent latency but has awkward asymmetric padding (256×192 with
-    pad=4) that doesn't decompose cleanly into ``ttnn.fold``.  We push the
+    pad=2) that doesn't decompose cleanly into ``ttnn.fold``.  We push the
     already-flattened patch tokens to the device instead.
     """
     assert ttnn is not None, "ttnn runtime not available"
@@ -163,16 +163,16 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
         params["blocks"].append({
             "norm1": {"weight": _t(blk.norm1.weight, device), "bias": _t(blk.norm1.bias, device)},
             "attn": {
-                "qkv_w": _t_bfp4(qkv_w_padded, device),
+                "qkv_w": _t_bfp8(qkv_w_padded, device),
                 "qkv_b": _t_bias(qkv_b_padded, device),
                 "proj_w": _t_bfp8(proj_w_padded, device),
                 "proj_b": _t_bias(blk.attn.proj.bias, device),
             },
             "norm2": {"weight": _t(blk.norm2.weight, device), "bias": _t(blk.norm2.bias, device)},
             "mlp": {
-                "fc1_w": _t_bfp4(blk.mlp.fc1.weight.t(), device),
+                "fc1_w": _t_bfp8(blk.mlp.fc1.weight.t(), device),
                 "fc1_b": _t_bias(blk.mlp.fc1.bias, device),
-                "fc2_w": _t_bfp4(blk.mlp.fc2.weight.t(), device),
+                "fc2_w": _t_bfp8(blk.mlp.fc2.weight.t(), device),
                 "fc2_b": _t_bias(blk.mlp.fc2.bias, device),
             },
         })
@@ -186,7 +186,7 @@ def patch_embed(pixel_values, params: Dict[str, Any], pad: int = 4, patch: int =
     """HaMeR patch embedding on device.  Expects NHWC input already on device."""
     # Host-side padding keeps this op decomposition trivial on-device: we
     # unfold 16×16×3 patches and project with a matmul.  Upstream uses a
-    # Conv2d(pad=4) which is the same as padding the image by 4 on each side
+    # Conv2d(pad=2) which is the same as padding the image by 2 on each side
     # first and then striding by 16 with zero pad.
     x = pixel_values
     # fold: (B, Hp, Wp, 16·16·3)
