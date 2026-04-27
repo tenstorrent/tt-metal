@@ -39,10 +39,10 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        expected_ns_8x1=135_613_432,
+        expected_ns_8x1=130_400_312,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=135_613_432,
+        expected_ns_2x4=131_230_536,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
