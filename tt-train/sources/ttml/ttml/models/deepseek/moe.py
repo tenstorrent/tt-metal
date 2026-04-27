@@ -167,15 +167,14 @@ class MoE(AbstractModuleBase):
             # Build group mask [B, 1, S, num_experts] via scatter + repeat_interleave.
             # Scatter needs UINT32 indices in ROW_MAJOR layout.
             b, _, s, _ = list(biased.shape)
-            top_group_indices_u32 = ttnn.typecast(top_group_indices, ttnn.DataType.UINT32)
-            top_group_indices_u32 = ttnn.to_layout(top_group_indices_u32, ttnn.ROW_MAJOR_LAYOUT)
+            top_group_indices = ttnn.to_layout(top_group_indices, ttnn.ROW_MAJOR_LAYOUT)
             group_mask = ttnn.zeros(
                 [b, 1, s, self.n_groups], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, biased.device()
             )
             group_src = ttnn.ones(
                 [b, 1, s, self.n_limited_groups], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, biased.device()
             )
-            group_mask = ttnn.scatter(group_mask, -1, top_group_indices_u32, group_src)
+            group_mask = ttnn.scatter(group_mask, -1, top_group_indices, group_src)
             group_mask = ttnn.repeat(group_mask, ttnn.Shape([1, 1, 1, experts_per_group]))
             group_mask = ttnn.to_layout(group_mask, ttnn.TILE_LAYOUT)
             neg_inf = ttnn.multiply(ttnn.subtract(group_mask, 1.0), 1e9)
@@ -207,11 +206,10 @@ class MoE(AbstractModuleBase):
         # one-hot-per-selected-expert mask [B, 1, S, num_experts] in a single
         # op instead of num_experts independent eq/sum/gt/typecast chains.
         device = x.get_value().device()
-        topk_indices_u32 = ttnn.typecast(topk_indices, ttnn.DataType.UINT32)
-        topk_indices_u32 = ttnn.to_layout(topk_indices_u32, ttnn.ROW_MAJOR_LAYOUT)
+        topk_indices = ttnn.to_layout(topk_indices, ttnn.ROW_MAJOR_LAYOUT)
         expert_mask_all = ttnn.zeros([B, 1, S, self.num_experts], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
         expert_src = ttnn.ones([B, 1, S, self.n_activated], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
-        expert_mask_all = ttnn.scatter(expert_mask_all, -1, topk_indices_u32, expert_src)
+        expert_mask_all = ttnn.scatter(expert_mask_all, -1, topk_indices, expert_src)
         expert_mask_all = ttnn.to_layout(expert_mask_all, ttnn.TILE_LAYOUT)
 
         # ── 4. Routing weights ──
