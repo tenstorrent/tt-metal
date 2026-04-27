@@ -689,6 +689,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // On Gen1 (WH/BH), semaphores can only be bound to DM kernels, not compute kernels.
+    // Compute-kernel semaphore access is a Quasar-only feature.
+    if (is_gen1_arch()) {
+        for (const auto& kernel : spec.kernels) {
+            if (kernel.is_compute_kernel() && !kernel.semaphore_bindings.empty()) {
+                TT_FATAL(
+                    false,
+                    "KernelSpec '{}' has semaphore bindings, but it is a compute kernel. "
+                    "On WH/BH, semaphores can only be bound to data movement kernels.",
+                    kernel.unique_id;
+            }
+        }
+    }
+
     //////////////////////////////
     // Validate WorkerSpecs
     //////////////////////////////

@@ -490,6 +490,25 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsSucceed) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelSucceedsOnQuasar) {
+    // Quasar permits compute kernels to participate in semaphore signalling.
+    // (The corresponding Gen1 test asserts this is rejected on WH/BH.)
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[1] is the compute kernel in MakeMinimalValidProgramSpec
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
 TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
@@ -1852,6 +1871,47 @@ TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
+    // On WH/BH, compute kernels cannot participate in semaphore signalling.
+    // (The corresponding Quasar test asserts this is allowed there.)
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[1] is the compute kernel in MakeMinimalGen1ValidProgramSpec
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is a compute kernel with 1 semaphore binding(s). "
+                                 "On WH/BH, semaphores can only be bound to data movement kernels.")));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
+    // Sanity check: binding a semaphore to a DM kernel on WH/BH is allowed.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
+    ASSERT_TRUE(spec.kernels[0].is_dm_kernel());
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
 TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
