@@ -1117,7 +1117,7 @@ void py_module(nb::module_& mod) {
         "subcontext_id",
         []() -> std::optional<int> {
             if (!DistributedContext::is_initialized()) {
-                throw std::runtime_error("Distributed context not initialized.");
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
             auto id = DistributedContext::get_current_world()->subcontext_id();
             if (!id.has_value()) {
@@ -1140,7 +1140,7 @@ void py_module(nb::module_& mod) {
         "subcontext_count",
         []() -> int {
             if (!DistributedContext::is_initialized()) {
-                throw std::runtime_error("Distributed context not initialized.");
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
             return DistributedContext::get_current_world()->subcontext_count();
         },
@@ -1152,7 +1152,7 @@ void py_module(nb::module_& mod) {
         "subcontext_sizes",
         []() -> std::vector<int> {
             if (!DistributedContext::is_initialized()) {
-                throw std::runtime_error("Distributed context not initialized.");
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
             auto span = DistributedContext::get_current_world()->subcontext_sizes();
             return std::vector<int>(span.begin(), span.end());
@@ -1165,7 +1165,7 @@ void py_module(nb::module_& mod) {
         "subcontext_size",
         [](int subcontext_id) -> Size {
             if (!DistributedContext::is_initialized()) {
-                throw std::runtime_error("Distributed context not initialized.");
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
 
             auto* world = DistributedContext::get_current_world();
@@ -1192,10 +1192,26 @@ void py_module(nb::module_& mod) {
         "local_to_world_rank",
         [](int subcontext_id, int local_rank) -> Rank {
             if (!DistributedContext::is_initialized()) {
-                throw std::runtime_error("Distributed context not initialized.");
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
-            return DistributedContext::get_current_world()->local_to_world_rank(
-                SubcontextId{subcontext_id}, Rank{local_rank});
+
+            auto* world = DistributedContext::get_current_world();
+            const auto subcontext_count = world->subcontext_count();
+            if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
+                throw std::out_of_range(
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
+                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+            }
+
+            const auto subcontext_sz = world->subcontext_size(SubcontextId{subcontext_id});
+            if (local_rank < 0 || local_rank >= subcontext_sz) {
+                throw std::out_of_range(
+                    "local_rank out of range for subcontext " + std::to_string(subcontext_id) +
+                    ": expected 0 <= local_rank < " + std::to_string(subcontext_sz) +
+                    ", got " + std::to_string(local_rank));
+            }
+
+            return world->local_to_world_rank(SubcontextId{subcontext_id}, Rank{local_rank});
         },
         nb::arg("subcontext_id"),
         nb::arg("local_rank"),
@@ -1213,7 +1229,7 @@ void py_module(nb::module_& mod) {
         "world_rank",
         []() -> Rank {
             if (!DistributedContext::is_initialized()) {
-                throw std::runtime_error("Distributed context not initialized.");
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
             return DistributedContext::get_world_context()->rank();
         },
@@ -1228,7 +1244,7 @@ void py_module(nb::module_& mod) {
         "world_size",
         []() -> Size {
             if (!DistributedContext::is_initialized()) {
-                throw std::runtime_error("Distributed context not initialized.");
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
             return DistributedContext::get_world_context()->size();
         },
