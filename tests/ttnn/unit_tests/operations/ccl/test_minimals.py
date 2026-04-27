@@ -1001,6 +1001,69 @@ def test_rms_fuse(
     )
 
 
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is for N300 (2-chip WH)")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        (
+            2,
+            2048,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
+            None,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 1), id="2x1_grid")], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_rms_fuse_n300(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    fused_add,
+    use_noc1_only,
+    input_dtype,
+    residual_dtype,
+    output_dtype,
+    topology,
+):
+    if mesh_device.get_num_devices() != 2:
+        pytest.skip("Not N300 - this test targets 2-chip Wormhole")
+    run_rms_fuse_impl_deepseek(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        topology,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        output_dtype=output_dtype,
+        num_iters=num_iters,
+        input_dtype=input_dtype,
+        residual_dtype=residual_dtype,
+    )
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
