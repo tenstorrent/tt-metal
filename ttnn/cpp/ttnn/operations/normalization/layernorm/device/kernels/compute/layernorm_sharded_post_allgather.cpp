@@ -91,11 +91,19 @@ void kernel_main() {
     experimental::CircularBuffer cb_ex_sqr_obj(cb_ex_sqr);
 
 #ifdef RMSNORM
-    binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
+    if (is_allgather_worker) {
+        binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
+    } else {
+        binary_op_init_common(cb_in0, cb_scaler_global, cb_out);
+    }
     constexpr uint32_t stats_tiles = 1;
     constexpr uint32_t cb_xmm = cb_in0;  // x
 #else
-    binary_op_init_common(cb_stats, cb_scaler_global, cb_stats_reduced);
+    if (is_allgather_worker) {
+        binary_op_init_common(cb_stats, cb_scaler_global, cb_stats_reduced);
+    } else {
+        binary_op_init_common(cb_in0, cb_scaler_global, cb_out);
+    }
     constexpr uint32_t stats_tiles = 2;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
 #endif
