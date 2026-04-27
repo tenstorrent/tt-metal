@@ -2,15 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import reduce
 from hashlib import sha256
 from typing import List
 
 import pandas as pd
 import pytest
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.data_format_inference import data_formats, is_format_combination_outlier
+from helpers.chip_architecture import ChipArchitecture
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
@@ -20,6 +20,7 @@ from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .fused_operand import OperandRegistry
 from .fused_operation import FusedOperation
+from .fuser_sentinel import FuserSentinel
 
 
 @dataclass
@@ -31,6 +32,7 @@ class GlobalConfig:
     profiler_enabled: bool = False
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
+    sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
 
 class FuserConfig(TestConfig):
@@ -66,23 +68,6 @@ class FuserConfig(TestConfig):
         num_stages = len(self.pipeline)
 
         for i, operation in enumerate(self.pipeline, start=1):
-            formats_config = data_formats(
-                input_format=operation.math.operations[0].src_a.data_format,
-                output_format=operation.output.data_format,
-                is_fp32_dest_acc_en=self.global_config.dest_acc,
-                num_iterations=1,
-                unpacking_to_dest=operation.unpack_to_dest,
-                chip_arch=get_chip_architecture(),
-                disable_format_inference=False,
-            )[0]
-
-            operation.unpack_a_in = formats_config.unpack_A_src
-            operation.unpack_a_out = formats_config.unpack_A_dst
-            operation.unpack_b_in = formats_config.unpack_B_src
-            operation.unpack_b_out = formats_config.unpack_B_dst
-            operation.math_format = formats_config.math
-            operation.pack_in = formats_config.pack_src
-            operation.pack_out = formats_config.pack_dst
             operation.stage_id = i
             operation.num_stages = num_stages
 

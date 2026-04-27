@@ -12,9 +12,7 @@ from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceGolden, get_golden_generator
-from helpers.llk_params import (
-    ReducePool,
-)
+from helpers.llk_params import ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
