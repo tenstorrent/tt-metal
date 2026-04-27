@@ -2,22 +2,34 @@
 
 `Generator.generate(prompt_ids, max_new_tokens)` runs the prefill body
 in a loop — at each step the prompt + tokens-generated-so-far are
-padded to `model.seq_len` and fed through the prefill orchestration;
-the logits at the last "real" position give the next token. KV caches
+padded to `seq_len` and fed through the prefill orchestration; the
+logits at the last "real" position give the next token. KV caches
 are reset once at the start of each session.
 
-This matches the correctness of the legacy `demo.py` loop. The
-fast prefill→decode path (one prefill + N decodes, O(seq_len + N) vs
-the loop's O(seq_len*N)) is the eventual goal; it requires the
-sliding-attention bodies to write into `self.k_cache`/`self.v_cache`
-in-place (full bodies already do, via paged_update_cache /
-fill_cache, but sliding bodies still synthesize ephemeral K/V via
-concat / where). That cache-write surgery is tracked as a follow-up.
+The fast prefill→decode path (one prefill + N decodes, O(seq_len + N)
+vs the loop's O(seq_len*N)) is the eventual goal. It needs the
+sliding-attention cache geometry to be reworked: the existing
+`_sliding_decode` body's masked write places the new K/V at a fixed
+"last row" (row 255) of a 256-slot circular buffer, not at row
+`pos_ids`. Adding `fill_cache(k_cache, new_K, 0)` in `_sliding_prefill`
+populates rows 0..seq_len-1, which doesn't align with the decode
+body's expected geometry — first decode step then produces the same
+token as prefill, repeating. A real fix needs one of:
+  - prefill writes to rows `256-seq_len..255` (most recent prompt
+    token at row 255), or
+  - decode replaces the where-mask with paged_update_cache at
+    row pos_ids, or
+  - introduce circular indexing into the where mask.
+Each is non-trivial surgery on the codegen-derived ttnn op graph.
+Leaving as a follow-up. Full layers already do paged_update_cache /
+fill_cache and would work if sliding caught up.
 """
 import torch
 from gemma4 import synthesize_prefill_inputs
 
 import ttnn
+
+_DRAM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
 
 
 def _build_token_slot(ids, seq_len, pad_id, device):
@@ -32,7 +44,7 @@ def _build_token_slot(ids, seq_len, pad_id, device):
         dtype=ttnn.DataType.INT32,
         layout=ttnn.Layout.ROW_MAJOR,
         device=device,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        memory_config=_DRAM,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
 
@@ -82,13 +94,8 @@ class Generator:
         cap = min(max_new_tokens, self.seq_len - len(prompt_ids))
 
         for _ in range(cap):
-            # Fresh runtime inputs each step. The prefill body writes K/V
-            # into self.k_cache/self.v_cache; for now those writes don't
-            # persist across this loop because each step's prefill rebuilds
-            # them from scratch — but that's exactly the legacy behavior.
             runtime = synthesize_prefill_inputs(self.device, seq_len=self.seq_len)
             runtime[7] = _build_token_slot(sequence, self.seq_len, self.pad_id, self.device)
-
             n_slots = max(runtime) + 1
             input_list = [None] * n_slots
             for slot, t in runtime.items():
@@ -97,8 +104,6 @@ class Generator:
             logits = self.model(input_list, mode="prefill", current_pos=0)
             logits_torch = _logits_to_torch(logits, self.device)
 
-            # Logits at the position of the last real token; padded
-            # positions [len(sequence):] don't influence under causal masking.
             last_real = len(sequence) - 1
             next_id = int(logits_torch[0, last_real].argmax().item())
             sequence.append(next_id)
