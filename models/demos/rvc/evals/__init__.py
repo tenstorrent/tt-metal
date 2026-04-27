@@ -2,32 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-DEFAULT_TOKEN_ACCURACY_THRESHOLD = 0.95
+from .speaker_similarity import compute_speaker_similarity
+from .token_accuracy import (
+    DEFAULT_TOKEN_ACCURACY_THRESHOLD,
+    TokenAccuracyResult,
+    compute_token_accuracy,
+    edit_distance,
+)
+from .wer import (
+    ASRBackendError,
+    WERResult,
+    compute_wer,
+    normalize_transcript,
+    transcribe_audio,
+)
+
 DEFAULT_WHISPER_MODEL = "openai/whisper-medium"
-
-_LAZY_EXPORTS = {
-    "ASRBackendError": ("models.demos.rvc.evals.wer", "ASRBackendError"),
-    "TokenAccuracyResult": ("models.demos.rvc.evals.token_accuracy", "TokenAccuracyResult"),
-    "WERResult": ("models.demos.rvc.evals.wer", "WERResult"),
-    "compute_speaker_similarity": ("models.demos.rvc.evals.speaker_similarity", "compute_speaker_similarity"),
-    "compute_token_accuracy": ("models.demos.rvc.evals.token_accuracy", "compute_token_accuracy"),
-    "compute_wer": ("models.demos.rvc.evals.wer", "compute_wer"),
-    "edit_distance": ("models.demos.rvc.evals.token_accuracy", "edit_distance"),
-    "normalize_transcript": ("models.demos.rvc.evals.wer", "normalize_transcript"),
-    "transcribe_audio": ("models.demos.rvc.evals.wer", "transcribe_audio"),
-}
-
-
-def __getattr__(name: str):
-    if name not in _LAZY_EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    import importlib
-
-    module_name, attribute_name = _LAZY_EXPORTS[name]
-    module = importlib.import_module(module_name)
-    value = getattr(module, attribute_name)
-    globals()[name] = value
-    return value
 
 
 def count_whisper_token(
