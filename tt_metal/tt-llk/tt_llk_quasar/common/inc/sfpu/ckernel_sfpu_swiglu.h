@@ -15,16 +15,13 @@ namespace ckernel
 {
 namespace sfpu
 {
-// GPT-OSS variant of swiglu: alpha = 1.702, clamp_limit = 7.0
-struct SwiGLUConfigGPTOSS
-{
-    static constexpr float alpha       = 1.702f;
-    static constexpr float clamp_limit = 7.0f;
-};
-
-// Implements GPT-OSS swiglu activation as a binary SFPU kernel.
-// Formula: result = (clamp(up, -L, +L) + 1) * clamp(gate, -inf, +L) * sigmoid(alpha * clamp(gate, -inf, +L))
-// where L = Config::clamp_limit and alpha = Config::alpha.
+// Implements the GPT-OSS variant of SwiGLU as a binary SFPU kernel:
+//
+//     result = (clip(up, -L, +L) + 1) * min(gate, +L) * sigmoid(alpha * min(gate, +L))
+//
+// where L = clamp_limit = 7.0f and alpha = 1.702f. These constants are loaded
+// once per SFPU section by `_init_swiglu_()` (3 BF16 immediates into LREG4/5/6)
+// and reused across every face the caller iterates.
 //
 // CLAMP IMPLEMENTATION NOTE — uses SFPNONLINEAR RELU to AVOID CC predication.
 //
@@ -43,75 +40,80 @@ struct SwiGLUConfigGPTOSS
 // The Confluence-documented "fix" — inserting SFPENCC(0,0) or SFPENCC(1,2)
 // between clamp pairs to set CC.Res=1 — empirically corrupts subsequent
 // SFPMOVs on the Quasar simulator (PCC collapses from ~0.999 to ~0.64,
-// outputs saturate to the clamp constant on every lane). This is a doc-vs-
-// silicon discrepancy that is unresolved as of 2026-04; see
-// `codegen/references/common-errors.md` ("Quasar SFPU: Chained SFPGT → SFPMOV
-// clamp pairs leak CC predication") for the full investigation.
+// outputs saturate to the clamp constant on every lane). Doc-vs-silicon
+// discrepancy unresolved as of 2026-04.
 //
-// Therefore we implement the clamps via the predication-free arithmetic
-// identity (SFPNONLINEAR RELU is hardware-accelerated on Quasar):
+// We therefore implement the clamps via the predication-free arithmetic
+// identities below (SFPNONLINEAR RELU is hardware-accelerated on Quasar):
 //
-//     min(x, +L) = +L - relu(+L - x)
-//     max(x, -L) = -L + relu(x + L)
+//     min(x, +L)        = +L - relu(+L - x)                  (3 ops)
+//     clip(x, -L, +L)   = +L - relu(+2L - relu(x + L))       (5 ops, nested)
 //
-// 3 SFPU ops per clamp, 9 ops total for the full clip — same instruction
-// count as the (broken) predicated version. No SFPENCC bracketing required.
+// Verification of the nested-relu clip:
+//     x ≥ +L : relu(x+L) = x+L > 2L  → outer relu = 0       → result = +L
+//     x ≤ -L : relu(x+L) = 0          → outer relu = 2L     → result = +L - 2L = -L
+//     |x| < L: relu(x+L) = x+L        → outer relu = L - x  → result = +L - (L-x) = x
+
+// Loads the 3 hoisted constants into LREG4/5/6. Call exactly once per SFPU
+// section (after `_llk_math_eltwise_unary_sfpu_init_` and before the per-face
+// `_calculate_swiglu_` loop). The values persist for the whole section.
+inline void _init_swiglu_()
+{
+    TTI_SFPLOADI(p_sfpu::LREG4, 0 /*Float16_b*/, 0x40E0); // +clamp_limit  =  +7.0f  (BF16 exact)
+    TTI_SFPLOADI(p_sfpu::LREG5, 0 /*Float16_b*/, 0x4160); // +2*clamp_limit = +14.0f (BF16 exact, used by nested-relu clip)
+    TTI_SFPLOADI(p_sfpu::LREG6, 0 /*Float16_b*/, 0x3FDA); // alpha          =  1.702f (BF16 quantizes to 1.703125, abs err ~1.1e-3)
+}
+
+// Per-face inner loop: reads `iterations` (= TEST_FACE_R_DIM / SFP_ROWS)
+// 32-datum row-pairs of (gate, up), writes the swiglu output back to Dest.
 //
-// BF16 packed immediates (top 16 bits of FP32) for the default SwiGLUConfigGPTOSS:
-//   +clamp_limit = +7.0f -> 0x40E0 (exact in BF16)
-//   -clamp_limit = -7.0f -> 0xC0E0 (exact in BF16)
-//   alpha        =  1.702f -> 0x3FDA (quantizes to 1.703125, abs err ~1.1e-3)
-template <class Config = SwiGLUConfigGPTOSS>
+// LREG layout:
+//   LREG0     : gate (in), gate_clamped (after gate min-clamp), result (final, before store)
+//   LREG1     : up (in), up_clipped (after nested-relu clip)
+//   LREG2     : scratch for clamp tmp; later up_plus1
+//   LREG3     : alpha_gate (after hoisted SFPMUL), then sigmoid output (in-place)
+//   LREG4     : +L           (loaded by _init_swiglu_)
+//   LREG5     : +2L          (loaded by _init_swiglu_)
+//   LREG6     : alpha        (loaded by _init_swiglu_)
+//   LREG7     : sigmoid work_reg, then glu = gate * sig
 inline void _calculate_swiglu_(const int iterations, const int gate_offset_idx, const int up_offset_idx, const int out_offset_idx)
 {
-    // Hoisted compile-time scalar constants — written once per call.
-    TTI_SFPLOADI(p_sfpu::LREG4, 0 /*Float16_b*/, 0x40E0); // +clamp_limit
-    TTI_SFPLOADI(p_sfpu::LREG5, 0 /*Float16_b*/, 0xC0E0); // -clamp_limit
-    TTI_SFPLOADI(p_sfpu::LREG6, 0 /*Float16_b*/, 0x3FDA); // alpha
-
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        // Load gate and up from dest at distinct tile bases.
+        // Load gate and up from Dest at distinct tile bases.
         TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, gate_offset_idx + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, up_offset_idx + (d << 1));
 
-        // Clamp gate to max = +clamp_limit:  gate = +L - relu(+L - gate)
-        // SFPMAD(va=LCONST_1, vb=LREG0, vc=LREG4, vd=LREG2, mod=NEGATE_VB) → LREG2 = -gate + +L = +L - gate
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG2, 0x1 /*NEGATE_VB*/);
-        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);
-        // SFPMAD(va=LCONST_1, vb=LREG2, vc=LREG4, vd=LREG0, mod=NEGATE_VB) → LREG0 = -tmp + +L = gate_clamped
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG0, 0x1 /*NEGATE_VB*/);
+        // ---- Gate min-clamp:  gate = +L - relu(+L - gate)  (3 ops) ----
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG2, 0x1 /*NEGATE_VB*/); // LREG2 = +L - gate
+        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);                    // LREG2 = relu(LREG2)
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG0, 0x1 /*NEGATE_VB*/); // LREG0 = +L - LREG2 = gate_clamped
 
-        // Clip up to [-L, +L]: do max(up, -L) first, then min(up, +L).
-        // max(up, -L): up = -L + relu(up - (-L)) = -L + relu(up + L)
-        // SFPMAD(LCONST_1, LREG1, LREG4, LREG2, 0) → LREG2 = up + +L
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, 0);
-        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);
-        // SFPMAD(LCONST_1, LREG2, LREG5, LREG1, 0) → LREG1 = tmp + (-L) = relu(up+L) - L
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        // ---- alpha_gate = alpha * gate_clamped  (1 op, hoisted here so the ----
+        //      ---- 5 up-clip ops below + sigmoid hide the SFPMUL latency) ----
+        TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0); // LREG3 = alpha * LREG0
 
-        // min(up, +L): up = +L - relu(+L - up)
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, 0x1 /*NEGATE_VB*/);
-        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG1, 0x1 /*NEGATE_VB*/);
+        // ---- Up clip: clip(up, ±L) = +L - relu(+2L - relu(up + L))  (5 ops) ----
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, 0);                 // LREG2 = up + +L
+        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);                    // LREG2 = relu(LREG2)
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0x1 /*NEGATE_VB*/); // LREG2 = +2L - LREG2
+        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);                    // LREG2 = relu(LREG2)
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG1, 0x1 /*NEGATE_VB*/); // LREG1 = +L - LREG2 = up_clipped
 
-        // up_plus1 = up + 1.0 -> LREG2 = 1.0 * LREG1 + LCONST_1
-        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
+        // ---- up_plus1 = up_clipped + 1.0  (1 op via LCONST_1 mul-add trick) ----
+        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0); // LREG2 = up + 1
 
-        // alpha_gate = alpha * gate -> LREG3 = LREG6 * LREG0 + 0
-        TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
-
-        // sig = sigmoid(alpha_gate), in-place on LREG3; LREG7 is scratch work reg.
+        // ---- sigmoid(alpha_gate) in-place on LREG3, with LREG7 as scratch (4 ops via helper) ----
         _calculate_sigmoid_regs_(p_sfpu::LREG3, p_sfpu::LREG7, p_sfpu::LREG3);
 
-        // glu = gate * sig -> LREG7 = LREG0 * LREG3 + 0
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+        // ---- glu = gate_clamped * sig  (1 op, into LREG7) ----
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0); // LREG7 = LREG0 * LREG3
 
-        // result = up_plus1 * glu -> LREG0 (reused) = LREG2 * LREG7 + 0
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        // ---- result = up_plus1 * glu  (1 op, into LREG0 — gate_clamped is dead) ----
+        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // LREG0 = LREG2 * LREG7
 
-        // Store result to dest at out_offset_idx + (d << 1)
+        // ---- Store ----
         TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, out_offset_idx + (d << 1));
     }
 }

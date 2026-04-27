@@ -150,9 +150,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // relative offsets work for every face.
     _llk_math_eltwise_unary_sfpu_start_(params.DST_INDEX);
 
+    // Load the 3 hoisted constants (+L, +2L, alpha) into LREG4/5/6 once for
+    // the whole SFPU section. They persist across every per-face call below.
+    ckernel::sfpu::_init_swiglu_();
+
     for (std::uint32_t face = 0; face < params.num_faces; ++face)
     {
-        ckernel::sfpu::_calculate_swiglu_<ckernel::sfpu::SwiGLUConfigGPTOSS>(
+        ckernel::sfpu::_calculate_swiglu_(
             num_sfpu_iterations,
             /*gate_offset_idx=*/0,
             /*up_offset_idx=*/64,
