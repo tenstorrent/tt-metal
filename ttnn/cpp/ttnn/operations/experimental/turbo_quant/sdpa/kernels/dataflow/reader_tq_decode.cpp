@@ -33,7 +33,8 @@ void kernel_main() {
     constexpr auto k_norms_args = TensorAccessorArgs<k_idx_args.next_compile_time_args_offset()>();
     constexpr auto v_idx_args = TensorAccessorArgs<k_norms_args.next_compile_time_args_offset()>();
     constexpr auto v_norms_args = TensorAccessorArgs<v_idx_args.next_compile_time_args_offset()>();
-    constexpr auto page_table_args = TensorAccessorArgs<v_norms_args.next_compile_time_args_offset()>();
+    constexpr auto cur_pos_args = TensorAccessorArgs<v_norms_args.next_compile_time_args_offset()>();
+    constexpr auto page_table_args = TensorAccessorArgs<cur_pos_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -43,6 +44,8 @@ void kernel_main() {
     const uint32_t v_norms_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(argidx++);
+    const uint32_t cur_pos_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t cur_pos_stick_size = get_arg_val<uint32_t>(argidx++);
     const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
@@ -57,7 +60,24 @@ void kernel_main() {
     constexpr uint32_t cb_k_norms = tt::CBIndex::c_11;
     constexpr uint32_t cb_v_idx = pre_rescaled ? tt::CBIndex::c_2 : tt::CBIndex::c_12;
     constexpr uint32_t cb_v_norms = tt::CBIndex::c_13;
+    constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
     constexpr uint32_t cb_page_table = tt::CBIndex::c_9;
+
+    // ── Load cur_pos tensor into cb_cur_pos (one-shot at kernel start) ──
+    // Both reader (this kernel) and compute use cur_pos to derive a per-batch
+    // valid_k_chunks bound. Without this, the kernel iterates the whole padded
+    // KV cache (e.g. 256 chunks for max_num_blocks=1024) instead of just the
+    // chunks containing real data — wasting up to 100x compute at small seqs.
+    cb_reserve_back(cb_cur_pos, 1);
+    const uint32_t cur_pos_cb_wr_ptr = get_write_ptr(cb_cur_pos);
+    const auto cur_pos_reader = TensorAccessor(cur_pos_args, cur_pos_addr, cur_pos_stick_size);
+    noc_async_read(cur_pos_reader.get_noc_addr(0), cur_pos_cb_wr_ptr, cur_pos_stick_size);
+    noc_async_read_barrier();
+    cb_push_back(cb_cur_pos, 1);
+    volatile tt_l1_ptr uint32_t* cur_pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_cb_wr_ptr);
+
+    // Sk_chunk in TOKENS = Sk_chunk_t tiles × 32 rows/tile.
+    constexpr uint32_t k_chunk_size_tokens = Sk_chunk_t * 32;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_idx_tile_bytes = get_tile_size(cb_k_idx);
@@ -98,7 +118,13 @@ void kernel_main() {
 
             const uint32_t k_head = nq / q_heads_per_kv;
 
-            for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+            // Limit k_chunks to those that actually contain valid (filled) data.
+            // valid_k_chunks = ceil((cur_pos[nb] + 1) / k_chunk_size_tokens), capped by k_num_chunks.
+            const uint32_t cur_pos_nb = cur_pos_ptr[nb];
+            const uint32_t valid_k_chunks_raw = (cur_pos_nb + k_chunk_size_tokens) / k_chunk_size_tokens;
+            const uint32_t valid_k_chunks = valid_k_chunks_raw < k_num_chunks ? valid_k_chunks_raw : k_num_chunks;
+
+            for (uint32_t k_chunk = 0; k_chunk < valid_k_chunks; ++k_chunk) {
                 const uint32_t chunk_start_row = k_chunk * Sk_chunk_t;
                 const uint32_t chunk_end_row =
                     (chunk_start_row + Sk_chunk_t < Skt) ? chunk_start_row + Sk_chunk_t : Skt;

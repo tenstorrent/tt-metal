@@ -35,6 +35,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     const auto& v_idx = args.v_indices;
     const auto& v_norms = args.v_norms;
     const auto& page_table = args.page_table;
+    const auto& cur_pos = args.cur_pos;
 
     IDevice* device = q.device();
     [[maybe_unused]] auto grid = device->compute_with_storage_grid_size();
@@ -299,6 +300,19 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 .set_page_size(CBIndex::c_9, page_table_page_size));
     }
 
+    // ── cur_pos CB (c_8) ──
+    // Holds B int32 values (current decode position per batch). Reader reads
+    // the cur_pos tensor into this CB once at kernel start; compute consumes
+    // to derive a valid_k_chunks loop bound (vs. iterating the full padded
+    // cache, which is the whole point of this fix).
+    const uint32_t cur_pos_stick_size = cur_pos.buffer()->aligned_page_size();
+    auto cur_pos_df = datatype_to_dataformat_converter(cur_pos.dtype());
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(cur_pos_stick_size, {{CBIndex::c_8, cur_pos_df}})
+            .set_page_size(CBIndex::c_8, cur_pos_stick_size));
+
     // ── Reader kernel ──
     std::vector<uint32_t> reader_ct_args = {
         B,
@@ -321,6 +335,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     TensorAccessorArgs(*k_norms.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*v_idx.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*v_norms.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*cur_pos.buffer()).append_to(reader_ct_args);
     // page_table TensorAccessor args — always append (even in contiguous mode, reader
     // ignores them behind the `if constexpr (is_paged_attention)` gate, but the offset
     // calculation must be consistent).
@@ -380,6 +395,8 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 v_norms.buffer()->address(),
                 is_paged_attention ? page_table.buffer()->address() : 0u,
                 page_table_page_size,
+                cur_pos.buffer()->address(),
+                cur_pos_stick_size,
                 i,  // core_id
                 batch_start,
                 batch_end,
@@ -452,6 +469,10 @@ void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
         // args[6] = page_table_page_size (constant — set in create, not touched here).
         const bool is_paged = (args.k_indices.padded_shape()[0] != args.q.padded_shape()[0]);
         reader_args[5] = is_paged ? args.page_table.buffer()->address() : 0u;
+        // args[7] = cur_pos buffer address (refresh per call so the kernel reads
+        // the latest position values).
+        // args[8] = cur_pos_stick_size (constant — set in create).
+        reader_args[7] = args.cur_pos.buffer()->address();
 
         auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id, core);
         writer_args[0] = output.buffer()->address();

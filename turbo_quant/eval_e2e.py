@@ -289,6 +289,7 @@ def main():
     tt_out_warmup, _ = tt_model.ttnn_decode_forward(*device_inputs_warmup)
     ttnn.deallocate(tt_out_warmup)
     print(f"  Compile time: {time.perf_counter() - t_compile:.1f}s")
+    print(f"  Program cache entries after warmup: {mesh_device.num_program_cache_entries()}")
 
     # ------------------------------------------------------------------ #
     # Capture trace (Phase 1.5-A2)                                        #
@@ -313,6 +314,7 @@ def main():
     # Decode loop                                                          #
     # ------------------------------------------------------------------ #
     print("\n=== Decode loop ===")
+    print(f"  Program cache entries before decode: {mesh_device.num_program_cache_entries()}")
     all_tokens = list(encoded)
     times = []
     current_tokens = [encoded[0]] * batch  # one token per batch slot
@@ -334,6 +336,13 @@ def main():
             tt_logits, _ = tt_model.ttnn_decode_forward(*trace_inputs)
         elapsed = time.perf_counter() - t0
         times.append(elapsed)
+
+        # Per-step cache instrumentation: print only for the first 3 steps
+        # (enough to see whether cache misses keep happening every step).
+        if step < 3:
+            print(
+                f"    [cache] step {step}: {mesh_device.num_program_cache_entries()} entries  ({elapsed*1000:.1f} ms)"
+            )
 
         # Extract logits (blocking read — syncs device)
         logits = (

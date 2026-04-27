@@ -158,7 +158,7 @@ inline void dequant_k_chunk(
 
     // Pass 1: typecast BFP4→BF16 into cb_dq_temp (row-major layout).
     {
-        DeviceZoneScopedN("TQ_K_TYPECAST");
+        // DeviceZoneScopedN("TQ_K_TYPECAST");
         init_sfpu(cb_k_idx, cb_dq_temp);
         cb_reserve_back(cb_dq_temp, chunk_tiles);
         for (uint32_t t = 0; t < chunk_tiles; t++) {
@@ -178,7 +178,7 @@ inline void dequant_k_chunk(
 
     // Pass 2a: Centroid gather, in-place in cb_dq_temp.
     {
-        DeviceZoneScopedN("TQ_K_GATHER");
+        // DeviceZoneScopedN("TQ_K_GATHER");
         mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
         cb_wait_front(cb_dq_temp, chunk_tiles);
         cb_wait_front(cb_k_norms, Sk_chunk_t);
@@ -212,7 +212,7 @@ inline void dequant_k_chunk(
 
     // Pass 2b: Norm bcast multiply + tile-grid transpose into cb_k_in.
     {
-        DeviceZoneScopedN("TQ_K_NORM_TRANSPOSE");
+        // DeviceZoneScopedN("TQ_K_NORM_TRANSPOSE");
         cb_reserve_back(cb_k_in, chunk_tiles);
         for (uint32_t row = 0; row < Sk_chunk_t; row++) {
             for (uint32_t col = 0; col < DHt; col++) {
@@ -245,7 +245,7 @@ inline void dequant_v_chunk(
 
     // Pass 1: Typecast BFP4→BF16 into cb_dq_temp.
     {
-        DeviceZoneScopedN("TQ_V_TYPECAST");
+        // DeviceZoneScopedN("TQ_V_TYPECAST");
         init_sfpu(cb_v_idx, cb_dq_temp);
         cb_reserve_back(cb_dq_temp, chunk_tiles);
         for (uint32_t t = 0; t < chunk_tiles; t++) {
@@ -265,7 +265,7 @@ inline void dequant_v_chunk(
 
     // Pass 2a: Centroid gather, in-place in cb_dq_temp.
     {
-        DeviceZoneScopedN("TQ_V_GATHER");
+        // DeviceZoneScopedN("TQ_V_GATHER");
         mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
         cb_wait_front(cb_dq_temp, chunk_tiles);
         cb_wait_front(cb_v_norms, Sk_chunk_t);
@@ -300,7 +300,7 @@ inline void dequant_v_chunk(
     // Pass 2b: Norm bcast multiply into cb_v_in (no output transpose — natural [Sk × vDHt]).
     // Sequential pack matches the row-major src layout.
     {
-        DeviceZoneScopedN("TQ_V_NORM");
+        // DeviceZoneScopedN("TQ_V_NORM");
         cb_reserve_back(cb_v_in, chunk_tiles);
         for (uint32_t row = 0; row < Sk_chunk_t; row++) {
             for (uint32_t col = 0; col < vDHt; col++) {
@@ -412,6 +412,14 @@ void kernel_main() {
     constexpr uint32_t cb_v_idx = tt::CBIndex::c_12;
     constexpr uint32_t cb_v_norms = tt::CBIndex::c_13;
     constexpr uint32_t cb_dq_temp = tt::CBIndex::c_14;
+    constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
+
+    // ── Wait for reader to fill cur_pos CB ──
+    // Reader does a single noc_async_read of the cur_pos tensor into cb_cur_pos
+    // at kernel start; we use ckernel::read_tile_value (UNPACK→mailbox→MATH/PACK)
+    // to read cur_pos[nb] per batch in the nb loop below.
+    cb_wait_front(cb_cur_pos, 1);
+    constexpr uint32_t k_chunk_size_tokens = Sk_chunk_t * 32;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
@@ -516,120 +524,132 @@ void kernel_main() {
                 uint32_t alias_mm2_prev_out = cb_out_im_A;
                 uint32_t alias_mm2_cur_out = cb_out_im_B;
 
-                mm_init(cb_q_in, cb_k_in, cb_out);
+                {
+                    DeviceZoneScopedN("TQ_HEAD_INIT");
+                    mm_init(cb_q_in, cb_k_in, cb_out);
+                }
 
-                for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-                    DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
-                    // ── Step 1: Dequantize K chunk → cb_k_in (transposed layout) ──
-                    {
-                        DeviceZoneScopedN("TQ_DEQUANT_K");
-                        dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
-                            cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
-                    }
+                {
+                    DeviceZoneScopedN("TQ_CHUNK_LOOP");
+                    // Limit k_chunks to those that actually contain valid (filled) data.
+                    // Mirrors reader_tq_decode.cpp's bound — must agree to avoid CB deadlock.
+                    const uint32_t cur_pos_nb = read_tile_value(cb_cur_pos, 0, nb);
+                    const uint32_t valid_k_chunks_raw = (cur_pos_nb + k_chunk_size_tokens) / k_chunk_size_tokens;
+                    const uint32_t valid_k_chunks =
+                        valid_k_chunks_raw < k_num_chunks ? valid_k_chunks_raw : k_num_chunks;
+                    for (uint32_t k_chunk = 0; k_chunk < valid_k_chunks; ++k_chunk) {
+                        DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
+                        // ── Step 1: Dequantize K chunk → cb_k_in (transposed layout) ──
+                        {
+                            // DeviceZoneScopedN("TQ_DEQUANT_K");
+                            dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
+                                cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
+                        }
 
-                    // ── Step 2: QK = Q × K^T ──
-                    {
-                        DeviceZoneScopedN("TQ_QK_MATMUL");
-                        reconfig_data_format(cb_k_in, cb_q_in);
-                        pack_reconfig_data_format(cb_qk_im);
-                        matmul_blocks(
-                            cb_q_in,
-                            cb_k_in,
-                            cb_qk_im,
-                            Sq_chunk_t,
-                            Sk_chunk_t,
-                            DHt,
-                            qk_num_blocks,
-                            qk_in0_num_subblocks,
-                            qk_in1_num_subblocks,
-                            qk_in0_block_w,
-                            qk_subblock_h,
-                            qk_subblock_w,
-                            true /*transpose K*/);
-                    }
+                        // ── Step 2: QK = Q × K^T ──
+                        {
+                            // DeviceZoneScopedN("TQ_QK_MATMUL");
+                            reconfig_data_format(cb_k_in, cb_q_in);
+                            pack_reconfig_data_format(cb_qk_im);
+                            matmul_blocks(
+                                cb_q_in,
+                                cb_k_in,
+                                cb_qk_im,
+                                Sq_chunk_t,
+                                Sk_chunk_t,
+                                DHt,
+                                qk_num_blocks,
+                                qk_in0_num_subblocks,
+                                qk_in1_num_subblocks,
+                                qk_in0_block_w,
+                                qk_subblock_h,
+                                qk_subblock_w,
+                                true /*transpose K*/);
+                        }
 
-                    // ── Step 3: Online softmax ──
-                    {
-                        DeviceZoneScopedN("TQ_SOFTMAX");
-                        // cur_max = max(QK, dim=-1) (with eltwise max vs prev on chunk>0)
-                        reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                        reduce_c<
-                            PoolType::MAX,
-                            ReduceDim::REDUCE_ROW,
-                            cb_qk_im,
-                            cb_identity_scale_in,
-                            Sq_chunk_t,
-                            Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
+                        // ── Step 3: Online softmax ──
+                        {
+                            // DeviceZoneScopedN("TQ_SOFTMAX");
+                            // cur_max = max(QK, dim=-1) (with eltwise max vs prev on chunk>0)
+                            reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                            reduce_c<
+                                PoolType::MAX,
+                                ReduceDim::REDUCE_ROW,
+                                cb_qk_im,
+                                cb_identity_scale_in,
+                                Sq_chunk_t,
+                                Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
 
-                        // QK = exp((QK - cur_max) * scale); partial reduce_sum into cur_sum
-                        sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                            alias_cur_max, alias_cur_sum, Sk_chunk_t);
-                    }
+                            // QK = exp((QK - cur_max) * scale); partial reduce_sum into cur_sum
+                            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+                        }
 
-                    // ── Step 4: Dequantize V chunk → cb_v_in (natural layout) ──
-                    {
-                        DeviceZoneScopedN("TQ_DEQUANT_V");
-                        dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
-                            cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
-                    }
+                        // ── Step 4: Dequantize V chunk → cb_v_in (natural layout) ──
+                        {
+                            // DeviceZoneScopedN("TQ_DEQUANT_V");
+                            dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
+                                cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
+                        }
 
-                    // ── Step 5: OUT_IM = softmax × V ──
-                    {
-                        DeviceZoneScopedN("TQ_OUT_MATMUL");
-                        reconfig_data_format(cb_v_in, cb_qk_im);
-                        pack_reconfig_data_format(alias_mm2_cur_out);
-                        matmul_blocks(
-                            cb_qk_im,
-                            cb_v_in,
-                            alias_mm2_cur_out,
-                            Sq_chunk_t,
-                            vDHt,
-                            Sk_chunk_t,
-                            out_num_blocks,
-                            out_in0_num_subblocks,
-                            out_in1_num_subblocks,
-                            out_in0_block_w,
-                            out_subblock_h,
-                            out_subblock_w,
-                            false /*no transpose*/);
+                        // ── Step 5: OUT_IM = softmax × V ──
+                        {
+                            // DeviceZoneScopedN("TQ_OUT_MATMUL");
+                            reconfig_data_format(cb_v_in, cb_qk_im);
+                            pack_reconfig_data_format(alias_mm2_cur_out);
+                            matmul_blocks(
+                                cb_qk_im,
+                                cb_v_in,
+                                alias_mm2_cur_out,
+                                Sq_chunk_t,
+                                vDHt,
+                                Sk_chunk_t,
+                                out_num_blocks,
+                                out_in0_num_subblocks,
+                                out_in1_num_subblocks,
+                                out_in0_block_w,
+                                out_subblock_h,
+                                out_subblock_w,
+                                false /*no transpose*/);
 
-                        cb_pop_front(cb_qk_im, qk_chunk_tiles);
-                        reconfig_data_format(alias_prev_max, alias_cur_max);
-                    }
+                            cb_pop_front(cb_qk_im, qk_chunk_tiles);
+                            reconfig_data_format(alias_prev_max, alias_cur_max);
+                        }
 
-                    // ── Step 6: Lazy softmax correction (from chunk 2 onward) ──
-                    if (k_chunk > 0) {
-                        DeviceZoneScopedN("TQ_SOFTMAX_CORRECTION");
-                        // exp_max_diff = exp((prev_max - cur_max) * scale)
-                        sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                        cb_pop_front(alias_prev_max, Sq_chunk_t);
-                        // prev_sum *= exp_max_diff
-                        mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-                        // cur_sum += prev_sum
-                        add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
-                        // mm2_cur_out += mm2_prev_out * exp_max_diff (via L1 accum)
-                        mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                            alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
-                    }
+                        // ── Step 6: Lazy softmax correction (from chunk 2 onward) ──
+                        if (k_chunk > 0) {
+                            // DeviceZoneScopedN("TQ_SOFTMAX_CORRECTION");
+                            // exp_max_diff = exp((prev_max - cur_max) * scale)
+                            sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                            cb_pop_front(alias_prev_max, Sq_chunk_t);
+                            // prev_sum *= exp_max_diff
+                            mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                            // cur_sum += prev_sum
+                            add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                            // mm2_cur_out += mm2_prev_out * exp_max_diff (via L1 accum)
+                            mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
+                                alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+                        }
 
-                    // Empirical fix: multiple volatile L1 reads via the CB tile pointer on UNPACK.
-                    {
-                        DeviceZoneScopedN("TQ_SYNC_UNPACK");
-                        UNPACK(sync_unpack_cb_read(alias_cur_max););
-                    }
+                        // Empirical fix: multiple volatile L1 reads via the CB tile pointer on UNPACK.
+                        {
+                            // DeviceZoneScopedN("TQ_SYNC_UNPACK");
+                            UNPACK(sync_unpack_cb_read(alias_cur_max););
+                        }
 
-                    // ── Step 7: Swap aliases for next iteration ──
-                    uint32_t tmp;
-                    tmp = alias_prev_sum;
-                    alias_prev_sum = alias_cur_sum;
-                    alias_cur_sum = tmp;
-                    tmp = alias_prev_max;
-                    alias_prev_max = alias_cur_max;
-                    alias_cur_max = tmp;
-                    tmp = alias_mm2_prev_out;
-                    alias_mm2_prev_out = alias_mm2_cur_out;
-                    alias_mm2_cur_out = tmp;
-                }  // end k_chunk loop
+                        // ── Step 7: Swap aliases for next iteration ──
+                        uint32_t tmp;
+                        tmp = alias_prev_sum;
+                        alias_prev_sum = alias_cur_sum;
+                        alias_cur_sum = tmp;
+                        tmp = alias_prev_max;
+                        alias_prev_max = alias_cur_max;
+                        alias_cur_max = tmp;
+                        tmp = alias_mm2_prev_out;
+                        alias_mm2_prev_out = alias_mm2_cur_out;
+                        alias_mm2_cur_out = tmp;
+                    }  // end k_chunk loop
+                }  // end TQ_CHUNK_LOOP zone
 
                 // ── Final: row-reduce partial sum, recip, normalize output ──
                 {
@@ -644,4 +664,7 @@ void kernel_main() {
             }  // end !pre_rescaled branch
         }
     }
+
+    // Release the cur_pos CB so the reader can refill it on the next trace replay.
+    cb_pop_front(cb_cur_pos, 1);
 }
