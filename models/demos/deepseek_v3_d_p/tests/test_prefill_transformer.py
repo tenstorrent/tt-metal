@@ -47,6 +47,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_SHORT_PATH,
     P64TOK_PATH,
     P960TOK_PATH,
+    PIE960_PATH,
     PROMPTS_PATH,
     ReferenceCacheKey,
     check_reference_cache_exists,
@@ -83,6 +84,7 @@ SEQ_LEN_25K = 25 * 1024
         "abc_short",
         "p64tok",
         "p960tok",
+        "pie960",
         "random",
         "passkey",
         "kv_retrieval",
@@ -276,6 +278,10 @@ def test_prefill_transformer(
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
             prompt_text = load_prompts_from_json(str(P960TOK_PATH))
+        elif input_source == "pie960":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(PIE960_PATH))
         elif input_source in INFINITEBENCH_SUBSET_NAMES:
             cached_path = download_infinitebench_subset(input_source)
             with open(cached_path) as f:

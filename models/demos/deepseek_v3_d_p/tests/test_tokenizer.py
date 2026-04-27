@@ -63,8 +63,9 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
         Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.json"),
         Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json"),
         Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json"),
+        Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json"),
     ],
-    ids=["short", "64tok", "960tok"],
+    ids=["short", "64tok", "960tok", "pie"],
 )
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 def test_token_count(tokenizer, json_path):
