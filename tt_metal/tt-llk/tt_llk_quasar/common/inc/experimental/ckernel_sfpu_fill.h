@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-// AI-generated — run_id: 2026-04-23_fill_quasar_e9608a59
 #pragma once
 
 #include <cstdint>
-#include <cstring>
 
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
@@ -18,12 +16,10 @@ namespace sfpu
 {
 
 // Broadcast a float constant to all elements of Dest.
-// value_bit_mask: IEEE 754 bit-pattern of the float to write.
 template <int ITERATIONS>
-inline void _calculate_fill_(const float value_bit_mask)
+inline void _calculate_fill_(const float value)
 {
-    std::uint32_t bits;
-    std::memcpy(&bits, &value_bit_mask, sizeof(bits));
+    std::uint32_t bits = __builtin_bit_cast(std::uint32_t, value);
     TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, bits & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, bits >> 16);
 #pragma GCC unroll 8
@@ -39,9 +35,9 @@ inline void _calculate_fill_(const float value_bit_mask)
 //   Int32        → sfpmem::INT32  (32-bit sign-magnitude, loads both halves)
 //   Int16        → sfpmem::UINT16 (16-bit; INT16 = Quasar hw code 9)
 //   Int8 / UInt8 → sfpmem::UINT8  (8-bit)
-// Always use SFPLOADI_MOD0_LOWER to place the value at LReg bits [15:0].
+// Note: Always use SFPLOADI_MOD0_LOWER to place the value at LReg bits [15:0].
 // SFPLOADI_MOD0_USHORT (mode 2) shifts the value 10 bits left inside the LReg,
-// causing SFPMEM::UINT16 reading [15:0] to produce value<<10 instead of value.
+// causing for example SFPMEM::UINT16 reading [15:0] to produce value<<10 instead of value.
 template <DataFormat FMT, int ITERATIONS>
 inline void _calculate_fill_int_(const std::uint32_t value)
 {
@@ -67,14 +63,11 @@ inline void _calculate_fill_int_(const std::uint32_t value)
 }
 
 // Broadcast a bit-pattern constant to all elements of Dest.
-// Semantically identical to _calculate_fill_; provided for API compatibility.
 // value: Raw bit-pattern to write, not reinterpreted as float.
 template <int ITERATIONS>
 inline void _calculate_fill_bitcast_(const std::uint32_t value)
 {
-    float as_float;
-    std::memcpy(&as_float, &value, sizeof(as_float));
-    _calculate_fill_<ITERATIONS>(as_float);
+    _calculate_fill_<ITERATIONS>(__builtin_bit_cast(float, value));
 }
 
 } // namespace sfpu

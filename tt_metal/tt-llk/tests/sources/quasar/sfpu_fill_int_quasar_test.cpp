@@ -120,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = params.buffer_Res[0] / 16;
+    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
     bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
     bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
