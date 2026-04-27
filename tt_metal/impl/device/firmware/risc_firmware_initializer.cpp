@@ -287,12 +287,16 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
-            // Poll each reset MMIO ETH channel's heartbeat until the counter is actively
-            // incrementing in 0xABCDxxxx format, confirming UMD base relay firmware is running.
-            // Two-phase check (mirrors UMD topology_discovery::eth_heartbeat_running):
+            // FIX AR: poll ALL reset ETH cores in a single shared time window instead of
+            // sequentially (1000ms per core × N cores).  WH ETH link training takes ~1–3s;
+            // with per-core sequential polling, every core times out because its individual
+            // 1s window starts long after the simultaneous PCIe reset.  Parallel polling
+            // gives all cores the full kBulkPollMs to converge.
+            //
+            // Two-phase heartbeat check:
             //   Phase 1: wait for heartbeat != 0  (ROM zeroes L1 on boot; firmware writes first value)
             //   Phase 2: wait for value to CHANGE  (proves firmware is actively running, not stale memory)
-            //            AND upper 16 bits == 0xABCD (rules out non-base-firmware garbage)
+            // WH heartbeat at 0x1F80 (test_results[48]) is a plain incrementing counter — no 0xABCDxxxx prefix.
             // cluster_.read_reg() on MMIO cores goes through PCIe — safe even with broken relay.
             //
             // Heartbeat addresses (populated in each arch's HAL active_eth file):
@@ -311,54 +315,63 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         "using 500ms sleep as fallback.");
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 } else {
-                    constexpr int kMaxPollMs = 1000;
-                    constexpr auto kPollInterval = std::chrono::milliseconds(10);
+                    struct CorePollState {
+                        tt_cxy_pair target;
+                        uint32_t prev_hb = 0;
+                        bool nonzero_seen = false;
+                        bool ready = false;
+                    };
+                    std::vector<CorePollState> poll_states;
                     for (const tt::ChipId poll_mmio_id : mmio_ids_set) {
                         for (const auto& poll_logical_core :
                              this->get_control_plane_().get_active_ethernet_cores(poll_mmio_id)) {
                             CoreCoord poll_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
                                 poll_mmio_id, poll_logical_core, CoreType::ETH);
-                            tt_cxy_pair poll_target(poll_mmio_id, poll_virt);
-                            const auto poll_start = std::chrono::steady_clock::now();
-                            bool ready = false;
-                            uint32_t prev_hb = 0;
-                            bool nonzero_seen = false;
-                            while (true) {
-                                uint32_t hb_val = 0;
-                                try {
-                                    cluster_.read_reg(&hb_val, poll_target, hb_addr);
-                                } catch (...) {
-                                    break;  // PCIe read failed — don't spin
-                                }
-                                if (!nonzero_seen) {
-                                    if (hb_val != 0) {
-                                        prev_hb = hb_val;
-                                        nonzero_seen = true;
-                                    }
-                                } else if (hb_val != prev_hb) {
-                                    // WH heartbeat (0x1F80) is a plain incrementing counter,
-                                    // not 0xABCDxxxx format — just check that the value changed.
-                                    ready = true;
-                                    break;
-                                }
-                                const auto elapsed_ms =
-                                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        std::chrono::steady_clock::now() - poll_start)
-                                        .count();
-                                if (elapsed_ms >= kMaxPollMs) {
-                                    break;
-                                }
-                                std::this_thread::sleep_for(kPollInterval);
+                            poll_states.push_back({tt_cxy_pair(poll_mmio_id, poll_virt), 0, false, false});
+                        }
+                    }
+                    constexpr int kBulkPollMs = 5000;
+                    constexpr auto kPollInterval = std::chrono::milliseconds(10);
+                    const auto bulk_start = std::chrono::steady_clock::now();
+                    while (true) {
+                        bool all_done = true;
+                        for (auto& ps : poll_states) {
+                            if (ps.ready) continue;
+                            uint32_t hb_val = 0;
+                            try {
+                                cluster_.read_reg(&hb_val, ps.target, hb_addr);
+                            } catch (...) {
+                                ps.ready = true;  // PCIe read failed — count as done
+                                continue;
                             }
-                            if (!ready) {
-                                log_warning(
-                                    tt::LogAlways,
-                                    "teardown: FIX AC — ETH core {} on MMIO device {} did not "
-                                    "report base firmware heartbeat within {}ms; proceeding.",
-                                    poll_virt.str(),
-                                    poll_mmio_id,
-                                    kMaxPollMs);
+                            if (!ps.nonzero_seen) {
+                                if (hb_val != 0) {
+                                    ps.prev_hb = hb_val;
+                                    ps.nonzero_seen = true;
+                                }
+                            } else if (hb_val != ps.prev_hb) {
+                                // WH heartbeat (0x1F80) is a plain incrementing counter,
+                                // not 0xABCDxxxx format — just check that the value changed.
+                                ps.ready = true;
                             }
+                            if (!ps.ready) all_done = false;
+                        }
+                        if (all_done) break;
+                        const auto elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - bulk_start)
+                                .count();
+                        if (elapsed_ms >= kBulkPollMs) break;
+                        std::this_thread::sleep_for(kPollInterval);
+                    }
+                    for (const auto& ps : poll_states) {
+                        if (!ps.ready) {
+                            log_warning(
+                                tt::LogAlways,
+                                "teardown: FIX AC — ETH core {} did not report base firmware "
+                                "heartbeat within {}ms; proceeding.",
+                                ps.target.str(),
+                                kBulkPollMs);
                         }
                     }
                 }
@@ -469,7 +482,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
-            // Same two-phase heartbeat poll as Step 2 — see comment there for rationale.
+            // FIX AR: same parallel bulk poll as Step 2 — see comment there for rationale.
             // Relay is intact in this path (relay_broken_non_mmio was empty),
             // but cluster_.read_reg() via PCIe is still the right read path for MMIO cores.
             {
@@ -481,54 +494,63 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         "using 200ms sleep as fallback.");
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 } else {
-                    constexpr int kMaxPollMs = 1000;
-                    constexpr auto kPollInterval = std::chrono::milliseconds(10);
+                    struct CorePollState {
+                        tt_cxy_pair target;
+                        uint32_t prev_hb = 0;
+                        bool nonzero_seen = false;
+                        bool ready = false;
+                    };
+                    std::vector<CorePollState> poll_states;
                     for (const tt::ChipId poll_mmio_id : mmio_ids_set) {
                         for (const auto& poll_logical_core :
                              this->get_control_plane_().get_active_ethernet_cores(poll_mmio_id)) {
                             CoreCoord poll_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
                                 poll_mmio_id, poll_logical_core, CoreType::ETH);
-                            tt_cxy_pair poll_target(poll_mmio_id, poll_virt);
-                            const auto poll_start = std::chrono::steady_clock::now();
-                            bool ready = false;
-                            uint32_t prev_hb = 0;
-                            bool nonzero_seen = false;
-                            while (true) {
-                                uint32_t hb_val = 0;
-                                try {
-                                    cluster_.read_reg(&hb_val, poll_target, hb_addr);
-                                } catch (...) {
-                                    break;
-                                }
-                                if (!nonzero_seen) {
-                                    if (hb_val != 0) {
-                                        prev_hb = hb_val;
-                                        nonzero_seen = true;
-                                    }
-                                } else if (hb_val != prev_hb) {
-                                    // WH heartbeat (0x1F80) is a plain incrementing counter,
-                                    // not 0xABCDxxxx format — just check that the value changed.
-                                    ready = true;
-                                    break;
-                                }
-                                const auto elapsed_ms =
-                                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        std::chrono::steady_clock::now() - poll_start)
-                                        .count();
-                                if (elapsed_ms >= kMaxPollMs) {
-                                    break;
-                                }
-                                std::this_thread::sleep_for(kPollInterval);
+                            poll_states.push_back({tt_cxy_pair(poll_mmio_id, poll_virt), 0, false, false});
+                        }
+                    }
+                    constexpr int kBulkPollMs = 5000;
+                    constexpr auto kPollInterval = std::chrono::milliseconds(10);
+                    const auto bulk_start = std::chrono::steady_clock::now();
+                    while (true) {
+                        bool all_done = true;
+                        for (auto& ps : poll_states) {
+                            if (ps.ready) continue;
+                            uint32_t hb_val = 0;
+                            try {
+                                cluster_.read_reg(&hb_val, ps.target, hb_addr);
+                            } catch (...) {
+                                ps.ready = true;  // PCIe read failed — count as done
+                                continue;
                             }
-                            if (!ready) {
-                                log_warning(
-                                    tt::LogAlways,
-                                    "teardown: FIX AC (timeout) — ETH core {} on MMIO device {} did not "
-                                    "report base firmware heartbeat within {}ms; proceeding.",
-                                    poll_virt.str(),
-                                    poll_mmio_id,
-                                    kMaxPollMs);
+                            if (!ps.nonzero_seen) {
+                                if (hb_val != 0) {
+                                    ps.prev_hb = hb_val;
+                                    ps.nonzero_seen = true;
+                                }
+                            } else if (hb_val != ps.prev_hb) {
+                                // WH heartbeat (0x1F80) is a plain incrementing counter,
+                                // not 0xABCDxxxx format — just check that the value changed.
+                                ps.ready = true;
                             }
+                            if (!ps.ready) all_done = false;
+                        }
+                        if (all_done) break;
+                        const auto elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - bulk_start)
+                                .count();
+                        if (elapsed_ms >= kBulkPollMs) break;
+                        std::this_thread::sleep_for(kPollInterval);
+                    }
+                    for (const auto& ps : poll_states) {
+                        if (!ps.ready) {
+                            log_warning(
+                                tt::LogAlways,
+                                "teardown: FIX AC (timeout) — ETH core {} did not report base firmware "
+                                "heartbeat within {}ms; proceeding.",
+                                ps.target.str(),
+                                kBulkPollMs);
                         }
                     }
                 }
