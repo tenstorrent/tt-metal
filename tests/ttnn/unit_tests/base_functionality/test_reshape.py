@@ -254,7 +254,6 @@ def test_reshape_cw_div2_rm(device, n, c, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -272,7 +271,6 @@ def test_reshape_cw_mul2_rm(device, n, c, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -290,7 +288,6 @@ def test_reshape_hw_div2_rm(device, n, c, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -308,7 +305,6 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
@@ -323,7 +319,6 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -357,7 +352,6 @@ def test_reshape(h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -371,7 +365,6 @@ def test_reshape_negative_1(h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [32, 32])
@@ -387,7 +380,6 @@ def test_reshape_in_4D(n, c, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [32, 64])
@@ -405,7 +397,6 @@ def test_reshape_in_4D_on_device(device, n, c, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
-    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 def test_permute_reshape(device):
