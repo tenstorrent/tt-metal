@@ -566,81 +566,10 @@ class TestMoeGroupDevice:
 # ---------------------------------------------------------------------------
 # Device-time profiling (Tracy).
 #
-# Launch via:
-#   tt-train/run_profiler.sh tt-train/tests/python/test_moe_group.py::TestMoeGroupProfile
-#
-# The run_profiler.sh wrapper invokes `python -m tracy -r -v -p` which writes
-# a host-side ops log CSV (`ops_perf_results_<timestamp>.csv`) with one row per
-# op launch, including `DEVICE KERNEL DURATION [ns]`.
-#
 # Each profile test brackets the measured iterations with `signpost("start")`
 # and `signpost("stop")`, and we filter the ops log by those markers so warmup
 # and other ops are excluded from the stats.
 # ---------------------------------------------------------------------------
-
-
-_PROFILE_LOG_DEVICE_CSV = "/home/training-team/danik/tt-metal/generated/profiler/.logs/profile_log_device.csv"
-
-
-def _last_n_device_kernel_durations_ns(n):  # noqa: unused — kept for local debugging
-    """Parse profile_log_device.csv and return the last `n` per-op device
-    kernel durations in ns.
-
-    profile_log_device.csv has raw device-side zones: one row per
-    (core, RISC, zone, ZONE_START|ZONE_END) with a cycle timestamp.
-    Each op launch has a unique `run host ID`. For each run_host_id with
-    any *-KERNEL zones, duration = max(kernel ZONE_END cycles) -
-    min(kernel ZONE_START cycles), converted to ns via CHIP_FREQ from
-    the file header.
-
-    Returns None if the CSV is unavailable or empty.
-    """
-    import os
-
-    if not os.path.exists(_PROFILE_LOG_DEVICE_CSV):
-        return None
-    try:
-        import pandas as pd
-    except ImportError:
-        return None
-
-    with open(_PROFILE_LOG_DEVICE_CSV) as f:
-        header_line = f.readline()
-    # header line: "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 80"
-    chip_freq_mhz = 1000
-    for tok in header_line.split(","):
-        if "CHIP_FREQ" in tok:
-            try:
-                chip_freq_mhz = int(tok.strip().split(":")[1].strip())
-            except Exception:
-                pass
-    ns_per_cycle = 1000.0 / chip_freq_mhz  # 1e9 ns/s / (freq_mhz * 1e6 cycles/s)
-
-    df = pd.read_csv(_PROFILE_LOG_DEVICE_CSV, skiprows=1, skipinitialspace=True)
-    required = {"run host ID", "time[cycles since reset]", "zone name", "type"}
-    if not required.issubset(df.columns):
-        return None
-
-    # Keep only KERNEL zones (BRISC-KERNEL, NCRISC-KERNEL, TRISCn-KERNEL).
-    df = df[df["zone name"].astype(str).str.endswith("-KERNEL", na=False)]
-    df["cycles"] = pd.to_numeric(df["time[cycles since reset]"], errors="coerce")
-    df = df.dropna(subset=["cycles"])
-
-    # Per run host ID: kernel duration = max(end cycles) - min(start cycles).
-    durations_ns = []
-    for run_id, group in df.groupby("run host ID"):
-        starts = group[group["type"] == "ZONE_START"]["cycles"]
-        ends = group[group["type"] == "ZONE_END"]["cycles"]
-        if len(starts) == 0 or len(ends) == 0:
-            continue
-        cycles = ends.max() - starts.min()
-        durations_ns.append((int(run_id), cycles * ns_per_cycle))
-
-    if not durations_ns:
-        return None
-    # Sort by run_id (ascending), take last n.
-    durations_ns.sort(key=lambda x: x[0])
-    return [d for _, d in durations_ns[-n:]]
 
 
 @pytest.mark.skipif(not _TTML_AVAILABLE, reason="ttml / ttnn not importable")
