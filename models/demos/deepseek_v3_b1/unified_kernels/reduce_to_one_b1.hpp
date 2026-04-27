@@ -79,7 +79,6 @@ struct ReduceToOneB1 {
         uint32_t outputCoreNocX,
         uint32_t outputCoreNocY,
         uint32_t numWorkers,
-        uint32_t slotSizeBytes,
         uint32_t isFabricCore,
         bool enableDownstreamSocket,
         uint32_t fabricRtArgBase = 0,
@@ -101,7 +100,6 @@ struct ReduceToOneB1 {
         static constexpr uint32_t output_core_noc_x = outputCoreNocX;
         static constexpr uint32_t output_core_noc_y = outputCoreNocY;
         static constexpr uint32_t num_workers = numWorkers;
-        static constexpr uint32_t slot_size_bytes = slotSizeBytes;
         static constexpr uint32_t is_fabric_core = isFabricCore;
         static constexpr uint32_t fabric_rt_arg_base = fabricRtArgBase;
         static constexpr uint32_t total_num_workers = totalNumWorkers;
@@ -110,6 +108,11 @@ struct ReduceToOneB1 {
         static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
         static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
         static constexpr uint32_t forward_metadata_size_bytes = forwardMetadataSizeBytes;
+
+        static constexpr uint32_t compute_all_sent_mask(uint32_t slots) {
+            return (slots == 32) ? 0xFFFF'FFFFu : ((1u << slots) - 1u);
+        }
+        static constexpr uint32_t all_sent_mask = compute_all_sent_mask(numWorkers);
     };
 
     // Compute (TRISC) compile-time args
@@ -185,6 +188,25 @@ struct ReduceToOneB1 {
 
     private:
 #if defined(COMPILE_FOR_BRISC)
+        static constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+        static constexpr uint32_t slot_size_bytes = packet_header_size_bytes + CTArgs::payload_size_bytes;
+
+        template <typename FabricConnection>
+        static FORCE_INLINE uint32_t process_ready_slots(
+            volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t sent_mask, uint32_t buffer_base, FabricConnection& conn) {
+            uint32_t sem_value = *sem_ptr;
+            uint32_t pending = sem_value & ~sent_mask;
+            while (pending != 0) {
+                uint32_t slot = __builtin_ctz(pending);
+                uint32_t slot_addr = buffer_base + slot * slot_size_bytes;
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_non_blocking_from_address(slot_addr, slot_size_bytes);
+                sent_mask |= (1u << slot);
+                pending &= pending - 1;
+            }
+            return sent_mask;
+        }
+
         // Template helper for routing - allows if constexpr to work for both 1D and 2D fabric
         template <typename packet_header_t>
         static FORCE_INLINE void set_unicast_route(
@@ -255,14 +277,13 @@ struct ReduceToOneB1 {
             // ================================================================
             // BRISC - Writer: sends data via fabric or NOC
             // ================================================================
-            constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
                     if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
                         // Persistent fabric core: wait for aggregator signal, then send
                         // cross-device atomic inc to bcast sender on entry device.
-                        // Persistent args start after the worker sem addrs.
-                        size_t p_idx = CTArgs::fabric_rt_arg_base + CTArgs::num_workers;
+                        // Persistent args start after the shared ready semaphore address.
+                        size_t p_idx = CTArgs::fabric_rt_arg_base + 1;
                         uint32_t wait_sem_addr = get_arg_val<uint32_t>(p_idx++);
                         uint32_t dst_noc_x = get_arg_val<uint32_t>(p_idx++);
                         uint32_t dst_noc_y = get_arg_val<uint32_t>(p_idx++);
@@ -272,7 +293,6 @@ struct ReduceToOneB1 {
 
                         volatile tt_l1_ptr uint32_t* wait_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
-                        constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
                         PacketHeaderPool::reset();
                         auto route_id = PacketHeaderPool::allocate_header_n(1);
                         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
@@ -288,47 +308,28 @@ struct ReduceToOneB1 {
                         sender.wait_for_empty_write_slot();
                         noc_semaphore_wait_min(wait_sem_ptr, 1);
                         unified_kernels::semaphore_dec(wait_sem_ptr);
-                        sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
+                        sender.send_payload_flush_blocking_from_address(
+                            reinterpret_cast<uint32_t>(hdr), packet_header_size_bytes);
                         sender.close();
                         noc_async_full_barrier();
                     }
                     return;
                 }
 
-                // Read worker semaphore addresses from runtime args
                 size_t arg_idx = CTArgs::fabric_rt_arg_base;
-                uint32_t worker_sem_addr[CTArgs::num_workers];
-                for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
-                    worker_sem_addr[i] = get_arg_val<uint32_t>(arg_idx++);
-                }
-
+                const uint32_t ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
                 const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
-
-                // Build fabric connection from runtime args
                 auto fabric_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                 fabric_sender.open();
-
-                // Forward worker packets
-                uint32_t slot_base = packet_buffer_addr;
-                for (uint32_t worker = 0; worker < CTArgs::num_workers; worker++) {
-                    uint32_t worker_header_addr = slot_base;
-                    uint32_t worker_payload_addr = slot_base + packet_header_size_bytes;
-
-                    volatile tt_l1_ptr uint32_t* worker_sem_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
-                    fabric_sender.wait_for_empty_write_slot();
-                    noc_semaphore_wait_min(worker_sem_ptr, 1);
-                    unified_kernels::semaphore_dec(worker_sem_ptr);
-
-                    fabric_sender.send_payload_without_header_non_blocking_from_address(
-                        worker_payload_addr, CTArgs::payload_size_bytes);
-                    fabric_sender.send_payload_flush_blocking_from_address(
-                        worker_header_addr, packet_header_size_bytes);
-
-                    slot_base += CTArgs::slot_size_bytes;
-                }
-
+                volatile tt_l1_ptr uint32_t* ready_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem_addr);
+                uint32_t sent_mask = 0;
+                do {
+                    invalidate_l1_cache();
+                    sent_mask = process_ready_slots(ready_sem_ptr, sent_mask, packet_buffer_addr, fabric_sender);
+                } while (sent_mask != CTArgs::all_sent_mask);
+                noc_semaphore_set(ready_sem_ptr, 0);
                 fabric_sender.close();
                 noc_async_write_barrier();
                 return;
@@ -438,7 +439,7 @@ struct ReduceToOneB1 {
                 CTArgs::payload_size_bytes);
 
             // Calculate slot in fabric core's packet buffer
-            uint32_t slot_offset = args.my_slot_idx * CTArgs::slot_size_bytes;
+            uint32_t slot_offset = args.my_slot_idx * slot_size_bytes;
             uint32_t header_dest_addr = packet_buffer_addr + slot_offset;
             uint32_t payload_dest_addr = header_dest_addr + packet_header_size_bytes;
 
@@ -469,8 +470,9 @@ struct ReduceToOneB1 {
             noc_async_write<CTArgs::payload_size_bytes, true, /*posted=*/true>(
                 data_addr, payload_noc_addr, CTArgs::payload_size_bytes);
 
-            // Signal fabric core
-            noc_semaphore_inc(arrival_sem_noc_addr, 1);
+            // Ensure the staged packet is visible before advertising the slot as ready.
+            noc_async_posted_writes_flushed();
+            noc_semaphore_inc(arrival_sem_noc_addr, 1u << args.my_slot_idx);
             noc_async_atomic_barrier();
 
             // Pop source_cb to free it for the next iteration.

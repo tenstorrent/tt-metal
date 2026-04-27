@@ -46,8 +46,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("output_core_noc_x"),
         get_named_compile_time_arg_val("output_core_noc_y"),
         get_named_compile_time_arg_val("num_workers"),
-        get_named_compile_time_arg_val("slot_size_bytes"),
         get_named_compile_time_arg_val("is_fabric_core"),
+        0,  // enableDownstreamSocket (standalone kernel never uses downstream sockets)
         0,  // fabricRtArgBase (default)
         get_named_compile_time_arg_val("total_num_workers"),
         get_named_compile_time_arg_val("agg_output_size_bytes"),
@@ -56,14 +56,14 @@ void kernel_main() {
         get_named_compile_time_arg_val("forward_metadata_size_bytes")>;
 
     // Writer runtime args for worker cores only (from per-core args)
-    // Fabric cores have different args (sem IDs + fabric connection) read inside the op
+    // Fabric cores read the shared ready semaphore + fabric connection args inside the op
     ReduceToOne::WorkerWriterArgs rt_args{};
     if constexpr (CTArgs::is_fabric_core == 0) {
         rt_args = {
             get_arg_val<uint32_t>(0),  // fabric_core_noc_x
             get_arg_val<uint32_t>(1),  // fabric_core_noc_y
             get_arg_val<uint32_t>(2),  // my_slot_idx
-            get_arg_val<uint32_t>(3),  // worker_sem_addr
+            get_arg_val<uint32_t>(3),  // shared ready semaphore address
             get_arg_val<uint32_t>(4),  // dst_l1_addr
             get_arg_val<uint32_t>(5),  // dst_sem_addr
             get_arg_val<uint32_t>(6),  // output_base_addr
@@ -103,7 +103,9 @@ void kernel_main() {
     deepseek_compute_kernel_init();
 #endif
 
-    // Execute the op (looped for testing iteration correctness)
+    // Optional in-kernel loop count for standalone experimentation. This is not
+    // an epoch-safe correctness mode for reduce_to_one today; standalone tests
+    // should keep num_loop_iters == 1 until explicit epoch ownership exists.
     // IsWorkerCore = true (compile-time) since fabric core logic is handled inside the op
     constexpr uint32_t num_loop_iters = get_named_compile_time_arg_val("num_loop_iters");
     ReduceToOne::Op<CTArgs, true> op;
