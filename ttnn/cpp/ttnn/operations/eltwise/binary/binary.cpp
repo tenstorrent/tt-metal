@@ -5,9 +5,7 @@
 
 #include "binary.hpp"
 
-#include "device/binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -249,15 +247,6 @@ inline Tensor to_dtype(const Tensor& input, DataType dtype) {
 
 inline float to_dtype(float input, [[maybe_unused]] DataType dtype) { return input; }
 
-inline bool is_block_format(DataType dtype) {
-    using enum DataType;
-    switch (dtype) {
-        case BFLOAT4_B:
-        case BFLOAT8_B: return true;
-        default: return false;
-    }
-}
-
 inline bool is_layout_or_scalar(const Tensor& input, Layout layout) { return input.layout() == layout; }
 
 inline bool is_layout_or_scalar([[maybe_unused]] float input, [[maybe_unused]] Layout layout) { return true; }
@@ -271,13 +260,6 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
 }
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
-
-constexpr bool is_associative(BinaryOpType op) {
-    return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
-           op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
-           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR || op == BinaryOpType::MAXIMUM ||
-           op == BinaryOpType::MINIMUM || op == BinaryOpType::GCD || op == BinaryOpType::LCM;
-}
 
 // Tensor - Scalar
 inline Tensor binary_impl(
@@ -329,151 +311,7 @@ inline Tensor binary_impl(
     TT_THROW("Unsupported operation");
 }
 
-inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
-    // TODO: #7731 (Remove calls to repeat)
-    constexpr auto repeat_smaller = [](const Tensor& first, Tensor& second) {
-        const auto& first_shape = first.logical_shape();
-        const auto& second_shape = second.logical_shape();
-        // repeats second if it is smaller
-        if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
-            TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
-            Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
-            second = ttnn::repeat(second, repeats);
-        }
-        // repeats second if it is smaller
-        if (first_shape.rank() >= 3 and second_shape.rank() >= 3 and first_shape[-3] > second_shape[-3]) {
-            TT_FATAL(second_shape[-3] == 1, "Dimension trying to broadcast is not equal to 1");
-            int rank_a = first_shape.rank();
-            std::vector<uint32_t> repeat_dim(rank_a, 1);
-            repeat_dim[rank_a - 3] = first_shape[rank_a - 3];
-            Shape repeats(repeat_dim);
-            second = ttnn::repeat(second, repeats);
-        }
-    };
-
-    repeat_smaller(a, b);
-    repeat_smaller(b, a);
-
-    // Swap tensors if a needs to be broadcasted to b
-    if (detail::is_associative(binary_op_type) and a.logical_volume() < b.logical_volume()) {
-        return std::make_tuple(b, a);
-    }
-
-    return std::make_tuple(a, b);
-}
-
-inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
-    if (a.is_sharded() and is_block_format(a.dtype())) {
-        return true;
-    }
-
-    if constexpr (requires { b.is_sharded(); }) {
-        if (b.is_sharded() and is_block_format(b.dtype())) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.logical_shape(); }) {
-        const auto& a_shape = a.logical_shape();
-        const auto& b_shape = b.logical_shape();
-
-        if (is_block_format(a.dtype()) &&
-            ((a_shape[-2] == 1 && b_shape[-2] > 1) || (a_shape[-1] == 1 && b_shape[-1] > 1))) {
-            return true;
-        }
-
-        if (is_block_format(b.dtype()) &&
-            ((b_shape[-2] == 1 && a_shape[-2] > 1) || (b_shape[-1] == 1 && a_shape[-1] > 1))) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
-    if constexpr (requires {
-                      b.dtype();
-                      b.is_sharded();
-                      b.logical_shape();
-                  }) {
-        if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32 or a.dtype() == DataType::UINT32 or
-            b.dtype() == DataType::UINT32 or a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16 or
-            a.dtype() == DataType::UINT8 or b.dtype() == DataType::UINT8) {
-            return true;
-        }
-
-        if (a.logical_shape().rank() > 4 or b.logical_shape().rank() > 4) {
-            return true;
-        }
-
-        if (a.logical_shape()[-2] == 1 && b.logical_shape()[-2] > 1 && a.logical_shape()[-1] > 1 &&
-            b.logical_shape()[-1] == 1) {
-            return true;
-        }
-        if (b.logical_shape()[-2] == 1 && a.logical_shape()[-2] > 1 && b.logical_shape()[-1] > 1 &&
-            a.logical_shape()[-1] == 1) {
-            return true;
-        }
-    }
-    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return true now
-    return true;
-}
-
 }  // namespace detail
-
-bool is_legacy_only(
-    const Tensor& lhs,
-    const auto& rhs,
-    [[maybe_unused]] const std::optional<MemoryConfig>& memory_config,
-    [[maybe_unused]] const std::optional<Tensor>& output,
-    [[maybe_unused]] ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    [[maybe_unused]] ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations) {
-    // const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
-
-    if (detail::any_sharded_block_format(lhs, rhs) or detail::any_subtile_broadcasted_block_format(lhs, rhs)) {
-        //  TT_FATAL(
-        //      lhs_activations.size() <= 1,
-        //      "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
-        //      "but note there may be issues");
-        //  TT_FATAL(
-        //      rhs_activations.empty(),
-        //      "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
-        //      "there may be issues");
-        //  return true;
-    }
-    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return false now
-    return false;
-}
-
-template bool is_legacy_only<Tensor>(
-    const Tensor& lhs,
-    const Tensor& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
-
-template bool is_legacy_only<float>(
-    const Tensor& lhs,
-    const float& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
-
-template bool is_legacy_only<int32_t>(
-    const Tensor& lhs,
-    const int32_t& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
-
 }  // namespace ttnn::operations::binary
 
 namespace ttnn::detail {
@@ -488,27 +326,9 @@ inline auto invoke_binary_ng_impl(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
+    const std::optional<bool>& /*use_legacy*/,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (use_legacy
-            ? *use_legacy
-            : operations::binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                  (not operations::binary::detail::is_binary_ng_only(lhs, rhs))) {
-        const std::vector activations(post_activations.begin(), post_activations.end());
-        const std::optional lhs_activation =
-            lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
-
-        if constexpr (requires { operations::binary::detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
-            auto [a, b] = operations::binary::detail::preprocess_inputs(binary_op_type, lhs, rhs);
-
-            return ttnn::prim::binary(a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
-        } else {
-            return ttnn::prim::binary(
-                lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
-        }
-    }
-
     const auto a_dtype = lhs.dtype();
     const DataType b_dtype = [&] {
         if constexpr (requires { rhs.dtype(); }) {
@@ -694,13 +514,6 @@ Tensor relational_binary(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (use_legacy
-            ? *use_legacy
-            : operations::binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                  (not operations::binary::detail::is_binary_ng_only(lhs, rhs))) {
-        return detail::binary_impl(binary_op_type, lhs, rhs, dtype, memory_config, output);
-    }
-
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,

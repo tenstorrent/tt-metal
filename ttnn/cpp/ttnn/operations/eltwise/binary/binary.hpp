@@ -125,14 +125,6 @@
 namespace ttnn {
 namespace operations::binary {
 
-bool is_legacy_only(
-    const Tensor& lhs,
-    const auto& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
-
 template <BinaryOpType binary_op_type>
 Tensor where_operation_with_scalar(
     const Tensor& condition,

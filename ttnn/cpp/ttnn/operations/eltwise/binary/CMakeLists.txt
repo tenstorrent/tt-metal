@@ -18,12 +18,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            binary.hpp
-            binary_composite.hpp
-            common/binary_op_types.hpp
-            common/binary_op_utils.hpp
-            device/binary_device_operation.hpp
+        FILES binary.hpp binary_composite.hpp common/binary_op_types.hpp common/binary_op_utils.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -32,14 +27,6 @@ target_sources(
         binary.cpp
         common/binary_op_utils.cpp
         device/binary_composite_op.cpp
-        device/binary_device_operation.cpp
-        device/broadcast_height_and_width_multi_core_program_factory.cpp
-        device/broadcast_height_multi_core_program_factory.cpp
-        device/broadcast_width_multi_core_program_factory.cpp
-        device/element_wise_multi_core_program_factory.cpp
-        device/element_wise_multi_core_sfpu_pgm_factory.cpp
-        device/broadcast_height_multi_core_sharded_optimized_program_factory.cpp
-        device/broadcast_height_multi_core_sharded_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})
