@@ -111,8 +111,10 @@ class BgeM3MLP(LightweightModule):
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
         batch_size, _, seq_len, _ = hidden_states.shape
         core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, int(seq_len), int(batch_size))
+        wi_core_grid = None if self.config.wi_prg_config is not None else core_grid
+        wi_activation = None if self.config.wi_prg_config is not None else "gelu"
 
-        # ``activation="gelu"`` fuses GELU into the Wi matmul (no separate unary GELU or extra buffer).
+        # GELU stays fused into Wi, either through the default activation arg or the explicit B1/S512 program config.
         activated = ttnn.linear(
             hidden_states,
             self.wi_weight,
@@ -121,8 +123,8 @@ class BgeM3MLP(LightweightModule):
             bias=self.wi_bias,
             program_config=self.config.wi_prg_config,
             compute_kernel_config=self.config.wi_compute_kernel_cfg,
-            activation="gelu",
-            core_grid=core_grid,
+            activation=wi_activation,
+            core_grid=wi_core_grid,
         )
 
         output = ttnn.linear(
@@ -197,6 +199,14 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         to_set["wo_compute_kernel_cfg"] = bge_m3_mlp_wo_compute_kernel_config(
             mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
         )
+    if config.wi_prg_config is None:
+        to_set["wi_prg_config"] = _b1s512_mlp_wi_program_config(
+            mesh_device,
+            max_seq,
+            max_batch,
+            hidden_size=config.hidden_size,
+            intermediate_size=config.intermediate_size,
+        )
 
     wi_dtype = to_set.get("wi_dtype", config.wi_dtype)
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)
@@ -238,6 +248,37 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         )
 
     return replace(config, **to_set)
+
+
+def _b1s512_mlp_wi_program_config(
+    mesh_device,
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    *,
+    hidden_size: int,
+    intermediate_size: int,
+) -> object | None:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len != 512 or max_batch != 1:
+        return None
+
+    core_grid = bge_m3_matmul_core_grid(mesh_device, max_seq_len, max_batch)
+    hidden_tiles = hidden_size // 32
+    intermediate_tiles = intermediate_size // 32
+    seq_tiles = max_seq_len // 32
+    per_core_m = (seq_tiles + core_grid.y - 1) // core_grid.y
+    per_core_n = (intermediate_tiles + core_grid.x - 1) // core_grid.x
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+        in0_block_w=min(4, hidden_tiles),
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
+    )
 
 
 def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: BgeM3MLPConfig) -> ttnn.Tensor:
