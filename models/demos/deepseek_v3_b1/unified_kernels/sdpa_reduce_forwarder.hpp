@@ -82,6 +82,8 @@ struct SdpaReduceForwarder {
     private:
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
         static constexpr uint8_t forwarder_to_fabric_noc = 0;
+        static_assert(
+            noc_mode == DM_DYNAMIC_NOC || forwarder_to_fabric_noc == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
 
         /**
          * Process ready slots from a semaphore and forward packets.
