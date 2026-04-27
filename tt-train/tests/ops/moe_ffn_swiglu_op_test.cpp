@@ -126,17 +126,17 @@ void RunCase(const FfnCase& c) {
     std::vector<std::size_t> grouped_4d_shape{1U, 1U, static_cast<std::size_t>(T_cap), static_cast<std::size_t>(c.H)};
     xt::xarray<float> grouped_4d = xt::xarray<float>::from_shape(grouped_4d_shape);
     std::copy(grouped.begin(), grouped.end(), grouped_4d.begin());
-    auto t_grouped = core::from_xtensor(grouped_4d, device);
+    auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
 
     auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
 
-    auto t_wg = core::from_xtensor(w_gate, device);
-    auto t_wu = core::from_xtensor(w_up, device);
-    auto t_wd = core::from_xtensor(w_down, device);
+    auto t_wg = autograd::create_tensor(core::from_xtensor(w_gate, device), /*requires_grad=*/true);
+    auto t_wu = autograd::create_tensor(core::from_xtensor(w_up, device), /*requires_grad=*/true);
+    auto t_wd = autograd::create_tensor(core::from_xtensor(w_down, device), /*requires_grad=*/true);
 
     auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
-    xt::xarray<float> out_xt = core::to_xtensor(t_out);  // [1,1,T_cap,H]
+    xt::xarray<float> out_xt = core::to_xtensor(t_out->get_value());  // [1,1,T_cap,H]
 
     // Flatten to [T_cap, H] for comparison.
     std::vector<std::size_t> out_2d_shape{static_cast<std::size_t>(T_cap), static_cast<std::size_t>(c.H)};
@@ -184,4 +184,113 @@ TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H512_I1024) {
 
 TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H4096_I512) {
     RunCase({/*E*/ 4U, /*H*/ 4096U, /*I*/ 512U, /*counts*/ {64U, 32U, 96U, 64U}});
+}
+
+// Backward sanity: gradients populate, are finite, have the right shapes,
+// and are zero on per-expert pad rows of `grouped` (those rows contribute
+// nothing to the loss). Numerical correctness is left to a downstream
+// reference test; this guards the op wiring and graph dependencies.
+class MoeFfnSwigluBackwardTest : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
+    using namespace ttml;
+
+    constexpr uint32_t E = 3U;
+    constexpr uint32_t H = 64U;
+    constexpr uint32_t I = 128U;
+    const std::vector<uint32_t> counts = {32U, 16U, 48U};
+
+    std::vector<uint32_t> offsets(E + 1U, 0U);
+    for (uint32_t e = 0; e < E; ++e) {
+        const uint32_t padded = ((counts[e] + 31U) / 32U) * 32U;
+        offsets[e + 1U] = offsets[e] + padded;
+    }
+    const uint32_t T_cap = offsets.back();
+
+    auto& rng = autograd::ctx().get_generator();
+    auto gen = [&]() { return std::uniform_real_distribution<float>(0.0f, 1.0f); };
+
+    xt::xarray<float> grouped_4d = xt::xarray<float>::from_shape(
+        std::vector<std::size_t>{1U, 1U, static_cast<std::size_t>(T_cap), static_cast<std::size_t>(H)});
+    grouped_4d.fill(0.0f);
+    for (uint32_t e = 0; e < E; ++e) {
+        if (counts[e] == 0U) {
+            continue;
+        }
+        std::vector<std::size_t> slice_shape{1U, 1U, static_cast<std::size_t>(counts[e]), static_cast<std::size_t>(H)};
+        xt::xarray<float> slice = xt::empty<float>(slice_shape);
+        core::parallel_generate<float>(slice, gen, rng());
+        xt::view(grouped_4d, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
+    }
+
+    xt::xarray<float> w_gate = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), H, I});
+    xt::xarray<float> w_up = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), H, I});
+    xt::xarray<float> w_down = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), I, H});
+    core::parallel_generate<float>(w_gate, gen, rng());
+    core::parallel_generate<float>(w_up, gen, rng());
+    core::parallel_generate<float>(w_down, gen, rng());
+
+    auto* device = &autograd::ctx().get_device();
+
+    auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
+    auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
+    auto t_wg = autograd::create_tensor(core::from_xtensor(w_gate, device), /*requires_grad=*/true);
+    auto t_wu = autograd::create_tensor(core::from_xtensor(w_up, device), /*requires_grad=*/true);
+    auto t_wd = autograd::create_tensor(core::from_xtensor(w_down, device), /*requires_grad=*/true);
+
+    auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+    t_out->set_grad(core::ones_like(t_out->get_value()));
+    t_out->backward();
+
+    auto dgrouped = core::to_xtensor(t_grouped->get_grad());
+    auto dwg = core::to_xtensor(t_wg->get_grad());
+    auto dwu = core::to_xtensor(t_wu->get_grad());
+    auto dwd = core::to_xtensor(t_wd->get_grad());
+
+    EXPECT_EQ(dgrouped.shape(), grouped_4d.shape());
+    EXPECT_EQ(dwg.shape(), w_gate.shape());
+    EXPECT_EQ(dwu.shape(), w_up.shape());
+    EXPECT_EQ(dwd.shape(), w_down.shape());
+
+    EXPECT_TRUE(xt::all(xt::isfinite(dgrouped))) << "non-finite dgrouped";
+    EXPECT_TRUE(xt::all(xt::isfinite(dwg))) << "non-finite dW_gate";
+    EXPECT_TRUE(xt::all(xt::isfinite(dwu))) << "non-finite dW_up";
+    EXPECT_TRUE(xt::all(xt::isfinite(dwd))) << "non-finite dW_down";
+
+    // Loss = sum(Y); inputs are positive, weights are positive — every active row
+    // contributes a non-zero gradient. Active-row dgrouped should be non-trivial.
+    bool any_active_nonzero = false;
+    for (uint32_t e = 0; e < E; ++e) {
+        if (counts[e] == 0U) {
+            continue;
+        }
+        auto active = xt::view(dgrouped, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all());
+        if (xt::amax(xt::abs(active))() > 0.0f) {
+            any_active_nonzero = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(any_active_nonzero) << "all active-row gradients are zero — backward likely not connected";
+
+    // Per-expert pad rows of `grouped` had zero input → must have zero gradient.
+    for (uint32_t e = 0; e < E; ++e) {
+        const uint32_t pad_lo = offsets[e] + counts[e];
+        const uint32_t pad_hi = offsets[e + 1U];
+        if (pad_hi == pad_lo) {
+            continue;
+        }
+        auto pad = xt::view(dgrouped, 0, 0, xt::range(pad_lo, pad_hi), xt::all());
+        EXPECT_NEAR(xt::amax(xt::abs(pad))(), 0.0f, 1e-3f) << "non-zero dgrouped on pad rows for expert " << e;
+    }
+
+    autograd::ctx().reset_graph();
 }
