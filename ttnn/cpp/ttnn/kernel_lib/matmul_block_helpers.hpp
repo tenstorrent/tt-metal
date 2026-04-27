@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -124,9 +124,9 @@ struct NoPreKBlock {
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   in0_cb, in1_cb     Input CBs for matrices A and B.
- *   out_cb             Output CB for the final result.
- *   interm_cb          Intermediate CB for K-blocking spill/reload or L1-ACC FIFO.
+ *   in0_cb_id, in1_cb_id  Input CBs for matrices A and B.
+ *   out_cb_id          Output CB for the final result.
+ *   interm_cb_id       Intermediate CB for K-blocking spill/reload or L1-ACC FIFO.
  *                      When num_k_blocks == 1 it is never read; pass any non-output CB.
  *   shape              MatmulBlockShape (see above) — subblock counts, subblock size,
  *                      K-blocking, batch. Build with MatmulBlockShape::of(...).
@@ -200,10 +200,10 @@ template <
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock>
 ALWI void matmul_block(
-    uint32_t in0_cb,
-    uint32_t in1_cb,
-    uint32_t out_cb,
-    uint32_t interm_cb,
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t out_cb_id,
+    uint32_t interm_cb_id,
     MatmulBlockShape shape,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
@@ -226,8 +226,8 @@ ALWI void matmul_block(
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   in_out_cb       CB serving as both input and output (in-place).
- *   in1_cb          CB with the single column-identity tile (kept fronted, not popped).
+ *   in_out_cb_id    CB serving as both input and output (in-place).
+ *   in1_cb_id       CB with the single column-identity tile (kept fronted, not popped).
  *   num_subblocks   Number of subblock iterations (= rows / subblock_h).
  *   subblock_h      Subblock height in tiles (matmul rt_dim).
  *   subblock_w      Subblock width in tiles (matmul ct_dim; typically 1).
@@ -237,12 +237,12 @@ ALWI void matmul_block(
  *   // SDPA fold M partial-sums using a column-identity tile in in1_cb.
  *   // Before: cb_out_accum has (STATS_GRANULARITY * Wt) tiles;
  *   // After:  cb_out_accum has Wt tiles (one reduced row).
- *   // Args: (in_out_cb, in1_cb, num_subblocks, subblock_h, subblock_w=1, block_kt=1).
+ *   // Args: (in_out_cb_id, in1_cb_id, num_subblocks, subblock_h, subblock_w=1, block_kt=1).
  *   matmul_reduce_inplace(cb_out_accum, cb_col_identity, Wt, STATS_GRANULARITY);
  */
 ALWI void matmul_reduce_inplace(
-    uint32_t in_out_cb,
-    uint32_t in1_cb,
+    uint32_t in_out_cb_id,
+    uint32_t in1_cb_id,
     uint32_t num_subblocks,
     uint32_t subblock_h,
     uint32_t subblock_w = 1,

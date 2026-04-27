@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -97,10 +97,10 @@ struct NoPostBias {
  *
  * ── Template Parameters ────────────────────────────────────────────────────
  *
- *   partials_cb       CB containing matmul output (= interm_cb from matmul_block).
- *   bias_cb           CB containing bias tiles. RowBroadcast: one tile per output column.
+ *   partials_cb_id    CB containing matmul output (= interm_cb from matmul_block).
+ *   bias_cb_id        CB containing bias tiles. RowBroadcast: one tile per output column.
  *                     Elementwise: multiple M rows per column.
- *   out_cb            Output CB for biased result.
+ *   out_cb_id         Output CB for biased result.
  *   broadcast         BiasBroadcast::RowBroadcast (default, add_tiles_bcast_rows) or
  *                     BiasBroadcast::Elementwise (add_tiles).
  *   output_layout     OutputLayout::SubblockMajor (default, legacy) or OutputLayout::RowMajor.
@@ -146,9 +146,9 @@ struct NoPostBias {
  *       SFPUPostBias>(BiasAddShape::of(...), SFPUPostBias{});
  */
 template <
-    uint32_t partials_cb,
-    uint32_t bias_cb,
-    uint32_t out_cb,
+    uint32_t partials_cb_id,
+    uint32_t bias_cb_id,
+    uint32_t out_cb_id,
     BiasBroadcast broadcast = BiasBroadcast::RowBroadcast,
     OutputLayout output_layout = OutputLayout::SubblockMajor,
     typename PostBiasFn = bias_add_config::NoPostBias>

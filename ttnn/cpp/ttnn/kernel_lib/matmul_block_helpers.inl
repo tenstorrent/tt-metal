@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include "experimental/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 
 /**
@@ -28,16 +29,21 @@ template <
     typename PostComputeFn,
     typename PreKBlockFn>
 ALWI void matmul_block(
-    uint32_t in0_cb,
-    uint32_t in1_cb,
-    uint32_t out_cb,
-    uint32_t interm_cb,
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t out_cb_id,
+    uint32_t interm_cb_id,
     MatmulBlockShape shape,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
     bool retain_in0,
     uint32_t in1_per_core_w,
     uint32_t out_row_width) {
+
+    ::experimental::CircularBuffer in0_cb(in0_cb_id);
+    ::experimental::CircularBuffer in1_cb(in1_cb_id);
+    ::experimental::CircularBuffer out_cb(out_cb_id);
+    ::experimental::CircularBuffer interm_cb(interm_cb_id);
 
     // Hoist shape fields into local names so the existing body reads unchanged.
     const uint32_t in0_num_subblocks = shape.in0_num_subblocks;
@@ -75,8 +81,8 @@ ALWI void matmul_block(
     ASSERT(out_subblock_h > 0);
     ASSERT(out_subblock_w > 0);
     ASSERT(batch > 0);
-    ASSERT(in0_cb != out_cb);
-    ASSERT(in1_cb != out_cb);
+    ASSERT(in0_cb_id != out_cb_id);
+    ASSERT(in1_cb_id != out_cb_id);
 
     ASSERT(out_num_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
 
@@ -97,10 +103,11 @@ ALWI void matmul_block(
             // Full-block wait for both modes. Every caller (matmul + SDPA) has the
             // full in0 block resident before invoking the helper, so progressive
             // per-subblock waits are pure polling overhead on TRISCs.
-            cb_wait_front(in0_cb, in0_block_num_tiles);
-            cb_wait_front(in1_cb, in1_block_num_tiles);
+            in0_cb.wait_front(in0_block_num_tiles);
+            in1_cb.wait_front(in1_block_num_tiles);
 
-            const uint32_t pack_target = pack_last_to_interm ? interm_cb : out_cb;
+            const uint32_t pack_target_id = pack_last_to_interm ? interm_cb_id : out_cb_id;
+            ::experimental::CircularBuffer pack_target(pack_target_id);
 
             // Legacy/sequential path: reserve the full out_block on the first
             // non-last K-block so interm spills don't overwrite output data
@@ -110,7 +117,7 @@ ALWI void matmul_block(
             // CB-API contract requires.
             if constexpr (layout == OutputLayout::SubblockMajor) {
                 if (block == 0 && !last_out) {
-                    cb_reserve_back(out_cb, out_block_num_tiles);
+                    out_cb.reserve_back(out_block_num_tiles);
                 }
             }
 
@@ -129,9 +136,9 @@ ALWI void matmul_block(
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
                     // Smaller than full-block reserve, so shared out/interm CBs don't deadlock.
                     if (last_out) {
-                        cb_reserve_back(pack_target, row_group_tiles);
+                        pack_target.reserve_back(row_group_tiles);
                     } else if constexpr (spill_row_major) {
-                        cb_reserve_back(interm_cb, row_group_tiles);
+                        interm_cb.reserve_back(row_group_tiles);
                     }
                 }
 
@@ -140,12 +147,12 @@ ALWI void matmul_block(
                     tile_regs_acquire();
 
                     if (enable_reload) {
-                        copy_tile_to_dst_init_short_with_dt(in1_cb, interm_cb);
-                        cb_wait_front(interm_cb, out_num_tiles);
-                        copy_block_matmul_partials(interm_cb, 0, 0, out_num_tiles);
-                        cb_pop_front(interm_cb, out_num_tiles);
+                        copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
+                        interm_cb.wait_front(out_num_tiles);
+                        copy_block_matmul_partials(interm_cb_id, 0, 0, out_num_tiles);
+                        interm_cb.pop_front(out_num_tiles);
                         mm_block_init_short_with_dt(
-                            in0_cb, in1_cb, interm_cb, transpose, out_subblock_w, out_subblock_h, block_w);
+                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, out_subblock_w, out_subblock_h, block_w);
                     }
 
                     // Compute output sub-block via hardware block matmul.
@@ -158,8 +165,8 @@ ALWI void matmul_block(
 #ifndef SKIP_COMPUTE
                         // ckernel:: disambiguates the LLK matmul_block from this helper.
                         ckernel::matmul_block(
-                            in0_cb,
-                            in1_cb,
+                            in0_cb_id,
+                            in1_cb_id,
                             in0_index,
                             in1_index,
                             dst_index,
@@ -181,12 +188,12 @@ ALWI void matmul_block(
 
                         tile_regs_commit();
                         if constexpr (layout == OutputLayout::SubblockMajor) {
-                            cb_reserve_back(pack_target, out_num_tiles);
+                            pack_target.reserve_back(out_num_tiles);
                         }
                         tile_regs_wait();
 
                         if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
-                            PACK((pack_reconfig_data_format(pack_target)));
+                            PACK((pack_reconfig_data_format(pack_target_id)));
                         }
 
                         if constexpr (packer_l1_acc) {
@@ -207,7 +214,7 @@ ALWI void matmul_block(
                             // absolute-offset pack because DST tiles are packed column-first
                             // within a subblock while row-major output wants row-first.
                             if (out_subblock_h == 1) {
-                                pack_tile_block(0, pack_target, out_subblock_w);
+                                pack_tile_block(0, pack_target_id, out_subblock_w);
                             } else {
                                 uint32_t dst_idx = 0;
                                 uint32_t col_base = in1_subblock * out_subblock_w;
@@ -216,18 +223,18 @@ ALWI void matmul_block(
                                     // not in1_per_core_w — those differ for DRAM-sharded.
                                     uint32_t row_pos = r * out_row_width;
                                     for (uint32_t c = 0; c < out_subblock_w; c++) {
-                                        pack_tile<true>(dst_idx, pack_target, row_pos + col_base + c);
+                                        pack_tile<true>(dst_idx, pack_target_id, row_pos + col_base + c);
                                         dst_idx++;
                                     }
                                 }
                             }
                         } else {
-                            pack_tile_block(0, pack_target, out_num_tiles);
+                            pack_tile_block(0, pack_target_id, out_num_tiles);
                         }
 
                         tile_regs_release();
                         if constexpr (layout == OutputLayout::SubblockMajor) {
-                            cb_push_back(pack_target, out_num_tiles);
+                            pack_target.push_back(out_num_tiles);
                         }
 
                     } else {
@@ -238,7 +245,7 @@ ALWI void matmul_block(
                         // major (compatible with software reload's per-subblock read).
                         tile_regs_commit();
                         if constexpr (!spill_row_major) {
-                            cb_reserve_back(interm_cb, out_num_tiles);
+                            interm_cb.reserve_back(out_num_tiles);
                         }
                         tile_regs_wait();
 
@@ -248,24 +255,24 @@ ALWI void matmul_block(
 
                         if constexpr (spill_row_major) {
                             if (out_subblock_h == 1) {
-                                pack_tile_block(0, interm_cb, out_subblock_w);
+                                pack_tile_block(0, interm_cb_id, out_subblock_w);
                             } else {
                                 uint32_t dst_idx = 0;
                                 uint32_t col_base = in1_subblock * out_subblock_w;
                                 for (uint32_t r = 0; r < out_subblock_h; r++) {
                                     uint32_t row_pos = r * out_row_width;
                                     for (uint32_t c = 0; c < out_subblock_w; c++) {
-                                        pack_tile<true>(dst_idx, interm_cb, row_pos + col_base + c);
+                                        pack_tile<true>(dst_idx, interm_cb_id, row_pos + col_base + c);
                                         dst_idx++;
                                     }
                                 }
                             }
                         } else {
-                            pack_tile_block(0, interm_cb, out_num_tiles);
+                            pack_tile_block(0, interm_cb_id, out_num_tiles);
                         }
                         tile_regs_release();
                         if constexpr (!spill_row_major) {
-                            cb_push_back(interm_cb, out_num_tiles);
+                            interm_cb.push_back(out_num_tiles);
                         }
                     }
 
@@ -274,9 +281,9 @@ ALWI void matmul_block(
 
                 if constexpr (layout == OutputLayout::RowMajor) {
                     if (last_out) {
-                        cb_push_back(pack_target, row_group_tiles);
+                        pack_target.push_back(row_group_tiles);
                     } else if constexpr (spill_row_major) {
-                        cb_push_back(interm_cb, row_group_tiles);
+                        interm_cb.push_back(row_group_tiles);
                     }
                 }
 
@@ -292,16 +299,16 @@ ALWI void matmul_block(
                 if constexpr (pack_last_to_interm) {
                     if (block < num_k_blocks - 1) {
                         for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
-                            cb_wait_front(interm_cb, drain_step);
-                            cb_pop_front(interm_cb, drain_step);
+                            interm_cb.wait_front(drain_step);
+                            interm_cb.pop_front(drain_step);
                         }
                     }
                     enable_reload = false;
                 } else {
                     if (num_k_blocks >= 2 && block < num_k_blocks - 2) {
                         for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
-                            cb_wait_front(interm_cb, drain_step);
-                            cb_pop_front(interm_cb, drain_step);
+                            interm_cb.wait_front(drain_step);
+                            interm_cb.pop_front(drain_step);
                         }
                     }
                     if (block == num_k_blocks - 2) {
@@ -317,20 +324,23 @@ ALWI void matmul_block(
             // retain_in0: SDPA reuses Q across K chunks, so caller keeps in0 front
             // on the last iteration. Intermediate blocks always pop.
             if (!retain_in0 || !last_out) {
-                cb_pop_front(in0_cb, in0_block_num_tiles);
+                in0_cb.pop_front(in0_block_num_tiles);
             }
-            cb_pop_front(in1_cb, in1_block_num_tiles);
+            in1_cb.pop_front(in1_block_num_tiles);
         }
     }
 }
 
 ALWI void matmul_reduce_inplace(
-    uint32_t in_out_cb,
-    uint32_t in1_cb,
+    uint32_t in_out_cb_id,
+    uint32_t in1_cb_id,
     uint32_t num_subblocks,
     uint32_t subblock_h,
     uint32_t subblock_w,
     uint32_t block_kt) {
+
+    ::experimental::CircularBuffer in_out_cb(in_out_cb_id);
+    ::experimental::CircularBuffer in1_cb(in1_cb_id);
 
     const uint32_t subblock_tiles = subblock_h * subblock_w;
     const uint32_t total_in_tiles = num_subblocks * subblock_tiles;
@@ -338,27 +348,27 @@ ALWI void matmul_reduce_inplace(
     // Init + reconfig + input waits. in1_cb holds a single column-identity tile
     // (fronted for the life of the helper); in_out_cb must have the full input
     // population fronted before the reduce begins.
-    mm_block_init_short(in_out_cb, in1_cb, /*transpose=*/false, subblock_w, subblock_h, block_kt);
-    reconfig_data_format(in1_cb, in_out_cb);
-    cb_wait_front(in1_cb, 1);
-    cb_wait_front(in_out_cb, total_in_tiles);
+    mm_block_init_short(in_out_cb_id, in1_cb_id, /*transpose=*/false, subblock_w, subblock_h, block_kt);
+    reconfig_data_format(in1_cb_id, in_out_cb_id);
+    in1_cb.wait_front(1);
+    in_out_cb.wait_front(total_in_tiles);
 
     for (uint32_t sub = 0; sub < num_subblocks; ++sub) {
         tile_regs_acquire();
         ckernel::matmul_block(
-            in_out_cb, in1_cb, 0, 0, 0,
+            in_out_cb_id, in1_cb_id, 0, 0, 0,
             /*transpose=*/false, subblock_w, subblock_h, block_kt);
         tile_regs_commit();
         // Pop must happen after commit and before the back-pack so the read pointer
         // advances past the tiles we just consumed, making room for the write.
-        cb_pop_front(in_out_cb, subblock_tiles);
+        in_out_cb.pop_front(subblock_tiles);
         tile_regs_wait();
-        cb_reserve_back(in_out_cb, subblock_tiles);
+        in_out_cb.reserve_back(subblock_tiles);
         for (uint32_t i = 0; i < subblock_tiles; i++) {
-            pack_tile(i, in_out_cb);
+            pack_tile(i, in_out_cb_id);
         }
         tile_regs_release();
-        cb_push_back(in_out_cb, subblock_tiles);
+        in_out_cb.push_back(subblock_tiles);
     }
 }
 

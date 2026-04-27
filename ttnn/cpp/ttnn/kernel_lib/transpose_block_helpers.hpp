@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -27,11 +27,11 @@ namespace compute_kernel_lib {
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   in_transpose_cb  CB to read original tiles from.
- *   in_cb            CB to write transposed tiles to.
+ *   in_transpose_cb_id  CB to read original tiles from.
+ *   in_cb_id            CB to write transposed tiles to.
  */
 template <uint32_t in_block_num_tiles, uint32_t block_size = 4>
-FORCE_INLINE void transpose_tile_block(uint32_t in_transpose_cb, uint32_t in_cb);
+FORCE_INLINE void transpose_tile_block(uint32_t in_transpose_cb_id, uint32_t in_cb_id);
 
 /**
  * TransposePreKBlock: PreKBlockFn functor that transposes in0 before each K-block
