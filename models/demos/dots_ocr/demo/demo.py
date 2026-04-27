@@ -246,7 +246,11 @@ def _decode_loop(
     Uses TTNN argmax on device when possible; host ``torch.argmax`` when repetition penalty is applied
     (penalty runs on host logits).
     """
-    from models.demos.dots_ocr.tt.common import argmax_token_id_host_via_ttnn, argmax_token_id_ttnn
+    from models.demos.dots_ocr.tt.common import (
+        argmax_token_id_host_via_ttnn,
+        argmax_token_id_ttnn,
+        token_ids_ttnn_to_torch,
+    )
 
     batch_size = prefilled_logits.shape[0]
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)], dtype=torch.int32)
@@ -295,13 +299,15 @@ def _decode_loop(
                     tt_logits = tt_out[0]
                 else:
                     tt_logits = tt_out
-                out_tok = argmax_token_id_ttnn(
+                out_tok_tt = argmax_token_id_ttnn(
                     tt_logits, mesh_device=generator.mesh_device, batch_size=batch_size, layout="decode"
                 )
+                out_tok = token_ids_ttnn_to_torch(out_tok_tt, mesh_device=generator.mesh_device)
                 try:
                     import ttnn
 
                     ttnn.deallocate(tt_logits)
+                    ttnn.deallocate(out_tok_tt)
                 except Exception:
                     pass
             else:
@@ -364,13 +370,15 @@ def _decode_loop(
                 tt_logits = tt_out[0]
             else:
                 tt_logits = tt_out
-            out_tok = argmax_token_id_ttnn(
+            out_tok_tt = argmax_token_id_ttnn(
                 tt_logits, mesh_device=generator.mesh_device, batch_size=batch_size, layout="decode"
             )
+            out_tok = token_ids_ttnn_to_torch(out_tok_tt, mesh_device=generator.mesh_device)
             try:
                 import ttnn
 
                 ttnn.deallocate(tt_logits)
+                ttnn.deallocate(out_tok_tt)
             except Exception:
                 pass
         else:

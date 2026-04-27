@@ -587,21 +587,15 @@ def get_max_prefill_chunk_size(seq_len: int, max_prefill_seq_len: int) -> int:
 def sample_host(tt_input, mesh_device, temperature: float = 0.6, top_p: float = 0.08, on_host: bool = True):
     """Host-side sampler.
 
-    - If ``mesh_device`` is truthy, assume ``tt_input`` is a ``ttnn.Tensor`` and pull it back.
-    - Otherwise assume ``tt_input`` is already a torch tensor.
+    This function intentionally operates on **torch** tensors only. If you have TTNN
+    logits on device, convert them to torch at the call site (explicit boundary).
 
     Returns ``(maybe_ttnn_tensor, torch_tensor)``. In ``on_host=True`` mode the ttnn tensor is
     created without a device (host-only).
     """
     ttnn = get_ttnn()
     vocab_size = tt_input.shape[-1]
-    if mesh_device and ttnn is not None:
-        pt_input = ttnn.to_torch(
-            tt_input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=list(mesh_device.shape)),
-        )[:, :1, :, :vocab_size]
-    else:
-        pt_input = tt_input[..., :vocab_size]
+    pt_input = tt_input[..., :vocab_size]
 
     if temperature > 0:
         probs = torch.softmax(pt_input / temperature, dim=-1)
@@ -648,7 +642,7 @@ def argmax_token_id_ttnn(
     mesh_device: object,
     batch_size: int = 1,
     layout: str = "decode",
-) -> torch.Tensor:
+) -> object:
     """
     Greedy token selection on device (same row selection as :meth:`Transformer.process_output_decode` + host ``argmax``).
 
@@ -668,7 +662,7 @@ def argmax_token_id_ttnn(
         layout: ``"decode"`` (default) — batch padding; ``"prefill_block"`` — last sequence index in a 32-chunk (rare).
 
     Returns:
-        torch int64 tensor shaped [B, 1] token ids (host).
+        ttnn tensor of token ids on device.
     """
     ttnn = get_ttnn()
     if ttnn is None or not isinstance(tt_logits, ttnn.Tensor):
@@ -705,11 +699,8 @@ def argmax_token_id_ttnn(
 
     flat = ttnn.reshape(x, (-1, vocab))
     idx = ttnn.argmax(flat, dim=-1)
-    comp = _mesh_composer_bsh_to_torch(ttnn, mesh_device)
-    idx_pt = ttnn.to_torch(idx, mesh_composer=comp) if comp is not None else ttnn.to_torch(idx)
-    if idx_pt.dim() == 0:
-        idx_pt = idx_pt.view(1)
-    idx_pt = idx_pt.to(torch.int64).view(-1, 1)
+    # Keep token ids on device. Caller can explicitly D2H when needed.
+    idx = ttnn.reshape(idx, (-1, 1))
     try:
         if x is not tt_logits:
             ttnn.deallocate(x)
@@ -719,11 +710,19 @@ def argmax_token_id_ttnn(
         ttnn.deallocate(flat)
     except Exception:
         pass
-    try:
-        ttnn.deallocate(idx)
-    except Exception:
-        pass
-    return idx_pt
+    return idx
+
+
+def token_ids_ttnn_to_torch(tt_tok: object, *, mesh_device: object) -> torch.Tensor:
+    """Explicit boundary: convert device token ids -> torch int64 [B, 1]."""
+    ttnn = get_ttnn()
+    if ttnn is None or not isinstance(tt_tok, ttnn.Tensor):
+        raise TypeError("token_ids_ttnn_to_torch expects a ttnn.Tensor")
+    comp = _mesh_composer_bsh_to_torch(ttnn, mesh_device)
+    t = ttnn.to_torch(tt_tok, mesh_composer=comp) if comp is not None else ttnn.to_torch(tt_tok)
+    if t.dim() == 0:
+        t = t.view(1)
+    return t.to(torch.int64).view(-1, 1)
 
 
 def argmax_token_id_host_via_ttnn(logits: torch.Tensor, *, mesh_device: object) -> torch.Tensor:
@@ -746,7 +745,8 @@ def argmax_token_id_host_via_ttnn(logits: torch.Tensor, *, mesh_device: object) 
     if mem is not None:
         fkw["memory_config"] = mem
     tt = ttnn.from_torch(row.to(torch.bfloat16), **fkw)
-    out = argmax_token_id_ttnn(tt, mesh_device=mesh_device)
+    out_tt = argmax_token_id_ttnn(tt, mesh_device=mesh_device)
+    out = token_ids_ttnn_to_torch(out_tt, mesh_device=mesh_device)
     try:
         ttnn.deallocate(tt)
     except Exception:
