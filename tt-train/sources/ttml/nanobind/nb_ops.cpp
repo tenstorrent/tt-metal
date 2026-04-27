@@ -13,6 +13,7 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -63,6 +64,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("sample");
     m.def_submodule("swiglu");
     m.def_submodule("unary");
+    m.def_submodule("metal_ops");
 }
 
 void py_module(nb::module_& m) {
@@ -459,6 +461,44 @@ void py_module(nb::module_& m) {
         py_unary.def("broadcast_batch", &ttml::ops::broadcast_batch, nb::arg("tensor"), nb::arg("new_batch_dim"));
         py_unary.def("log_softmax", &ttml::ops::log_softmax, nb::arg("tensor"), nb::arg("dim"));
         py_unary.def("log_softmax_moreh", &ttml::ops::log_softmax_moreh, nb::arg("tensor"), nb::arg("dim"));
+    }
+
+    {
+        auto py_metal = m.def_submodule("metal_ops");
+        py_metal.def(
+            "moe_ungroup",
+            [](const ttnn::Tensor& expert_out,
+               const ttnn::Tensor& plan,
+               const ttnn::Tensor& offsets,
+               const ttnn::Tensor& counts,
+               const ttnn::Tensor& metadata,
+               const ttnn::Tensor& scores,
+               const ttnn::Tensor& local_expert_ids,
+               uint32_t e_local,
+               uint32_t k,
+               uint32_t d,
+               uint32_t b,
+               uint32_t s) {
+                return ttml::metal::moe_ungroup(
+                    expert_out, plan, offsets, counts, metadata, scores, local_expert_ids, e_local, k, d, b, s);
+            },
+            nb::arg("expert_out"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("counts"),
+            nb::arg("metadata"),
+            nb::arg("scores"),
+            nb::arg("local_expert_ids"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Ungroup expert outputs back to dense [D,B,S,H] ROW_MAJOR bf16,\n"
+            "fused with per-token top-K weight scaling. expert_out is the\n"
+            "FFN output in moe_group's grouped layout; plan/offsets/counts\n"
+            "are the index outputs of moe_group; metadata/scores are the\n"
+            "router top-K (expert_ids, weights). Returns ungrouped [D,B,S,H].");
     }
 }
 
