@@ -13,6 +13,19 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(1);
 // TensorAccessorArgs at index 2 (variable length)
 constexpr auto dst_args = TensorAccessorArgs<2>();
 
+template <uint32_t stick_size_bytes>
+inline void zeroWrite(uint64_t dst_noc_addr) {
+    constexpr uint32_t num_full_writes = stick_size_bytes / MEM_ZEROS_SIZE;
+    constexpr uint32_t partial_write_size = stick_size_bytes % MEM_ZEROS_SIZE;
+    for (uint32_t i = 0; i < num_full_writes; ++i) {
+        noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, MEM_ZEROS_SIZE);
+        dst_noc_addr += MEM_ZEROS_SIZE;
+    }
+    if constexpr (partial_write_size > 0) {
+        noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, partial_write_size);
+    }
+}
+
 void kernel_main() {
     // Common runtime args (multicast once per kernel, not unicast per core)
     // CRTA[0] = input_addr (unused by writer, reserved for consistency with reader)
@@ -41,7 +54,7 @@ void kernel_main() {
     // Covers all H positions (interior + H-halo) at T < t_front_pad.
     for (uint32_t s = 0; s < zero_fill_count; ++s) {
         uint64_t dst_noc_addr = get_noc_addr(zero_fill_start + s, dst_accessor);
-        noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, stick_size);
+        zeroWrite<stick_size>(dst_noc_addr);
         noc_async_write_barrier();
     }
 
@@ -59,8 +72,11 @@ void kernel_main() {
             cb_wait_front(cb_output_id, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
-            // For masked rows: drain the CB but write zeros to DRAM instead of CB data.
-            noc_async_write(masked ? (uint32_t)MEM_ZEROS_BASE : l1_read_addr, dst_noc_addr, stick_size);
+            if (masked) {
+                zeroWrite<stick_size>(dst_noc_addr);
+            } else {
+                noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+            }
             dst_stick_id++;
             noc_async_write_barrier();
             cb_pop_front(cb_output_id, 1);

@@ -166,6 +166,7 @@ ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.pad2_right,
         args.pad2_cluster_axis,
         args.pad2_num_links,
+        args.logical_h,
         args.t_front_pad,
         tensor_args);
 }

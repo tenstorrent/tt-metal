@@ -103,6 +103,7 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("pad2_cluster_axis", pad2_cluster_axis);
         attrs.emplace_back("pad2_num_links", pad2_num_links);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
+        attrs.emplace_back("logical_h", logical_h);
         attrs.emplace_back("t_front_pad", t_front_pad);
         return attrs;
     }
