@@ -97,7 +97,8 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
-        nb::arg("use_l1_small_for_semaphores") = false);
+        nb::arg("use_l1_small_for_semaphores") = false,
+        nb::arg("use_fp8_dispatch") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

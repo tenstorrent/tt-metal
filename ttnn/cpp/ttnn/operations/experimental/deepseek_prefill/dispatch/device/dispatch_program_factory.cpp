@@ -271,13 +271,23 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
     }
     // c_11: untilize output (compute → writer)
-    detail::create_tensor_cb(
-        program,
-        idle_core_grid,
-        output_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_11,
-        "idle_untilize_output");
+    // FP8 path: configure as Fp8_e4m3 so pack_untilize converts BF16 tiles → FP8 row-major.
+    if (operation_attributes.use_fp8_dispatch) {
+        uint32_t fp8_page_size = tt::round_up((uint32_t)hidden_size, l1_alignment);
+        tt::tt_metal::CircularBufferConfig fp8_cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                read_batch_size * fp8_page_size, {{tt::CBIndex::c_11, tt::DataFormat::Fp8_e4m3}})
+                .set_page_size(tt::CBIndex::c_11, fp8_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, fp8_cb_config);
+    } else {
+        detail::create_tensor_cb(
+            program,
+            idle_core_grid,
+            output_tensor,
+            /*buffering_factor=*/read_batch_size,
+            /*cb_id=*/tt::CBIndex::c_11,
+            "idle_untilize_output");
+    }
     // c_12: route table mailbox (sender writes before start_semaphore; writer reads after)
     // Layout: [entry_count u32] [entry_0..N × 6 u32s each]
     {
@@ -391,14 +401,24 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         /*buffering_factor=*/detail::get_num_pages(dispatch_table_tensor),
         /*cb_id=*/tt::CBIndex::c_9,
         "dispatch_table_tensor");
-    // c_18: receive buffer for untilized data from idle cores
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        output_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_18,
-        "receive_untilized");
+    // c_18: receive buffer for untilized data from idle cores (also sender self-untilize output)
+    // FP8 path: configure as Fp8_e4m3 so pack_untilize on the sender converts BF16 tiles → FP8.
+    if (operation_attributes.use_fp8_dispatch) {
+        uint32_t fp8_page_size = tt::round_up((uint32_t)hidden_size, l1_alignment);
+        tt::tt_metal::CircularBufferConfig fp8_cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                read_batch_size * fp8_page_size, {{tt::CBIndex::c_18, tt::DataFormat::Fp8_e4m3}})
+                .set_page_size(tt::CBIndex::c_18, fp8_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, fp8_cb_config);
+    } else {
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
+            output_tensor,
+            /*buffering_factor=*/read_batch_size,
+            /*cb_id=*/tt::CBIndex::c_18,
+            "receive_untilized");
+    }
     // c_19: route table scratch (sender builds local-expert route table here before NOC-writing to idle)
     {
         uint32_t max_route_entries = read_batch_size * operation_attributes.num_experts_per_tok;
@@ -648,7 +668,12 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
                 .compile_args = idle_writer_compile_args}));
     }
 
-    // Compute kernel on idle cores (same untilize kernel, unchanged)
+    std::map<std::string, std::string> compute_defines;
+    if (operation_attributes.use_fp8_dispatch) {
+        compute_defines["USE_FP8_DISPATCH"] = "1";
+    }
+
+    // Compute kernel on idle cores
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/compute/"
@@ -656,13 +681,15 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         idle_core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .compile_args = {
-                static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
-                static_cast<uint32_t>(tt::CBIndex::c_11),  // cb_untilize_id
-                static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
-                (uint32_t)hidden_size,
-                read_batch_size,
-            }});
+            .compile_args =
+                {
+                    static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
+                    static_cast<uint32_t>(tt::CBIndex::c_11),  // cb_untilize_id
+                    static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
+                    (uint32_t)hidden_size,
+                    read_batch_size,
+                },
+            .defines = compute_defines});
 
     // Compute kernel on sender cores for self-untilize (output goes to c_18)
     tt::tt_metal::CreateKernel(
@@ -672,13 +699,15 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         sender_core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .compile_args = {
-                static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
-                static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_untilize_id (reuse receive buffer)
-                static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
-                (uint32_t)hidden_size,
-                read_batch_size,
-            }});
+            .compile_args =
+                {
+                    static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
+                    static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_untilize_id (reuse receive buffer)
+                    static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
+                    (uint32_t)hidden_size,
+                    read_batch_size,
+                },
+            .defines = compute_defines});
 
     // ==================== Pre-compute NOC coordinates ====================
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;

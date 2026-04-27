@@ -83,10 +83,13 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
     auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
 
+    // FP8 dispatch uses UINT8 (1 byte/element) for DRAM allocation; actual content is Fp8_e4m3.
+    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::UINT8 : DataType::BFLOAT16;
+
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
         Shape(dispatch_buffer_shape),
-        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(layout), mem_config));
+        tt::tt_metal::TensorLayout(dispatch_buffer_dtype, tt::tt_metal::PageConfig(layout), mem_config));
 
     auto dispatch_metadata_spec = TensorSpec(
         Shape(dispatch_metadata_shape),
@@ -140,7 +143,8 @@ prefill_dispatch(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    bool use_fp8_dispatch) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -155,7 +159,8 @@ prefill_dispatch(
             .topology = topology,
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .use_fp8_dispatch = use_fp8_dispatch},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,
