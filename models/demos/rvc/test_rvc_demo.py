@@ -17,7 +17,7 @@ if __name__ == "__main__":
     print("Testing RVC implementation...")
     
     # Test model creation
-    model = models.demos.rvc.main.create_rvc_model_tt(input_dim=128, hidden_dim=256, output_dim=128)
+    model = models.demos.rvc.main.create_rvc_model(input_dim=128, hidden_dim=256, output_dim=128)
     print("✓ Model created successfully")
     
     # Test basic functionality

@@ -50,10 +50,10 @@ def create_tt_tensor(tensor_data, device=None):
         tt_tensor = ttnn.to_device(tt_tensor, device)
     return tt_tensor
 
-def create_rvc_model_tt(input_dim=128, hidden_dim=256, output_dim=128, device=None):
+def create_rvc_model(input_dim=128, hidden_dim=256, output_dim=128, device=None):
     """Create RVC model using TTNN operations"""
     # For this example, we'll create a simplified RVC model that uses TTNN operations
-    class RVCModelTT:
+    class RVCModel:
         def __init__(self, input_dim, hidden_dim, output_dim, device):
             self.input_dim = input_dim
             self.hidden_dim = hidden_dim
@@ -89,7 +89,7 @@ def create_rvc_model_tt(input_dim=128, hidden_dim=256, output_dim=128, device=No
             # Convert back to PyTorch for output
             return to_torch(x2)
     
-    return RVCModelTT(input_dim, hidden_dim, output_dim, device)
+    return RVCModel(input_dim, hidden_dim, output_dim, device)
 
 def main():
     """Main function to demonstrate RVC model using TTNN"""
@@ -106,13 +106,15 @@ def main():
     
     # Initialize device
     device = None
+    device_opened = False
     if args.device == "gpu":
         device = ttnn.open_device(DeviceGrid(8, 4))
+        device_opened = True
     elif args.device == "cpu":
         pass  # Use CPU
     
     # Create model using TTNN
-    model = create_rvc_model_tt(args.input_dim, args.hidden_dim, args.output_dim, device)
+    model = create_rvc_model(args.input_dim, args.hidden_dim, args.output_dim, device)
     
     # Create dummy input
     batch_size = args.batch_size
@@ -126,7 +128,8 @@ def main():
     
     print(f"Output shape: {output.shape}")
     
-    if device:
+    # Only close device if it was actually opened
+    if device_opened:
         ttnn.close_device(device)
     
     print("RVC model example completed using TTNN operations")
