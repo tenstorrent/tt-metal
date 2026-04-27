@@ -107,8 +107,11 @@ class TTNNDotsVision2DRoPE:
         self,
         grid_thw: torch.Tensor,
         seq_len: int,
-    ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], ttnn.Tensor]:
-        """Build 2D RoPE cos/sin tables and cu_seqlens for vision attention."""
+    ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], list[int]]:
+        """Build 2D RoPE cos/sin tables and cu_seqlens for vision attention.
+
+        Returns cu_seqlens as a Python list to avoid repeated device-to-host syncs.
+        """
         g = grid_thw.detach().cpu() if getattr(grid_thw, "is_cuda", False) else grid_thw
         if g.dim() != 2 or g.shape[1] != 3:
             raise ValueError(f"grid_thw must be [N,3], got {g.shape}")
@@ -122,16 +125,7 @@ class TTNNDotsVision2DRoPE:
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
         sms = self.spatial_merge_size
 
-        rope_dtype = getattr(ttnn, "float32", None) or ttnn.bfloat16
-
-        inv = ttnn.from_torch(
-            self._inv_freq.to(torch.float32).reshape(1, 1, 1, self.rotary_dim // 2),
-            device=self.device,
-            dtype=rope_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=mem,
-            mesh_mapper=mapper,
-        )
+        inv_freq = self._inv_freq  # shape: [rotary_dim // 2]
 
         hpos_segments = []
         wpos_segments = []
@@ -143,73 +137,79 @@ class TTNNDotsVision2DRoPE:
             if h % sms != 0 or w % sms != 0:
                 raise ValueError(f"grid {h}x{w} not divisible by spatial_merge_size={sms}")
 
-            h_ids = ttnn.arange(0, h, dtype=rope_dtype, device=self.device, layout=ttnn.TILE_LAYOUT, memory_config=mem)
-            h_ids = ttnn.reshape(h_ids, (1, 1, h, 1))
-            ones_w = ttnn.ones(
-                (1, 1, 1, w), dtype=rope_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=mem
-            )
-            h_grid = ttnn.matmul(h_ids, ones_w, memory_config=mem)
-            h_grid = ttnn.reshape(h_grid, (h, w))
-            h_grid = ttnn.reshape(h_grid, (h // sms, sms, w // sms, sms))
-            h_grid = ttnn.permute(h_grid, (0, 2, 1, 3))
-            hpos = ttnn.reshape(h_grid, (1, 1, h * w, 1))
+            h_ids = torch.arange(h, dtype=torch.float32)
+            w_ids = torch.arange(w, dtype=torch.float32)
 
-            ones_h = ttnn.ones(
-                (1, 1, h, 1), dtype=rope_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=mem
-            )
-            w_ids = ttnn.arange(0, w, dtype=rope_dtype, device=self.device, layout=ttnn.TILE_LAYOUT, memory_config=mem)
-            w_ids = ttnn.reshape(w_ids, (1, 1, 1, w))
-            w_grid = ttnn.matmul(ones_h, w_ids, memory_config=mem)
-            w_grid = ttnn.reshape(w_grid, (h, w))
-            w_grid = ttnn.reshape(w_grid, (h // sms, sms, w // sms, sms))
-            w_grid = ttnn.permute(w_grid, (0, 2, 1, 3))
-            wpos = ttnn.reshape(w_grid, (1, 1, h * w, 1))
+            # Build 2D grids: h_grid[i,j] = i, w_grid[i,j] = j
+            h_grid = h_ids.unsqueeze(1).expand(h, w)  # [h, w]
+            w_grid = w_ids.unsqueeze(0).expand(h, w)  # [h, w]
 
-            if t != 1:
-                hpos = ttnn.concat([hpos] * t, dim=2)
-                wpos = ttnn.concat([wpos] * t, dim=2)
+            # Spatial merge reshuffling
+            h_grid = h_grid.reshape(h // sms, sms, w // sms, sms).permute(0, 2, 1, 3).reshape(-1)
+            w_grid = w_grid.reshape(h // sms, sms, w // sms, sms).permute(0, 2, 1, 3).reshape(-1)
 
-            hpos_segments.append(hpos)
-            wpos_segments.append(wpos)
+            # Repeat for temporal dimension
+            if t > 1:
+                h_grid = h_grid.repeat(t)
+                w_grid = w_grid.repeat(t)
+
+            hpos_segments.append(h_grid)
+            wpos_segments.append(w_grid)
             running += t * h * w
             cu.append(running)
 
-        hpos_all = ttnn.concat(hpos_segments, dim=2) if len(hpos_segments) > 1 else hpos_segments[0]
-        wpos_all = ttnn.concat(wpos_segments, dim=2) if len(wpos_segments) > 1 else wpos_segments[0]
+        hpos_all = torch.cat(hpos_segments) if len(hpos_segments) > 1 else hpos_segments[0]
+        wpos_all = torch.cat(wpos_segments) if len(wpos_segments) > 1 else wpos_segments[0]
 
-        hpos_rm = ttnn.to_layout(ttnn.typecast(hpos_all, dtype=rope_dtype), ttnn.TILE_LAYOUT)
-        wpos_rm = ttnn.to_layout(ttnn.typecast(wpos_all, dtype=rope_dtype), ttnn.TILE_LAYOUT)
-        freqs_h = ttnn.matmul(hpos_rm, inv, memory_config=mem)
-        freqs_w = ttnn.matmul(wpos_rm, inv, memory_config=mem)
+        # Compute frequencies on CPU: [S] x [rotary_dim//2] -> [S, rotary_dim//2]
+        freqs_h = hpos_all.unsqueeze(1) * inv_freq.unsqueeze(0)
+        freqs_w = wpos_all.unsqueeze(1) * inv_freq.unsqueeze(0)
 
-        cos_h = ttnn.cos(freqs_h, memory_config=mem)
-        sin_h = ttnn.sin(freqs_h, memory_config=mem)
-        cos_w = ttnn.cos(freqs_w, memory_config=mem)
-        sin_w = ttnn.sin(freqs_w, memory_config=mem)
+        cos_h = torch.cos(freqs_h)
+        sin_h = torch.sin(freqs_h)
+        cos_w = torch.cos(freqs_w)
+        sin_w = torch.sin(freqs_w)
 
-        cos_half = ttnn.concat([cos_h, cos_w], dim=-1)
-        sin_half = ttnn.concat([sin_h, sin_w], dim=-1)
+        # Concat h and w: [S, rotary_dim]
+        cos_half = torch.cat([cos_h, cos_w], dim=-1)
+        sin_half = torch.cat([sin_h, sin_w], dim=-1)
 
-        cos_full = ttnn.concat([cos_half, cos_half], dim=-1)
-        sin_full = ttnn.concat([sin_half, sin_half], dim=-1)
+        # Repeat to full head_dim: [S, head_dim]
+        cos_full = torch.cat([cos_half, cos_half], dim=-1)
+        sin_full = torch.cat([sin_half, sin_half], dim=-1)
 
-        cos = ttnn.typecast(cos_full, dtype=ttnn.bfloat16)
-        sin = ttnn.typecast(sin_full, dtype=ttnn.bfloat16)
-        rot_mats = (
-            ttnn.to_layout(cos, ttnn.TILE_LAYOUT),
-            ttnn.to_layout(sin, ttnn.TILE_LAYOUT),
-        )
+        # Reshape to [1, 1, S, head_dim]
+        cos_full = cos_full.unsqueeze(0).unsqueeze(0)
+        sin_full = sin_full.unsqueeze(0).unsqueeze(0)
 
-        cu_t = ttnn.from_torch(
-            torch.tensor(cu, dtype=torch.int32),
+        # Convert from HF-style to meta-style as required by rotary_embedding_llama
+        from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
+
+        cos_full, sin_full = convert_rope_style_hf_to_meta(cos_full, sin_full)
+
+        cos_full = cos_full.to(torch.bfloat16)
+        sin_full = sin_full.to(torch.bfloat16)
+
+        cos_tt = ttnn.from_torch(
+            cos_full,
             device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
+        sin_tt = ttnn.from_torch(
+            sin_full,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
         )
 
-        return rot_mats, cu_t
+        rot_mats = (cos_tt, sin_tt)
+
+        return rot_mats, cu
 
 
 # ---------------------------------------------------------------------------
@@ -708,15 +708,40 @@ class TTNNDotsVisionAttention(TTNNModule):
             return None
         return torch.transpose(w, -2, -1).contiguous()
 
+    def _permute_qkv_hf_to_meta(self, qkv_tensor, is_bias=False):
+        """Permute Q/K portions of fused QKV from HF to meta-style for rotary_embedding_llama."""
+        from models.tt_transformers.tt.load_checkpoints import reverse_permute
+
+        h = self.num_heads
+        hd = self.head_dim
+        qkv_dim = h * hd  # 1536 per Q/K/V
+
+        if is_bias:
+            q_part = qkv_tensor[:qkv_dim]
+            k_part = qkv_tensor[qkv_dim : 2 * qkv_dim]
+            v_part = qkv_tensor[2 * qkv_dim :]
+            q_part = reverse_permute(q_part.unsqueeze(-1), h, qkv_dim, 1).squeeze(-1)
+            k_part = reverse_permute(k_part.unsqueeze(-1), h, qkv_dim, 1).squeeze(-1)
+            return torch.cat([q_part, k_part, v_part], dim=0)
+        else:
+            q_part = qkv_tensor[:qkv_dim, :]
+            k_part = qkv_tensor[qkv_dim : 2 * qkv_dim, :]
+            v_part = qkv_tensor[2 * qkv_dim :, :]
+            q_part = reverse_permute(q_part, h, qkv_dim, qkv_tensor.shape[1])
+            k_part = reverse_permute(k_part, h, qkv_dim, qkv_tensor.shape[1])
+            return torch.cat([q_part, k_part, v_part], dim=0)
+
     def preprocess_weights_impl(self):
         def _to_host(w, layout=ttnn.TILE_LAYOUT):
             if w is None:
                 return None
             return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout)
 
-        self.tt_qkv_weight = _to_host(self._transpose_for_linear(self._qkv_weight))
+        qkv_w = self._permute_qkv_hf_to_meta(self._qkv_weight)
+        self.tt_qkv_weight = _to_host(self._transpose_for_linear(qkv_w))
         if self._qkv_bias is not None:
-            self.tt_qkv_bias = _to_host(self._qkv_bias.reshape(1, 1, 1, -1))
+            qkv_b = self._permute_qkv_hf_to_meta(self._qkv_bias, is_bias=True)
+            self.tt_qkv_bias = _to_host(qkv_b.reshape(1, 1, 1, -1))
         self.tt_o_proj_weight = _to_host(self._transpose_for_linear(self._o_proj_weight))
         if self._o_proj_bias is not None:
             self.tt_o_proj_bias = _to_host(self._o_proj_bias.reshape(1, 1, 1, -1))
@@ -740,6 +765,20 @@ class TTNNDotsVisionAttention(TTNNModule):
         self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
         self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
+
+        # Build transformation matrix for rotary_embedding_llama (must be 32x32, kernel operates per-tile)
+        from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+        transformation_mat_torch = get_rot_transformation_mat(dhead=self.head_dim)
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        self.transformation_mat = ttnn.from_torch(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
 
     def _get_sdpa_program_config(self, seq_len: int):
         if seq_len <= 2048:
@@ -776,18 +815,25 @@ class TTNNDotsVisionAttention(TTNNModule):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        qkv = ttnn.reshape(qkv, (1, 1, s, 3, h, hd))
-        q = ttnn.slice(qkv, (0, 0, 0, 0, 0, 0), (1, 1, s, 1, h, hd))
-        k = ttnn.slice(qkv, (0, 0, 0, 1, 0, 0), (1, 1, s, 2, h, hd))
-        v = ttnn.slice(qkv, (0, 0, 0, 2, 0, 0), (1, 1, s, 3, h, hd))
-
-        q = ttnn.permute(ttnn.reshape(q, (1, s, h, hd)), (0, 2, 1, 3))
-        k = ttnn.permute(ttnn.reshape(k, (1, s, h, hd)), (0, 2, 1, 3))
-        v = ttnn.permute(ttnn.reshape(v, (1, s, h, hd)), (0, 2, 1, 3))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv)
 
         if rot_mats is not None and len(rot_mats) == 2:
             cos, sin = rot_mats
-            q, k = apply_rotary_tt(q, k, cos, sin, out_dtype=ttnn.bfloat16)
+
+            if q.dtype != ttnn.bfloat16:
+                q = ttnn.typecast(q, dtype=ttnn.bfloat16)
+            if k.dtype != ttnn.bfloat16:
+                k = ttnn.typecast(k, dtype=ttnn.bfloat16)
+
+            q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.transformation_mat, is_decode_mode=False)
+            k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.transformation_mat, is_decode_mode=False)
 
         if cu_seqlens is None:
             program_config = self._get_sdpa_program_config(s)
@@ -798,7 +844,10 @@ class TTNNDotsVisionAttention(TTNNModule):
                 is_causal=False,
                 program_config=program_config,
             )
-            ctx = ttnn.reshape(ttnn.permute(ctx, (0, 2, 1, 3)), (1, 1, s, h * hd))
+            ctx = ttnn.experimental.nlp_concat_heads(
+                ctx,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             return ttnn.linear(
                 ctx,
                 self.tt_o_proj_weight,
@@ -809,31 +858,45 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         cu_host = self._cu_seqlens_to_list(cu_seqlens, s)
 
-        ctx_segments = []
-
-        for seg_start, seg_end in zip(cu_host[:-1], cu_host[1:]):
-            seg_start, seg_end = int(seg_start), int(seg_end)
-            seg_len = seg_end - seg_start
-            if seg_len <= 0:
-                continue
-
-            q_seg = ttnn.slice(q, (0, 0, seg_start, 0), (1, h, seg_end, hd))
-            k_seg = ttnn.slice(k, (0, 0, seg_start, 0), (1, h, seg_end, hd))
-            v_seg = ttnn.slice(v, (0, 0, seg_start, 0), (1, h, seg_end, hd))
-
-            program_config = self._get_sdpa_program_config(seg_len)
-            ctx_seg = ttnn.transformer.scaled_dot_product_attention(
-                q_seg,
-                k_seg,
-                v_seg,
+        if len(cu_host) == 2:
+            # Single segment — skip slicing and concat
+            program_config = self._get_sdpa_program_config(s)
+            ctx = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
                 is_causal=False,
                 program_config=program_config,
             )
-            ctx_segments.append(ctx_seg)
+        else:
+            ctx_segments = []
 
-        ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
+            for seg_start, seg_end in zip(cu_host[:-1], cu_host[1:]):
+                seg_start, seg_end = int(seg_start), int(seg_end)
+                seg_len = seg_end - seg_start
+                if seg_len <= 0:
+                    continue
 
-        ctx = ttnn.reshape(ttnn.permute(ctx, (0, 2, 1, 3)), (1, 1, s, h * hd))
+                q_seg = ttnn.slice(q, (0, 0, seg_start, 0), (1, h, seg_end, hd))
+                k_seg = ttnn.slice(k, (0, 0, seg_start, 0), (1, h, seg_end, hd))
+                v_seg = ttnn.slice(v, (0, 0, seg_start, 0), (1, h, seg_end, hd))
+
+                program_config = self._get_sdpa_program_config(seg_len)
+                ctx_seg = ttnn.transformer.scaled_dot_product_attention(
+                    q_seg,
+                    k_seg,
+                    v_seg,
+                    is_causal=False,
+                    program_config=program_config,
+                )
+                ctx_segments.append(ctx_seg)
+
+            ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
+
+        ctx = ttnn.experimental.nlp_concat_heads(
+            ctx,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         return ttnn.linear(
             ctx,
             self.tt_o_proj_weight,
@@ -1240,6 +1303,8 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         seq_len = int(x.shape[2])
 
         rot_mats, cu_seqlens = self.rope.build(grid_thw, seq_len)
+        # cu_seqlens is already a Python list from build(), so all 42 blocks
+        # skip the device-to-host sync in _cu_seqlens_to_list.
 
         for block in self.blocks:
             x = block(x, rot_mats=rot_mats, cu_seqlens=cu_seqlens)
