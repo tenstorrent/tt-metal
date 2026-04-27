@@ -441,13 +441,15 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.buffer()->page_size();
     const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const uint32_t num_workers_per_link = 1;                                         // per link per dir
+    const uint32_t num_dirs = (args.topology == ttnn::ccl::Topology::Ring) ? 2 : 1;  // =1 for line since edge device
+    const uint32_t total_workers = num_workers_per_link * num_links * num_dirs;
 
-    const int64_t output_size_bytes = static_cast<int64_t>(N) * input_size_bytes;
-    const uint32_t num_workers_per_link = 1;
+    const int64_t output_size_bytes = N * input_size_bytes;
     const uint32_t read_pages_per_worker =
-        tt::div_up(static_cast<uint32_t>(input_size_bytes / read_page_size), num_workers_per_link * num_links);
+        tt::div_up(static_cast<uint32_t>(input_size_bytes / read_page_size), total_workers);
     const uint32_t write_pages_per_worker =
-        tt::div_up(static_cast<uint32_t>(output_size_bytes / write_page_size), num_workers_per_link * num_links);
+        tt::div_up(static_cast<uint32_t>(output_size_bytes / write_page_size), total_workers);
 
     auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
         read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_worker, arch, /*is_read=*/true);
