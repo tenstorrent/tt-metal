@@ -5,6 +5,7 @@
 
 import os
 import shutil
+from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar
@@ -38,6 +39,25 @@ from .pack import (
 )
 from .tile_constants import FACE_C_DIM, MAX_TILE_ELEMENTS, calculate_tile_size_bytes
 from .unpack import unpack_res_tiles
+
+
+class UnpackTarget(Enum):
+    """Per-operand L1 layout target.
+
+    Determines how an operand's tile is laid out in L1 so that the matching
+    unpacker path (SrcS or Dest) reads the expected format. Relevant for
+    formats whose in-L1 layout differs between SrcS and Dest (notably MXFP8,
+    which uses per-slice [scales][elements] for SrcS vs. a full
+    [scales][elements] tile for Dest).
+
+    - Auto: derive from TestConfig.unpack_to_srcs (legacy behavior).
+    - SrcS: laid out for SrcS unpack (per-slice layout for mxfp8).
+    - Dest: laid out for Dest unpack (full-tile layout for mxfp8).
+    """
+
+    Auto = "auto"
+    SrcS = "srcs"
+    Dest = "dest"
 
 
 class StimuliConfig:
@@ -103,8 +123,13 @@ class StimuliConfig:
         self.operand_res_tile_size = operand_res_tile_size
         self.twos_complement = twos_complement
 
-        # Hardware flags injected by TestConfig via set_use_srcs() / set_dest_acc()
-        self.use_srcs = False
+        # Hardware flags injected by TestConfig via set_unpack_targets() / set_dest_acc().
+        # Each operand has an independent L1 layout flag so tests can mix SrcS and Dest
+        # unpacking (e.g. A->SrcS, B->Dest). use_srcs_Res follows the kernel's pack path.
+        self.use_srcs_A = False
+        self.use_srcs_B = False
+        self.use_srcs_C = False
+        self.use_srcs_Res = False
         self._dest_acc_32b = False
 
         self._calculate_tile_sizes()
@@ -115,13 +140,13 @@ class StimuliConfig:
             self.stimuli_A_format,
             self.tile_dimensions,
             format_tile_sizes,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_A,
         )
         self.tile_size_B_bytes = calculate_tile_size_bytes(
             self.stimuli_B_format,
             self.tile_dimensions,
             format_tile_sizes,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_B,
         )
 
         self.buf_a_addr = 0
@@ -137,7 +162,7 @@ class StimuliConfig:
                 self.stimuli_C_format,
                 self.tile_dimensions,
                 format_tile_sizes,
-                use_srcs=self.use_srcs,
+                use_srcs=self.use_srcs_C,
             )
             self.buf_c_addr = (
                 self.buf_b_addr + self.tile_size_B_bytes * self.tile_count_B
@@ -157,13 +182,26 @@ class StimuliConfig:
                 self.stimuli_res_format,
                 self.tile_dimensions,
                 format_tile_sizes,
-                use_srcs=self.use_srcs,
+                use_srcs=self.use_srcs_Res,
                 dest_acc=self._dest_acc_32b,
             )
 
-    def set_use_srcs(self, unpack_to_srcs: bool):
-        """Enable SrcS-interleaved L1 layout. Called by TestConfig."""
-        self.use_srcs = unpack_to_srcs
+    def set_unpack_targets(
+        self,
+        per_operand_use_srcs: dict[str, bool],
+        result_use_srcs: bool,
+    ):
+        """Set per-operand L1 layout flags. Called by TestConfig.
+
+        per_operand_use_srcs: mapping with keys 'A', 'B', 'C' -> bool. Missing
+            keys default to False.
+        result_use_srcs: L1 layout flag for the packed result buffer, which is
+            determined by the kernel's pack path (SrcS or Dest).
+        """
+        self.use_srcs_A = per_operand_use_srcs.get("A", False)
+        self.use_srcs_B = per_operand_use_srcs.get("B", False)
+        self.use_srcs_C = per_operand_use_srcs.get("C", False)
+        self.use_srcs_Res = result_use_srcs
         self._calculate_tile_sizes()
 
     def set_dest_acc(self, dest_acc):
@@ -193,7 +231,10 @@ class StimuliConfig:
             f"  sfpu: {self.sfpu}"
             f"  write_full_tiles: {self.write_full_tiles}"
             f"  use_dense_tile_dimensions: {self.use_dense_tile_dimensions}"
-            f"  use_srcs: {self.use_srcs}"
+            f"  use_srcs_A: {self.use_srcs_A}"
+            f"  use_srcs_B: {self.use_srcs_B}"
+            f"  use_srcs_C: {self.use_srcs_C}"
+            f"  use_srcs_Res: {self.use_srcs_Res}"
             f"  dest_acc_32b: {self._dest_acc_32b}"
             f"  operand_res_tile_size: {self.operand_res_tile_size}"
             f"  buf_a_addr: 0x{self.buf_a_addr:08X}"
@@ -440,7 +481,7 @@ class StimuliConfig:
             self.face_r_dim,
             location,
             self.write_full_tiles,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_A,
             twos_complement=self.twos_complement,
         )
 
@@ -454,7 +495,7 @@ class StimuliConfig:
             self.face_r_dim,
             location,
             self.write_full_tiles,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_B,
             twos_complement=self.twos_complement,
         )
 
@@ -474,7 +515,7 @@ class StimuliConfig:
                 self.face_r_dim,
                 location,
                 self.write_full_tiles,
-                use_srcs=self.use_srcs,
+                use_srcs=self.use_srcs_C,
                 twos_complement=self.twos_complement,
             )
 
@@ -502,7 +543,7 @@ class StimuliConfig:
             self.face_r_dim,
             self.tile_dimensions,
             location,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_A,
             twos_complement=self.twos_complement,
         )
         StimuliConfig.write_matrix_w_tile_dimensions(
@@ -515,7 +556,7 @@ class StimuliConfig:
             self.face_r_dim,
             self.tile_dimensions,
             location,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_B,
             twos_complement=self.twos_complement,
         )
 
@@ -535,7 +576,7 @@ class StimuliConfig:
                 self.face_r_dim,
                 self.tile_dimensions,
                 location,
-                use_srcs=self.use_srcs,
+                use_srcs=self.use_srcs_C,
                 twos_complement=self.twos_complement,
             )
 
@@ -545,7 +586,7 @@ class StimuliConfig:
             self.stimuli_res_format,
             self.tile_dimensions,
             format_tile_sizes,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_Res,
             dest_acc=self._dest_acc_32b,
         )
         read_bytes_cnt = tile_size_res_bytes * self.tile_count_res
@@ -571,7 +612,7 @@ class StimuliConfig:
         # size and extracts only the needed faces.
         stride_bytes = (
             tile_size_res_bytes
-            if (self.use_dense_tile_dimensions or self.use_srcs)
+            if (self.use_dense_tile_dimensions or self.use_srcs_Res)
             else None
         )
         res_from_L1 = unpack_res_tiles(
@@ -582,7 +623,7 @@ class StimuliConfig:
             self.num_faces,
             self.face_r_dim,
             tile_stride_bytes=stride_bytes,
-            use_srcs=self.use_srcs,
+            use_srcs=self.use_srcs_Res,
             dest_acc=self._dest_acc_32b,
             twos_complement=self.twos_complement,
         )

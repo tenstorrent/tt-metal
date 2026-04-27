@@ -71,7 +71,7 @@ from .llk_params import (
     MailboxesQuasar,
 )
 from .logger import logger
-from .stimuli_config import StimuliConfig
+from .stimuli_config import StimuliConfig, UnpackTarget
 from .target_config import TestTargetConfig
 from .test_variant_parameters import (
     IN_TILE_DIMS,
@@ -489,6 +489,9 @@ class TestConfig:
         L1_to_L1_iterations: int = 1,
         unpack_to_dest: bool = False,
         unpack_to_srcs: bool = False,
+        unpack_target_A: UnpackTarget = UnpackTarget.Auto,
+        unpack_target_B: UnpackTarget = UnpackTarget.Auto,
+        unpack_target_C: UnpackTarget = UnpackTarget.Auto,
         disable_format_inference: bool = False,
         dest_acc: DestAccumulation = DestAccumulation.No,
         l1_acc: L1Accumulation = L1Accumulation.No,
@@ -518,6 +521,9 @@ class TestConfig:
         self.L1_to_L1_iterations = L1_to_L1_iterations
         self.unpack_to_dest = unpack_to_dest
         self.unpack_to_srcs = unpack_to_srcs
+        self.unpack_target_A = unpack_target_A
+        self.unpack_target_B = unpack_target_B
+        self.unpack_target_C = unpack_target_C
         self.disable_format_inference = disable_format_inference
         self.l1_acc = l1_acc
         self.skip_build_header = skip_build_header
@@ -564,9 +570,16 @@ class TestConfig:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
 
-        # Inject use_srcs and dest_acc into StimuliConfig
+        # Inject per-operand L1 layout flags and dest_acc into StimuliConfig.
+        # Each operand's UnpackTarget resolves to a use_srcs bool; Auto falls back to
+        # the legacy unpack_to_srcs flag so existing tests behave identically.
+        # The result buffer's layout follows the kernel's pack path, which today maps
+        # to unpack_to_srcs (SrcS pack when True, Dest pack when False).
         if self.variant_stimuli:
-            self.variant_stimuli.set_use_srcs(self.unpack_to_srcs)
+            self.variant_stimuli.set_unpack_targets(
+                per_operand_use_srcs=self._resolve_per_operand_use_srcs(),
+                result_use_srcs=self.unpack_to_srcs,
+            )
             self.variant_stimuli.set_dest_acc(self.dest_acc)
 
         if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
@@ -612,6 +625,24 @@ class TestConfig:
             raise RuntimeError(
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
             )
+
+    def _resolve_per_operand_use_srcs(self) -> dict[str, bool]:
+        """Resolve each operand's UnpackTarget into a use_srcs bool.
+
+        UnpackTarget.Auto falls back to the legacy `unpack_to_srcs` flag so tests
+        that don't set per-operand targets behave identically to before.
+        """
+
+        def resolve(target: UnpackTarget) -> bool:
+            if target == UnpackTarget.Auto:
+                return self.unpack_to_srcs
+            return target == UnpackTarget.SrcS
+
+        return {
+            "A": resolve(self.unpack_target_A),
+            "B": resolve(self.unpack_target_B),
+            "C": resolve(self.unpack_target_C),
+        }
 
     def generate_runtime_args_struct(self):
         # Generate runtime parameter struct

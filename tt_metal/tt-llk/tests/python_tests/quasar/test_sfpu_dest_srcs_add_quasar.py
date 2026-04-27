@@ -17,8 +17,11 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_config import StimuliConfig, UnpackTarget
 from helpers.stimuli_generator import (
+    apply_log_uniform_magnitudes,
+    compute_safe_input_magnitude_range,
+    format_elem_max,
     generate_stimuli,
 )
 from helpers.test_config import TestConfig
@@ -76,34 +79,30 @@ def test_sfpu_dest_srcs_add_quasar(formats_dest_acc_implied_math_input_dims):
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
         sfpu=True,
-        const_face=True,
-        const_value_A=1,
-        const_value_B=2,  # TODO: remove consts
     )
 
-    # TODO: uncomment when debugguing complete
-    # min_magnitude, max_magnitude = compute_safe_input_magnitude_range(
-    #     formats.input_format,
-    #     formats.output_format,
-    #     input_magnitude_cap=format_elem_max(formats.input_format)
-    #     * ADD_RANGE_SAFETY_FACTOR,
-    #     output_magnitude_cap=format_elem_max(formats.output_format)
-    #     * ADD_RANGE_SAFETY_FACTOR,
-    # )
-    # src_A = apply_log_uniform_magnitudes(
-    #     src_A,
-    #     min_magnitude=min_magnitude,
-    #     max_magnitude=max_magnitude,
-    #     cast_to_format=formats.input_format,
-    #     alternate_sign_every_n=3,
-    # )
-    # src_B = apply_log_uniform_magnitudes(
-    #     src_B,
-    #     min_magnitude=min_magnitude,
-    #     max_magnitude=max_magnitude,
-    #     cast_to_format=formats.input_format,
-    #     alternate_sign_every_n=3,
-    # )
+    min_magnitude, max_magnitude = compute_safe_input_magnitude_range(
+        formats.input_format,
+        formats.output_format,
+        input_magnitude_cap=format_elem_max(formats.input_format)
+        * ADD_RANGE_SAFETY_FACTOR,
+        output_magnitude_cap=format_elem_max(formats.output_format)
+        * ADD_RANGE_SAFETY_FACTOR,
+    )
+    src_A = apply_log_uniform_magnitudes(
+        src_A,
+        min_magnitude=min_magnitude,
+        max_magnitude=max_magnitude,
+        cast_to_format=formats.input_format,
+        alternate_sign_every_n=3,
+    )
+    src_B = apply_log_uniform_magnitudes(
+        src_B,
+        min_magnitude=min_magnitude,
+        max_magnitude=max_magnitude,
+        cast_to_format=formats.input_format,
+        alternate_sign_every_n=3,
+    )
 
     num_faces = 4
 
@@ -152,6 +151,8 @@ def test_sfpu_dest_srcs_add_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         unpack_to_dest=True,
+        unpack_target_A=UnpackTarget.SrcS,
+        unpack_target_B=UnpackTarget.Dest,
         dest_acc=dest_acc,
         disable_format_inference=formats.input_format.is_mx_format(),
     )
