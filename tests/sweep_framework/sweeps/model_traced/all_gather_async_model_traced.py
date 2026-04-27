@@ -524,23 +524,24 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # Match the master model's call signature exactly:
-                        # the model calls all_gather_async with dim as keyword
-                        # and does NOT pass persistent_buf, semaphore handles,
-                        # or subdevice_id (those are added by lower-level test
-                        # harnesses but not by the model itself).
-                        op_kwargs = {
-                            "dim": dim,
-                            "num_links": num_links,
-                            "topology": topology,
-                        }
-                        if cluster_axis is not None:
-                            op_kwargs["cluster_axis"] = cluster_axis
-                        if output_memory_config is not None:
-                            op_kwargs["memory_config"] = output_memory_config
+                        # The master trace was recorded when semaphore was
+                        # optional, but the current C++ binding requires it
+                        # as a positional arg.  Pass semaphores so the op
+                        # actually executes and the tracer captures args.
+                        # validate_sweep_trace.py strips CCL infra keys
+                        # (multi_device_global_semaphore, persistent_output_buffer,
+                        # subdevice_id, barrier_semaphore, etc.) during
+                        # normalization so the comparison still matches.
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
-                            **op_kwargs,
+                            None,  # persistent_output_buffer (optional)
+                            dim,
+                            ccl_semaphore_handles[i],
+                            num_links=num_links,
+                            memory_config=output_memory_config,
+                            topology=topology,
+                            subdevice_id=worker_sub_device_id,
+                            cluster_axis=cluster_axis,
                         )
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(

@@ -40,6 +40,17 @@ IGNORED_KEYS = frozenset(
         "sweep_source_hash",
         "device_ids",
         "mesh_device",
+        # CCL infrastructure args: the current all_gather_async API requires
+        # semaphores/persistent buffers as positional args, but the master
+        # traces were recorded when they were optional.  Strip them so the
+        # sweep trace (which must pass them to execute) still matches.
+        "multi_device_global_semaphore",
+        "persistent_output_buffer",
+        "subdevice_id",
+        "barrier_semaphore",
+        "chunks_per_sync",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
     }
 )
 
