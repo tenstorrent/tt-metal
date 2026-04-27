@@ -23,6 +23,8 @@ target_sources(
         test_thread_pool.cpp
         test_async_teardown_race.cpp
         test_gap5_relay_broken_teardown.cpp
+        test_gap8_init_router_sync_dead_relay.cpp
+        test_gap7_mmio_phase5_relay_broken.cpp
         test_gap10_channels_not_ready_lifecycle.cpp
         test_dispatch_context.cpp
         utils.cpp
