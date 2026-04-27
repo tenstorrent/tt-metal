@@ -113,6 +113,7 @@ class ReduceToOneB1:
         is_torus: bool = False,
         forward_metadata_size_bytes: int = 0,
         metadata_l1_addr: int = 0,
+        worker_fabric_semaphores: Optional[list] = None,
     ) -> ttnn.Tensor:
         """
         Execute reduce-to-one operation using generic_op.
@@ -133,6 +134,9 @@ class ReduceToOneB1:
             agg_output_size_bytes: Total useful output bytes (unpadded) for socket aggregation
             num_iterations: Number of iterations to run inside the kernel
             is_torus: Whether to use torus topology
+            worker_fabric_semaphores: Optional worker->fabric semaphore list. When provided,
+                                      this avoids allocating semaphores inside the op, which is
+                                      required for trace capture.
 
         Returns:
             Output tensor
@@ -230,10 +234,17 @@ class ReduceToOneB1:
         worker_fabric_sem_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
-        worker_fabric_global_sems = [
-            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_worker_fabric_sems)
-        ]
-        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
+        if worker_fabric_semaphores is None:
+            worker_fabric_semaphores = [
+                ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+                for _ in range(num_worker_fabric_sems)
+            ]
+        elif len(worker_fabric_semaphores) != num_worker_fabric_sems:
+            raise ValueError(
+                "Expected exactly "
+                f"{num_worker_fabric_sems} worker_fabric_semaphores, got {len(worker_fabric_semaphores)}"
+            )
+        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_semaphores]
 
         # Persistent-signal sync setup for downstream sockets
         agg_sem_addr = 0

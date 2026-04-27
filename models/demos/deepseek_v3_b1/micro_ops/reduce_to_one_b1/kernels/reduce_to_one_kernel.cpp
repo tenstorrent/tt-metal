@@ -107,9 +107,34 @@ void kernel_main() {
     // IsWorkerCore = true (compile-time) since fabric core logic is handled inside the op
     constexpr uint32_t num_loop_iters = get_named_compile_time_arg_val("num_loop_iters");
     ReduceToOne::Op<CTArgs, true> op;
-    for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
-        op(rt_args);
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (!CTArgs::is_fabric_core && CTArgs::device_role != deepseek_b1_ops::MESH_LEAF) {
+        for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
+            DeviceZoneScopedN("REDUCE_TO_ONE_READER");
+            op(rt_args);
+        }
     }
+#elif defined(COMPILE_FOR_BRISC)
+    if constexpr (!CTArgs::is_fabric_core) {
+        for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
+            DeviceZoneScopedN("REDUCE_TO_ONE_WRITER");
+            op(rt_args);
+        }
+    } else if constexpr (CTArgs::device_role != deepseek_b1_ops::MESH_ROOT1) {
+        // The standalone micro-op does not enable the fused persistent ROOT1 fabric signal path.
+        for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
+            DeviceZoneScopedN("REDUCE_TO_ONE_FORWARDER");
+            op(rt_args);
+        }
+    }
+#elif defined(COMPILE_FOR_TRISC)
+    if constexpr (!CTArgs::is_fabric_core && CTArgs::device_role != deepseek_b1_ops::MESH_LEAF) {
+        for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
+            DeviceZoneScopedN("REDUCE_TO_ONE_COMPUTE");
+            op(rt_args);
+        }
+    }
+#endif
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();
     noc_async_atomic_barrier();

@@ -11,19 +11,37 @@ This test validates the 3-level reduction tree for a 4x2 mesh
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import is_slow_dispatch, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions, RoutedExpert
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    create_fabric_router_config,
+    get_env_int,
+    run_trace_benchmark,
+)
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+
+ENV_MAX_PAYLOAD_SIZE = "CCL_REDUCE_TO_ONE_MAX_PAYLOAD_SIZE_BYTES"
+TRACE_MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
+
+NUM_WORKERS = RoutedExpert.NUM_CORES
+VALID_TOTAL_WIDTH = LogicalModelDimensions.HIDDEN_SIZE
+PADDED_WIDTH_PER_CORE = RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE
+VALID_WIDTH_PER_CORE = VALID_TOTAL_WIDTH // NUM_WORKERS
+PADDED_TOTAL_WIDTH = PADDED_WIDTH_PER_CORE * NUM_WORKERS
 
 
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+def _pad_reduce_shards(valid_tensor: torch.Tensor) -> torch.Tensor:
+    """Pack 8 valid 896-wide shards into 8 padded 1024-wide reduce shards."""
+    padded = torch.zeros((valid_tensor.shape[0], PADDED_TOTAL_WIDTH), dtype=valid_tensor.dtype)
+    for shard_idx in range(NUM_WORKERS):
+        valid_start = shard_idx * VALID_WIDTH_PER_CORE
+        valid_end = valid_start + VALID_WIDTH_PER_CORE
+        padded_start = shard_idx * PADDED_WIDTH_PER_CORE
+        padded[:, padded_start : padded_start + VALID_WIDTH_PER_CORE] = valid_tensor[:, valid_start:valid_end]
+    return padded
 
 
 def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
@@ -46,23 +64,25 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
 
     assert submesh_device.shape == ttnn.MeshShape((4, 2)), f"Expected 4x2 mesh, got {submesh_device.shape}"
 
-    # Tensor shape: (1, 7168) sharded across 8 cores
-    tensor_shape = [1, 7168]
+    # Use the padded 8-shard reduce layout that matches the decoder/MoE reduce buffers.
+    tensor_shape = [1, PADDED_TOTAL_WIDTH]
+    valid_tensor_shape = [1, VALID_TOTAL_WIDTH]
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
     tile = ttnn.Tile((1, 32))
 
-    # Get optimal cores for DRAM access
-    compute_cores = submesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    # Use the pinned decoder/MoE worker layout.
+    compute_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(submesh_device, ttnn.NOC.NOC_0)
     num_cores = len(compute_cores)
     logger.info(f"Using {num_cores} optimal DRAM cores: {compute_cores[:8]}")
 
     # Build shard grid from optimal cores (use first 8 cores)
-    num_shard_cores = 8
+    num_shard_cores = NUM_WORKERS
     shard_cores = compute_cores[:num_shard_cores]
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in shard_cores})
 
-    shard_shape = [1, 896]
+    shard_width = PADDED_WIDTH_PER_CORE
+    shard_shape = [1, shard_width]
     shard_spec = ttnn.ShardSpec(
         shard_grid,
         shard_shape,
@@ -126,10 +146,18 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
     )
     logger.info(f"Created output tensor sharded on aggregator core: {aggregator_core}")
 
+    logger.info(
+        "Using padded reduce geometry: valid_width_per_core={}, padded_width_per_core={}, total_width={}",
+        VALID_WIDTH_PER_CORE,
+        PADDED_WIDTH_PER_CORE,
+        PADDED_TOTAL_WIDTH,
+    )
+
     data_per_device = []
     torch.manual_seed(42)
     for _ in range(num_devices):
-        data = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        valid_data = torch.randn(valid_tensor_shape, dtype=torch.bfloat16)
+        data = _pad_reduce_shards(valid_data)
         data_per_device.append(data)
 
     data_all = torch.stack(data_per_device, dim=0)
@@ -153,9 +181,17 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
     compute_grid = submesh_device.compute_with_storage_grid_size()
     num_cores = compute_grid.x * compute_grid.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    worker_columns = {}
+    for core in shard_cores:
+        worker_columns.setdefault(core.x, []).append(core)
+    worker_fabric_semaphore_count = len(worker_columns[sorted(worker_columns.keys())[0]])
     ttnn.synchronize_device(submesh_device)
     semaphores = [ttnn.create_global_semaphore(submesh_device, available_cores, 0) for _ in range(4)]
+    worker_fabric_semaphores = [
+        ttnn.create_global_semaphore(submesh_device, available_cores, 0) for _ in range(worker_fabric_semaphore_count)
+    ]
     ttnn.synchronize_device(submesh_device)
+    logger.info(f"Created {worker_fabric_semaphore_count} worker->fabric semaphores")
 
     return {
         "submesh_device": submesh_device,
@@ -167,6 +203,7 @@ def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
         "exit_coord": exit_coord,
         "output_core": aggregator_core,
         "semaphores": semaphores,
+        "worker_fabric_semaphores": worker_fabric_semaphores,
     }
 
 
@@ -232,7 +269,8 @@ def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coo
         config["output_tensor"],
         config["semaphores"],
         ttnn.MeshCoordinate(config["root_coord"]),
-        ttnn.MeshCoordinate(config["exit_coord"]),
+        worker_fabric_semaphores=config["worker_fabric_semaphores"],
+        exit_coord=ttnn.MeshCoordinate(config["exit_coord"]),
         num_iterations=num_iterations,
         is_torus=is_torus,
     )
@@ -251,8 +289,16 @@ def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coo
     print("Test passed!")
 
 
-def run_reduce_to_one_with_trace(mesh_device, root_coord=(1, 1), exit_coord=(0, 1)):
-    """Run reduce_to_one test with trace capture and replay."""
+def run_reduce_to_one_with_trace(
+    mesh_device,
+    *,
+    root_coord=(1, 1),
+    exit_coord=(0, 1),
+    is_torus=False,
+    num_warmup_iter=15,
+    num_iter=30,
+):
+    """Run reduce_to_one with trace capture/replay using the shared CCL helper."""
     print(f"\n=== Testing reduce_to_one with trace ===")
 
     config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
@@ -262,74 +308,34 @@ def run_reduce_to_one_with_trace(mesh_device, root_coord=(1, 1), exit_coord=(0, 
     output_tensor_preallocated = config["output_tensor"]
     root_coord = config["root_coord"]
     exit_coord = config["exit_coord"]
-    ref_output = config["ref_output"]
     semaphores = config["semaphores"]
 
-    # Run once to compile
-    print("Running reduce_to_one (compiling)...")
-    output_tensor = ReduceToOneB1.op(
-        input_tensor,
-        intermediate_tensor,
-        output_tensor_preallocated,
-        semaphores,
-        ttnn.MeshCoordinate(root_coord),
-        ttnn.MeshCoordinate(exit_coord),
+    logger.info(
+        "Running reduce_to_one trace: max_payload_size_bytes={}",
+        TRACE_MAX_PAYLOAD_SIZE,
     )
-    ttnn.synchronize_device(submesh_device)
 
-    # Helper to run reduce_to_one multiple iterations
-    profiler = BenchmarkProfiler()
+    def run_reduce_to_one_op():
+        return ReduceToOneB1.op(
+            input_tensor,
+            intermediate_tensor,
+            output_tensor_preallocated,
+            semaphores,
+            ttnn.MeshCoordinate(root_coord),
+            worker_fabric_semaphores=config["worker_fabric_semaphores"],
+            exit_coord=ttnn.MeshCoordinate(exit_coord),
+            num_iterations=1,
+            is_torus=is_torus,
+        )
 
-    def run_iterations(num_iters):
-        for _ in range(num_iters):
-            output_tensor = ReduceToOneB1.op(
-                input_tensor,
-                intermediate_tensor,
-                output_tensor_preallocated,
-                semaphores,
-                ttnn.MeshCoordinate(root_coord),
-                ttnn.MeshCoordinate(exit_coord),
-            )
-
-    # Capture warmup trace
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_iterations(15)
-    ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh_device)
-
-    # Capture main trace
-    logger.info("Capturing main trace")
-    trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_iterations(30)
-    ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh_device)
-
-    # Execute warmup trace
-    logger.info("Execute trace warmup")
-    profiler.start("warmup-trace")
-    ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh_device, trace_id_warmup)
-    ttnn.synchronize_device(submesh_device)
-    profiler.end("warmup-trace")
-
-    # Execute main trace
-    logger.info("Execute main trace")
-    signpost("start")
-    profiler.start("main-trace")
-    ttnn.execute_trace(submesh_device, trace_id, blocking=False)
-    ttnn.release_trace(submesh_device, trace_id)
-    ttnn.synchronize_device(submesh_device)
-
-    profiler.end("main-trace")
-    signpost("stop")
-
-    # Verify output
-    print("\nVerifying trace output...")
-    match = verify_output(output_tensor, submesh_device, root_coord, ref_output)
-
-    assert match, "Output tensor does not match reference after trace execution"
-    print("Trace test passed!")
+    output_tensor = run_trace_benchmark(
+        submesh_device,
+        run_reduce_to_one_op,
+        num_warmup_iter=num_warmup_iter,
+        num_iter=num_iter,
+        profiler_name="deepseek-reduce-to-one",
+    )
+    return output_tensor, config
 
 
 # === Basic Tests ===
@@ -355,3 +361,46 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
 def test_reduce_to_one_2d(bh_2d_mesh_device):
     """Test reduce_to_one with 2D fabric."""
     run_reduce_to_one(bh_2d_mesh_device, num_iterations=100)
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(TRACE_MAX_PAYLOAD_SIZE),
+                "trace_region_size": 1048576,
+            }
+        )
+    ],
+    indirect=["device_params"],
+    ids=["fabric_2d_trace"],
+)
+def test_reduce_to_one_trace(
+    bh_2d_mesh_device,
+    num_warmup_iter,
+    num_iter,
+):
+    """Trace benchmark for standalone reduce_to_one using the padded decoder/MoE geometry."""
+    if is_slow_dispatch():
+        pytest.skip("reduce_to_one trace test needs fast dispatch")
+
+    output_tensor, config = run_reduce_to_one_with_trace(
+        bh_2d_mesh_device,
+        num_warmup_iter=num_warmup_iter,
+        num_iter=num_iter,
+    )
+
+    print("\nVerifying trace output...")
+    match = verify_output(
+        output_tensor,
+        config["submesh_device"],
+        config["root_coord"],
+        config["ref_output"],
+    )
+
+    assert match, "Output tensor does not match reference after trace execution"
+    print("Trace test passed!")

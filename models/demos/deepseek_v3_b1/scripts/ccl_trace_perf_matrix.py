@@ -8,9 +8,10 @@ summarize top-level zone durations from profile_log_device.csv.
 
 Op time definition:
 - Parse only trace id 1 from profile_log_device.csv.
-- For each top-level (RISC processor type, zone) bucket, average across all
-  devices.
-- Op time is the max of those per-bucket averages.
+- Most CCLs: for each top-level (RISC processor type, zone) bucket, average
+  across all devices; op time is the max of those per-bucket averages.
+- reduce_to_one: keep only per-device averaging across iterations, then report
+  the slowest device's slowest top-level bucket.
 """
 
 import argparse
@@ -76,6 +77,8 @@ class CCLConfig:
     env_compute_block_size: str | None = None
     default_compute_block_sizes: tuple[int, ...] = ()
     supported_compute_block_sizes: tuple[int, ...] = ()
+    op_time_aggregation: str = "cross_device_bucket_avg"
+    render_cross_device_bucket_averages: bool = True
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,7 @@ class RunResult:
     bucket_stats: dict[tuple[str, str], BucketStat]
     op_bucket: tuple[str, str]
     op_cycles: float
+    op_device: str | None = None
     num_l_chunks: int | None = None
     tiles_per_l_chunk: int | None = None
     block_size: int | None = None
@@ -133,6 +137,37 @@ CCL_CONFIGS = {
             "CCL_RECEIVER": "receiver",
             "CCL_COMPUTE": "compute",
         },
+    ),
+    "reduce_to_one": CCLConfig(
+        title="Reduce-to-one trace perf matrix",
+        test_target=(
+            "models/demos/deepseek_v3_b1/tests/unit_tests/test_reduce_to_one_b1.py::" "test_reduce_to_one_trace"
+        ),
+        benchmark_shape=(1, 8192),
+        default_num_links=(1,),
+        supported_num_links=(1,),
+        transport_mode="fixed 2-column forwarder topology",
+        env_num_links=None,
+        env_max_payload_size="CCL_REDUCE_TO_ONE_MAX_PAYLOAD_SIZE_BYTES",
+        top_level_zones=(
+            "REDUCE_TO_ONE_READER",
+            "REDUCE_TO_ONE_WRITER",
+            "REDUCE_TO_ONE_FORWARDER",
+            "REDUCE_TO_ONE_COMPUTE",
+        ),
+        zone_labels={
+            "REDUCE_TO_ONE_READER": "reader",
+            "REDUCE_TO_ONE_WRITER": "writer",
+            "REDUCE_TO_ONE_FORWARDER": "forwarder",
+            "REDUCE_TO_ONE_COMPUTE": "compute",
+        },
+        fixed_setup_description=(
+            "2D only; standalone padded 8-shard geometry with pinned workers "
+            "(1024 elems per shard) and 2 local reduce forwarders per device."
+        ),
+        show_num_links_in_report=False,
+        op_time_aggregation="max_device_bucket",
+        render_cross_device_bucket_averages=False,
     ),
     "sdpa_reduce_to_all": CCLConfig(
         title="SDPA reduce-to-all trace perf matrix",
@@ -466,6 +501,20 @@ def bucket_display(bucket: tuple[str, str], config: CCLConfig) -> str:
     return f"{risc_type} {zone_label}"
 
 
+def uses_max_device_bucket_op_time(config: CCLConfig) -> bool:
+    return config.op_time_aggregation == "max_device_bucket"
+
+
+def op_time_description(config: CCLConfig) -> str:
+    if config.op_time_aggregation == "cross_device_bucket_avg":
+        return "Op time = max(avg per top-level (RISC processor type, zone) bucket across devices)."
+    if config.op_time_aggregation == "max_device_bucket":
+        return (
+            "Op time = slowest device's slowest top-level bucket, " "using per-device averages across iterations only."
+        )
+    raise ValueError(f"Unsupported op_time_aggregation: {config.op_time_aggregation}")
+
+
 def parse_chip_freq_mhz(profile_log: Path) -> float:
     with profile_log.open(encoding="utf-8") as handle:
         first_line = handle.readline()
@@ -497,7 +546,14 @@ def make_bucket_stat(values: list[float]) -> BucketStat:
 def summarize_profile_log(
     profile_log: Path,
     config: CCLConfig,
-) -> tuple[float, dict[tuple[str, str, str], BucketStat], dict[tuple[str, str], BucketStat], tuple[str, str], float]:
+) -> tuple[
+    float,
+    dict[tuple[str, str, str], BucketStat],
+    dict[tuple[str, str], BucketStat],
+    str | None,
+    tuple[str, str],
+    float,
+]:
     chip_freq_mhz = parse_chip_freq_mhz(profile_log)
     zone_set = set(config.top_level_zones)
 
@@ -606,18 +662,32 @@ def summarize_profile_log(
         device_bucket_values[(device_id, risc_type, zone_name)].append(float(max(core_totals)))
 
     device_stats = {key: make_bucket_stat(values) for key, values in device_bucket_values.items()}
+    if not device_stats:
+        raise RuntimeError(f"No per-device stats produced from {profile_log}")
 
-    bucket_device_averages: dict[tuple[str, str], list[float]] = defaultdict(list)
-    for (_device_id, risc_type, zone_name), stat in device_stats.items():
-        bucket_device_averages[(risc_type, zone_name)].append(stat.avg_cycles)
+    if config.op_time_aggregation == "max_device_bucket":
+        (op_device, op_risc_type, op_zone_name), op_stat = max(
+            device_stats.items(), key=lambda item: item[1].avg_cycles
+        )
+        bucket_stats: dict[tuple[str, str], BucketStat] = {}
+        op_bucket = (op_risc_type, op_zone_name)
+        op_cycles = op_stat.avg_cycles
+        return chip_freq_mhz, device_stats, bucket_stats, op_device, op_bucket, op_cycles
 
-    bucket_stats = {key: make_bucket_stat(values) for key, values in bucket_device_averages.items()}
-    if not bucket_stats:
-        raise RuntimeError(f"No top-level bucket stats produced from {profile_log}")
+    if config.op_time_aggregation == "cross_device_bucket_avg":
+        bucket_device_averages: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for (_device_id, risc_type, zone_name), stat in device_stats.items():
+            bucket_device_averages[(risc_type, zone_name)].append(stat.avg_cycles)
 
-    op_bucket = max(bucket_stats, key=lambda key: bucket_stats[key].avg_cycles)
-    op_cycles = bucket_stats[op_bucket].avg_cycles
-    return chip_freq_mhz, device_stats, bucket_stats, op_bucket, op_cycles
+        bucket_stats = {key: make_bucket_stat(values) for key, values in bucket_device_averages.items()}
+        if not bucket_stats:
+            raise RuntimeError(f"No top-level bucket stats produced from {profile_log}")
+
+        op_bucket = max(bucket_stats, key=lambda key: bucket_stats[key].avg_cycles)
+        op_cycles = bucket_stats[op_bucket].avg_cycles
+        return chip_freq_mhz, device_stats, bucket_stats, None, op_bucket, op_cycles
+
+    raise ValueError(f"Unsupported op_time_aggregation: {config.op_time_aggregation}")
 
 
 def collect_bucket_order(results: list[RunResult], config: CCLConfig) -> list[tuple[str, str]]:
@@ -661,11 +731,14 @@ def render_summary_section(
             f"Trace id: {TRACE_ID}",
             "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
             "Conversion: us = cycles / CHIP_FREQ[MHz], ns = cycles * 1000 / CHIP_FREQ[MHz].",
-            "Op time = max(avg per top-level (RISC processor type, zone) bucket across devices).",
+            op_time_description(config),
             f"Top-level zones: {', '.join(config.top_level_zones)}",
             "",
         ]
     )
+    if not config.render_cross_device_bucket_averages:
+        lines.append("Cross-device bucket averages are omitted for this CCL.")
+        lines.append("")
 
     if not results:
         lines.append("Results pending.")
@@ -688,6 +761,8 @@ def render_summary_section(
             "op_cycles",
             "op_bucket",
         ]
+        if uses_max_device_bucket_op_time(config):
+            summary_headers.insert(-1, "op_device")
         result_lookup = {}
         for result in sorted_results:
             row = [
@@ -699,6 +774,8 @@ def render_summary_section(
                 format_float(result.op_cycles, 1),
                 bucket_display(result.op_bucket, config),
             ]
+            if uses_max_device_bucket_op_time(config):
+                row.insert(-1, result.op_device or "-")
             summary_rows.append(row)
             result_lookup[(result.num_l_chunks, result.block_size, result.max_payload_size)] = result
 
@@ -724,6 +801,8 @@ def render_summary_section(
                 matrix_rows_cycles.append(row_cycles)
     elif config.show_num_links_in_report:
         summary_headers = ["num_links", "max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
+        if uses_max_device_bucket_op_time(config):
+            summary_headers.insert(-1, "op_device")
         result_lookup = {}
         for result in sorted_results:
             row = [
@@ -733,6 +812,8 @@ def render_summary_section(
                 format_float(result.op_cycles, 1),
                 bucket_display(result.op_bucket, config),
             ]
+            if uses_max_device_bucket_op_time(config):
+                row.insert(-1, result.op_device or "-")
             summary_rows.append(row)
             result_lookup[(result.num_links, result.max_payload_size)] = result
 
@@ -752,6 +833,8 @@ def render_summary_section(
             matrix_rows_cycles.append(row_cycles)
     else:
         summary_headers = ["max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
+        if uses_max_device_bucket_op_time(config):
+            summary_headers.insert(-1, "op_device")
         result_lookup = {}
         for result in sorted_results:
             row = [
@@ -760,6 +843,8 @@ def render_summary_section(
                 format_float(result.op_cycles, 1),
                 bucket_display(result.op_bucket, config),
             ]
+            if uses_max_device_bucket_op_time(config):
+                row.insert(-1, result.op_device or "-")
             summary_rows.append(row)
             result_lookup[result.max_payload_size] = result
 
@@ -865,16 +950,20 @@ def render_details_section(
         [
             f"Trace id: {TRACE_ID}",
             "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
+            op_time_description(config),
             "",
         ]
     )
+    if not config.render_cross_device_bucket_averages:
+        lines.append("Cross-device bucket averages are omitted for this CCL.")
+        lines.append("")
 
     if not results:
         lines.append("Results pending.")
         lines.append("")
         return "\n".join(lines)
 
-    bucket_order = collect_bucket_order(results, config)
+    bucket_order = collect_bucket_order(results, config) if config.render_cross_device_bucket_averages else []
     for result in sort_results_for_display(config, results):
         if is_sdpa_chunk_sweep(config):
             lines.append(
@@ -932,46 +1021,57 @@ def render_details_section(
         lines.append(format_markdown_table(device_headers, device_rows))
         lines.append("")
 
-        bucket_headers = [
-            "RISC processor type",
-            "ZONE",
-            "DEVICE_COUNT",
-            "AVG_CYCLES",
-            "AVG_NS",
-            "AVG_US",
-            "MIN_DEVICE_AVG_CYCLES",
-            "MEDIAN_DEVICE_AVG_CYCLES",
-        ]
-        bucket_rows = []
-        for bucket in bucket_order:
-            stat = result.bucket_stats.get(bucket)
-            if stat is None:
-                continue
-            risc_type, zone_name = bucket
-            bucket_rows.append(
-                [
-                    risc_type,
-                    zone_name,
-                    str(stat.count),
-                    format_float(stat.avg_cycles, 1),
-                    format_float(cycles_to_ns(stat.avg_cycles, result.chip_freq_mhz), 3),
-                    format_float(cycles_to_us(stat.avg_cycles, result.chip_freq_mhz), 3),
-                    format_float(stat.min_cycles, 1),
-                    format_float(stat.median_cycles, 1),
-                ]
-            )
+        if config.render_cross_device_bucket_averages:
+            bucket_headers = [
+                "RISC processor type",
+                "ZONE",
+                "DEVICE_COUNT",
+                "AVG_CYCLES",
+                "AVG_NS",
+                "AVG_US",
+                "MIN_DEVICE_AVG_CYCLES",
+                "MEDIAN_DEVICE_AVG_CYCLES",
+            ]
+            bucket_rows = []
+            for bucket in bucket_order:
+                stat = result.bucket_stats.get(bucket)
+                if stat is None:
+                    continue
+                risc_type, zone_name = bucket
+                bucket_rows.append(
+                    [
+                        risc_type,
+                        zone_name,
+                        str(stat.count),
+                        format_float(stat.avg_cycles, 1),
+                        format_float(cycles_to_ns(stat.avg_cycles, result.chip_freq_mhz), 3),
+                        format_float(cycles_to_us(stat.avg_cycles, result.chip_freq_mhz), 3),
+                        format_float(stat.min_cycles, 1),
+                        format_float(stat.median_cycles, 1),
+                    ]
+                )
 
-        lines.append("#### Bucket averages across devices")
-        lines.append("")
-        lines.append(format_markdown_table(bucket_headers, bucket_rows))
-        lines.append("")
-        lines.append(
-            "Final op time: {} us ({} cycles), bucket={}".format(
-                format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
-                format_float(result.op_cycles, 1),
-                bucket_display(result.op_bucket, config),
+            lines.append("#### Bucket averages across devices")
+            lines.append("")
+            lines.append(format_markdown_table(bucket_headers, bucket_rows))
+            lines.append("")
+        if uses_max_device_bucket_op_time(config):
+            lines.append(
+                "Final op time: {} us ({} cycles), device={}, bucket={}".format(
+                    format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
+                    format_float(result.op_cycles, 1),
+                    result.op_device or "-",
+                    bucket_display(result.op_bucket, config),
+                )
             )
-        )
+        else:
+            lines.append(
+                "Final op time: {} us ({} cycles), bucket={}".format(
+                    format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
+                    format_float(result.op_cycles, 1),
+                    bucket_display(result.op_bucket, config),
+                )
+            )
         lines.append("")
 
     return "\n".join(lines)
@@ -1146,7 +1246,14 @@ def main() -> int:
 
                         profile_log = max(new_logs, key=lambda path: path.stat().st_mtime)
                         profile_log_rel = to_repo_relative(profile_log, repo_root)
-                        chip_freq_mhz, device_stats, bucket_stats, op_bucket, op_cycles = summarize_profile_log(
+                        (
+                            chip_freq_mhz,
+                            device_stats,
+                            bucket_stats,
+                            op_device,
+                            op_bucket,
+                            op_cycles,
+                        ) = summarize_profile_log(
                             profile_log,
                             config,
                         )
@@ -1170,6 +1277,7 @@ def main() -> int:
                                 bucket_stats=bucket_stats,
                                 op_bucket=op_bucket,
                                 op_cycles=op_cycles,
+                                op_device=op_device,
                                 num_l_chunks=num_l_chunks,
                                 tiles_per_l_chunk=tiles_per_l_chunk,
                                 block_size=block_size,
