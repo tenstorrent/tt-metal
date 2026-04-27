@@ -113,17 +113,29 @@ class Gemma4ForCausalLM:
         # Phase 5: reset is the caller's job (Generator does it once at
         # the start of a session). Independent single-shot callers
         # (PCC tests) call reset_kv_caches() explicitly before model().
-        # Phase 3: build the per-call position scalar internally and inject
-        # it at every input slot that historically held an int32 [1] zero.
-        # The runtime_inputs synthesizer no longer allocates these slots,
-        # so eff_input may need to grow to fit the highest pos slot.
-        pos_tensor = _build_pos_tensor(current_pos, self.mesh_device)
+        #
+        # `current_pos` is the absolute position of the new token being
+        # processed. We inject two related tensors:
+        #   * slot 0 (var_0) = current_pos - 1, so the orchestration's
+        #     ttnn_add_0 = var_0 + var_185 = current_pos for decode
+        #     (var_185=1) — Q's RoPE then ends up at position current_pos.
+        #   * per-layer pos slots = current_pos, used as update_idxs by
+        #     full layers' paged_update_cache (write the new K at row
+        #     current_pos, where prefill K[i] sits at row i).
+        # Prefill mode ignores ttnn_add_0 and per-layer pos slots entirely
+        # (cache writes go through fill_cache(.., 0); RoPE comes from the
+        # prelude's per-position arange), so the split is decode-only — but
+        # injecting different values in both modes is harmless.
+        var0_pos = max(0, current_pos - 1)
+        var0_tensor = _build_pos_tensor(var0_pos, self.mesh_device)
+        layer_tensor = var0_tensor if current_pos == 0 else _build_pos_tensor(current_pos, self.mesh_device)
         eff_input = list(input)
         max_slot = max(self._pos_slots)
         if len(eff_input) <= max_slot:
             eff_input.extend([None] * (max_slot + 1 - len(eff_input)))
         for slot in self._pos_slots:
-            eff_input[slot] = pos_tensor
+            eff_input[slot] = layer_tensor
+        eff_input[0] = var0_tensor
         if mode == "decode":
             return self._call_decode(eff_input)
         elif mode == "prefill":

@@ -72,7 +72,6 @@ class Attention:
         k_norm_w,
         o_proj_w,
         seq_len=19,
-        sliding_prefill_kv_zero_pad=None,
     ):
         assert layer_type in ("sliding", "full"), layer_type
         if layer_type == "sliding":
@@ -91,13 +90,6 @@ class Attention:
         # Prefill sequence length. Decode bodies are seq_len=1 (not parameterized).
         # Default 19 matches the codegen-baked artifact.
         self.seq_len = seq_len
-        # Pre-allocated [1, 4, 256-seq_len, 256] zero tensor used by the
-        # sliding-prefill body to front-pad the prefill K / V before
-        # writing them into the cache (so the L prefill rows land at
-        # rows 256-L..255 of the cache, matching decode's circular-shift
-        # geometry). Only built for sliding layers; full layers use a
-        # different cache mechanism.
-        self.sliding_prefill_kv_zero_pad = sliding_prefill_kv_zero_pad
 
     def __call__(self, x, *, is_decode, **kwargs):
         if self.layer_type == "sliding":
@@ -177,21 +169,6 @@ class Attention:
             dtype=proj_dtype,
         )
 
-        # Pre-build the zero front-pad used by _sliding_prefill to align
-        # cache writes to rows 256-seq_len..255. Allocated once per layer.
-        pad_rows = 256 - seq_len
-        if pad_rows > 0:
-            sliding_prefill_kv_zero_pad = ttnn.as_tensor(
-                torch.zeros((1, 4, pad_rows, 256), dtype=torch.bfloat16),
-                dtype=ttnn.DataType.BFLOAT16,
-                layout=ttnn.Layout.TILE,
-                device=mesh_device,
-                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-        else:
-            sliding_prefill_kv_zero_pad = None
-
         return cls(
             layer_type="sliding",
             fused_qkv_w=fused_qkv_w,
@@ -199,7 +176,6 @@ class Attention:
             k_norm_w=k_norm_w,
             o_proj_w=o_proj_w,
             seq_len=seq_len,
-            sliding_prefill_kv_zero_pad=sliding_prefill_kv_zero_pad,
         )
 
     @classmethod
@@ -267,60 +243,39 @@ class Attention:
         pos_ids,
         sliding_cos_cache,
         sliding_sin_cache,
-        pos_typecast_11,
-        causal_mask_logical_and,
-        causal_mask_logical_not,
-        var_185,
-        var_186,
-        var_190,
-        var_191,
-        var_192,
-        var_193,
+        pos_typecast_11,  # noqa: ARG002  -- no longer used; SDPA op handles position mask
+        causal_mask_logical_and,  # noqa: ARG002
+        causal_mask_logical_not,  # noqa: ARG002
+        var_185,  # noqa: ARG002
+        var_186,  # noqa: ARG002
+        var_190,  # noqa: ARG002
+        var_191,  # noqa: ARG002
+        var_192,  # noqa: ARG002
+        var_193,  # noqa: ARG002
     ):
-        """Sliding-window attention (Gemma3 style): fused-QKV matmul, q/k_norm,
-        RoPE rotation, sliding-window masked SDPA, o_proj, distributed
-        reduce-scatter. Decode-specific: writes the new K/V state into the
-        paged KV cache via `ttnn.experimental.paged_update_cache`.
+        """Sliding-window attention, canonical tt-metal pattern (post-rewrite).
 
-        Returns a 4-tuple matching the codegen-emitted local names of the
-        sub-block's outputs:
-          * `ttnn_reshape_46`  -- residual flow that feeds `post_attn_ln`
-          * `ttnn_add_15`      -- pos-id increment surfaced to `_main`'s return
-          * `ttnn_where_8`     -- sliding-window K-cache write (masked)
-          * `ttnn_where_10`    -- sliding-window V-cache write (masked)
+        Mirrors `tt_transformers/tt/attention.py:Attention.forward_decode`:
+        fused-QKV matmul → q/k_norm → RoPE → `paged_update_cache` writes
+        the new K/V at row=pos_ids → `scaled_dot_product_attention_decode`
+        with `sliding_window_size=256` → o_proj → reduce_scatter.
 
-        Consumes (deallocates internally): `x`.
-        Does NOT deallocate: `k_cache`, `v_cache` (the K/V state is written
-        in-place via `paged_update_cache` -- the cache buffers persist for
-        the next decode step); `pos_ids` (intentionally kept alive because
-        for "before-full" sliding layers (4, 10, 16, 22, 28, 34, 40, 46,
-        52, 58) the same input slot doubles as the next full layer's
-        `update_idxs_tensor`); weight tensors, RoPE caches, position-id
-        helpers, causal-mask helpers, var_*.
+        Returns the legacy 4-tuple shape `(residual, _, k_cache, v_cache)`
+        so the caller's unpacking is unchanged. The 2nd element is None
+        (the legacy ttnn_add_15 pos increment is no longer produced; it
+        was unused after the layer-output trim). k_cache and v_cache are
+        the in-place-updated buffers themselves.
         """
-        # Aliases that match the verbatim codegen op names below.
-        ttnn_typecast_2 = sliding_cos_cache
-        ttnn_typecast_3 = sliding_sin_cache
-        ttnn_typecast_11 = pos_typecast_11
-        ttnn_logical_and_0 = causal_mask_logical_and
-        ttnn_logical_not_0 = causal_mask_logical_not
-        runtime_a = k_cache
-        runtime_b = v_cache
-        runtime_c = pos_ids
-        ttnn_multiply_21 = x
-
-        ttnn_reshape_30 = ttnn.reshape(
-            ttnn_multiply_21,
-            [1, 1344],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_multiply_21, False)
+        # 1) Fused QKV matmul (verbatim from the codegen — distributed).
+        _DRAM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
+        ttnn_reshape_30 = ttnn.reshape(x, [1, 1344], memory_config=_DRAM)
+        ttnn.deallocate(x, False)
         ttnn_all_gather_7 = ttnn.all_gather(
             input_tensor=ttnn_reshape_30,
             dim=1,
             cluster_axis=1,
             subdevice_id=None,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            memory_config=_DRAM,
             num_links=None,
             topology=ttnn.Topology.Ring,
         )
@@ -330,7 +285,7 @@ class Attention:
             self.fused_qkv_w,
             transpose_a=False,
             transpose_b=False,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            memory_config=_DRAM,
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -339,41 +294,23 @@ class Attention:
             ),
         )
         ttnn.deallocate(ttnn_all_gather_7, False)
-        ttnn_slice_7 = ttnn.slice(
-            ttnn_matmul_8,
-            [0, 0],
-            [1, 1024],
-            [1, 1],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn_slice_8 = ttnn.slice(
-            ttnn_matmul_8,
-            [0, 1024],
-            [1, 3072],
-            [1, 1],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn_slice_9 = ttnn.slice(
-            ttnn_matmul_8,
-            [0, 3072],
-            [1, 4096],
-            [1, 1],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
+
+        # Slice into K, Q, V (per-shard order is K|Q|V — see from_state_dict_sliding).
+        k_slice = ttnn.slice(ttnn_matmul_8, [0, 0], [1, 1024], [1, 1], memory_config=_DRAM)
+        q_slice = ttnn.slice(ttnn_matmul_8, [0, 1024], [1, 3072], [1, 1], memory_config=_DRAM)
+        v_slice = ttnn.slice(ttnn_matmul_8, [0, 3072], [1, 4096], [1, 1], memory_config=_DRAM)
         ttnn.deallocate(ttnn_matmul_8, False)
-        ttnn_reshape_31 = ttnn.reshape(
-            ttnn_slice_7,
-            [1, 4, 1, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_slice_7, False)
-        ttnn_rms_norm_3 = ttnn.rms_norm(
-            ttnn_reshape_31,
+
+        # 2) K: rms_norm + RoPE.
+        k_BHSD = ttnn.reshape(k_slice, [1, 4, 1, 256], memory_config=_DRAM)
+        ttnn.deallocate(k_slice, False)
+        k_normed_BHSD = ttnn.rms_norm(
+            k_BHSD,
             epsilon=9.9999999747524271e-07,
             weight=self.k_norm_w,
             bias=None,
             residual_input_tensor=None,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            memory_config=_DRAM,
             program_config=None,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -382,161 +319,41 @@ class Attention:
                 packer_l1_acc=True,
             ),
         )
-        ttnn.deallocate(ttnn_reshape_31, False)
-        ttnn_reshape_32 = ttnn.reshape(
-            ttnn_rms_norm_3,
-            [1, 1, 4, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn_multiply_22 = ttnn.multiply(
-            ttnn_reshape_32,
-            ttnn_typecast_2,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_reshape_32, False)
-        ttnn_slice_10 = ttnn.slice(
-            ttnn_rms_norm_3,
-            [0, 0, 0, 128],
-            [1, 4, 1, 256],
-            [1, 1, 1, 1],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn_neg_2 = ttnn.neg(
-            ttnn_slice_10,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_slice_10, False)
-        ttnn_slice_11 = ttnn.slice(
-            ttnn_rms_norm_3,
-            [0, 0, 0, 0],
-            [1, 4, 1, 128],
-            [1, 1, 1, 1],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_rms_norm_3, False)
-        ttnn_concat_3 = ttnn.concat(
-            [ttnn_neg_2, ttnn_slice_11],
-            3,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_slice_11, False)
-        ttnn.deallocate(ttnn_neg_2, False)
-        ttnn_reshape_33 = ttnn.reshape(
-            ttnn_concat_3,
-            [1, 1, 4, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_concat_3, False)
-        ttnn_multiply_23 = ttnn.multiply(
-            ttnn_reshape_33,
-            ttnn_typecast_3,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_reshape_33, False)
-        ttnn_add_14 = ttnn.add(
-            ttnn_multiply_22,
-            ttnn_multiply_23,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_multiply_23, False)
-        ttnn.deallocate(ttnn_multiply_22, False)
-        ttnn_reshape_34 = ttnn.reshape(
-            ttnn_add_14,
-            [1, 1024],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_add_14, False)
-        ttnn_to_layout_12 = ttnn.to_layout(ttnn_reshape_34, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-        ttnn.deallocate(ttnn_reshape_34, False)
-        ttnn_embedding_6 = ttnn.embedding(
-            var_186,
-            ttnn_to_layout_12,
-            padding_idx=None,
-            layout=ttnn.Layout.TILE,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_to_layout_12, False)
-        ttnn_reshape_35 = ttnn.reshape(
-            ttnn_embedding_6,
-            [256, 1, 4, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_embedding_6, False)
-        ttnn_permute_6 = ttnn.permute(
-            ttnn_reshape_35,
-            [1, 2, 0, 3],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            pad_value=0.0,
-        )
-        ttnn.deallocate(ttnn_reshape_35, False)
-        ttnn_where_7 = ttnn.where(
-            ttnn_logical_not_0,
-            var_192,
-            ttnn_permute_6,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_permute_6, False)
-        ttnn_permute_7 = ttnn.permute(
-            runtime_a,
-            [2, 0, 1, 3],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            pad_value=0.0,
-        )
-        ttnn_reshape_36 = ttnn.reshape(
-            ttnn_permute_7,
-            [256, 1024],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_permute_7, False)
-        ttnn_to_layout_13 = ttnn.to_layout(ttnn_reshape_36, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-        ttnn.deallocate(ttnn_reshape_36, False)
-        ttnn_embedding_7 = ttnn.embedding(
-            var_190,
-            ttnn_to_layout_13,
-            padding_idx=None,
-            layout=ttnn.Layout.TILE,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_to_layout_13, False)
-        ttnn_reshape_37 = ttnn.reshape(
-            ttnn_embedding_7,
-            [256, 1, 4, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_embedding_7, False)
-        ttnn_permute_8 = ttnn.permute(
-            ttnn_reshape_37,
-            [1, 2, 0, 3],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            pad_value=0.0,
-        )
-        ttnn.deallocate(ttnn_reshape_37, False)
-        ttnn_where_8 = ttnn.where(
-            ttnn_logical_and_0,
-            ttnn_where_7,
-            ttnn_permute_8,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_permute_8, False)
-        ttnn.deallocate(ttnn_where_7, False)
-        ttnn_reshape_38 = ttnn.reshape(
-            ttnn_slice_9,
-            [1, 4, 1, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_slice_9, False)
-        ttnn_rms_norm_4 = ttnn.rms_norm(
-            ttnn_reshape_38,
+        ttnn.deallocate(k_BHSD, False)
+        # RoPE for K. The codegen uses [1, S, H, D] layout for the multiplication;
+        # cos/sin caches broadcast over [1, 1, H, D]-shaped K.
+        k_normed_BSHD = ttnn.reshape(k_normed_BHSD, [1, 1, 4, 256], memory_config=_DRAM)
+        k_cos = ttnn.multiply(k_normed_BSHD, sliding_cos_cache, dtype=ttnn.DataType.BFLOAT16, memory_config=_DRAM)
+        ttnn.deallocate(k_normed_BSHD, False)
+        k_back_half = ttnn.slice(k_normed_BHSD, [0, 0, 0, 128], [1, 4, 1, 256], [1, 1, 1, 1], memory_config=_DRAM)
+        k_neg_back = ttnn.neg(k_back_half, memory_config=_DRAM)
+        ttnn.deallocate(k_back_half, False)
+        k_front_half = ttnn.slice(k_normed_BHSD, [0, 0, 0, 0], [1, 4, 1, 128], [1, 1, 1, 1], memory_config=_DRAM)
+        ttnn.deallocate(k_normed_BHSD, False)
+        k_rotated = ttnn.concat([k_neg_back, k_front_half], 3, memory_config=_DRAM)
+        ttnn.deallocate(k_front_half, False)
+        ttnn.deallocate(k_neg_back, False)
+        k_rotated_BSHD = ttnn.reshape(k_rotated, [1, 1, 4, 256], memory_config=_DRAM)
+        ttnn.deallocate(k_rotated, False)
+        k_sin = ttnn.multiply(k_rotated_BSHD, sliding_sin_cache, dtype=ttnn.DataType.BFLOAT16, memory_config=_DRAM)
+        ttnn.deallocate(k_rotated_BSHD, False)
+        # paged_update_cache wants input shape [seq=1, batch, n_kv_heads, head_dim] —
+        # exactly the [1, 1, 4, 256] layout the RoPE chain already produced.
+        k_for_cache = ttnn.add(k_cos, k_sin, dtype=ttnn.DataType.BFLOAT16, memory_config=_DRAM)
+        ttnn.deallocate(k_sin, False)
+        ttnn.deallocate(k_cos, False)
+
+        # 3) V: rms_norm only (no RoPE on V), reshape to match the
+        #    [seq=1, batch, n_kv_heads, head_dim] layout the cache op expects.
+        v_BHSD = ttnn.reshape(v_slice, [1, 4, 1, 256], memory_config=_DRAM)
+        ttnn.deallocate(v_slice, False)
+        v_normed = ttnn.rms_norm(
+            v_BHSD,
             epsilon=9.9999999747524271e-07,
             weight=None,
             bias=None,
             residual_input_tensor=None,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            memory_config=_DRAM,
             program_config=None,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -545,114 +362,22 @@ class Attention:
                 packer_l1_acc=True,
             ),
         )
-        ttnn.deallocate(ttnn_reshape_38, False)
-        ttnn_reshape_39 = ttnn.reshape(
-            ttnn_rms_norm_4,
-            [1, 1024],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_rms_norm_4, False)
-        ttnn_to_layout_14 = ttnn.to_layout(ttnn_reshape_39, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-        ttnn.deallocate(ttnn_reshape_39, False)
-        ttnn_embedding_8 = ttnn.embedding(
-            var_186,
-            ttnn_to_layout_14,
-            padding_idx=None,
-            layout=ttnn.Layout.TILE,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_to_layout_14, False)
-        ttnn_reshape_40 = ttnn.reshape(
-            ttnn_embedding_8,
-            [256, 1, 4, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_embedding_8, False)
-        ttnn_permute_9 = ttnn.permute(
-            ttnn_reshape_40,
-            [1, 2, 0, 3],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            pad_value=0.0,
-        )
-        ttnn.deallocate(ttnn_reshape_40, False)
-        ttnn_where_9 = ttnn.where(
-            ttnn_logical_not_0,
-            var_192,
-            ttnn_permute_9,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_permute_9, False)
-        ttnn_permute_10 = ttnn.permute(
-            runtime_b,
-            [2, 0, 1, 3],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            pad_value=0.0,
-        )
-        ttnn_reshape_41 = ttnn.reshape(
-            ttnn_permute_10,
-            [256, 1024],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_permute_10, False)
-        ttnn_to_layout_15 = ttnn.to_layout(ttnn_reshape_41, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-        ttnn.deallocate(ttnn_reshape_41, False)
-        ttnn_embedding_9 = ttnn.embedding(
-            var_190,
-            ttnn_to_layout_15,
-            padding_idx=None,
-            layout=ttnn.Layout.TILE,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_to_layout_15, False)
-        ttnn_reshape_42 = ttnn.reshape(
-            ttnn_embedding_9,
-            [256, 1, 4, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_embedding_9, False)
-        ttnn_permute_11 = ttnn.permute(
-            ttnn_reshape_42,
-            [1, 2, 0, 3],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            pad_value=0.0,
-        )
-        ttnn.deallocate(ttnn_reshape_42, False)
-        ttnn_where_10 = ttnn.where(
-            ttnn_logical_and_0,
-            ttnn_where_9,
-            ttnn_permute_11,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_permute_11, False)
-        ttnn.deallocate(ttnn_where_9, False)
-        ttnn_to_layout_16 = ttnn.to_layout(runtime_c, ttnn.Layout.TILE, None, memory_config=None)
-        # Note: layer 1's original codegen deallocated `var_9` here. For the
-        # parameterized helper, we skip this dealloc — for "before-full" sliding
-        # layers (4, 10, 16, 22, 28, 34, 40, 46, 52, 58) the runtime_c input
-        # slot is also the next full layer's update_idxs_tensor, so freeing it
-        # here would leave the full layer with a dangling reference.
-        ttnn_add_15 = ttnn.add(
-            ttnn_to_layout_16,
-            var_185,
-            dtype=ttnn.DataType.INT32,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_to_layout_16, False)
-        ttnn_reshape_43 = ttnn.reshape(
-            ttnn_slice_8,
-            [1, 8, 1, 256],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_slice_8, False)
-        ttnn_rms_norm_5 = ttnn.rms_norm(
-            ttnn_reshape_43,
+        ttnn.deallocate(v_BHSD, False)
+        # Reshape from [B=1, H=4, S=1, D=256] to [S=1, B=1, H=4, D=256] for the
+        # cache op (no data movement — same memory layout).
+        v_for_cache = ttnn.reshape(v_normed, [1, 1, 4, 256], memory_config=_DRAM)
+        ttnn.deallocate(v_normed, False)
+
+        # 4) Q: rms_norm + RoPE (same RoPE cache as K — single-token RoPE).
+        q_BHSD = ttnn.reshape(q_slice, [1, 8, 1, 256], memory_config=_DRAM)
+        ttnn.deallocate(q_slice, False)
+        q_normed_BHSD = ttnn.rms_norm(
+            q_BHSD,
             epsilon=9.9999999747524271e-07,
             weight=self.q_norm_w,
             bias=None,
             residual_input_tensor=None,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            memory_config=_DRAM,
             program_config=None,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -661,190 +386,87 @@ class Attention:
                 packer_l1_acc=True,
             ),
         )
-        ttnn.deallocate(ttnn_reshape_43, False)
-        ttnn_multiply_24 = ttnn.multiply(
-            ttnn_rms_norm_5,
-            ttnn_typecast_2,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        ttnn.deallocate(q_BHSD, False)
+        q_cos = ttnn.multiply(q_normed_BHSD, sliding_cos_cache, dtype=ttnn.DataType.BFLOAT16, memory_config=_DRAM)
+        q_back_half = ttnn.slice(q_normed_BHSD, [0, 0, 0, 128], [1, 8, 1, 256], [1, 1, 1, 1], memory_config=_DRAM)
+        q_neg_back = ttnn.neg(q_back_half, memory_config=_DRAM)
+        ttnn.deallocate(q_back_half, False)
+        q_front_half = ttnn.slice(q_normed_BHSD, [0, 0, 0, 0], [1, 8, 1, 128], [1, 1, 1, 1], memory_config=_DRAM)
+        ttnn.deallocate(q_normed_BHSD, False)
+        q_rotated = ttnn.concat([q_neg_back, q_front_half], 3, memory_config=_DRAM)
+        ttnn.deallocate(q_front_half, False)
+        ttnn.deallocate(q_neg_back, False)
+        q_sin = ttnn.multiply(q_rotated, sliding_sin_cache, dtype=ttnn.DataType.BFLOAT16, memory_config=_DRAM)
+        ttnn.deallocate(q_rotated, False)
+        q_post_rope = ttnn.add(q_cos, q_sin, dtype=ttnn.DataType.BFLOAT16, memory_config=_DRAM)
+        ttnn.deallocate(q_sin, False)
+        ttnn.deallocate(q_cos, False)
+        # SDPA wants Q in shape [1, B, n_q_heads, head_dim].
+        q_for_sdpa = ttnn.reshape(q_post_rope, [1, 1, 8, 256], memory_config=_DRAM)
+        ttnn.deallocate(q_post_rope, False)
+
+        # 5) Persist new K/V into the cache at row=pos_ids (in-place).
+        # paged_update_cache requires L1-sharded input — same pattern as
+        # _full_decode, with the shard size matching K/V's last-two-dim
+        # tile-aligned shape ([32, 4*256/4=256] per single core).
+        _shard_mem_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+                [32, 256],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
-        ttnn_slice_12 = ttnn.slice(
-            ttnn_rms_norm_5,
-            [0, 0, 0, 128],
-            [1, 8, 1, 256],
-            [1, 1, 1, 1],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        k_for_cache_sharded = ttnn.to_memory_config(k_for_cache, _shard_mem_cfg)
+        ttnn.deallocate(k_for_cache, False)
+        ttnn.experimental.paged_update_cache(
+            k_cache,
+            k_for_cache_sharded,
+            update_idxs_tensor=pos_ids,
+            share_cache=False,
+            page_table=None,
         )
-        ttnn_neg_3 = ttnn.neg(
-            ttnn_slice_12,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        ttnn.deallocate(k_for_cache_sharded, False)
+        v_for_cache_sharded = ttnn.to_memory_config(v_for_cache, _shard_mem_cfg)
+        ttnn.deallocate(v_for_cache, False)
+        ttnn.experimental.paged_update_cache(
+            v_cache,
+            v_for_cache_sharded,
+            update_idxs_tensor=pos_ids,
+            share_cache=False,
+            page_table=None,
         )
-        ttnn.deallocate(ttnn_slice_12, False)
-        ttnn_slice_13 = ttnn.slice(
-            ttnn_rms_norm_5,
-            [0, 0, 0, 0],
-            [1, 8, 1, 128],
-            [1, 1, 1, 1],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_rms_norm_5, False)
-        ttnn_concat_4 = ttnn.concat(
-            [ttnn_neg_3, ttnn_slice_13],
-            3,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_slice_13, False)
-        ttnn.deallocate(ttnn_neg_3, False)
-        ttnn_multiply_25 = ttnn.multiply(
-            ttnn_concat_4,
-            ttnn_typecast_3,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_concat_4, False)
-        ttnn_add_16 = ttnn.add(
-            ttnn_multiply_24,
-            ttnn_multiply_25,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_multiply_25, False)
-        ttnn.deallocate(ttnn_multiply_24, False)
-        ttnn_repeat_interleave_2 = ttnn.repeat_interleave(
-            ttnn_where_8,
-            2,
-            1,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn_repeat_interleave_3 = ttnn.repeat_interleave(
-            ttnn_where_10,
-            2,
-            1,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn_typecast_15 = ttnn.typecast(
-            ttnn_add_16,
-            ttnn.DataType.FLOAT32,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_add_16, False)
-        ttnn_typecast_16 = ttnn.typecast(
-            ttnn_repeat_interleave_2,
-            ttnn.DataType.FLOAT32,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_repeat_interleave_2, False)
-        ttnn_matmul_9 = ttnn.matmul(
-            ttnn_typecast_15,
-            ttnn_typecast_16,
-            transpose_a=False,
-            transpose_b=True,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            dtype=ttnn.DataType.FLOAT32,
-            program_config=None,
-            activation=None,
+        ttnn.deallocate(v_for_cache_sharded, False)
+
+        # 6) SDPA decode with sliding window. The op handles GQA (8 Q heads
+        #    over 4 KV heads), causal masking, and the window cutoff.
+        attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_for_sdpa,
+            k_cache,
+            v_cache,
+            cur_pos_tensor=pos_ids,
+            # Legacy manual SDPA didn't apply 1/sqrt(head_dim); the Gemma3
+            # graph relies on Q/K being magnitude-controlled by RMSNorm and
+            # leaves the dot-product unscaled. `scale=1.0` matches.
+            scale=1.0,
+            sliding_window_size=256,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
             ),
+            memory_config=_DRAM,
         )
-        ttnn.deallocate(ttnn_typecast_16, False)
-        ttnn.deallocate(ttnn_typecast_15, False)
-        ttnn_add_17 = ttnn.add(
-            ttnn_matmul_9,
-            ttnn_typecast_11,
-            dtype=ttnn.DataType.FLOAT32,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_matmul_9, False)
-        ttnn_eq_1 = ttnn.eq(
-            ttnn_add_17,
-            var_193,
-            dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn_logical_not_3 = ttnn.logical_not(
-            ttnn_eq_1,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_eq_1, False)
-        ttnn_sum_1 = ttnn.sum(
-            ttnn_logical_not_3,
-            [3],
-            True,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-            ),
-        )
-        ttnn.deallocate(ttnn_logical_not_3, False)
-        ttnn_logical_not_4 = ttnn.logical_not(
-            ttnn_sum_1,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_sum_1, False)
-        ttnn_softmax_1 = ttnn.softmax(
-            ttnn_add_17,
-            3,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-            ),
-            numeric_stable=True,
-        )
-        ttnn.deallocate(ttnn_add_17, False)
-        ttnn_typecast_17 = ttnn.typecast(
-            ttnn_logical_not_4,
-            ttnn.DataType.FLOAT32,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_logical_not_4, False)
-        ttnn_where_11 = ttnn.where(
-            ttnn_typecast_17,
-            var_191,
-            ttnn_softmax_1,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_typecast_17, False)
-        ttnn.deallocate(ttnn_softmax_1, False)
-        ttnn_typecast_18 = ttnn.typecast(
-            ttnn_repeat_interleave_3,
-            ttnn.DataType.FLOAT32,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_repeat_interleave_3, False)
-        ttnn_matmul_10 = ttnn.matmul(
-            ttnn_where_11,
-            ttnn_typecast_18,
-            transpose_a=False,
-            transpose_b=False,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-            dtype=ttnn.DataType.FLOAT32,
-            program_config=None,
-            activation=None,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-            ),
-        )
-        ttnn.deallocate(ttnn_typecast_18, False)
-        ttnn.deallocate(ttnn_where_11, False)
-        ttnn_typecast_19 = ttnn.typecast(
-            ttnn_matmul_10,
-            ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_matmul_10, False)
-        ttnn_reshape_44 = ttnn.reshape(
-            ttnn_typecast_19,
-            [1, 2048],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_typecast_19, False)
-        ttnn_matmul_11 = ttnn.matmul(
-            ttnn_reshape_44,
+        ttnn.deallocate(q_for_sdpa, False)
+
+        # 7) Concat heads (just a reshape for decode seq=1) → o_proj → reduce_scatter.
+        attn_flat = ttnn.reshape(attn_output, [1, 2048], memory_config=_DRAM)
+        ttnn.deallocate(attn_output, False)
+        attn_out_proj = ttnn.matmul(
+            attn_flat,
             self.o_proj_w,
             transpose_a=False,
             transpose_b=True,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            memory_config=_DRAM,
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -852,19 +474,15 @@ class Attention:
                 math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
             ),
         )
-        ttnn.deallocate(ttnn_reshape_44, False)
-        ttnn_reshape_45 = ttnn.reshape(
-            ttnn_matmul_11,
-            [1, 1, 1, 5376],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_matmul_11, False)
-        ttnn_reduce_scatter_2 = ttnn.reduce_scatter(
-            input_tensor=ttnn_reshape_45,
+        ttnn.deallocate(attn_flat, False)
+        attn_out_4d = ttnn.reshape(attn_out_proj, [1, 1, 1, 5376], memory_config=_DRAM)
+        ttnn.deallocate(attn_out_proj, False)
+        attn_reduced = ttnn.reduce_scatter(
+            input_tensor=attn_out_4d,
             dim=3,
             cluster_axis=1,
             subdevice_id=None,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            memory_config=_DRAM,
             num_links=None,
             topology=ttnn.Topology.Ring,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
@@ -874,15 +492,13 @@ class Attention:
                 packer_l1_acc=False,
             ),
         )
-        ttnn.deallocate(ttnn_reshape_45, False)
-        ttnn_reshape_46 = ttnn.reshape(
-            ttnn_reduce_scatter_2,
-            [1, 1, 1344],
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        )
-        ttnn.deallocate(ttnn_reduce_scatter_2, False)
+        ttnn.deallocate(attn_out_4d, False)
+        residual = ttnn.reshape(attn_reduced, [1, 1, 1344], memory_config=_DRAM)
+        ttnn.deallocate(attn_reduced, False)
 
-        return (ttnn_reshape_46, ttnn_add_15, ttnn_where_8, ttnn_where_10)
+        # Legacy 4-tuple shape: (residual, _, k_cache, v_cache). The 2nd slot
+        # (was the dropped pos-id increment ttnn_add_15) is None.
+        return (residual, None, k_cache, v_cache)
 
     def _sliding_prefill(
         self,
@@ -1060,19 +676,11 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             pad_value=0.0,
         )
-        # Persist prefill K into the sliding cache. The decode body uses an
-        # embedding-based circular shift (var_190 = [1, 2, …, 255, 0]) +
-        # masked write at row 255 — meaning row 255 is "newest" and row 0 is
-        # "oldest". So the L prefill K rows land at cache rows 256-L..255 in
-        # original order; rows 0..255-L stay zero. ttnn.pad doesn't support
-        # front-padding, so we concat with a pre-allocated zero pad.
-        if self.sliding_prefill_kv_zero_pad is not None:
-            _padded_k = ttnn.concat([self.sliding_prefill_kv_zero_pad, ttnn_permute_11], dim=2)
-        else:
-            _padded_k = ttnn_permute_11
-        ttnn.fill_cache(k_cache, _padded_k, 0)
-        if self.sliding_prefill_kv_zero_pad is not None:
-            ttnn.deallocate(_padded_k, False)
+        # Persist prefill K at cache rows 0..seq_len-1. The decode body
+        # (post-rewrite) uses scaled_dot_product_attention_decode reading
+        # cache[0..cur_pos], so prefill positions go at the start of the
+        # cache — the same geometry as full attention.
+        ttnn.fill_cache(k_cache, ttnn_permute_11, 0)
         ttnn_reshape_32 = ttnn.reshape(
             ttnn_add_15,
             [self.seq_len, 1024],
@@ -1182,14 +790,8 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             pad_value=0.0,
         )
-        # Persist prefill V at cache rows 256-L..255 (see K-cache fill above).
-        if self.sliding_prefill_kv_zero_pad is not None:
-            _padded_v = ttnn.concat([self.sliding_prefill_kv_zero_pad, ttnn_permute_15], dim=2)
-        else:
-            _padded_v = ttnn_permute_15
-        ttnn.fill_cache(v_cache, _padded_v, 0)
-        if self.sliding_prefill_kv_zero_pad is not None:
-            ttnn.deallocate(_padded_v, False)
+        # Persist prefill V at cache rows 0..seq_len-1 (see K-cache fill above).
+        ttnn.fill_cache(v_cache, ttnn_permute_15, 0)
         ttnn_reshape_37 = ttnn.reshape(
             ttnn_rms_norm_4,
             [self.seq_len, 1024],
