@@ -52,8 +52,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
@@ -165,26 +163,6 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
-    # SDPA Forward
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
-    # Ring SDPA Forward (for ring attention / context parallelism)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/ring_sdpa_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.cpp
-    # Ring SDPA Backward (for ring attention / context parallelism)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/ring_sdpa_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp
-    # SDPA Backward
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp
     # SGD Optimizer
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_device_operation.cpp
