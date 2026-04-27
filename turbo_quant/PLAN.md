@@ -51,14 +51,39 @@ which stores `index + norm` separately and dequantizes inside, doesn't.
 `Q × dequant(idx, norm)^T × dequant(idx, norm) = Q × K^T × V` correctly
 even with paged + GQA + pre-rotated Q + 1024-block padding + cap=1.
 But somewhere between the unit test setup and eval_e2e.py's setup,
-something diverges. Bisect candidates not yet exhausted:
-- multi-layer interaction (1L bug looks similar but baseline 1L is also
-  garbage — model needs >1 layer to be coherent)
-- mesh device replication (unit test = single device, e2e = mesh)
-- trace mode (ruled out: `--no-trace` also fails)
-- eval_e2e quantize ordering (RoPE → TQ rotation chain)
-- `paged_update_cache` precision when called repeatedly across steps in
-  trace replay (ruled out by sequential write test)
+something diverges.
+
+Bisect candidates ruled out (this session):
+- trace mode (`--no-trace` also fails)
+- BFP4 quantization of integer indices 0–7 (lossless verified)
+- `paged_update_cache` write path (test_e2e_writes.py passes)
+- GQA grouping (test_e2e_writes.py with NQH=32/NKH=8 passes)
+- pre-rotated Q (test_e2e_writes.py with `Q × Π` passes)
+- partial-fill softmax dilution (test_padded_cache.py with cap=1 passes
+  cos > 0.99 even with 1020 blocks of zero-K padding)
+- centroid-list mismatch host vs kernel (both use `get_codebook(...).centroids`)
+- rotation seed mismatch (eval_e2e uses seed=42, TTNNTurboQuantSetup
+  default is also seed=42)
+
+Bisect candidates still open:
+- multi-layer interaction at >1L (1L baseline is also garbage — needs
+  a "multi-layer-but-not-sensitive-to-attention-quality" comparison
+  point, which the partial-layer model itself doesn't provide)
+- mesh device replication semantics with batch=1 (eval_e2e opens 8
+  devices via FABRIC_1D even for single-batch; tests use
+  `ttnn.open_device(device_id=0)` which is single device)
+- something in `pre_rotate_query`'s memory config / sharding (DRAM
+  interleaved matmul output) interacting badly with the kernel
+- order-of-operations between paged_update_cache and the next op in
+  the trace (e.g. is there a missing barrier?)
+- a subtle cur_pos read race in trace mode where the kernel reads
+  cur_pos from a CB but the value may not yet be written by an
+  upstream op in the same trace
+
+Next debug step (when resuming): add `DPRINT_MATH(cur_pos_nb)` inside
+the compute kernel and run e2e with DPRINT enabled to verify cur_pos
+values match the expected step number. Profiler/DPRINT cannot coexist,
+so this requires backing out the DeviceZoneScopedN annotations first.
 
 ### Bottleneck diagnosis trail (for posterity)
 
