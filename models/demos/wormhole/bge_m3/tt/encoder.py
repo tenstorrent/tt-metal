@@ -37,7 +37,7 @@ class BgeM3TransformerBlock(LightweightModule):
                 head_dim=args.head_dim,
                 mesh_device=mesh_device,
                 qkv_dtype=dtype,
-                score_dtype=ttnn.bfloat16,
+                score_dtype=_attention_score_dtype(dtype, max_seq_len, max_batch_size),
                 output_dtype=dtype,
                 score_prg_config=None,
                 max_seq_len=max_seq_len,
@@ -94,6 +94,17 @@ class BgeM3TransformerBlock(LightweightModule):
         ttnn.deallocate(mlp_output)
 
         return hidden_states
+
+
+def _attention_score_dtype(
+    dtype: ttnn.DataType,
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+) -> ttnn.DataType:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch == 1:
+        return dtype
+    return ttnn.bfloat16
 
 
 def _build_optional_layer_norm(

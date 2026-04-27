@@ -10,9 +10,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.demos.wormhole.bge_m3.tt.device_kernels import (
     bge_m3_linear_activation_memory_config,
-    bge_m3_matmul_compute_kernel_config,
     bge_m3_matmul_core_grid,
+    bge_m3_mlp_wi_compute_kernel_config,
     bge_m3_mlp_wi_output_memory_config,
+    bge_m3_mlp_wo_compute_kernel_config,
     bge_m3_weight_dram_memory_config,
 )
 
@@ -189,11 +190,11 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         to_set["wo_memcfg"] = act_mem
 
     if config.wi_compute_kernel_cfg is None:
-        to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+        to_set["wi_compute_kernel_cfg"] = bge_m3_mlp_wi_compute_kernel_config(
             mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
         )
     if config.wo_compute_kernel_cfg is None:
-        to_set["wo_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+        to_set["wo_compute_kernel_cfg"] = bge_m3_mlp_wo_compute_kernel_config(
             mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
         )
 
