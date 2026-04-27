@@ -1383,6 +1383,9 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                     mmio_host,
                     probe_dead_channels.size());
             } else {
+                // FIX AP dependency (#42429): terminate_stale_erisc_routers() must run before
+                // configure_fabric() — it quiesces existing ERISC router state that could cause
+                // phantom traffic or handshake confusion during fabric bringup.
                 auto result = terminate_stale_erisc_routers(dev, builder_context);
                 probe_dead_channels = std::move(result.probe_dead_channels);
                 relay_broken = result.relay_broken;

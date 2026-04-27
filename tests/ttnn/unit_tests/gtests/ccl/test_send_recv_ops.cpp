@@ -100,7 +100,10 @@ void test_send_recv_async(
         case tt::tt_metal::DataType::UINT32:
             test_send_recv_async_<uint32_t>(md0, md1, tensor_spec, socket_buffer_type, seed);
             break;
-        default: GTEST_SKIP() << "Unsupported data type: " << tensor_spec.data_type(); break;
+        default:
+            log_info(tt::LogTest, "Skipping test: unsupported data type {}", tensor_spec.data_type());
+            GTEST_SKIP() << "Unsupported data type: " << tensor_spec.data_type();
+            break;
     }
 }
 

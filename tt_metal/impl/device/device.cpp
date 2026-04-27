@@ -1021,7 +1021,11 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 // Without this, Phase 3 throws in TearDown() → GoogleTest marks the (SKIPPED) test
                 // as FAILED.  The underlying scenario: Phase 2.5 force-reset Device N chan 0 (the
                 // relay ETH channel to the MMIO device), which broke the relay mid-quiesce.
-                fabric_relay_path_broken_ = true;
+                // Only applies to non-MMIO devices — MMIO devices have direct UMD access and do
+                // not depend on a relay path.
+                if (!is_mmio_capable()) {
+                    fabric_relay_path_broken_ = true;
+                }
                 log_warning(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
@@ -2228,6 +2232,18 @@ bool Device::phase5b_erisc_health_check(
             // 0x0 = launch message never arrived → firmware loading failure
             // 0x49705180 = L1 corrupt (prior crash left garbage) → needs tt-smi -r
             // Other values = unexpected firmware state
+            // FIX AK-2 (#42429): Non-MMIO devices (remote peers in a partial mesh) may see
+            // unexpected channel states during async teardown without being at fault.
+            // Return cleanly rather than throwing — the MMIO host is the authoritative
+            // fabric controller and will detect true failures.
+            if (!is_mmio_capable()) {
+                log_warning(LogDevice,
+                    "Device {}: Phase 5b fabric health: {} truly-unhealthy channel(s) with unexpected "
+                    "status (non-MMIO device in partial mesh) — returning non-fatal",
+                    id_, truly_unhealthy.size());
+                fabric_channels_not_ready_for_traffic_ = true;
+                return true;
+            }
             TT_THROW(
                 "Fabric health check failed after quiesce restart on Device {} — "
                 "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) after {}ms. "

@@ -344,7 +344,7 @@ private:
 
     // fabric_relay_path_broken_ — state machine:
     //
-    //   CLEAR (false)  ──[SET sites (5)]──►  SET (true)
+    //   CLEAR (false)  ──[SET sites (6)]──►  SET (true)
     //
     //   SET site 1 (quiesce_and_restart_fabric_workers, ENTRY snapshot deadline):
     //     ENTRY snapshot timed out reading all-channel statuses before quiesce begins.
@@ -364,6 +364,10 @@ private:
     //
     //   SET site 5 (wait_for_fabric_workers_ready, Phase 5b relay read exception):
     //     Phase 5b health-check relay read threw; relay ERISC confirmed non-functional.
+    //
+    //   SET site 6 (FIX AN — device.cpp, Phase 2.5 catch in quiesce):
+    //     Phase 2.5 relay read threw during quiesce; only on !is_mmio_capable() devices
+    //     (relay-dependent reads only).  Added by FIX AN (#42429).
     //
     //   CLEAR site (configure_fabric, top of function):
     //     Fresh fabric firmware is loaded on all ETH channels.  Relay is restored.

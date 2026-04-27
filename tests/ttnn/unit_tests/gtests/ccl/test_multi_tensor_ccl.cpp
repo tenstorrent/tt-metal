@@ -46,6 +46,10 @@ class MultiCQFabricMeshDevice2x4Fixture : public MultiCQMeshDevice2x4Fixture {
 protected:
     MultiCQFabricMeshDevice2x4Fixture() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D); }
     void TearDown() override {
+        // Invariant (#42429): quiesce() must precede configure_fabric() on the next init — see FIX AK/AN.
+        // MultiCQMeshDevice2x4Fixture::TearDown() (via MeshDeviceFixtureBase::TearDown()) calls
+        // quiesce_devices() and mesh_device_->close() before returning.  SetFabricConfig(DISABLED)
+        // runs after that, satisfying the quiesce-before-fabric-reconfigure ordering requirement.
         MultiCQMeshDevice2x4Fixture::TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
