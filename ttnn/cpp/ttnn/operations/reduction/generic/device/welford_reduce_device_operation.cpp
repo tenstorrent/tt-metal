@@ -17,7 +17,7 @@ WelfordReduceDeviceOperation::program_factory_t WelfordReduceDeviceOperation::se
 }
 
 void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to Std/Var reductions need to be on device! Got storage type: {}",
@@ -33,6 +33,8 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.logical_shape().rank() >= 2,
         "Welford reduce only supports tensors with at least 2 dimensions, got rank: {}",
         tensor_args.logical_shape().rank());
+    validate_reduce_sharded_buffer_types(
+        tensor_args.memory_config(), operation_attributes.output_mem_config, "Std/Var reduction");
 }
 
 WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::compute_output_specs(
@@ -65,37 +67,12 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
         output_shape[-1] = 1;
     }
 
-    TensorSpec tensor_spec(
+    return build_reduce_output_tensor_spec(
         output_shape,
-        tt::tt_metal::TensorLayout(
-            operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(Layout::TILE),
-            MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
-
-    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-        }
-        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            return tensor_spec.height_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-        }
-
-        auto nd_shard_spec_copy = nd_shard_spec;
-        if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::W ||
-            operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
-            nd_shard_spec_copy.shard_shape[-1] = 1;
-        }
-        if ((operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::H ||
-             operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-            nd_shard_spec_copy.shard_shape.rank() > 1) {
-            nd_shard_spec_copy.shard_shape[-2] = 1;
-        }
-        return tensor_spec.sharded(
-            std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
-    }
-
-    return tensor_spec;
+        operation_attributes.output_dtype,
+        operation_attributes.output_mem_config,
+        tensor_args.memory_config(),
+        operation_attributes.reduce_dim);
 }
 
 WelfordReduceDeviceOperation::tensor_return_value_t WelfordReduceDeviceOperation::create_output_tensors(

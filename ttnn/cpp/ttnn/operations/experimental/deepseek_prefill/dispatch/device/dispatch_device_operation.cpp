@@ -14,9 +14,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Validate input tensor layouts are ROW_MAJOR
-    TT_FATAL(
-        tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
     TT_FATAL(
         tensor_args.weights_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Weights tensor must be ROW_MAJOR layout");
@@ -142,7 +139,8 @@ prefill_dispatch(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    bool use_l1_small_for_semaphores) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -156,7 +154,8 @@ prefill_dispatch(
             .num_links = num_links,
             .topology = topology,
             .output_mem_config = memory_config,
-            .worker_core_range_set = worker_core_range_set},
+            .worker_core_range_set = worker_core_range_set,
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

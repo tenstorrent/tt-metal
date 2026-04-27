@@ -16,15 +16,14 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     extract_mesh_config,
     get_dispatch_input_mesh_mapper,
     get_ep_mesh_composer,
     get_gate_outputs,
-    get_max_payload_size,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -88,161 +87,23 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
     [
-        (32, 7168, 16, 4, 2),
+        pytest.param(32, 7168, 16, 4, 2, True, id="pcc"),
+        pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (2, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2-1link",
-        ),
-        pytest.param(
-            (2, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2-2link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4-1link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4-2link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-            id="ring-4-1link",
-        ),
-        pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-            id="ring-4-2link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-1link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-2link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="ring-8-1link",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            2,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="ring-8-2link",
-        ),
-        pytest.param(
-            (2, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-4x2"),
-            id="mesh-2x2",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-            id="mesh-2x4",
-        ),
-    ],
+    ALL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
@@ -254,11 +115,16 @@ def test_ttnn_dispatch(
     num_links,
     topology,
     use_predictable_data,
+    input_layout,
     verbose,
+    run_pcc_check,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
-    torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
+    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
+        pytest.skip("8-chip perf only runs with random data")
+
+    torch.manual_seed(42)
 
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
@@ -308,7 +174,7 @@ def test_ttnn_dispatch(
     mesh_mapper_replicated = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
     tt_x = ttnn.from_torch(
-        x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        x, mesh_mapper=mesh_mapper_replicated, layout=input_layout, device=mesh_device, dtype=ttnn.bfloat16
     )
 
     tt_weights = ttnn.from_torch(
@@ -383,6 +249,11 @@ def test_ttnn_dispatch(
     tt_dispatched, tt_metadata = tt_dispatch_module(
         tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
+
+    if not run_pcc_check:
+        ttnn.synchronize_device(mesh_device)
+        logger.debug("Skipping PCC validation (run_pcc_check=False)")
+        return
 
     # Run torch reference for all EP ranks at once
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)

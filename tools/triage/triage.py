@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,6 +23,7 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
+    --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
 
 Description:
@@ -84,6 +85,26 @@ from ttexalens.elf import ElfVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
+
+
+def _raise_open_file_limit(desired: int = 65536) -> None:
+    """
+    Raise the open file limit for the current process to the desired value if possible.
+    This is necessary to avoid hitting the open file limit when processing many ELF files with the elf cache enabled.
+    If the file limit is already at or above the desired value, this function does nothing.
+    """
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        new_soft = desired if hard == resource.RLIM_INFINITY else min(desired, hard)
+        if new_soft <= soft:
+            return
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except (ImportError, OSError, ValueError) as e:
+        utils.WARN(
+            f"Failed to raise open file limit: {e}. This may cause issues when processing many ELF files. Consider increasing the limit manually (ulimit -n {desired})."
+        )
 
 
 class ScriptPriority(Enum):
@@ -424,6 +445,7 @@ def create_progress() -> Progress:
 
 def process_arguments(args: ScriptArguments) -> None:
     init_console_and_verbosity(args)
+    _raise_open_file_limit()
 
 
 def parse_arguments(
@@ -993,6 +1015,10 @@ def main():
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
+
+    from elfs_cache import run as get_elfs_cache
+
+    get_elfs_cache(args, context).log_stats()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

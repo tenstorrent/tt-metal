@@ -9,8 +9,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_gate_weights, get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -24,7 +26,7 @@ def cleanup_cache():
         shutil.rmtree(CACHE_DIR)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     yield
-    # Keep cache for debugging if test fails
+    report_and_clear()
 
 
 def create_gate_input(config, mesh_device):
@@ -111,10 +113,13 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     output1 = to_torch_gate(scores1)
 
     # === Path 2: Cold Cache (build + load) ===
+    init_checker(CACHE_DIR)
     assert not TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate"), "Cache should be empty before build"
 
     # Build cache
     logger.info(f"Building cache to {CACHE_DIR}")
+    profiler.clear()
+    profiler.start("build_cache")
     try:
         TtMoEGatePrefill.build_ttnn_cache(
             torch_weight=gate_w,
@@ -128,10 +133,13 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     except Exception as e:
         logger.error(f"Cache building failed: {e}")
         raise
+    profiler.end("build_cache")
 
+    init_checker(CACHE_DIR)
     assert TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate"), "Cache should be complete after build"
 
     # Load from cold cache
+    profiler.start("cold_load")
     gate_cold = TtMoEGatePrefill(
         config,
         mesh_device,
@@ -142,10 +150,12 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         weight_cache_path=CACHE_DIR,
         cache_name_prefix="gate",
     )
+    profiler.end("cold_load")
     scores2, indices2, logits2, offsets2, counts2 = gate_cold(x)
     output2 = to_torch_gate(scores2)
 
     # === Path 3: Warm Cache (reuse existing cache) ===
+    profiler.start("warm_load")
     gate_warm = TtMoEGatePrefill(
         config,
         mesh_device,
@@ -156,6 +166,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         weight_cache_path=CACHE_DIR,
         cache_name_prefix="gate",
     )
+    profiler.end("warm_load")
     scores3, indices3, logits3, offsets3, counts3 = gate_warm(x)
     output3 = to_torch_gate(scores3)
 
@@ -166,6 +177,9 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     logger.info(f"Gate Cache Test ({gate_mode}):")
     logger.info(f"  Weights vs Cold Cache PCC: {pcc_cold}")
     logger.info(f"  Weights vs Warm Cache PCC: {pcc_warm}")
+    logger.info(f"  build_cache: {profiler.get('build_cache')*1000:.1f} ms")
+    logger.info(f"  cold_load:   {profiler.get('cold_load')*1000:.1f} ms")
+    logger.info(f"  warm_load:   {profiler.get('warm_load')*1000:.1f} ms")
 
     assert passed_cold, f"Cold cache mismatch ({gate_mode}): PCC={pcc_cold}"
     assert passed_warm, f"Warm cache mismatch ({gate_mode}): PCC={pcc_warm}"

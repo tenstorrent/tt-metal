@@ -9,14 +9,12 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
@@ -43,6 +41,11 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
 
 blackhole:
+  # UINT32 tiled concat crash — segfault in ttsim for 4D UINT32 tensors on BH.
+  # Skipping full test function because parametrized ID contains parens/brackets
+  # that break the skip-list shell interpolation.
+  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
+
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py

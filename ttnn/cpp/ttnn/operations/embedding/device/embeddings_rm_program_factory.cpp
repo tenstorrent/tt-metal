@@ -89,16 +89,33 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
+
+    constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding CB
+    uint32_t chunk_size;
+    uint32_t num_chunks;
+    uint32_t last_chunk_size;
+    bool use_chunked = !output_sharded && rounded_weight_page_size > max_l1_budget_bytes;
+    if (use_chunked) {
+        chunk_size = (max_l1_budget_bytes / alignment) * alignment;
+        chunk_size = std::max(chunk_size, alignment);
+        num_chunks = (rounded_weight_page_size + chunk_size - 1) / chunk_size;
+        last_chunk_size = rounded_weight_page_size - (num_chunks - 1) * chunk_size;
+    } else {
+        chunk_size = rounded_weight_page_size;
+        num_chunks = 1;
+        last_chunk_size = rounded_weight_page_size;
+    }
+
     uint32_t out_cb_size;
     if (output_sharded) {
         out_cb_size = output.buffer()->aligned_size_per_bank();
     } else {
         uint32_t buffering_size = (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1) ? 2 : 1;
-        out_cb_size = buffering_size * rounded_weight_page_size;
+        out_cb_size = buffering_size * chunk_size;
     }
     tt::tt_metal::CircularBufferConfig cb_out_config =
         tt::tt_metal::CircularBufferConfig(out_cb_size, {{out_cb_index, weights_cb_data_format}})
-            .set_page_size(out_cb_index, rounded_weight_page_size);
+            .set_page_size(out_cb_index, chunk_size);
     if (output_sharded) {
         cb_out_config.set_globally_allocated_address(*out_buffer);
     }
@@ -135,7 +152,10 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         (std::uint32_t)input_page_size,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
-        (std::uint32_t)block_height * input_element_size_bytes};
+        (std::uint32_t)block_height * input_element_size_bytes,
+        (std::uint32_t)chunk_size,
+        (std::uint32_t)num_chunks,
+        (std::uint32_t)last_chunk_size};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -155,17 +175,34 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    // Tilized writer
+    // Writer
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
-        tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+        if (use_chunked) {
+            std::vector<uint32_t> writer_compile_time_args = {
+                (std::uint32_t)out_cb_index,
+                (std::uint32_t)output_page_size,
+                (std::uint32_t)chunk_size,
+                (std::uint32_t)num_chunks,
+                (std::uint32_t)last_chunk_size};
+            tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
-        writer_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
-            all_cores,
-            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            writer_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_rm_writer_chunked.cpp",
+                all_cores,
+                tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        } else {
+            std::vector<uint32_t> writer_compile_time_args = {
+                (std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
+            tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+
+            writer_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+                all_cores,
+                tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        }
     }
 
     uint32_t input_offset = 0;
@@ -182,8 +219,17 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     if (embeddings_type == EmbeddingsType::PADDED) {
         reader_runtime_args.push_back(pad_token.value());
     }
-    std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+    std::vector<uint32_t> writer_runtime_args;
+    if (use_chunked) {
+        writer_runtime_args = {
+            (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
+    } else {
+        writer_runtime_args = {
+            (std::uint32_t)output.buffer()->address(),
+            (std::uint32_t)output_page_size,
+            (std::uint32_t)0,
+            (std::uint32_t)0};
+    }
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -202,8 +248,13 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
         // Writer
         if (!output_sharded) {
-            writer_runtime_args[2] = local_num_blocks;
-            writer_runtime_args[3] = input_offset;
+            if (use_chunked) {
+                writer_runtime_args[1] = local_num_blocks;
+                writer_runtime_args[2] = input_offset;
+            } else {
+                writer_runtime_args[2] = local_num_blocks;
+                writer_runtime_args[3] = input_offset;
+            }
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
