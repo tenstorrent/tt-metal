@@ -184,6 +184,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
         enable_encoder_trace=True,
+        use_2cq=True,
     )
 
     def _model_pipeline(
