@@ -212,7 +212,7 @@
     wh_n150:
       timeout: 15
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-E4B unit tests (N150)
@@ -224,7 +224,7 @@
     wh_n150:
       timeout: 20
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-E4B unit tests (N300)
@@ -236,7 +236,7 @@
     wh_n300:
       timeout: 20
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-26B-A4B unit tests (T3K)
@@ -248,7 +248,7 @@
     wh_llmbox_perf:
       timeout: 25
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-31B unit tests (T3K)
@@ -260,7 +260,7 @@
     wh_llmbox_perf:
       timeout: 25
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Shallow UNet unit tests

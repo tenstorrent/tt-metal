@@ -314,7 +314,7 @@
     wh_n150:
       timeout: 20
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-E4B e2e tests (N150)
@@ -326,7 +326,7 @@
     wh_n150:
       timeout: 25
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-E4B e2e tests (N300)
@@ -338,7 +338,7 @@
     wh_n300:
       timeout: 25
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-26B-A4B e2e tests (T3K)
@@ -350,7 +350,7 @@
     wh_llmbox_perf:
       timeout: 30
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-31B e2e tests (T3K)
@@ -362,7 +362,7 @@
     wh_llmbox_perf:
       timeout: 30
       tier: 2
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 # ── Mistral / Mixtral ──────────────────────────────────────────────
