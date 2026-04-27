@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 import ttnn
@@ -38,11 +40,11 @@ class LlamaCompletionCtx:
     max_tokens_to_complete: int
     temperature: float
     completions_per_prompt: int = 1
-    _tokenizer: object = None
-    _pad_token: int = None
+    _tokenizer: Any = None
+    _pad_token: Optional[int] = None
 
 
-def deallocate_tensors(tensors) -> None:
+def deallocate_tensors(tensors: Any) -> None:
     if tensors is None:
         return
     if not isinstance(tensors, (list, tuple)):
@@ -56,7 +58,7 @@ def deallocate_tensors(tensors) -> None:
             ttnn.deallocate(t, force=True)
 
 
-def load_checkpoint(model, checkpoint_path, dp_mapper=None):
+def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
     from safetensors.numpy import load_file
     import ml_dtypes
 
@@ -84,33 +86,7 @@ def load_checkpoint(model, checkpoint_path, dp_mapper=None):
             print(f"  - {n}")
 
 
-def _get_dp_mapper():
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    device = autograd_ctx.get_device()
-    if device.get_num_devices() > 1:
-        return ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
-    return None
-
-
-def _get_dp_composer():
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    device = autograd_ctx.get_device()
-    if device.get_num_devices() > 1:
-        return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-    return None
-
-
-def _get_num_devices():
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    device = autograd_ctx.get_device()
-    return device.get_num_devices()
-
-
-def _get_mesh_device():
-    return ttml.autograd.AutoContext.get_instance().get_device()
-
-
-def _async_read_to_host(tensors, mesh_device):
+def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
     """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
 
     Returns ``(host_tensors, event)``. The caller must call
@@ -153,13 +129,22 @@ class LlamaGRPOCompleter(GRPOCompleter):
         transformer_config: TransformerConfig,
         device_config: DeviceConfig,
         model_source: str,
-    ):
+    ) -> None:
         tf_config = transformer_config
         dev_config = device_config
 
         if dev_config.total_devices() > 1:
             ttml.core.distributed.enable_fabric(dev_config.total_devices())
-        ttml.autograd.AutoContext.get_instance().open_device(dev_config.mesh_shape, dev_config.device_ids)
+        autograd_ctx = ttml.autograd.AutoContext.get_instance()
+        autograd_ctx.open_device(dev_config.mesh_shape, dev_config.device_ids)
+
+        # Cache the device + parallelism state on ``self`` rather than going
+        # through ``AutoContext`` on every tensor upload. The completer (and
+        # the trainer that drives it) only handles single-device or DDP today;
+        # tensor parallelism is intentionally not supported here.
+        mesh_device: Any = autograd_ctx.get_device()
+        self._mesh_device: Any = mesh_device
+        self._num_devices: int = mesh_device.get_num_devices()
 
         tokenizer = AutoTokenizer.from_pretrained(model_source)
         tf_config.vocab_size = len(tokenizer)
@@ -195,17 +180,30 @@ class LlamaGRPOCompleter(GRPOCompleter):
         tt_model = LlamaCompositeKV(llama_cfg)
 
         if dev_config.enable_ddp:
-            autograd_ctx = ttml.autograd.AutoContext.get_instance()
             autograd_ctx.initialize_parallelism_context(
                 ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
             )
+
+        # Resolve DDP state once after the parallelism context is (maybe)
+        # initialised so callers can use the cached mapper/composer/flags
+        # without re-querying ``AutoContext``.
+        self._ddp_enabled: bool = (
+            autograd_ctx.is_parallelism_context_initialized()
+            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
+        )
+        self._dp_mapper: Any = (
+            ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if self._ddp_enabled else None
+        )
+        self._dp_composer: Any = (
+            ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if self._ddp_enabled else None
+        )
 
         local_safetensors = os.path.isdir(model_source) and any(
             f == "model.safetensors" for f in os.listdir(model_source)
         )
         if local_safetensors:
             logging.info("Loading model from local safetensors: %s", model_source)
-            load_checkpoint(tt_model, model_source, dp_mapper=_get_dp_mapper())
+            load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
         else:
             logging.info("Downloading model from HuggingFace: %s", model_source)
             model_repo_path = snapshot_download(
@@ -222,15 +220,15 @@ class LlamaGRPOCompleter(GRPOCompleter):
         self._model = tt_model
         self.transformer_config = tf_config
 
-        self._kv_cache = None
+        self._kv_cache: Any = None
         self._kv_cache_B: int = 0
 
     @property
-    def tokenizer(self):
+    def tokenizer(self) -> Any:
         return self._ctx._tokenizer
 
     @property
-    def model(self):
+    def model(self) -> Any:
         """The underlying tt model."""
         return self._model
 
@@ -269,7 +267,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         B = len(completions)
         pad_token = self._ctx._pad_token
 
-        total_devices = _get_num_devices()
+        total_devices = self._num_devices
         assert B % total_devices == 0
         B_local = B // total_devices
 
@@ -309,7 +307,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         targets_pad[:, :T] = targets_np
 
         targets_tt = ttml.autograd.Tensor.from_numpy(
-            targets_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, _get_dp_mapper()
+            targets_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
         )
 
         nlog = ttml.ops.loss.cross_entropy_loss(logits, targets_tt, ttml.ops.ReduceType.NONE)
@@ -319,7 +317,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         loss_mask_pad[:, :T] = loss_mask_np
 
         loss_mask_tt = ttml.autograd.Tensor.from_numpy(
-            loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, _get_dp_mapper()
+            loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, self._dp_mapper
         )
 
         return nlog, loss_mask_tt
@@ -340,7 +338,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         padded = np.full((B, padded_len), self._ctx._pad_token, dtype=np.uint32)
         padded[:, : tokens_np.shape[1]] = tokens_np
         return ttml.autograd.Tensor.from_numpy(
-            padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, _get_dp_mapper()
+            padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
         )
 
     def _create_causal_mask(
@@ -362,7 +360,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         mask_4d = mask_3d[:, np.newaxis, :, :]
         assert mask_4d.shape == (B, 1, padded_q, padded_w)
 
-        return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, _get_dp_mapper())
+        return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
 
     def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
         logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
@@ -407,7 +405,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         ctx = self._ctx
         assert prompt_tokens_np.shape == (B, N)
         assert len(pad_lengths) == B
-        total_devices = _get_num_devices()
+        total_devices = self._num_devices
         assert B % total_devices == 0
 
         B_local = B // total_devices
@@ -423,21 +421,21 @@ class LlamaGRPOCompleter(GRPOCompleter):
             self.transformer_config.max_sequence_length - N,
         )
 
-        mesh_device = _get_mesh_device()
-        composer = _get_dp_composer()
+        mesh_device = self._mesh_device
+        composer = self._dp_composer
         stop_ids = self._get_stop_ids()
         stop_arr = np.fromiter(stop_ids, dtype=np.int32) if stop_ids else np.empty(0, dtype=np.int32)
 
-        generated_columns: list = []
-        chunk_columns: list = []
-        pending_hosts: list = []
-        pending_event = None
+        generated_columns: List[Any] = []
+        chunk_columns: List[Any] = []
+        pending_hosts: List[Any] = []
+        pending_event: Any = None
         done = np.zeros(B, dtype=bool)
 
-        def to_np(column_list):
+        def to_np(column_list: List[Any]) -> np.ndarray:
             arr = np.empty((B, len(column_list)), dtype=np.int32)
             for j, column in enumerate(column_list):
-                arr[:, j] = column.to_numpy(_get_dp_composer()).reshape(B)
+                arr[:, j] = column.to_numpy(composer).reshape(B)
             return arr
 
         for i in range(tokens_to_complete):

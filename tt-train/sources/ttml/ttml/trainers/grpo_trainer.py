@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict
 import inspect
@@ -10,7 +12,7 @@ import logging
 import random
 import time
 from datetime import datetime, timezone
-from typing import List, Callable, Sequence
+from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple
 
 import os
 import numpy as np
@@ -72,12 +74,12 @@ class GRPOCompleter(ABC):
 
     @property
     @abstractmethod
-    def tokenizer(self):
+    def tokenizer(self) -> Any:
         """The tokenizer used by this completion engine."""
 
     @property
     @abstractmethod
-    def model(self):
+    def model(self) -> Any:
         """The underlying tt model used for forward passes and optimization."""
 
 
@@ -115,29 +117,7 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
     return GRPOConfig(**fields)
 
 
-def _get_dp_mapper():
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    device = autograd_ctx.get_device()
-    if device.get_num_devices() > 1:
-        return ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
-    return None
-
-
-def _get_dp_composer():
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    device = autograd_ctx.get_device()
-    if device.get_num_devices() > 1:
-        return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-    return None
-
-
-def _get_num_devices():
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    device = autograd_ctx.get_device()
-    return device.get_num_devices()
-
-
-def _deallocate_tensors(tensors) -> None:
+def _deallocate_tensors(tensors: Any) -> None:
     if tensors is None:
         return
     if not isinstance(tensors, (list, tuple)):
@@ -151,7 +131,12 @@ def _deallocate_tensors(tensors) -> None:
             ttnn.deallocate(t, force=True)
 
 
-def dispatch_reward(reward_func, completions, prompts, batch_columns):
+def dispatch_reward(
+    reward_func: Callable[..., List[float]],
+    completions: List[str],
+    prompts: List[str],
+    batch_columns: dict,
+) -> List[float]:
     sig = inspect.signature(reward_func)
     params = sig.parameters
     has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
@@ -165,8 +150,13 @@ def dispatch_reward(reward_func, completions, prompts, batch_columns):
     return reward_func(**call_kwargs)
 
 
-def compute_advantages_ttnn(rewards_np, group_size, mapper, num_devices):
-    """Compute group-relative advantages on device.
+def compute_advantages_ttnn(
+    rewards_np: np.ndarray,
+    group_size: int,
+    mapper: Any,
+    num_devices: int,
+) -> Any:
+    """Compute group-relative advantages on device. Returns a ``ttnn.Tensor``.
 
     Uploads ``rewards_np`` (shape ``[B]`` with ``B = num_groups * group_size``
     and contiguous groups of length ``group_size``) to the device, subtracts
@@ -203,7 +193,7 @@ def iter_batched_completions(
     batch_columns: dict,
     batch_size: int = 32,
     num_generations: int = 1,
-):
+) -> Iterator[Tuple[List[List[int]], List[List[int]], dict, float]]:
     completions_per_prompt = num_generations
     n = len(prompts)
     for start in range(0, n, batch_size):
@@ -223,7 +213,11 @@ def iter_batched_completions(
         yield prompt_batch_expanded, completions_batch, columns_expanded, generation_time_s
 
 
-def iter_micro_batch(prompts, completions, micro_batch_size=16):
+def iter_micro_batch(
+    prompts: List[List[int]],
+    completions: List[List[int]],
+    micro_batch_size: int = 16,
+) -> Iterator[Tuple[List[List[int]], List[List[int]]]]:
     for start in range(0, len(completions), micro_batch_size):
         end = min(start + micro_batch_size, len(completions))
 
@@ -231,15 +225,15 @@ def iter_micro_batch(prompts, completions, micro_batch_size=16):
 
 
 def save_checkpoint(
-    model,
-    step,
-    output_dir,
-    dp_composer=None,
-    tokenizer=None,
-    grpo_config=None,
-    optimizer=None,
-    model_source=None,
-):
+    model: Any,
+    step: int,
+    output_dir: str,
+    dp_composer: Any = None,
+    tokenizer: Any = None,
+    grpo_config: Optional[GRPOConfig] = None,
+    optimizer: Any = None,
+    model_source: Optional[str] = None,
+) -> None:
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
 
@@ -300,21 +294,21 @@ class GRPOTrainer:
     def __init__(
         self,
         completer: GRPOCompleter,
-        dataset,
+        dataset: Any,
         config: GRPOConfig,
-        reward_func: Callable,
+        reward_func: Callable[..., List[float]],
         optimizer_dict: dict,
-        callbacks: list = None,
-        model_source: str = None,
-    ):
+        callbacks: Optional[List[Any]] = None,
+        model_source: Optional[str] = None,
+    ) -> None:
         self.completer = completer
         self.dataset = dataset
         self.config = config
         self.reward_func = reward_func
         self.optimizer_dict = optimizer_dict
-        self.callbacks = callbacks or []
+        self.callbacks: List[Any] = callbacks or []
         self.model_source = model_source
-        self.model = None
+        self.model: Any = None
 
     def _compute_grpo_loss(
         self,
@@ -343,7 +337,7 @@ class GRPOTrainer:
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
         return ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / completions_batch_len)
 
-    def train(self):
+    def train(self) -> None:
         grpo_cfg = self.config
         completer = self.completer
         tt_model = completer.model
@@ -353,6 +347,20 @@ class GRPOTrainer:
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
         base_lr = optimizer.get_lr()
 
+        # Device-parallelism state. The trainer currently only handles either
+        # single-device or DDP; tensor parallelism is not supported here. We
+        # gate the multi-device sharding paths on ``ddp_enabled`` rather than
+        # ``num_devices > 1`` so this assumption is explicit at the call sites.
+        autograd_ctx = ttml.autograd.AutoContext.get_instance()
+        device = autograd_ctx.get_device()
+        num_devices: int = device.get_num_devices()
+        ddp_enabled: bool = (
+            autograd_ctx.is_parallelism_context_initialized()
+            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
+        )
+        dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
+        dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
+
         dataset = self.dataset.select(range(min(grpo_cfg.prompts_to_train, len(self.dataset))))
         prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
         extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
@@ -361,8 +369,8 @@ class GRPOTrainer:
         num_steps = 0
         accum_count = 0
         grad_accum = grpo_cfg.gradient_accumulation_steps
-        accum_rewards = []
-        accum_completion_lens = []
+        accum_rewards: List[np.ndarray] = []
+        accum_completion_lens: List[int] = []
         accum_generation_time_s = 0.0
         step_t0 = time.perf_counter()
 
@@ -385,8 +393,8 @@ class GRPOTrainer:
             advantages_tt = compute_advantages_ttnn(
                 rewards_np,
                 grpo_cfg.num_generations,
-                _get_dp_mapper(),
-                _get_num_devices(),
+                dp_mapper,
+                num_devices,
             )
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
@@ -403,7 +411,6 @@ class GRPOTrainer:
             for mini_epoch in range(grpo_cfg.num_iterations):
                 tt_model.train()
 
-                num_devices = _get_num_devices()
                 for i, (p, c) in enumerate(
                     iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size),
                 ):
@@ -439,7 +446,7 @@ class GRPOTrainer:
                     )
                     optimizer.set_lr(base_lr * warmup_factor)
 
-                    if _get_dp_mapper() is not None:
+                    if ddp_enabled:
                         ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
                     for cb in self.callbacks:
@@ -488,7 +495,7 @@ class GRPOTrainer:
                             tt_model,
                             num_steps,
                             grpo_cfg.output_dir,
-                            dp_composer=_get_dp_composer(),
+                            dp_composer=dp_composer,
                             tokenizer=tokenizer,
                             grpo_config=grpo_cfg,
                             optimizer=optimizer,
