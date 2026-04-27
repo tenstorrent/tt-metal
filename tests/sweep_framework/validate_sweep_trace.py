@@ -220,6 +220,41 @@ def _normalize_ccl_positional_args(args: dict, op_name: str) -> dict:
     return result
 
 
+def _normalize_paged_sdpa_args(args: dict, op_name: str) -> dict:
+    """Remap positional args for paged SDPA ops whose API changed since the master trace.
+
+    The master trace for paged_scaled_dot_product_attention_decode recorded
+    ``page_table_tensor`` as a named keyword argument.  The current binding
+    takes it as positional ``arg3``.  This function remaps positional args to
+    their original named-keyword form so the comparison matches.
+
+    Additionally, ``attention_sink`` and ``is_causal`` may be present in only
+    one side (master or sweep) depending on API version, and ``memory_config``
+    may be absent from the sweep when the default is used.  These keys are
+    stripped so they don't cause false diffs.
+    """
+    _PAGED_SDPA_OPS = {
+        "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+    }
+    if op_name not in _PAGED_SDPA_OPS:
+        return args
+
+    result = dict(args)
+
+    # Remap arg3 → page_table_tensor (if page_table_tensor is not already present)
+    if "arg3" in result and "page_table_tensor" not in result:
+        result["page_table_tensor"] = result.pop("arg3")
+
+    # Strip keys that may differ between API versions.
+    # - attention_sink: present in newer API, absent in older traces
+    # - is_causal: present in sweep but absent in master (default value)
+    # - memory_config: master serializes the default DRAM config, sweep omits it
+    for key in ("attention_sink", "is_causal", "memory_config"):
+        result.pop(key, None)
+
+    return result
+
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -229,10 +264,14 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """
     if isinstance(obj, dict):
         result = {}
-        # Detect if this dict is a tensor descriptor (parent is argN)
+        # Detect if this dict is a tensor descriptor.  Tensor descriptors
+        # appear under positional arg keys (argN) *and* named tensor kwargs
+        # (output_tensor, weight, bias, page_table, cur_pos_tensor, etc.).
+        # The most reliable signal is the presence of "type": "ttnn.Tensor".
         _is_tensor_desc = bool(
             _parent_key and (
-                _parent_key.startswith("arg") and _parent_key[3:].isdigit()
+                (_parent_key.startswith("arg") and _parent_key[3:].isdigit())
+                or obj.get("type") == "ttnn.Tensor"
             )
         )
         for k, v in sorted(obj.items()):
@@ -464,6 +503,10 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             # The master trace was recorded with dim as a keyword arg, but the
             # current API takes it positionally (after persistent_buf and semaphore).
             sweep_args = _normalize_ccl_positional_args(sweep_args, op_name)
+
+            # Paged SDPA ops: remap positional args and strip API-version-specific keys.
+            sweep_args = _normalize_paged_sdpa_args(sweep_args, op_name)
+            master_args = _normalize_paged_sdpa_args(master_args, op_name)
 
             norm_master = normalize(master_args)
             norm_sweep = normalize(sweep_args)
