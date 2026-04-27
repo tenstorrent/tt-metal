@@ -46,6 +46,7 @@ import logging
 import os
 import re
 import struct
+import threading
 import time
 import uuid
 from base64 import urlsafe_b64decode, urlsafe_b64encode
@@ -522,6 +523,42 @@ def _save_state(state: dict):
 _state: dict = _load_state()
 
 
+def _sync_state_from_manager() -> None:
+    """Propagate status changes from manager cache into _state and persist if dirty."""
+    dirty = False
+    for dash_id, meta in _state.items():
+        slurm_id = meta.get("slurm_job_id")
+        if not slurm_id:
+            continue
+        job_info = manager._jobs_cache.get(slurm_id)
+        if not job_info or job_info.status == JobStatus.UNKNOWN.value:
+            continue
+        new_status = _slurm_status_to_dashboard(job_info.status)
+        old_status = meta.get("last_known_status") or meta.get("status", "queued")
+        if new_status != old_status:
+            _obs_log_status_transition(dash_id, old_status, new_status, meta)
+            meta["last_known_status"] = new_status
+            dirty = True
+    if dirty:
+        _save_state(_state)
+
+
+def _start_background_sync(interval: int = 5) -> None:
+    def _loop():
+        while True:
+            time.sleep(interval)
+            try:
+                manager.update_job_statuses()
+                _sync_state_from_manager()
+            except Exception:
+                pass
+
+    threading.Thread(target=_loop, daemon=True, name="status-sync").start()
+
+
+_start_background_sync()
+
+
 def _slurm_status_to_dashboard(status: str) -> str:
     mapping = {
         JobStatus.PENDING.value: "queued",
@@ -535,36 +572,19 @@ def _slurm_status_to_dashboard(status: str) -> str:
 
 
 def _build_job_response(dash_id: str, meta: dict) -> dict:
-    """Construct the Job JSON response from stored metadata + live SLURM status."""
+    """Construct the Job JSON response from stored metadata + cached SLURM status."""
     slurm_id = meta.get("slurm_job_id")
     slurm_info = manager.get_job(slurm_id) if slurm_id else None
 
-    # Always query live SLURM status so we detect externally-cancelled jobs
-    # (scancel from CLI, dashboard, etc.) immediately
-    live_status_str = None
-    if slurm_id:
-        live_status = manager.get_job_status(slurm_id)
-        if live_status != JobStatus.UNKNOWN:
-            live_status_str = _slurm_status_to_dashboard(live_status.value)
-            old_status = meta.get("last_known_status") or meta.get("status", "queued")
-            if live_status_str != old_status:
-                meta["last_known_status"] = live_status_str
-                _save_state(_state)
-
-    old_status = meta.get("last_known_status") or meta.get("status", "queued")
-
     if slurm_info:
-        # Prefer live SLURM status over cache (catches external cancels).
-        # When sacct is disabled, live_status is UNKNOWN for finished jobs - trust stored
-        # terminal state (cancelled/completed/failed) from manual updates or dashboard cancel.
-        if live_status_str:
-            status = live_status_str
+        if slurm_info.status != JobStatus.UNKNOWN.value:
+            status = _slurm_status_to_dashboard(slurm_info.status)
         elif meta.get("last_known_status") in ("cancelled", "completed", "failed"):
             status = meta["last_known_status"]
         elif meta.get("status") in ("cancelled", "completed", "failed"):
             status = meta["status"]
         else:
-            status = _slurm_status_to_dashboard(slurm_info.status)
+            status = "queued"
         started_at = slurm_info.start_time
         completed_at = (
             slurm_info.end_time
@@ -577,15 +597,8 @@ def _build_job_response(dash_id: str, meta: dict) -> dict:
             else None
         )
         output_dir = slurm_info.output_dir
-        # Observability: log status transitions and persist last_known_status
-        if status != old_status:
-            _obs_log_status_transition(dash_id, old_status, status, meta)
-            meta["last_known_status"] = status
-            _save_state(_state)
     else:
-        # When no slurm_info: prefer live status, then last_known_status (often more
-        # accurate than status for completed/cancelled jobs), then status
-        status = live_status_str if live_status_str else meta.get("last_known_status") or meta.get("status", "queued")
+        status = meta.get("last_known_status") or meta.get("status", "queued")
         started_at = None
         completed_at = None
         output_dir = meta.get("output_dir", "")

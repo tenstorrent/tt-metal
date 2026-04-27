@@ -12,6 +12,8 @@ import os
 import re
 import subprocess
 import shutil
+import threading
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -210,6 +212,7 @@ class JobManager:
 
         self.jobs_base_dir.mkdir(parents=True, exist_ok=True)
         self._jobs_cache: Dict[str, JobInfo] = {}
+        self._bg_thread: threading.Thread | None = None
         self._load_existing_jobs()
 
     def _load_existing_jobs(self) -> None:
@@ -721,13 +724,26 @@ class JobManager:
 
                 self._save_job_status(job_info)
 
+    def start_background_refresh(self, interval: int = 5) -> None:
+        """Start a daemon thread that refreshes all job statuses on a fixed interval."""
+
+        def _loop():
+            while True:
+                time.sleep(interval)
+                try:
+                    self.update_job_statuses()
+                except Exception:
+                    pass
+
+        self._bg_thread = threading.Thread(target=_loop, daemon=True, name="slurm-status-refresh")
+        self._bg_thread.start()
+
     def get_all_jobs(self) -> List[JobInfo]:
         """Get all tracked jobs.
 
         Returns:
             List of JobInfo objects
         """
-        self.update_job_statuses()
         return list(self._jobs_cache.values())
 
     def get_job(self, job_id: str) -> Optional[JobInfo]:
@@ -739,10 +755,7 @@ class JobManager:
         Returns:
             JobInfo if found, None otherwise
         """
-        if job_id in self._jobs_cache:
-            self.update_job_statuses()
-            return self._jobs_cache.get(job_id)
-        return None
+        return self._jobs_cache.get(job_id)
 
     def get_job_output_file(self, job_id: str, filename: str) -> Optional[Path]:
         """Get path to a job's output file.
