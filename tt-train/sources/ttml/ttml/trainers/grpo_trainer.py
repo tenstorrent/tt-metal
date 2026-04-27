@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import random
+import time
 from datetime import datetime, timezone
 from typing import List, Callable, Sequence
 
@@ -164,13 +165,36 @@ def dispatch_reward(reward_func, completions, prompts, batch_columns):
     return reward_func(**call_kwargs)
 
 
-def compute_advantages(rewards_np, group_size):
-    advantages_np = np.zeros_like(rewards_np)
-    for start in range(0, len(rewards_np), group_size):
-        end = min(start + group_size, len(rewards_np))
-        rg = rewards_np[start:end]
-        advantages_np[start:end] = rg - float(rg.mean())
-    return advantages_np
+def compute_advantages_ttnn(rewards_np, group_size, mapper, num_devices):
+    """Compute group-relative advantages on device.
+
+    Uploads ``rewards_np`` (shape ``[B]`` with ``B = num_groups * group_size``
+    and contiguous groups of length ``group_size``) to the device, subtracts
+    the per-group mean, and returns a ``ttnn.Tensor`` of global shape
+    ``[B, 1]`` (sharded along axis 0 across the mesh by ``mapper``).
+
+    Each device must hold whole groups, which requires
+    ``num_groups % num_devices == 0``. Group means are then a purely local
+    reduction along the last axis of a ``[num_groups, 1, 1, group_size]``
+    tensor, so no cross-device communication is needed.
+    """
+    B = rewards_np.shape[0]
+    assert B % group_size == 0, "rewards length must be divisible by group_size"
+    num_groups = B // group_size
+    assert num_groups % num_devices == 0, "num_groups must be divisible by num_devices so groups don't straddle devices"
+
+    rewards_grouped = rewards_np.reshape(num_groups, 1, 1, group_size).astype(np.float32)
+    rewards_ttml = ttml.autograd.Tensor.from_numpy(rewards_grouped, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+    rewards_val = rewards_ttml.get_value()
+
+    group_mean = ttnn.mean(rewards_val, dim=-1, keepdim=True)  # [num_groups, 1, 1, 1]
+    advantages_4d = ttnn.subtract(rewards_val, group_mean)  # [num_groups, 1, 1, G]
+    ttnn.deallocate(group_mean, force=True)
+    ttnn.deallocate(rewards_val, force=True)
+
+    B_local = B // num_devices
+    advantages_rm = ttnn.to_layout(advantages_4d, ttnn.Layout.ROW_MAJOR)
+    return ttnn.reshape(advantages_rm, [B_local, 1])
 
 
 def iter_batched_completions(
@@ -186,7 +210,9 @@ def iter_batched_completions(
         end = min(start + batch_size, n)
         prompt_batch = list(prompts[start:end])
 
+        gen_t0 = time.perf_counter()
         completions_batch = completer.generate(prompt_batch)
+        generation_time_s = time.perf_counter() - gen_t0
 
         prompt_batch_expanded = [item for item in prompt_batch for _ in range(completions_per_prompt)]
         columns_expanded = {
@@ -194,7 +220,7 @@ def iter_batched_completions(
         }
 
         assert len(prompt_batch_expanded) == len(completions_batch)
-        yield prompt_batch_expanded, completions_batch, columns_expanded
+        yield prompt_batch_expanded, completions_batch, columns_expanded, generation_time_s
 
 
 def iter_micro_batch(prompts, completions, micro_batch_size=16):
@@ -295,7 +321,7 @@ class GRPOTrainer:
         nlog_probs_old: ttml.autograd.Tensor,
         nlog_probs_new: ttml.autograd.Tensor,
         mask: ttml.autograd.Tensor,
-        adv_tt: ttml.autograd.Tensor,
+        adv_ttml: ttml.autograd.Tensor,
         completions_batch_len: int,
         eps: float,
     ) -> ttml.autograd.Tensor:
@@ -304,8 +330,8 @@ class GRPOTrainer:
         ratio = ttml.ops.unary.exp(nlog_probs_old - nlog_probs_new)
         clipped_ratio = ttml.ops.unary.clip(ratio, 1.0 - eps, 1.0 + eps)
 
-        surr1 = ratio * adv_tt
-        surr2 = clipped_ratio * adv_tt
+        surr1 = ratio * adv_ttml
+        surr2 = clipped_ratio * adv_ttml
         surr = ttml.ops.binary.min(surr1, surr2)
 
         # Per-completion normalised weight: w[i,t] = mask[i,t] / max(sum_t(mask[i,t]), 1)
@@ -337,23 +363,31 @@ class GRPOTrainer:
         grad_accum = grpo_cfg.gradient_accumulation_steps
         accum_rewards = []
         accum_completion_lens = []
+        accum_generation_time_s = 0.0
+        step_t0 = time.perf_counter()
 
         optimizer.zero_grad()
 
         for cb in self.callbacks:
             cb.on_train_begin(self)
 
-        for prompts_batch, completions_batch, dataset_columns_dict in iter_batched_completions(
+        for prompts_batch, completions_batch, dataset_columns_dict, generation_time_s in iter_batched_completions(
             completer, prompts, extra_columns, grpo_cfg.batch_size, grpo_cfg.num_generations
         ):
             num_batches += 1
+            accum_generation_time_s += generation_time_s
 
             completions_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
             prompts_strs = [tokenizer.decode(p) for p in prompts_batch]
             rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
             rewards_np = np.array(rewards, dtype=np.float32)
 
-            advantages_np = compute_advantages(rewards_np, grpo_cfg.num_generations)
+            advantages_tt = compute_advantages_ttnn(
+                rewards_np,
+                grpo_cfg.num_generations,
+                _get_dp_mapper(),
+                _get_num_devices(),
+            )
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
 
@@ -369,19 +403,16 @@ class GRPOTrainer:
             for mini_epoch in range(grpo_cfg.num_iterations):
                 tt_model.train()
 
+                num_devices = _get_num_devices()
                 for i, (p, c) in enumerate(
                     iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size),
                 ):
                     B = len(c)
-                    adv_slice = advantages_np[i * grpo_cfg.micro_batch_size : i * grpo_cfg.micro_batch_size + B]
+                    start_local = (i * grpo_cfg.micro_batch_size) // num_devices
+                    end_local = start_local + B // num_devices
 
-                    adv_tt = ttml.autograd.Tensor.from_numpy(
-                        adv_slice.reshape((B, 1)),
-                        ttnn.Layout.ROW_MAJOR,
-                        ttnn.DataType.BFLOAT16,
-                        _get_dp_mapper(),
-                    )
-                    adv_tt.set_requires_grad(False)
+                    adv_slice_val = ttnn.slice(advantages_tt, [start_local, 0], [end_local, 1])
+                    adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
 
                     nlog_old, mask_old = probs_old_list[i]
                     nlog_probs_new, mask_new = completer.compute_nlog_probs(p, c)
@@ -390,7 +421,7 @@ class GRPOTrainer:
                         nlog_old,
                         nlog_probs_new,
                         mask_old,
-                        adv_tt,
+                        adv_ttml,
                         len(prompts_batch) * grad_accum,
                         grpo_cfg.epsilon,
                     )
@@ -398,7 +429,7 @@ class GRPOTrainer:
                     loss.backward(retain_graph=False)
                     ttml.autograd.AutoContext.get_instance().reset_graph()
 
-                    _deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
+                    _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
 
                 accum_count += 1
 
@@ -417,6 +448,9 @@ class GRPOTrainer:
                     optimizer.zero_grad()
                     accum_count = 0
 
+                    step_time_s = time.perf_counter() - step_t0
+                    generation_time_s_for_step = accum_generation_time_s
+
                     num_steps += 1
                     all_rewards = np.concatenate(accum_rewards)
                     mean_reward = float(all_rewards.mean())
@@ -428,12 +462,16 @@ class GRPOTrainer:
                             "reward_std": float(all_rewards.std()),
                             "mean_completion_len": mean_completion_len,
                             "lr": base_lr * warmup_factor,
+                            "step_time_s": step_time_s,
+                            "generation_time_s": generation_time_s_for_step,
                         }
                         for cb in self.callbacks:
                             cb.on_step_end(self, num_steps, **step_metrics)
 
                     accum_rewards.clear()
                     accum_completion_lens.clear()
+                    accum_generation_time_s = 0.0
+                    step_t0 = time.perf_counter()
 
                     if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                         ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
@@ -452,6 +490,7 @@ class GRPOTrainer:
 
             for nlog_old, mask_old in probs_old_list:
                 _deallocate_tensors([nlog_old, mask_old])
+            _deallocate_tensors(advantages_tt)
 
         for cb in self.callbacks:
             cb.on_train_end(self)
