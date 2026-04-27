@@ -17,15 +17,44 @@ Production shapes (GPT-OSS-120B on Galaxy, per DP-chip):
   HiFi4, fp32_dest_acc_en=False (BFP8 destination)
   num_cores_per_head = min(64, 64*32*1)//32 = 2  → 1 reducer + 1 worker
 
-Usage:
-  # Single WH device (no trace, validating correctness only):
-  pytest test_sdpa_paged_decode_hang.py --device-mode single
+How to run:
+  ─────────────────────────────────────────────────────────
+  From inside the Docker container on g10glx02 (Galaxy machine):
 
-  # Galaxy mesh — runs in trace mode, loops until hang or N iterations:
-  pytest test_sdpa_paged_decode_hang.py --device-mode galaxy --iterations 20
+    cd /home/models-team/divanovic/tt-metal
+    source /opt/venv/bin/activate
+    export TT_METAL_HOME=/home/models-team/divanovic/tt-metal
+    export ARCH_NAME=wormhole_b0
 
-  # Galaxy, keep running until hang detected (no iteration limit):
-  pytest test_sdpa_paged_decode_hang.py --device-mode galaxy --iterations 0
+  ─── Single WH device (no hang, correctness check only) ───────────────────
+    python -m pytest \
+      tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_paged_decode_hang.py \
+      --device-mode single --iterations 20 -v
+
+  ─── Galaxy mesh, trace mode, 20 iterations (hangs on UNFIXED kernel) ──────
+    python -m pytest \
+      tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_paged_decode_hang.py \
+      --device-mode galaxy --iterations 20 -v
+
+  ─── Galaxy, infinite loop until hang (no iteration limit) ──────────────────
+    python -m pytest \
+      tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_paged_decode_hang.py \
+      --device-mode galaxy --iterations 0 -v
+
+  ─── With DPRINTs enabled (captures CB/mask state on chip 0) ────────────────
+    TT_METAL_DPRINT_CORES=all \
+    TT_METAL_DPRINT_CHIPS=0 \
+    TT_METAL_DPRINT_FILE=/tmp/sdpa_dprint.log \
+    python -m pytest \
+      tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_paged_decode_hang.py \
+      --device-mode galaxy --iterations 20 -v
+
+  ─── With tt-triage on hang (run in separate terminal when device is hung) ───
+    python tools/triage/triage.py > /tmp/new_tt_triage_output.txt 2>&1
+
+  Expected behaviour:
+    UNFIXED kernel: hangs within iterations 2-13 (trace replay stalls)
+    FIXED kernel:   all iterations complete, each ~2s
 """
 
 import time
