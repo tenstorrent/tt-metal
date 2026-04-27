@@ -191,6 +191,18 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
     Program& command_queue_program = *this->command_queue_programs_[0];
     uint8_t num_hw_cqs = this->num_hw_cqs();
 
+    // Reset host-side CQ manager state for this device.
+    // Non-MMIO devices: host-side hugepage pointers are owned by the MMIO device
+    // (reset below), but sysmem_manager_ tracks in-flight counts, quiesce flags,
+    // and dev_fences locally. Reset unconditionally so re-init after firmware
+    // reload cannot inherit stale prefetch_q_dev_fences or cq_to_quiesced.
+    // Skip if relay is broken — reset() reads HW fence via relay which would hang.
+    if (!this->fabric_relay_path_broken_.load()) {
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            this->sysmem_manager_->reset(cq_id);
+        }
+    }
+
     // Reset host-side command queue pointers for all channels controlled by this mmio device
     if (this->is_mmio_capable()) {
         for (ChipId serviced_device_id :
@@ -209,9 +221,6 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                 context_->dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start / sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                // Reset the host manager's pointer for this command queue
-                this->sysmem_manager_->reset(cq_id);
-
                 const uint32_t cq_offset =
                     this->sysmem_manager_->is_dram_backed()
                         ? get_absolute_cq_offset(
