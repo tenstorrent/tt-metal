@@ -282,8 +282,8 @@ void kernel_main() {
                 //Definition: num_read_of_input = 3
                 for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                     uint32_t out_block_start_id_offset = 0;
-                    uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
                     cb_ex_external.reserve_back(cb_ex_external_tiles_required);
+                    uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
 
                     // Zero-fill the reserved cb_ex_external region so that bytes not written
                     // by the per-core NOC reads do not corrupt the downstream reduce_tile sum.
@@ -346,10 +346,15 @@ void kernel_main() {
                                 cb_ex2_partial.wait_front(1);
                             }
 
-                            // read self Ex partial - cb_ex_external is zero-initialised at the
-                            // start of this cur_read_iteration, so this slot is treated the same
-                            // as every other core's slot (datum_size_bytes wide; remaining bytes
-                            // already zero).
+                            // read self Ex partial - this slot is treated the same as every
+                            // other core's slot (datum_size_bytes wide, advancing by 16).
+                            // Bytes [datum_size_bytes, 16) of the slot, plus any trailing tile
+                            // bytes past the last used slot, must read as zero so they don't
+                            // pollute the downstream reduce_tile sum.  Either the conditional
+                            // zero-fill above (when needs_cb_ex_external_zero_fill is true) has
+                            // already cleared them, or the slot pitch (16) equals the per-write
+                            // size (datum_size_bytes == 16) AND the used slots tile exactly,
+                            // so there are no untouched bytes to worry about.
                             uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? cb_ex_partial.get_read_ptr() : cb_ex2_partial.get_read_ptr();
                             experimental::UnicastEndpoint remote_ep;

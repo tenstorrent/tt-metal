@@ -37,6 +37,23 @@ def run_group_norm_DRAM(
         pytest.skip()
 
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
+    # Pick the grid that the op will actually run on:
+    #   - specify_grid=True  exercises the explicit-grid contract on the user-chosen
+    #     (cores_y, cores_x) from the parametrize fixture.
+    #   - specify_grid=False exercises the C++ auto-selection (find_expected_dram_grid).
+    #     We must prepare gamma/beta/mask/reciprocals for that *same* auto-selected
+    #     grid; otherwise their shapes (driven by num_virtual_cols/num_virtual_rows)
+    #     would not match the grid the op actually picks at runtime.
+    if specify_grid:
+        grid_for_params = grid_size
+    else:
+        grid_for_params = ttnn.determine_expected_group_norm_dram_grid_size(
+            device=device,
+            num_channels=C,
+            num_groups=num_groups,
+            input_nhw=N * H * W,
+            num_batches=N,
+        )
 
     # Determine welford and reciprocals settings
     use_welford = welford_mode in ("welford_normal", "welford_reciprocal")
@@ -66,14 +83,14 @@ def run_group_norm_DRAM(
 
     # Create dram group norm params
     [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
-        [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_size, return_mask=True
+        [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_for_params, return_mask=True
     )
 
     # Create reciprocals tensor if needed
     reciprocals_tensor = None
     if use_reciprocals:
         # Generate reciprocals tensor
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_size)
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_for_params)
         reciprocals_tensor = ttnn.from_torch(
             torch_reciprocals,
             dtype=ttnn.DataType.FLOAT32,
@@ -84,9 +101,17 @@ def run_group_norm_DRAM(
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
                     ttnn.CoreRangeSet(
-                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(grid_for_params.x - 1, grid_for_params.y - 1),
+                            )
+                        }
                     ),
-                    (torch_reciprocals.shape[0] // (grid_size.x * grid_size.y), torch_reciprocals.shape[1]),
+                    (
+                        torch_reciprocals.shape[0] // (grid_for_params.x * grid_for_params.y),
+                        torch_reciprocals.shape[1],
+                    ),
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             ),
@@ -126,12 +151,18 @@ def run_group_norm_DRAM(
             atol = 0.043
             frobenius_threshold = 0.011
         else:
-            atol = 0.069
-            frobenius_threshold = 0.025
-
-        if not specify_grid:
-            atol = max(atol, 0.085)
-            frobenius_threshold = max(frobenius_threshold, 0.030)
+            if specify_grid:
+                atol = 0.069
+                frobenius_threshold = 0.025
+            else:
+                # Not using Welford + auto-grid: the op also picks num_out_blocks via the
+                # heuristic in the program factory, which generally differs from
+                # the explicit num_out_blocks used in the specify_grid=True branch.
+                # Different num_out_blocks chunks the per-block partial reductions
+                # differently, producing visible bfloat16 rounding drift on the
+                # legacy two-pass mean/variance path.
+                atol = 0.085
+                frobenius_threshold = 0.030
 
         assert_numeric_metrics(
             torch_output_tensor,
