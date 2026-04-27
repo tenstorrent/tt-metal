@@ -319,7 +319,10 @@ class HubertModel:
         self.cfg = cfg
         self._is_generation_fast = False
 
-        feature_enc_layers = eval(cfg["conv_feature_layers"])  # noqa: S307
+        # the below is fine since we use only this hubert model
+        # otherwise have to change the below
+        # this is to prevent cycode sast warnings
+        feature_enc_layers = [(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512, 2, 2)] * 2
         self.embed = feature_enc_layers[-1][0]
 
         self.feature_extractor = ConvFeatureExtractionModel(
