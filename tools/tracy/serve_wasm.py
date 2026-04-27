@@ -23,6 +23,9 @@ from tracy.common import (
     PROFILER_WASM_TRACES_DIR,
 )
 
+# Must match --port default in __main__ (subprocess omits --port when None).
+DEFAULT_HTTP_PORT = 8080
+
 clients = set()
 
 
@@ -41,6 +44,12 @@ def _kill_previous_server_process():
 
 def launch_server_subprocess(directory=None, port=None, daemon=True):
     logger.info("Launching tracy web app GUI server subprocess...")
+    http_port = DEFAULT_HTTP_PORT if port is None else port
+    ws_port = http_port + 1
+    logger.info(
+        f"Tracy WASM web UI (open in browser): http://localhost:{http_port}/ "
+        f"(WebSocket for live reload: ws://localhost:{ws_port}/)"
+    )
     _kill_previous_server_process()
     log_path = PROFILER_ARTIFACTS_DIR / "tracy_wasm_gui_server.log"
     cmd = [sys.executable, __file__]
@@ -311,6 +320,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir", type=str, default=PROFILER_WASM_DIR, help="Directory to serve (default: current directory)"
     )
-    parser.add_argument("--port", type=int, default=8080, help="Port to serve on (default: 8080)")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_HTTP_PORT, help=f"Port to serve on (default: {DEFAULT_HTTP_PORT})"
+    )
     args = parser.parse_args()
     run_server(args.dir, args.port)
