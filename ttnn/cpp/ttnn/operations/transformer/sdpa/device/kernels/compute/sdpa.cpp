@@ -156,6 +156,16 @@ void kernel_main() {
         }
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
+        constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
+
+        LightweightMaskContext lw_mask;
+        if constexpr (use_lightweight_causal_mask) {
+            lw_mask.is_causal = true;
+            lw_mask.neginf_tile_idx = 0;
+            lw_mask.causal_diag_tile_idx = 1;
+            cb_wait_front(cb_mask_in, 2);
+        }
+
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
             if (phase == 0) {
                 chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
@@ -179,7 +189,8 @@ void kernel_main() {
                         use_padded_mask,
                         is_chunked,
                         scale_fp32,
-                        sliding_window_size>(
+                        sliding_window_size,
+                        use_lightweight_causal_mask>(
                         Skt,
                         qk_in0_block_w,
                         qk_subblock_w,
@@ -216,7 +227,8 @@ void kernel_main() {
                         cb_sum_A,
                         cb_sum_B,
                         cb_exp_max_diff,
-                        cb_out);
+                        cb_out,
+                        lw_mask);
                 }
             }
         }

@@ -12,8 +12,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -59,22 +59,6 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
-
-static xt::xarray<float> make_random_xarray(
-    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
-    xt::xarray<float> x = xt::empty<float>({s[0], s[1], s[2], s[3]});
-    ttml::core::parallel_generate(
-        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
-    return x;
-}
-
-static xt::xarray<bfloat16> make_random_bf16_xarray(
-    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
-    xt::xarray<bfloat16> x = xt::empty<bfloat16>({s[0], s[1], s[2], s[3]});
-    ttml::core::parallel_generate(
-        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
-    return x;
-}
 
 static ttnn::Tensor to_tt_bf16(const xt::xarray<bfloat16>& x) {
     return ttml::core::from_xtensor<bfloat16, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
@@ -190,13 +174,16 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     const uint32_t seed_max_second_moment = g();
 
     // Generate random data
-    xt::xarray<float> w0_fp32 = make_random_xarray(pc.shape, seed_param);
-    xt::xarray<float> m0 = make_random_xarray(pc.shape, seed_first_moment);
-    xt::xarray<float> v0 = make_random_xarray(pc.shape, seed_second_moment, 0.0F, 1.0F);  // must be >= 0
-    xt::xarray<float> max_v0 = make_random_xarray(pc.shape, seed_max_second_moment, 0.0F, 1.0F);
+    xt::xarray<float> w0_fp32 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_param);
+    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_first_moment);
+    xt::xarray<float> v0 =
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_second_moment);  // must be >= 0
+    xt::xarray<float> max_v0 =
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_max_second_moment);
 
     // Generate gradient directly as bfloat16
-    xt::xarray<bfloat16> g0_bf16 = make_random_bf16_xarray(pc.shape, seed_grad);
+    xt::xarray<bfloat16> g0_bf16 =
+        ttml::test_utils::make_uniform_xarray<bfloat16>(pc.shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed_grad);
     auto g0_bf16_tt = to_tt_bf16(g0_bf16);
 
     // Initial step count (non-zero to test bias correction with accumulated steps)

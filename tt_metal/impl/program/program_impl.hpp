@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -298,6 +299,14 @@ public:
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
 
+    // Deallocate circular buffers and unregister from devices
+    void deallocate_circular_buffers();
+
+    // CB tracking for SHM memory reporting
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
+        int device_id, size_t num_devices) const;
+    size_t get_num_cb_devices() const { return cb_devices_.size(); }
+
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
@@ -330,17 +339,23 @@ public:
         return get_kernel(get_kernel_handle(name));
     }
 
-    // Metal 2.0: Runtime argument schema for validation
+    // Metal 2.0: Runtime argument schema for validation.
+    // Includes both the named args (declaration-order name lists) and the vararg counts.
     struct KernelRTASchema {
-        std::unordered_map<CoreCoord, size_t> num_runtime_args_per_node;
-        size_t num_common_runtime_args = 0;
+        // Named arg names, in declaration order. Used to serialize ProgramRunParams values
+        // into the dispatch buffer and to validate that every declared name is supplied.
+        std::vector<std::string> named_runtime_args;
+        std::vector<std::string> named_common_runtime_args;
+
+        // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
+        // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
+        // broadcast count.
+        std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
+        size_t num_common_runtime_varargs = 0;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
-    void register_kernel_rta_schema(
-        const KernelSpecName& name,
-        const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
-        size_t num_common_runtime_args);
+    void register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema);
     const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
@@ -407,6 +422,8 @@ private:
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
+    // Tracks which devices this program has CBs allocated on (for CB memory reporting)
+    std::unordered_set<const IDevice*> cb_devices_;
 
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>

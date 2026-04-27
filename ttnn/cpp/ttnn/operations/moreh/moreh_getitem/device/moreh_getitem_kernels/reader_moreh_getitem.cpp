@@ -67,8 +67,12 @@ void kernel_main() {
     constexpr auto index3_args = TensorAccessorArgs<index2_args.next_compile_time_args_offset()>();
     constexpr auto index4_args = TensorAccessorArgs<index3_args.next_compile_time_args_offset()>();
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(in_args, src_addr, stick_size);
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto index0 = TensorAccessor(index0_args, index0_addr, index0_stick_size);
     const auto index1 = TensorAccessor(index1_args, index1_addr, index1_stick_size);
     const auto index2 = TensorAccessor(index2_args, index2_addr, index2_stick_size);

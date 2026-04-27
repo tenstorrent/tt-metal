@@ -64,7 +64,8 @@ create_program_batch_sharded(
     tt::DataFormat output_data_format,
     bool untilize_out,
     bool skip_compute,
-    bool skip_write_back) {
+    bool skip_write_back,
+    bool row_broadcast_bias) {
     log_debug(tt::LogOp, "Batch-sharded DRAM matmul");
     log_debug(tt::LogOp, "B: {}, M: {}, K: {}, N: {}", B, M, K, N);
     log_debug(tt::LogOp, "per_core_M: {}, per_core_N: {}, in0_block_w: {}", per_core_M, per_core_N, in0_block_w);
@@ -475,6 +476,9 @@ create_program_batch_sharded(
         0u,                      // get_batch_from_reader
         0u,                      // in0_transpose_tile
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Create kernels on all cores in bounding box
     // Runtime args control which cores are active workers vs idle
@@ -532,6 +536,7 @@ create_program_batch_sharded(
                 {"cb_in0_intermediate", tt::CBIndex::c_8},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
+                {"bias_ntiles", per_core_N},
             }});
 
     // Set runtime args - each core only gets SetRuntimeArgs called ONCE per kernel
@@ -669,6 +674,8 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
+    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
+
     tt::tt_metal::IDevice* device =
         reuse_batched_hs_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, mesh_coord);
 
@@ -788,8 +795,9 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         bias_data_format,
         output_data_format,
         untilize_out,
-        false,   // skip_compute
-        false);  // skip_write_back
+        false,  // skip_compute
+        false,  // skip_write_back
+        row_broadcast_bias);
 }
 
 MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::cached_mesh_workload_t

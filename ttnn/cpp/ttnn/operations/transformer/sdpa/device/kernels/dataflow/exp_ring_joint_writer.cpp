@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_indexer.hpp"
 
@@ -263,8 +263,8 @@ void kernel_main() {
         fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
     }
 
-    const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size);
-    const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size);
+    const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt);
+    const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt);
 #endif
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
@@ -272,8 +272,8 @@ void kernel_main() {
     constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
     constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
-    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, DHt);
@@ -287,7 +287,12 @@ void kernel_main() {
 
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.

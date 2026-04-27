@@ -129,10 +129,10 @@ struct MoeGather {
                 noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, args.data_size_bytes);
                 // BH does not support posted atomics due to a bug
                 noc_semaphore_inc(dst_semaphore_noc_addr, 1);
-                noc_async_posted_writes_flushed();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
+                    noc_async_posted_writes_flushed();
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
                 noc_async_atomic_barrier();

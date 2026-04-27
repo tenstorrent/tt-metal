@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out1 = tt::CBIndex::c_17;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, 1024 * element_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
 #define NOC_MINIMUM_READ_SIZE 32
 

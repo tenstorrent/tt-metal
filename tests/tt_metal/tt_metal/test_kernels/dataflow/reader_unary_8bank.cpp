@@ -67,7 +67,7 @@ void kernel_main() {
 #endif
 
     constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto src_a = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.

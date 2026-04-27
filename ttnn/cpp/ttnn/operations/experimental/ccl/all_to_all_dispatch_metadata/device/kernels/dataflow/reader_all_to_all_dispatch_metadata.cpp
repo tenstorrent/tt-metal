@@ -21,8 +21,6 @@ void kernel_main() {
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
-    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
@@ -50,7 +48,6 @@ void kernel_main() {
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
     constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
-    constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
     constexpr auto input_args = TensorAccessorArgs<45>();
@@ -85,11 +82,11 @@ void kernel_main() {
     constexpr uint32_t shared_expert_data_size_bytes = num_shared_experts * sizeof(uint16_t);
     constexpr uint16_t bf16_one = 0x3f80;
 
-    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
-    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
-    const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
-    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address);
+    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
+    const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address);
+    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // Read the expert mapping table - new format: [devices, experts]
     // Each page is one device's view of the mapping. Read only the source device's page.

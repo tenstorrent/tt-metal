@@ -43,9 +43,10 @@ sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
     // apply mask
     TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
 
-    // Make sure compiler avoids these two regs here, ugh.
-    sfpi::vFloat tmp2 __attribute__((unused)) = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vFloat tmp3 __attribute__((unused)) = sfpi::l_reg[sfpi::LRegs::LReg3];
+    // Make sure compiler avoids these two regs here, ugh. And make
+    // sure the DCE pass considers this live without warning.
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat(sfpi::l_reg[sfpi::LRegs::LReg2]);
+    sfpi::l_reg[sfpi::LRegs::LReg3] = sfpi::vFloat(sfpi::l_reg[sfpi::LRegs::LReg3]);
 
     return sfpi::l_reg[sfpi::LRegs::LReg1];
 }
@@ -87,9 +88,7 @@ sfpi_inline void _calculate_floor_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = _floor_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+        sfpi::dst_reg[0] = _floor_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -99,9 +98,7 @@ sfpi_inline void _calculate_ceil_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = _ceil_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+        sfpi::dst_reg[0] = _ceil_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -111,9 +108,7 @@ sfpi_inline void _calculate_trunc_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+        sfpi::dst_reg[0] = _trunc_body_(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -123,11 +118,8 @@ sfpi_inline void _calculate_frac_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
-        // frac(x) = x - trunc(x)
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+        sfpi::vFloat x   = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = x - _trunc_body_(x);
         sfpi::dst_reg++;
     }
 }
@@ -137,11 +129,11 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
     // Create a temporary copy tmp = abs(v).
     sfpi::vFloat tmp = sfpi::setsgn(v, 0);
     // For all 0 ≤ x < 2**23, x + 2**23 will shift out the fractional part with round-to-nearest-even.
-    tmp += 8388608.0f;
+    tmp += 0x1.p23f;
     // Hide SFPNOP; extract exponent.
     sfpi::vInt exp = sfpi::exexp(v);
     // Subtract 2**23 to restore exponent.
-    tmp += -8388608.0f;
+    tmp += -0x1.p23f;
     // Hide SFPNOP; check exponent.  If x ≥ 2**23, then there is no fractional part.
     v_if (exp < 23)
     {
@@ -189,11 +181,8 @@ sfpi_inline void _calculate_stochastic_round_()
 #pragma GCC unroll ITERATIONS
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        // SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-        // rnd_mode=1 (stochastic), lreg_src_c=LREG0, lreg_dest=LREG0, instr_mod1=1 (fp32->fp16b)
-        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_STOCH, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        sfpi::vFloat x   = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = sfpi::float_to_fp16b(x, sfpi::RoundMode::Stochastic);
         sfpi::dst_reg++;
     }
 }

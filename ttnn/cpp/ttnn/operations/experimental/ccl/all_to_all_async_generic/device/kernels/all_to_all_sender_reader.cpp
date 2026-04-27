@@ -82,7 +82,7 @@ void kernel_main() {
     address_t input_address = get_arg_val<address_t>(arg_idx++);
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
     constexpr auto input_tensor_args = TensorAccessorArgs<11>();
-    auto input_addrgen = TensorAccessor(input_tensor_args, input_address, input_page_size);
+    auto input_addrgen = TensorAccessor(input_tensor_args, input_address);
     constexpr uint32_t split_num_half_tiles = split_dim_size * 2 / num_devices;
     constexpr uint32_t split_num_tiles = (split_num_half_tiles + 1) / 2;
     constexpr bool has_pre_half_tile = has_writer_tail && current_device_id % 2 == 1;

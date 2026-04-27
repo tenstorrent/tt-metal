@@ -68,6 +68,8 @@ void kernel_main() {
     const uint32_t page_size_b = align(page_size_b_arg, alignment_b);
 #endif
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto src = TensorAccessor(src_args, src_addr, page_size_a);
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, page_size_b);
 

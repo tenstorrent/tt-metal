@@ -41,6 +41,20 @@ def float_to_uint32(value):
     return int.from_bytes(struct.pack("f", value), byteorder="little")
 
 
+def get_worker_noc_hop_distance(mesh_device, logical_src, logical_dst, noc, mesh_coord=None):
+    """
+    Experimental NOC hop distance (``ttnn._ttnn.multi_device.experimental``).
+
+    For meshes with multiple devices, pass ``mesh_coord`` to select the chip; when omitted,
+    ``MeshCoordinate(0, 0)`` is used (homogeneous meshes only).
+    """
+    exp = ttnn._ttnn.multi_device.experimental
+    if mesh_device.get_num_devices() > 1:
+        coord = mesh_coord if mesh_coord is not None else ttnn.MeshCoordinate(0, 0)
+        return exp.get_worker_noc_hop_distance(mesh_device, coord, logical_src, logical_dst, noc)
+    return exp.get_worker_noc_hop_distance(mesh_device, logical_src, logical_dst, noc)
+
+
 def merge_per_core_runtime_args(*groups):
     """
     Merge per-core runtime arg groups in-order with core-aware concatenation.

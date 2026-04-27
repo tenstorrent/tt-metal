@@ -74,7 +74,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
+    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -97,7 +97,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address, page_size);
+    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 #endif
 
     OpSignaler op_signaler;

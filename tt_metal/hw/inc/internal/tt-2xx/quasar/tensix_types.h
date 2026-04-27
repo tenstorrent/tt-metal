@@ -255,7 +255,8 @@ enum class DataFormat : std::uint8_t {
     Int32 = 8,
     Int8 = 14,
     Int16 = 9,
-    UInt8 = 17,  // Unsigned INT with 8-bit magnitude
+    UInt8 = 17,    // Unsigned INT with 8-bit magnitude
+    UInt16 = 130,  // Unsigned INT with 16-bit magnitude
     Int4 = 23,
     UInt4 = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :

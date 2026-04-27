@@ -33,11 +33,11 @@ void kernel_main() {
     uint32_t consumer_idx = 0;
 #endif
 
-    // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer << ENDL();
-    // DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
+    // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer <<
+    // ENDL(); DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base, entry_size);
+    const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         uint32_t page_id = 0;

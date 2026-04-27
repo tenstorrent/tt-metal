@@ -62,13 +62,13 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<3>();
 
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(in0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(in0_args, src0_addr);
 #endif
 
     const uint32_t out_tile_bytes = get_tile_size(cb_id_out);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 #ifndef OUT_SHARDED
-    const auto s = TensorAccessor(out_args, dst_addr, out_tile_bytes);
+    const auto s = TensorAccessor(out_args, dst_addr);
 #endif
 
 #ifndef IN0_SHARDED

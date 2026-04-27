@@ -23,7 +23,7 @@ void kernel_main() {
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+    const auto in0 = TensorAccessor(in0_args, in0_addr);
 
     // Loop over all the tiles and read them into the circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {

@@ -160,7 +160,7 @@ void kernel_main() {
     arg_idx += rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
-    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
 #ifdef USE_WORKER_MUX

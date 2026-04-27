@@ -32,9 +32,9 @@ void kernel_main() {
     constexpr auto mean_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
 
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
-    const auto mean_output_addr_generator = TensorAccessor(mean_args, mean_output_addr, tile_bytes);
-    const auto rstd_output_addr_generator = TensorAccessor(rstd_args, rstd_output_addr, tile_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
+    const auto mean_output_addr_generator = TensorAccessor(mean_args, mean_output_addr);
+    const auto rstd_output_addr_generator = TensorAccessor(rstd_args, rstd_output_addr);
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {

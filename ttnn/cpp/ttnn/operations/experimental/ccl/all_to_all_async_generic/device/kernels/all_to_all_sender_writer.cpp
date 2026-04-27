@@ -120,7 +120,7 @@ void kernel_main() {
     uint32_t sender_core_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
     constexpr auto output_args = TensorAccessorArgs<11>();
-    auto output_addrgen = TensorAccessor(output_args, output_address, output_page_size);
+    auto output_addrgen = TensorAccessor(output_args, output_address);
     size_t device_offsets_idx = arg_idx;
     arg_idx += local_num_devices * 3;
 

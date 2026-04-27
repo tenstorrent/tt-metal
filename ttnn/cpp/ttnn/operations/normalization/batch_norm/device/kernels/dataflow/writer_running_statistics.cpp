@@ -41,17 +41,16 @@ void kernel_main() {
         get_compile_time_arg_val(old_running_var_args.next_compile_time_args_offset()) == 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src_addr);
 
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     const uint32_t old_running_mean_tile_bytes = get_tile_size(cb_id_old_running_mean);
-    const auto old_running_mean =
-        TensorAccessor(old_running_mean_args, old_running_mean_addr, old_running_mean_tile_bytes);
+    const auto old_running_mean = TensorAccessor(old_running_mean_args, old_running_mean_addr);
 
     const uint32_t old_running_var_tile_bytes = get_tile_size(cb_id_old_running_var);
-    const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr, old_running_var_tile_bytes);
+    const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_id_src_obj(cb_id_src);

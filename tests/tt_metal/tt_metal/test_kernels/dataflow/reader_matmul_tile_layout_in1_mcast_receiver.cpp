@@ -61,7 +61,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
     for (uint32_t b = 0; b < num_blocks; b++) {
         // Operand 0

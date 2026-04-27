@@ -85,7 +85,7 @@ void kernel_main() {
     open_connections(fabric_connection, num_connections, fab_idx);
 #else
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
-    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
 #endif

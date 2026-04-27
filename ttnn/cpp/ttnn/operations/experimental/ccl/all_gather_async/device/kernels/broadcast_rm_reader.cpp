@@ -28,7 +28,7 @@ void kernel_main() {
     uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
 
-    TensorAccessor tensor0_addrgen(tensor0_args, tensor_address0, input_page_size);
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
     for (uint32_t page_id = input_page_id_start; page_id < input_page_id_end;) {
         cb_reserve_back(cb0_id, 1);

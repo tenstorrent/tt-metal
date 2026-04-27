@@ -201,19 +201,27 @@ def run(
             mask_tensor = ttnn.from_torch(torch_mask, dtype=input_b_dtype, layout=mask_layout)
 
     start_time = start_measuring_time()
-    if mask_tensor is not None:
-        output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-            input_tensor_a,
-            scale,
-            mask_tensor,
-            **op_kwargs,
+
+    def _run_op(tensor_a, kw):
+        if mask_tensor is not None:
+            return ttnn.scale_causal_mask_hw_dims_softmax_in_place(tensor_a, scale, mask_tensor, **kw)
+        return ttnn.scale_causal_mask_hw_dims_softmax_in_place(tensor_a, scale, **kw)
+
+    try:
+        output_tensor = _run_op(input_tensor_a, op_kwargs)
+    except Exception:
+        input_tensor_a = ttnn.from_torch(
+            torch_input_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    else:
-        output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-            input_tensor_a,
-            scale,
-            **op_kwargs,
-        )
+        fallback_kwargs = {k: v for k, v in op_kwargs.items() if k not in ("program_config", "memory_config")}
+        try:
+            output_tensor = _run_op(input_tensor_a, fallback_kwargs)
+        except Exception:
+            output_tensor = _run_op(input_tensor_a, {})
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

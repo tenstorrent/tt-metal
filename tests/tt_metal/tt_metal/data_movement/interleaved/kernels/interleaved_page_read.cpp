@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr bool default_noc = get_compile_time_arg_val(6) == 1;
 
     constexpr auto src_args = TensorAccessorArgs<7>();
-    const auto s = TensorAccessor(src_args, src_addr, page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t transaction_size_bytes = page_size_bytes;
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);

@@ -8,7 +8,6 @@ import os
 import numpy as np
 import pytest
 import torch
-from diffusers.utils import export_to_video
 from loguru import logger
 
 import ttnn
@@ -26,6 +25,8 @@ from ....utils.test import line_params, ring_params
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        # BH on 2x4
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -37,6 +38,7 @@ from ....utils.test import line_params, ring_params
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
+        "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0_linear",
         "bh_4x8sp1tp0_ring",
@@ -83,6 +85,9 @@ def test_pipeline_inference(
         topology=topology,
         is_fsdp=is_fsdp,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        target_height=height,
+        target_width=width,
+        num_frames=num_frames,
     )
 
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
@@ -101,6 +106,7 @@ def test_pipeline_inference(
                 seed=seed,
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
+                output_type="uint8",
             )
 
         if hasattr(result, "frames"):
@@ -120,14 +126,13 @@ def test_pipeline_inference(
         # Remove batch dimension
         frames = frames[0]
         output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
-        try:
-            if int(ttnn.distributed_context_get_rank()) == 0:
-                export_to_video(frames, output_filename, fps=16)
-                logger.info(f"Saved video to: {output_filename}")
-            else:
-                logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
-        except AttributeError as e:
-            logger.info(f"AttributeError: {e}")
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            from models.tt_dit.utils.video import export_to_video
+
+            export_to_video(frames, output_filename, fps=16)
+            logger.info(f"Saved video to: {output_filename}")
+        else:
+            logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
     if no_prompt:
         run(prompt=prompt, number=0, seed=42)

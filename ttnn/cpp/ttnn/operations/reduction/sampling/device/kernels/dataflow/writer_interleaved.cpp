@@ -5,8 +5,8 @@
 #include "api/numeric/bfloat16.h"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
@@ -45,13 +45,13 @@ void kernel_main() {
     constexpr uint32_t args_base = p_args.next_compile_time_args_offset();
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(args_base + 0);
     constexpr uint32_t cb_id_mask = get_compile_time_arg_val(args_base + 1);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(args_base + 2);
-    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(args_base + 3);
+    constexpr uint32_t scaler_max_cb_id = get_compile_time_arg_val(args_base + 2);
+    constexpr uint32_t scaler_sum_cb_id = get_compile_time_arg_val(args_base + 3);
     constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(args_base + 4);
     constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 5);
     constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 6);
     constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 7);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(args_base + 8);
+    // args_base + 8: out_stick_size (passed from factory, unused in kernel)
     constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 9);
     constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 10);
     constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 11);
@@ -63,11 +63,13 @@ void kernel_main() {
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
-    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<scaler_max_cb_id, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<scaler_sum_cb_id, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
-    const auto addrg_k = TensorAccessor(k_args, k_addr, 128);
+    const auto addrg_k = TensorAccessor(k_args, k_addr);
     cb_reserve_back(cb_id_k, 1);
     uint32_t cb_id_k_ptr = get_write_ptr(cb_id_k);
     uint64_t k_noc_addr = get_noc_addr(0, addrg_k);
@@ -79,7 +81,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint32_t k = k_ptr[core_id];
 
-    const auto addrg_p = TensorAccessor(p_args, p_addr, 64);
+    const auto addrg_p = TensorAccessor(p_args, p_addr);
     cb_reserve_back(cb_id_p, 1);
     uint32_t cb_id_p_ptr = get_write_ptr(cb_id_p);
     uint64_t p_noc_addr = get_noc_addr(0, addrg_p);
@@ -91,7 +93,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint32_t p = p_ptr[core_id];
 
-    const auto addrg_temp = TensorAccessor(temp_args, temp_addr, 64);
+    const auto addrg_temp = TensorAccessor(temp_args, temp_addr);
     // cb_reserve_back(cb_id_temp, 1);
     uint32_t cb_id_temp_ptr = get_write_ptr(cb_id_temp);
     uint64_t temp_noc_addr = get_noc_addr(0, addrg_temp);
@@ -220,7 +222,7 @@ void kernel_main() {
     cb_pop_front(output_local_indices_cb_index, 1);
     cb_pop_front(output_final_indices_rm_cb_index, 32);
 
-    const auto s_out = TensorAccessor(dst_args, dst_addr, out_stick_size);
+    const auto s_out = TensorAccessor(dst_args, dst_addr);
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
     // Write individual core result - output buffer should handle alignment
     noc_async_write(out_addr + core_id * 4, dst_noc_addr + core_id * 4, 4);

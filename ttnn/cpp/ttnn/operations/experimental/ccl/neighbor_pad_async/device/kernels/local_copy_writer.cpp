@@ -39,7 +39,7 @@ void kernel_main() {
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rows_count = get_arg_val<uint32_t>(arg_idx++);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)
@@ -51,7 +51,7 @@ void kernel_main() {
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_wait_front(cb_output_id, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+            uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             dst_stick_id++;
             noc_async_write_barrier();

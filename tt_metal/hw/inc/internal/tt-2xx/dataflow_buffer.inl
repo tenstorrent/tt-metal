@@ -19,7 +19,7 @@
 namespace experimental {
 
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : local_dfb_interface_(g_dfb_interface[logical_dfb_id]), logical_dfb_id_(logical_dfb_id) {}
+    : local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)), logical_dfb_id_(logical_dfb_id) {}
 
 inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interface_.entry_size; }
 
@@ -157,13 +157,29 @@ inline void DataflowBuffer::finish_impl() {
 }
 
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
-    // return byte address (wr_ptr is 16B address on Gen1XX)
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
+           local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_offset;
+#elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr;
+#else
+    // Unpack TRISC does not use wr_ptr; return ring base for any accidental caller.
+    ASSERT(false);
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
+#endif
 }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
-    // return byte address (rd_ptr is 16B address on Gen1XX)
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
+           local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_offset;
+#elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr;
+#else
+    // Pack TRISC does not use rd_ptr; return ring base for any accidental caller.
+    ASSERT(false);
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
+#endif
 }
 
 #ifndef COMPILE_FOR_TRISC

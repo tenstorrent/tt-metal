@@ -20,7 +20,7 @@ void kernel_main() {
     uint32_t start_page_id = get_arg_val<uint32_t>(1);
     uint32_t end_page_id = get_arg_val<uint32_t>(2);
 
-    auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address, page_size);
+    auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address);
 
     auto process_pages = [&](const auto& page) {
         cb_wait_front(cb_id, 1);

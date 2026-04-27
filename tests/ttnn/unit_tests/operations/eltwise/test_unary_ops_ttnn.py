@@ -328,13 +328,12 @@ def test_unary_erf_ttnn(input_shapes, fast_and_approx, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("fast_and_approx", [False, True])
-def test_unary_erfc_ttnn(input_shapes, fast_and_approx, device):
+def test_unary_erfc_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    ttnn.erfc(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
+    ttnn.erfc(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erfc(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])

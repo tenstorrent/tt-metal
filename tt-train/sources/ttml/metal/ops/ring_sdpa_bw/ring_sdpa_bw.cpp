@@ -25,24 +25,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
-    // Call KV kernel to compute grad_K and grad_V
-    auto [grad_K, grad_V] = ttnn::prim::ttml_ring_sdpa_bw_kv(
-        grad_output,
-        attn_output,
-        query,
-        key,
-        value,
-        intermediates,
-        ring_size,
-        ring_axis,
-        step,
-        mask_type,
-        ring_direction,
-        preallocated_grad_key,
-        preallocated_grad_value);
-
-    // Call Q kernel to compute grad_Q
-    auto grad_Q = ttnn::prim::ttml_ring_sdpa_bw_q(
+    // Q kernel first: computes grad_Q and u_scaler = rowsum(dO * O)
+    auto [grad_Q, u_scaler] = ttnn::prim::ttml_ring_sdpa_bw_q(
         grad_output,
         attn_output,
         query,
@@ -55,6 +39,22 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
         mask_type,
         ring_direction,
         preallocated_grad_query);
+
+    // KV kernel: uses precomputed u_scaler
+    auto [grad_K, grad_V] = ttnn::prim::ttml_ring_sdpa_bw_kv(
+        grad_output,
+        u_scaler,
+        query,
+        key,
+        value,
+        intermediates,
+        ring_size,
+        ring_axis,
+        step,
+        mask_type,
+        ring_direction,
+        preallocated_grad_key,
+        preallocated_grad_value);
 
     return {grad_Q, grad_K, grad_V};
 }
