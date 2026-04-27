@@ -106,7 +106,7 @@ Golden comparisons use `comp_pcc` with PCC ≥ 0.9999 for bf16-only paths,
 
 Run via:
 ```
-scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/test_{feature}.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/test_{feature}.py
 ```
 
 Helper fails but raw passed -> fix .hpp/.inl internally, re-run 2c only.

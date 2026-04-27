@@ -152,7 +152,7 @@ For each unprocessed kernel (no `attempt` record in `migration_log.jsonl`):
    - Raw LLK calls → classify as covered / chain-primitive / not-covered
    - CB lifecycle per operand → map to Load/BinaryInputPolicy
    - Control-flow shape → single chain / branched chains / split windows
-3. Run the blockers checklist (from `llk_helpers_hq.md` Policy Mapping section):
+3. Run the blockers checklist (from `llk_helpers_hq.md` → "Generic Migration Blockers (Step 1 gate)" section, plus the helper-specific blockers in the target helper's header):
    - Non-zero absolute tile index? → GAP-1
    - Cumulative wait? → GAP-2
    - Non-sequential output pack? → GAP-3
@@ -291,25 +291,12 @@ Open gaps remaining:
 
 ---
 
-## First run: convert existing .md files
-
-If `coverage.jsonl`, `migration_log.jsonl`, or `feature_gap_map.jsonl` are absent but the
-corresponding `.md` files exist in `kernel_lib/`, convert them before starting Phase 0:
-
-- `kernel_eltwise_coverage.md` + `kernel_helper_coverage.md` → `coverage.jsonl`
-- `binary_migration_log.md` → `migration_log.jsonl`
-- `feature_gap_map.md` → `feature_gap_map.jsonl`
-
-After converting, delete the `.md` source files. The `.jsonl` files are the source of truth.
-
----
-
 ## Relation to other skills/docs
 
 | This phase needs | Where |
 |-----------------|-------|
 | Per-kernel audit checklist | `llk_helpers_hq.md` → "Kernel Migration Steps" Step 1 |
-| Policy mapping (CB lifecycle → policy) | `llk_helpers_hq.md` → "Policy Mapping" section |
-| Blockers checklist | `llk_helpers_hq.md` → "Blockers Checklist" section |
+| Policy mapping (CB lifecycle → policy) | `llk_helpers_hq.md` → "CB Lifecycle Taxonomy" section |
+| Blockers checklist | `llk_helpers_hq.md` → "Generic Migration Blockers (Step 1 gate)" section |
 | Adding a chain element (fast path) | `llk_helpers_conventions.md` §5 |
 | Full helper update (pipeline path) | `llk_helpers_pipeline.md` update mode |

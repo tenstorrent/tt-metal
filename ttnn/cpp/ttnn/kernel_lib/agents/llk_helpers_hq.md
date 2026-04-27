@@ -79,7 +79,7 @@ reconfig path) the update MUST:
 
 Run via:
 ```
-scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
 ```
 
 Phase 2 (Validate) of the pipeline is responsible for adding these tests —
@@ -88,48 +88,57 @@ sub-stage 2c / 2d steps.
 
 ## Kernel Migration Steps
 
-Migration is the FINAL step — it consumes helpers that already exist and are validated. If a missing op struct, missing enum value, or missing API surface is discovered mid-migration, stop and close that gap first (via "Adding ops" / "Updating helper" rows above), then resume.
+Migration is the FINAL step — it consumes helpers that already exist and are validated. If a missing op struct, missing enum value, or missing API surface is discovered mid-migration, stop and close that gap first (Helper Update / Helper Creation), then resume.
+
+The steps below are helper-agnostic. Helper-specific guidance (policy enums, batching rules, op-struct catalog, fusion patterns) lives in the per-helper `.hpp` doc-comments and the helper's section of `llk_helpers_conventions.md` — read those for the helper you are migrating to before Step 1.
 
 ### Step 1 — Audit the target kernel
 
 For the kernel being migrated, enumerate:
 
-- **Raw LLK calls it makes** (`*_tile_init`, `*_tile`, `reconfig_data_format*`, `cb_*`, `tile_regs_*`, `pack_tile*`). Classify each as: covered by an existing helper op struct, covered by a pipeline/chain primitive, or not yet covered.
-- **CB lifecycle per operand**: waited-once-popped-once (persistent), waited+popped each iteration (streaming), or caller-managed (preloaded). This decides `LoadPolicy` for SFPU chains or `BinaryInputPolicy` for binary ops.
-- **Dtype assumptions**: presence of `copy_tile_init_with_dt` / `pack_tile_with_dt` from `moreh_common.hpp` or explicit `reconfig_data_format_srca/_srcb` — indicates FP32_DEST_ACC paths that the helper must also handle. If the helper only does one entry-time reconfig and the kernel has multiple operand dtypes, flag this as a correctness risk and test with `fp32_dest_acc_en=True`.
+- **Raw LLK calls it makes** (`*_tile_init`, `*_tile`, `reconfig_data_format*`, `cb_*`, `tile_regs_*`, `pack_tile*`, `matmul_*`, `reduce_*`, etc.). For each, decide: covered by an existing helper API, requires a helper update, or out of scope.
+- **CB lifecycle per operand** — classify each input/output CB as one of:
+  - *Per-tile*: `cb_wait_front(N, 1) / ... / cb_pop_front(N, 1)` inside the loop body.
+  - *Upfront*: `cb_wait_front(N, count)` once, processed in a loop, `cb_pop_front(N, count)` once at the end.
+  - *Persistent*: waited once before the block, never popped inside (caller-managed).
+  - *Streaming, pre-pushed*: tiles already present when the block starts (no wait in compute), popped per tile.
+  - *Cumulative*: `cb_wait_front(N, base + i)` growing each iteration — usually unsupported by helpers.
+  Map each lifecycle to the policy enum the target helper exposes (consult the helper header).
+- **Dtype assumptions**: any `*_with_dt` calls, explicit `reconfig_data_format_srca/_srcb`, or per-iteration format swaps indicate FP32_DEST_ACC or mixed-dtype paths. If the helper only does one entry-time reconfig and the kernel switches dtypes mid-loop, flag this as a correctness risk; the migration MUST be tested with `fp32_dest_acc_en=True` and any mixed-dtype combos the original kernel supported.
 - **Control-flow shape of the replaceable block**:
-  - `if constexpr (compile_time_flag)` → trivially migratable; body is one chain.
-  - `if (runtime_bool)` → write one `sfpu_pipeline` / `binary_op` call per branch. Each branch constructs its own compile-time chain; the runtime `if` just selects which to invoke. Do NOT try to lift the runtime condition into the chain DSL.
-  - Interleaved SFPU+FPU in one DEST window (e.g. `add_tiles(...) ; rsqrt_tile(dst)`, `sub_tiles_bcast(...) ; exp_tile(dst)`) → use `binary_op_helpers` with a **chain-PostOp**: the final `PostOp` argument accepts `compute_kernel_lib::sfpu_chain(Op1{}, Op2{}, ...)` and runs it inside the same acquire/commit/wait/release window. Valid ops: any chain element. `Load<>` is permitted (the binary helper handles the unpacker init + per-tile reinit after the load). Ops on slots other than `D0` are permitted provided the caller pre-loads the secondary DEST slots.
-  - Interleaved SFPU+FPU that needs to load a *third* tile mid-window (e.g. post-binary mask load) → cannot fuse; split into `binary_op(...)` (pack to intermediate CB) + `sfpu_pipeline(...)` that loads the extra tile. The intermediate CB is the cost of the split; the helper still removes all the boilerplate around each phase.
+  - `if constexpr (compile_time_flag)` → trivially migratable; one helper invocation per arm.
+  - `if (runtime_bool)` → emit one helper call per branch; do NOT try to lift the runtime condition inside a compile-time helper composition.
+  - Interleaved op classes in one DEST window (e.g. FPU+SFPU, matmul+eltwise) → only migratable if the target helper exposes a fusion / post-op extension point. Otherwise split into separate helper calls with an intermediate CB.
 
 ### Step 2 — Gate-check against the helper API
 
 If the audit turns up ANY of these, return to a prior step before writing the migration:
 
-- A needed op struct does not exist → add it (conventions §5), then resume.
-- An enum value or policy is missing (e.g. partial reconfig mode, persistent load) → update the helper via the pipeline in update mode, then resume.
-- The control-flow is Tier 3 — accept that this kernel stays on raw LLK and move on.
+- A needed op struct, API, or fusion point does not exist → Helper Update (conventions §5) or Helper Creation, then resume.
+- A required policy / enum value is missing (e.g. a CB lifecycle the helper does not yet model, a dtype-reconfig mode it does not emit) → Helper Update via pipeline, then resume.
+- The control-flow or LLK pattern is fundamentally unsupported (cumulative waits, deeply interleaved op classes with no fusion point, exotic pack patterns) → leave that block on raw LLK and move on.
 
 ### Step 3 — Write the migration
 
 Keep the scope surgical:
 
-- **Only replace the LLK-call block**. Do NOT refactor surrounding code, rename CBs, or touch unrelated operations. If the kernel had reduce/binary helpers already, leave those calls alone.
-- **Always fully qualify helper symbols** (`compute_kernel_lib::Load<...>`, `compute_kernel_lib::sfpu_pipeline(...)`). Do NOT introduce `using namespace compute_kernel_lib;` or namespace aliases such as `namespace ckl = compute_kernel_lib;`. Namespace pollution — even block-scoped — leaks helper names into later additions to that scope and hides the dependency on the helper library at the call site. The verbosity of full qualification is the point: it is searchable, auditable, and keeps unrelated identifiers from silently binding to helper symbols.
-- **Delete dead locals** — `reduce_dst_idx`, `mask_dst_idx`, and similar DEST-index variables become unreachable once the chain manages DEST itself. Remove them.
-- **Preserve surrounding CB lifecycle**. The pipeline honours the Load's `LoadPolicy` for wait/pop; if the kernel still does `cb_wait_front(cb_mask, N)` / `cb_pop_front(cb_mask, N)` at the top/bottom of the kernel scope (persistent CBs), those stay.
-- **Swap `api/compute/*.h` includes** for `ttnn/cpp/ttnn/kernel_lib/*_helpers.hpp` only when the raw headers become unused. Do not drop headers still needed by unmigrated code paths in the same file.
+- **Only replace the LLK-call block.** Do NOT refactor surrounding code, rename CBs, reorder operations, or touch unrelated paths in the same kernel. Other helper calls already in the file stay as-is.
+- **Always fully qualify helper symbols** (`compute_kernel_lib::<Symbol>`). Do NOT introduce `using namespace compute_kernel_lib;` or namespace aliases (`namespace ckl = compute_kernel_lib;`). Namespace pollution — even block-scoped — leaks helper names into later additions to that scope and hides the dependency on the helper library at the call site. The verbosity of full qualification is the point: it is searchable, auditable, and prevents unrelated identifiers from silently binding to helper symbols.
+- **Delete dead locals.** DEST-slot indices, scratch counters, and lifecycle bookkeeping that the helper now owns become unreachable. Remove them; do not keep them "for safety".
+- **Preserve surrounding CB lifecycle the helper does not own.** If the helper's policy declares it does not wait/pop a given CB (caller-managed / persistent), the kernel's existing `cb_wait_front` / `cb_pop_front` at the surrounding scope MUST stay.
+- **Trim includes only when fully unused.** Swap `api/compute/*.h` includes for `ttnn/cpp/ttnn/kernel_lib/*_helpers.hpp` only after every raw LLK call from that header is gone. Headers still needed by unmigrated paths in the same file stay.
 
 ### Step 4 — Verify on device
 
-- Build (`./build_metal.sh`) — only compiles the host library. Kernels JIT at
-  runtime; a passing build is necessary but insufficient.
-- Run the kernel_lib validation suite: `scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py`.
-- Run the exercising pytest(s) for this operation. Resolve the path via the
-  manifest (see next section) instead of re-searching the tree each session.
-- Confirm both `fp32_dest_acc_en=False` and `fp32_dest_acc_en=True` cases pass when the operation tests FP32 accumulation.
-- If any test fails: diagnose whether it's a helper gap (→ Step 2) or a migration mistake (→ Step 3).
+Build is necessary but **not** sufficient — kernels JIT at runtime, so a clean `./build_metal.sh` says nothing about correctness. Every migration MUST pass on real device.
+
+- Build the host library: `./build_metal.sh`.
+- Run the kernel_lib validation suite (covers the helper itself):
+  `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py`.
+- Run the operation's pytest(s). Resolve the path via the [Pytest Manifest](#pytest-manifest) instead of re-searching the tree each session.
+- Confirm the test exercises THIS kernel file — see [Verifying the Test Exercises the Changed Kernel](#verifying-the-test-exercises-the-changed-kernel). Same-named files in other directories silently shadow the one you changed.
+- Cover the dtype matrix the kernel supported pre-migration: at minimum run `fp32_dest_acc_en` ∈ {False, True} when the op tests FP32 accumulation, and any mixed-dtype combos the original kernel handled.
+- If any test fails: diagnose whether it's a helper gap (→ Step 2) or a migration mistake (→ Step 3). Do NOT relax the test or skip dtype combos to make it pass.
 
 ### Pytest Manifest
 
@@ -168,7 +177,7 @@ manifest):
    program factory that compiles it.
 2. Trace the factory back to the `ttnn.*` op it registers.
 3. `grep -rn "ttnn\.<op_name>" tests/ --include="*.py"` → candidate tests.
-4. Run the shortest candidate with `scripts/tt-test.sh --timeout=60` and
+4. Run the shortest candidate with `scripts/run_safe_pytest.sh` and
    confirm it actually JIT-compiles the target kernel (optional paranoid
    check: temporarily plant `static_assert(false, "sentinel")` in the kernel
    and confirm the test fails to compile).
@@ -179,50 +188,51 @@ manifest):
 - Update `migration_blockers.md` or the relevant `*_analysis.md` to mark the kernel as migrated.
 - Cross-reference the helper feature(s) it now consumes so later removals notice the dependency.
 
-### Policy Mapping — Raw CB Lifecycle → Helper Policy
+### CB Lifecycle Taxonomy
 
-Use this table when reading a raw kernel to choose `BinaryInputPolicy` and `BinaryOutputPolicy`.
+Every helper that wraps a CB-consuming or CB-producing block exposes some form of policy enum that selects the wait/pop or reserve/push pattern it emits. The names differ per helper; the underlying lifecycles are the same. Use this taxonomy to read the raw kernel, then look up the matching enum in the target helper's header.
 
-**Input policies**
+**Input lifecycles**
 
-| Raw pattern | Policy |
-|-------------|--------|
-| `cb_wait_front(A, 1); ... cb_pop_front(A, 1)` per tile | `WaitAndPopPerTile` |
-| `cb_wait_front(A, N); ... cb_pop_front(A, N)` at end of block | `WaitUpfrontPopAtEnd` |
-| `cb_wait_front(A, N)` once before loop, never popped in loop (persistent) | `NoWaitNoPop` (caller manages) |
-| `cb_wait_front(A, N)` once before loop, popped once after loop | `WaitUpfrontPopAtEnd` if inside-helper block, `NoWaitPopAtEnd` if pre-waited by caller |
-| Tiles already present (pushed by reader/dataflow, no wait in compute) | `NoWaitNoPop` |
-| Cumulative wait (`cb_wait_front(A, base + i)` growing each iteration) | **Not supported** — leave on raw LLK |
+| Raw pattern | Lifecycle |
+|---|---|
+| `cb_wait_front(A, 1); ... cb_pop_front(A, 1)` per tile | per-tile (helper waits + pops) |
+| `cb_wait_front(A, N); ... cb_pop_front(A, N)` at end of block | upfront (helper waits + pops at end) |
+| `cb_wait_front(A, N)` once before loop, popped once after loop, but **outside** the helper-replaced block | pre-waited (helper pops at end, caller waits) |
+| `cb_wait_front(A, N)` once before loop, never popped in loop | persistent / caller-managed (helper neither waits nor pops) |
+| Tiles already present (pushed by reader, no wait in compute) | streaming, pre-pushed (helper neither waits nor pops; caller pops downstream) |
+| Cumulative wait (`cb_wait_front(A, base + i)` growing each iteration) | **unsupported** — leave on raw LLK |
 
-**Output policies**
+**Output lifecycles**
 
-| Raw pattern | Policy |
-|-------------|--------|
-| `cb_reserve_back(1); pack_tile; cb_push_back(1)` per tile | `PerTile` |
-| `cb_reserve_back(N)` upfront, `pack_tile` sequential, `cb_push_back(N)` at end | `Bulk` |
-| `cb_reserve_back(chunk)` per chunk, `pack_tile` per tile, `cb_push_back(chunk)` per chunk | `PerChunk` |
-| CB pre-reserved by caller before this block, `pack_tile` sequential, `cb_push_back(N)` at end | `Bulk` — a second `cb_reserve_back` on an already-reserved CB is a no-op (just checks free slots; write pointer hasn't advanced) |
+| Raw pattern | Lifecycle |
+|---|---|
+| `cb_reserve_back(1); pack; cb_push_back(1)` per tile | per-tile |
+| `cb_reserve_back(N)` upfront, pack sequential, `cb_push_back(N)` at end | bulk |
+| `cb_reserve_back(chunk); pack chunk; cb_push_back(chunk)` repeated | per-chunk |
+| CB pre-reserved by caller, helper packs sequentially, helper or caller pushes at end | bulk (a duplicate `cb_reserve_back` on an already-reserved CB is a no-op — safe) |
 
-### Blockers Checklist (Step 1 gate)
+### Generic Migration Blockers (Step 1 gate)
 
-Before writing a migration, check each stage of the raw kernel for these patterns. **Any hit → that stage stays on raw LLK** (log as NOT-MIGRATED or PARTIAL):
+Before writing a migration, check each stage of the raw kernel for these patterns. **Any hit → that stage stays on raw LLK** (log as NOT-MIGRATED or PARTIAL). These are helper-agnostic; the target helper may add more (consult its header).
 
-1. **Non-zero absolute tile index on A or B** — `*_tiles(A, B, j, j + offset, j)` where `offset` is non-zero and runtime-varying or non-zero and compile-time. Helper tile indexing is sequential from 0.
-2. **Cumulative wait** — `cb_wait_front(CB, base + iter * step)` where the count grows each iteration. No helper policy covers this.
-3. **Non-sequential output pack** — `pack_tile(i, out_cb, absolute_idx)` where `absolute_idx` is not `base + i`. Helper `Bulk` packs sequentially; `PerChunk` packs at `wt` relative index.
-4. **Asymmetric wait/process/pop** — `cb_wait_front(N); process(M); cb_pop_front(N)` with `M < N`. Helper's wait count == process count == pop count.
-5. **In-place output with capacity=1** — output CB is the same as input A, AND the program factory allocates `num_tiles = 1` for that CB. Raw code does `cb_pop_front(A, 1); cb_reserve_back(A, 1)` (pop before reserve). Helper does `cb_reserve_back` before `cb_pop_front` — **deadlocks** on a capacity-1 CB. Check `{cb_name}_num_tiles` in the program factory before migrating. If capacity ≥ 2, migration is safe.
-6. **Runtime op selection** — `if (runtime_flag) mul_tiles(...) else add_tiles(...)` dispatching at runtime. Write two separate helper calls in branches; cannot lift into a single helper call.
-7. **L1 accumulation pack** — `pack_tile<true>(i, cb, 0)` with `llk_pack_reconfig_l1_acc(1)` that accumulates into the same output tile slot. No helper output policy covers this.
-8. **Matmul interleaved** — `matmul_tiles(...)` inside the same loop as binary ops. Helpers are eltwise-only; split into separate matmul block + binary helper.
+1. **Cumulative wait** — `cb_wait_front(CB, base + iter * step)` where the wait count grows each iteration. No standard helper lifecycle covers this.
+2. **Asymmetric wait/process/pop** — `cb_wait_front(N); process(M); cb_pop_front(N)` with `M ≠ N`. Helper lifecycles assume wait count == process count == pop count.
+3. **Non-sequential pack indexing** — `pack_tile(src_idx, cb, abs_idx)` where `abs_idx` is not derivable from the tile loop index. Helpers pack at sequential or relative indices.
+4. **In-place output with capacity = 1** — output CB is the same as an input CB, AND the program factory allocates `num_tiles = 1` for it. Raw code does `cb_pop_front; cb_reserve_back` (pop before reserve); most helpers do the reverse and **deadlock** on a capacity-1 CB. Check the program factory before migrating. Capacity ≥ 2 is safe.
+5. **Runtime op selection within a single window** — `if (runtime_flag) opA(...) else opB(...)` where the helper composes ops at compile time. Emit one helper call per branch instead.
+6. **L1-accumulating pack** — `pack_tile<true>(...)` with `llk_pack_reconfig_l1_acc(1)` accumulating into the same output slot across iterations. Most output lifecycles do not model this.
+7. **Operation classes the helper does not span** — e.g. matmul interleaved inside an eltwise helper, or reduce inside a chain helper that only models SFPU ops. Split into separate helper calls (or leave on raw LLK if no helper covers the foreign block).
+
+The target helper may add helper-specific blockers (its own batching/DEST-stride pitfalls, dtype reconfig limits, fusion-point preconditions). Read the helper's header before completing Step 1.
 
 ### Partial Migration
 
-A kernel that has SOME migratable stages and SOME blocked stages is **PARTIAL** — not NOT-MIGRATED. Replace only the migratable stages; leave blocked stages on raw LLK. Document which stages were migrated and which blockers remain.
+A kernel that has SOME migratable stages and SOME blocked stages is **PARTIAL** — not NOT-MIGRATED. Replace only the migratable stages; leave the rest on raw LLK. Document which stages were migrated and the specific blocker per blocked stage.
 
 Good indicators that partial migration is worth doing:
-- The migratable stage involves multiple CB lifecycle calls (`wait + acquire + init + loop + commit + pack + release + pop`) — the helper reduces all of these to one call.
-- The blocker is in a different stage that has no dependency on the migratable stage's output CB.
+- The migratable stage involves multiple CB / DEST / init lifecycle calls — the helper collapses all of them into one call.
+- The blocker is in a different stage with no data dependency on the migratable stage's output CB.
 
 ### Verifying the Test Exercises the Changed Kernel
 
@@ -238,33 +248,22 @@ Before trusting a passing test:
 3. Confirm the test file calls that op (grep for `ttnn.op_name` in the test).
 4. Optional paranoid check: introduce a `static_assert(false, "sentinel")` in the kernel, run the test, confirm it FAILS to compile, then revert.
 
-### sfpu_pipeline output policy and batching
+### DEST × CB Capacity Deadlocks (general)
 
-`sfpu_pipeline` has two orthogonal output controls:
+Helpers that hold DEST across multiple tiles while writing to an output CB can deadlock when the output CB is too small to drain. The shape:
 
-| `SfpuOutputPolicy` | Behavior | When to use |
-|--------------------|----------|-------------|
-| `Bulk` | `cb_reserve_back(N)` upfront, pack all, `cb_push_back(N)` after loop | Output CB capacity ≥ `num_tiles` (block-level CBs) |
-| `PerTile` | `cb_reserve_back(1); pack; cb_push_back(1)` per tile, inside acquire window | Output CB capacity < `num_tiles` (streaming CBs, capacity=2) |
+- Helper acquires DEST and starts batching `batch_size` tiles.
+- Per-tile pack / push hits `cb_reserve_back` and spin-waits for the writer to drain.
+- The writer cannot drain until DEST is released; DEST cannot release until the batch finishes — **circular wait**.
 
-**Critical**: `SfpuBatching::Auto` with `SfpuOutputPolicy::PerTile` **deadlocks** when
-`batch_size > output CB capacity`. The pipeline holds DEST while spin-waiting for
-`cb_reserve_back` to succeed; the writer can't free output space until DEST is
-released — circular dependency.
-
-Check the program factory for `dst_num_tiles` (or `*_num_tiles`):
-- If output CB capacity = `num_tiles` (block-level) → `Bulk` + `Auto` batching is safe.
-- If output CB capacity = 1 or 2 (streaming, e.g. `value_or(2)`) → `PerTile` + `Disabled` batching.
-
-For chains with stride > 1 (using multiple DEST slots, e.g. `D0` + `D1`), `Auto` batch_size
-= `DEST_AUTO_LIMIT / stride`. Even small strides (2) can trigger the deadlock if capacity=2
-and batch_size=4.
+Generic rule: if the helper exposes a batching control AND a per-tile output policy, ensure the resolved `batch_size ≤ output CB capacity` (read the capacity from the program factory's CB allocation). The helper's header documents its own batching/output enum names and any safety asserts; consult it for the exact knob.
 
 ### Anti-patterns (do NOT do these during migration)
 
-- Migrating across a helper gap by hand-coding the missing op inline. Fix the helper first.
-- Restructuring control flow to fit the helper. If the kernel's runtime conditionals don't fit a single chain, use multiple `sfpu_pipeline` calls or leave that branch on raw LLK.
-- Batching migrations of unrelated kernels in one commit. One kernel per commit; failures should bisect to a single change.
-- Silently dropping FP32_DEST_ACC-guarded reconfig calls. Verify the helper emits an equivalent or flag the gap.
-- Marking a kernel NOT-MIGRATED when only some stages are blocked. Log as PARTIAL, migrate the clean stages, record the specific blocker per blocked stage.
-- Assuming the first passing test validates your edit. Verify the test exercises your exact kernel file — same-named files in other directories can silently shadow the one you changed.
+- **Hand-coding around a helper gap.** If an op, policy, or fusion point is missing, fix the helper (Helper Update / Helper Creation) — do not inline a workaround in the kernel.
+- **Restructuring control flow to fit the helper.** If the kernel's runtime conditionals don't fit a single helper call, emit multiple helper calls (one per branch) or leave that branch on raw LLK. Do NOT reshape the kernel's logic.
+- **Batching migrations of unrelated kernels in one commit.** One kernel per commit so failures bisect to a single change.
+- **Silently dropping FP32_DEST_ACC-guarded reconfig calls.** Verify the helper emits an equivalent reconfig (or flag the gap and leave the path on raw LLK).
+- **Marking a kernel NOT-MIGRATED when only some stages are blocked.** Log as PARTIAL, migrate the clean stages, record the specific blocker per blocked stage.
+- **Assuming the first passing test validates your edit.** Verify the test exercises your exact kernel file — same-named files in other directories can silently shadow the one you changed.
+- **Skipping the dtype matrix.** Re-run `fp32_dest_acc_en ∈ {False, True}` and any mixed-dtype combo the original kernel supported, even if a single bf16 run passes.

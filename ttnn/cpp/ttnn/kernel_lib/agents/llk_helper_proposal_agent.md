@@ -358,7 +358,7 @@ Parameterize over `num_tiles ∈ {1, 8, 64}` at minimum. Reference scaffold:
 Phase 2 (Validate) invokes it and blocks on failure.
 
 ```bash
-scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
 ```
 
 **2. Op-specific migration tests** — pytest commands for the kernels this
