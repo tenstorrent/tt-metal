@@ -22,16 +22,21 @@ class GRPOMonitor(TrainerCallback):
         os.makedirs(output_dir, exist_ok=True)
         with open(self.file_path, mode="w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["step", "reward", "avg_length"])
+            writer.writerow(["step", "reward", "avg_length", "step_time_s", "generation_time_s"])
 
     def on_step_end(self, trainer, step, **kwargs):
         reward = kwargs["reward_mean"]
         length = kwargs["mean_completion_len"]
+        step_time_s = kwargs.get("step_time_s", float("nan"))
+        generation_time_s = kwargs.get("generation_time_s", float("nan"))
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{timestamp}] Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens")
+        print(
+            f"[{timestamp}] Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens "
+            f"| Step: {step_time_s:.2f}s | Gen: {generation_time_s:.2f}s"
+        )
         with open(self.file_path, mode="a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([step, reward, length])
+            writer.writerow([step, reward, length, step_time_s, generation_time_s])
 
     def on_train_end(self, trainer):
         print("Training complete.")
