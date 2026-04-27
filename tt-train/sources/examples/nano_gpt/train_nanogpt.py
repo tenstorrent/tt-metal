@@ -1234,11 +1234,9 @@ def main():
             print("Using default model config")
             model_config = ModelConfig()
     except FileNotFoundError as e:
-        print(f"Warning: Config file not found: {e}")
-        print("Using default configs")
-        yaml_config = {}
-        training_config = TrainingConfig()
-        model_config = ModelConfig()
+        print(f"Error: Config file not found: {e}")
+        ttml.autograd.AutoContext.get_instance().close_device()
+        raise
 
     # Override with command line args (only if provided)
     if args.data_path:
