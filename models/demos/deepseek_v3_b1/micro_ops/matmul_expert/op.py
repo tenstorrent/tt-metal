@@ -919,6 +919,7 @@ def create_dram_expert_tensors_multi_device(
     k_parallel_per_bank: int = 1,
     allocate_in1_backing: bool = True,
     primary_worker_cores=None,
+    gather_to_next: bool = False,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
@@ -926,6 +927,12 @@ def create_dram_expert_tensors_multi_device(
     Assumes homogeneous DRAM bank topology across all devices.
     ``primary_worker_cores`` can override the canonical bank-worker order; callers
     that pass per-core bank IDs must use the same order here.
+
+    ``gather_to_next``: when True, place the primary core at the LAST in-bank
+    offset of compute_cores_list so it gets ``core_in_bank_idx = cores_per_bank-1``
+    and matches the kernel's ``is_gather_receiver`` derivation. The bank's
+    gathered N output then lands on the primary's L1 — invisible to downstream
+    consumers, which still see ``primary_cores_list`` unchanged.
 
     When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
     allocated (caller provides their own — e.g. the fused MoE kernel overlays
@@ -952,7 +959,10 @@ def create_dram_expert_tensors_multi_device(
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):
-            compute_cores_list.append(ttnn.CoreCoord(primary_core.x + offset, primary_core.y))
+            # gather_to_next: reverse the in-bank offset so the primary lands at
+            # the LAST position (= core_in_bank_idx cores_per_bank-1 = receiver).
+            x_offset = (cores_per_dram_bank - 1) - offset if gather_to_next else offset
+            compute_cores_list.append(ttnn.CoreCoord(primary_core.x + x_offset, primary_core.y))
     compute_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores_list]
     )

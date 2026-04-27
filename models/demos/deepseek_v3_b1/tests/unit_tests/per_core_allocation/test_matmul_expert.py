@@ -603,9 +603,10 @@ def _validate_dram_output_accum(
     """Validate accumulated DRAM output from dram_core_grid output tensor.
 
     gather_to_next: each core's shard widens to cores_per_dram_bank * dram_per_core_N
-    tiles. Receivers (last core in each bank) hold the bank's full N output
-    [c0_n_slice | c1_n_slice | ...]; senders' upper slots are junk. Read receiver
-    shards across banks to reconstruct the full N output.
+    tiles. The kernel's receiver = LAST in compute_cores_list bank; the swap
+    inside create_dram_expert_tensors_multi_device places the primary there, so
+    in the unswapped dram_core_grid (used for output sharding) the receiver
+    sits at the FIRST shard of each bank. Read shard 0 of each bank.
     """
     dram_core_width = dram_per_core_N * tile_w
 
@@ -619,7 +620,7 @@ def _validate_dram_output_accum(
         slices = []
         if gather_to_next:
             for bank_idx in range(num_banks):
-                receiver_core_idx = bank_idx * cores_per_dram_bank + (cores_per_dram_bank - 1)
+                receiver_core_idx = bank_idx * cores_per_dram_bank
                 start = receiver_core_idx * per_core_shard_w
                 slices.append(output_dev[..., start : start + per_core_shard_w])
         else:
@@ -774,6 +775,7 @@ def _build_dram_experts(
     Kt,
     tile_w,
     k_parallel_per_bank=1,
+    gather_to_next=False,
 ):
     """Build DRAM CompressedTensors and dram_meta_tensors for the kernel.
 
@@ -834,6 +836,7 @@ def _build_dram_experts(
         is_dram_flags=dram_meta_flags,
         subblock_n=subblock_n,
         k_parallel_per_bank=k_parallel_per_bank,
+        gather_to_next=gather_to_next,
     )
     return dram_cts, dram_meta_tensors
 
@@ -1442,6 +1445,7 @@ def _run_accum(
         subblock_n,
         Kt,
         tile_w,
+        gather_to_next=gather_to_next,
     )
     a_tensor = _build_activation_tensor(
         torch_a_all, mesh_device, compute_core_grid, num_cores, M, K * num_active, tile_w
@@ -1651,6 +1655,7 @@ def _run_slice_k(
         Kt,
         tile_w,
         k_parallel_per_bank=k_parallel_per_bank,
+        gather_to_next=gather_to_next,
     )
     a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
     index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
