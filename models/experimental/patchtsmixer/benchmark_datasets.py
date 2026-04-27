@@ -24,11 +24,12 @@ import torch
 import ttnn
 
 from models.experimental.patchtsmixer.tt.model_processing import (
+    preprocess_block,
     preprocess_embedding_proj,
-    preprocess_gated_attention,
-    preprocess_layernorm,
-    preprocess_linear,
+    preprocess_forecast_head,
+    preprocess_linear_head,
     preprocess_positional_encoding,
+    preprocess_pretrain_head,
 )
 
 
@@ -155,149 +156,66 @@ def load_or_create_model(model_class, config, checkpoint_path=None):
     return model
 
 
-def preprocess_parameters_for_ttnn(torch_model, device, num_layers, use_gated_attn, task_mode="forecasting"):
-    """Convert PyTorch model parameters to TTNN format"""
-    base = "model"
+def preprocess_parameters_for_ttnn(
+    torch_model,
+    device,
+    num_layers,
+    use_gated_attn,
+    task_mode="forecasting",
+    mode="common_channel",
+):
+    """Convert PyTorch model parameters to TTNN format."""
     sd = torch_model.state_dict()
-    state_dict = {}
+    parameters = {}
 
-    # Determine the correct base prefix based on task mode
+    # Determine model-specific prefixes.
     if task_mode == "forecasting":
         embedding_key = "patch_embed"
         pos_enc_key = "pos_enc"
         encoder_key = "mixer_block"
         head_key = "head"
-    else:  # regression, classification, pretraining
+    else:
         embedding_key = "embedding"
         pos_enc_key = "pos_encoder"
         encoder_key = "encoder"
         head_key = "head"
 
-    # Embedding
-    state_dict[f"{base}.{embedding_key}.proj.weight"] = sd[f"{embedding_key}.proj.weight"]
-    state_dict[f"{base}.{embedding_key}.proj.bias"] = sd[f"{embedding_key}.proj.bias"]
-
-    # Positional encoding
-    state_dict[f"{base}.{pos_enc_key}.pe"] = sd[f"{pos_enc_key}.pe"]
-
-    # Encoder/Mixer layers
-    for i in range(num_layers):
-        prefix = f"{base}.{encoder_key}.layers.{i}"
-
-        for mixer in ["patch_mixer", "feature_mixer"]:
-            state_dict[f"{prefix}.{mixer}.norm.norm.weight"] = sd[f"{encoder_key}.layers.{i}.{mixer}.norm.norm.weight"]
-            state_dict[f"{prefix}.{mixer}.norm.norm.bias"] = sd[f"{encoder_key}.layers.{i}.{mixer}.norm.norm.bias"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc1.weight"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc1.weight"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc1.bias"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc1.bias"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc2.weight"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc2.weight"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc2.bias"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc2.bias"]
-
-            if use_gated_attn:
-                state_dict[f"{prefix}.{mixer}.gate.attn_layer.weight"] = sd[
-                    f"{encoder_key}.layers.{i}.{mixer}.gate.attn_layer.weight"
-                ]
-                state_dict[f"{prefix}.{mixer}.gate.attn_layer.bias"] = sd[
-                    f"{encoder_key}.layers.{i}.{mixer}.gate.attn_layer.bias"
-                ]
-
-    # Head
-    state_dict[f"{base}.{head_key}.proj.weight"] = sd[f"{head_key}.proj.weight"]
-    state_dict[f"{base}.{head_key}.proj.bias"] = sd[f"{head_key}.proj.bias"]
-
-    # Convert to TTNN
-    parameters = {}
-
-    # Helper to extract sub-state_dict for a component
-    def extract_component_state(prefix):
-        """Extract state dict for a specific component, removing the prefix"""
-        component_dict = {}
+    def extract_substate(prefix):
         prefix_with_dot = f"{prefix}."
-        for key, value in state_dict.items():
-            if key.startswith(prefix_with_dot):
-                # Remove the prefix from the key
-                new_key = key[len(prefix_with_dot) :]
-                component_dict[new_key] = value
-        return component_dict
+        return {k[len(prefix_with_dot) :]: v for k, v in sd.items() if k.startswith(prefix_with_dot)}
 
-    # Embedding
-    embed_state = extract_component_state(f"{base}.{embedding_key}")
-    embed_params = preprocess_embedding_proj(embed_state, f"{base}.{embedding_key}", device=device)
-    parameters.update(embed_params)
+    # Embedding + positional encoding.
+    embed_sd = extract_substate(embedding_key)
+    parameters.update(preprocess_embedding_proj(embed_sd, f"model.{embedding_key}", device=device))
 
-    # Positional encoding
-    pos_enc_state = extract_component_state(f"{base}.{pos_enc_key}")
-    pos_enc_params = preprocess_positional_encoding(pos_enc_state, f"{base}.{pos_enc_key}", device=device)
-    parameters.update(pos_enc_params)
+    pos_enc_sd = extract_substate(pos_enc_key)
+    parameters.update(preprocess_positional_encoding(pos_enc_sd, f"model.{pos_enc_key}", device=device))
 
-    for i in range(num_layers):
-        prefix = f"{base}.{encoder_key}.layers.{i}"
+    # Encoder/mixer block. This handles channel_mixer when mode == "mix_channel".
+    encoder_sd = extract_substate(encoder_key)
+    parameters.update(
+        preprocess_block(
+            encoder_sd,
+            f"model.{encoder_key}",
+            device,
+            num_layers=num_layers,
+            mode=mode,
+            use_gated_attn=use_gated_attn,
+        )
+    )
 
-        for mixer_name in ["patch_mixer", "feature_mixer"]:
-            mixer_path = f"{prefix}.{mixer_name}"
-
-            # Extract sub-state for this mixer
-            mixer_state = extract_component_state(mixer_path)
-
-            # For layernorm, extract the norm component and pass empty base
-            norm_state = {}
-            for key, value in mixer_state.items():
-                if key.startswith("norm."):
-                    # Remove "norm." prefix: "norm.norm.weight" -> "norm.weight"
-                    norm_state[key[5:]] = value
-
-            norm_params = preprocess_layernorm(norm_state, f"{mixer_path}.norm", device=device)
-            parameters.update(norm_params)
-
-            # MLP layers - extract mlp component
-            mlp_state = {}
-            for key, value in mixer_state.items():
-                if key.startswith("mlp."):
-                    # Remove "mlp." prefix
-                    mlp_state[key[4:]] = value
-
-            # Extract fc1 and fc2 separately
-            fc1_state = {}
-            fc2_state = {}
-            for key, value in mlp_state.items():
-                if key.startswith("fc1."):
-                    fc1_state[key[4:]] = value  # "fc1.weight" -> "weight"
-                elif key.startswith("fc2."):
-                    fc2_state[key[4:]] = value  # "fc2.weight" -> "weight"
-
-            fc1_params = preprocess_linear(fc1_state, f"{mixer_path}.mlp.fc1", device=device)
-            fc2_params = preprocess_linear(fc2_state, f"{mixer_path}.mlp.fc2", device=device)
-            parameters.update(fc1_params)
-            parameters.update(fc2_params)
-
-            if use_gated_attn:
-                gate_state = {}
-                for key, value in mixer_state.items():
-                    if key.startswith("gate."):
-                        # Remove "gate." prefix
-                        gate_state[key[5:]] = value
-                gate_params = preprocess_gated_attention(gate_state, f"{mixer_path}.gate", device=device)
-                parameters.update(gate_params)
-
-    # Head preprocessing based on task mode
-    head_state = extract_component_state(f"{base}.{head_key}")
-
+    # Task heads.
+    head_sd = extract_substate(head_key)
     if task_mode == "forecasting":
-        from models.experimental.patchtsmixer.tt.model_processing import preprocess_forecast_head
-
-        head_params = preprocess_forecast_head(head_state, f"{base}.{head_key}", device=device)
+        head_params = preprocess_forecast_head(head_sd, f"model.{head_key}", device=device)
     elif task_mode in ["regression", "classification"]:
-        from models.experimental.patchtsmixer.tt.model_processing import preprocess_linear_head
-
-        head_params = preprocess_linear_head(head_state, f"{base}.{head_key}", device=device)
+        head_params = preprocess_linear_head(head_sd, f"model.{head_key}", device=device)
     elif task_mode == "pretraining":
-        from models.experimental.patchtsmixer.tt.model_processing import preprocess_pretrain_head
-
-        head_params = preprocess_pretrain_head(head_state, f"{base}.{head_key}", device=device)
+        head_params = preprocess_pretrain_head(head_sd, f"model.{head_key}", device=device)
     else:
         raise ValueError(f"Unknown task_mode: {task_mode}")
 
     parameters.update(head_params)
-
     return parameters
 
 
@@ -441,7 +359,7 @@ def run_benchmark(
 
     try:
         # Convert parameters
-        parameters = preprocess_parameters_for_ttnn(torch_model, device, num_layers, use_gated_attn, task_mode)
+        parameters = preprocess_parameters_for_ttnn(torch_model, device, num_layers, use_gated_attn, task_mode, mode)
 
         # Create TTNN model
         ttnn_model_config = {
