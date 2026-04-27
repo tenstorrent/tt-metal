@@ -135,6 +135,68 @@ def compute_metrics(predictions, targets):
     }
 
 
+def build_task_targets(
+    samples, targets, *, task_mode, prediction_length, patch_length, patch_stride, num_targets, num_classes
+):
+    """Build task-specific metric targets from forecast windows."""
+    if task_mode == "forecasting":
+        return targets
+
+    if task_mode == "regression":
+        # Use mean over prediction horizon as regression target.
+        reg_targets = targets.mean(axis=1)  # (B, C)
+        return reg_targets[:, :num_targets].astype(np.float32)
+
+    if task_mode == "classification":
+        # Derive classes from the mean future OT channel (last feature).
+        signal = targets[:, :, -1].mean(axis=1)
+        quantiles = np.linspace(0.0, 1.0, num_classes + 1)
+        bins = np.quantile(signal, quantiles)
+        # Ensure strictly increasing bin edges for stable digitize.
+        bins = np.maximum.accumulate(bins)
+        for i in range(1, len(bins)):
+            if bins[i] <= bins[i - 1]:
+                bins[i] = bins[i - 1] + 1e-6
+        labels = np.digitize(signal, bins[1:-1], right=False)
+        return np.eye(num_classes, dtype=np.float32)[labels]
+
+    if task_mode == "pretraining":
+        # Patchify past context to reconstruction target: (B, C, Np, patch_length).
+        bsz, context_length, channels = samples.shape
+        num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+        past_bcl = np.transpose(samples, (0, 2, 1))
+        patch_targets = np.empty((bsz, channels, num_patches, patch_length), dtype=np.float32)
+        for p in range(num_patches):
+            s = p * patch_stride
+            patch_targets[:, :, p, :] = past_bcl[:, :, s : s + patch_length]
+        return patch_targets
+
+    raise ValueError(f"Unknown task_mode for targets: {task_mode}")
+
+
+def to_metric_output(pred, task_mode):
+    """Convert model output tensor to numpy array for metric computation."""
+    pred_np = pred.detach().cpu().float().numpy()
+
+    # Forecast TT path returns (B, H, 1, C); squeeze singleton patch axis.
+    if task_mode == "forecasting" and pred_np.ndim == 4 and pred_np.shape[2] == 1:
+        pred_np = np.squeeze(pred_np, axis=2)
+
+    if task_mode in ["regression", "classification"]:
+        # TTNN linear-head outputs may include leading singleton dims (e.g. 1,1,B,N).
+        pred_np = np.squeeze(pred_np)
+        if pred_np.ndim == 1:
+            pred_np = pred_np[None, :]
+
+    if task_mode == "classification":
+        # Compare probabilities against one-hot targets.
+        pred_np = pred_np - np.max(pred_np, axis=-1, keepdims=True)
+        exp = np.exp(pred_np)
+        pred_np = exp / np.sum(exp, axis=-1, keepdims=True)
+
+    return pred_np.astype(np.float32)
+
+
 def load_or_create_model(model_class, config, checkpoint_path=None):
     """Load a trained model or create a new one"""
     model = model_class(**config).eval()
@@ -295,6 +357,24 @@ def run_benchmark(
     print(f"   Samples shape: {samples.shape}")
     print(f"   Targets shape: {targets.shape}")
 
+    # Resolve task defaults before model config and target creation.
+    if task_mode == "regression" and num_targets is None:
+        num_targets = num_channels
+    if task_mode == "classification" and num_classes is None:
+        raise ValueError("num_classes must be specified for classification task")
+
+    metric_targets = build_task_targets(
+        samples,
+        targets,
+        task_mode=task_mode,
+        prediction_length=prediction_length,
+        patch_length=patch_length,
+        patch_stride=patch_stride,
+        num_targets=num_targets,
+        num_classes=num_classes,
+    )
+    print(f"   Metric target shape: {metric_targets.shape}")
+
     # Model config
     config = {
         "context_length": context_length,
@@ -315,17 +395,11 @@ def run_benchmark(
     if task_mode == "forecasting":
         config["prediction_length"] = prediction_length
     elif task_mode == "regression":
-        if num_targets is None:
-            num_targets = num_channels  # default: predict all channels
         config["num_targets"] = num_targets
-        config["head_aggregation"] = head_aggregation
         if output_range is not None:
             config["output_range"] = output_range
     elif task_mode == "classification":
-        if num_classes is None:
-            raise ValueError("num_classes must be specified for classification task")
         config["num_classes"] = num_classes
-        config["head_aggregation"] = head_aggregation
     # pretraining has no extra params
 
     # Load PyTorch model
@@ -345,7 +419,7 @@ def run_benchmark(
             pred = torch_model(batch)
             torch_time += time.time() - start
 
-            torch_predictions.append(pred.numpy())
+            torch_predictions.append(to_metric_output(pred, task_mode))
 
     torch_predictions = np.concatenate(torch_predictions, axis=0)
     print(f"   Time: {torch_time:.2f}s")
@@ -416,9 +490,8 @@ def run_benchmark(
             ttnn_time += time.time() - start
 
             # Convert back to torch (outside timing)
-            tt_out_torch = ttnn.to_torch(tt_out).squeeze(2).float().numpy()
-
-            tt_predictions.append(tt_out_torch)
+            tt_out_torch = ttnn.to_torch(tt_out)
+            tt_predictions.append(to_metric_output(tt_out_torch, task_mode))
 
         tt_predictions = np.concatenate(tt_predictions, axis=0)
         print(f"   Time: {ttnn_time:.2f}s")
@@ -431,7 +504,7 @@ def run_benchmark(
     print(f"\n7. Computing metrics...")
 
     # PyTorch vs Ground Truth
-    torch_metrics = compute_metrics(torch_predictions, targets)
+    torch_metrics = compute_metrics(torch_predictions, metric_targets)
     print(f"\n   PyTorch vs Ground Truth:")
     print(f"      MSE:  {torch_metrics['mse']:.6f}")
     print(f"      MAE:  {torch_metrics['mae']:.6f}")
@@ -439,7 +512,7 @@ def run_benchmark(
     print(f"      Correlation: {torch_metrics['correlation']:.6f}")
 
     # TTNN vs Ground Truth
-    ttnn_metrics = compute_metrics(tt_predictions, targets)
+    ttnn_metrics = compute_metrics(tt_predictions, metric_targets)
     print(f"\n   TTNN vs Ground Truth:")
     print(f"      MSE:  {ttnn_metrics['mse']:.6f}")
     print(f"      MAE:  {ttnn_metrics['mae']:.6f}")
