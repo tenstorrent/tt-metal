@@ -18,10 +18,7 @@ inline void llk_unpack_AB_mop_config(const bool transpose_of_faces = false, cons
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t transpose_of_faces,
-    const std::uint32_t within_face_16x16_transpose) {
+    const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
@@ -35,18 +32,18 @@ inline void llk_unpack_AB_init(
         get_operand_num_faces(operandA_id),
         get_operand_num_faces(get_operand_id(operandB))));
 
-    _llk_unpack_AB_init_<BType>(tensor_shape, transpose_of_faces, within_face_16x16_transpose);
+    _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
-    llk_unpack_AB_init<BType>(operandA, operandB, 0, 0);
+    llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose) {
-    llk_unpack_AB_init<BType>(operandA, operandB, transpose, transpose);
+    llk_unpack_AB_init<BType>(operandA, operandB, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

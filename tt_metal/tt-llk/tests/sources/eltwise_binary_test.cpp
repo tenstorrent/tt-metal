@@ -35,8 +35,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
-    const std::uint32_t transpose_of_faces          = params.UNPACK_TRANSPOSE_FACES;
-    const std::uint32_t within_face_16x16_transpose = params.UNPACK_TRANSPOSE_WITHIN_FACE;
+    const ckernel::Transpose transpose      = params.UNPACK_TRANSPOSE_FACES
+                                                  ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
+                                                  : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
 
     // Configure hardware for unpacking, no broadcast, no transpose
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -51,7 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
 
-    _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose_of_faces, within_face_16x16_transpose);
+    _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);
 
 #ifdef EN_DEST_REUSE
     const std::uint32_t num_total_tiles = params.INPUT_NUM_TILES_IN_BLOCK * params.INPUT_NUM_BLOCKS;
