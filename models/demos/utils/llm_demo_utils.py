@@ -7,7 +7,7 @@ import warnings
 
 from loguru import logger
 
-from models.demos.utils.model_targets import DEFAULT_MODEL_TARGETS_PATH, resolve_perf_targets
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
@@ -129,7 +129,6 @@ def verify_perf(
     sku: str = None,
     batch_size: int = None,
     seq_len: int = None,
-    targets_yaml_path: str = DEFAULT_MODEL_TARGETS_PATH,
 ):
     """
     Verify the performance metrics against the expected values.
@@ -149,7 +148,6 @@ def verify_perf(
             sku=sku,
             batch_size=batch_size,
             seq_len=seq_len,
-            targets_yaml_path=targets_yaml_path,
         )
         if expected_perf_metrics is None:
             raise ValueError(

@@ -11,7 +11,10 @@ from typing import Any
 
 import yaml
 
-DEFAULT_MODEL_TARGETS_PATH = str(Path(__file__).resolve().parents[2] / "model_targets.yaml")
+TARGETS_YAML_PATH_DEFAULT = str(Path(__file__).resolve().parents[2] / "model_targets.yaml")
+
+# Backward-compatible alias for existing imports.
+DEFAULT_MODEL_TARGETS_PATH = TARGETS_YAML_PATH_DEFAULT
 
 _SKU_ALIASES = {
     "wormhole": {"n300", "n150", "wh_n150", "wh_n300", "tg", "wh_llmbox_perf", "wh_galaxy_perf"},
@@ -33,8 +36,8 @@ def normalize_sku(sku: Any) -> str:
     return token
 
 
-def load_model_targets(targets_yaml_path: str | None = None) -> dict[str, Any]:
-    path = Path(targets_yaml_path or DEFAULT_MODEL_TARGETS_PATH)
+def load_model_targets() -> dict[str, Any]:
+    path = Path(TARGETS_YAML_PATH_DEFAULT)
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
@@ -74,10 +77,9 @@ def resolve_target_entry(
     sku: str,
     batch_size: int | None = None,
     seq_len: int | None = None,
-    targets_yaml_path: str | None = None,
     include_todo: bool = False,
 ) -> dict[str, Any] | None:
-    targets_doc = load_model_targets(targets_yaml_path)
+    targets_doc = load_model_targets()
     targets = targets_doc.get("targets", {})
     sku_norm = normalize_sku(sku)
 
@@ -109,14 +111,12 @@ def resolve_perf_targets(
     sku: str,
     batch_size: int | None = None,
     seq_len: int | None = None,
-    targets_yaml_path: str | None = None,
 ) -> dict[str, float] | None:
     entry = resolve_target_entry(
         model_name=model_name,
         sku=sku,
         batch_size=batch_size,
         seq_len=seq_len,
-        targets_yaml_path=targets_yaml_path,
         include_todo=False,
     )
     if not entry:
@@ -130,14 +130,12 @@ def resolve_accuracy_targets(
     sku: str,
     batch_size: int | None = None,
     seq_len: int | None = None,
-    targets_yaml_path: str | None = None,
 ) -> dict[str, float] | None:
     entry = resolve_target_entry(
         model_name=model_name,
         sku=sku,
         batch_size=batch_size,
         seq_len=seq_len,
-        targets_yaml_path=targets_yaml_path,
         include_todo=False,
     )
     if not entry:

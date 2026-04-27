@@ -4,12 +4,14 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 
+from models.demos.utils import model_targets
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 
 
-def test_model_targets_resolver_prefers_specific_batch_and_seq(tmp_path: Path):
+def test_model_targets_resolver_prefers_specific_batch_and_seq(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     targets = {
         "version": 1,
         "targets": {
@@ -28,15 +30,16 @@ def test_model_targets_resolver_prefers_specific_batch_and_seq(tmp_path: Path):
     }
     yaml_path = tmp_path / "targets.yaml"
     yaml_path.write_text(yaml.safe_dump(targets), encoding="utf-8")
+    monkeypatch.setattr(model_targets, "TARGETS_YAML_PATH_DEFAULT", str(yaml_path))
 
-    generic = resolve_perf_targets("demo-model", "wh_n150", targets_yaml_path=str(yaml_path))
-    specific = resolve_perf_targets("Demo-Model", "wh_n150", 1, 128, str(yaml_path))
+    generic = resolve_perf_targets("demo-model", "wh_n150")
+    specific = resolve_perf_targets("Demo-Model", "wh_n150", 1, 128)
 
     assert generic["decode_t/s/u"] == 10
     assert specific["decode_t/s/u"] == 20
 
 
-def test_model_targets_resolver_accuracy_lookup(tmp_path: Path):
+def test_model_targets_resolver_accuracy_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     targets = {
         "version": 1,
         "targets": {
@@ -54,6 +57,7 @@ def test_model_targets_resolver_accuracy_lookup(tmp_path: Path):
     }
     yaml_path = tmp_path / "targets.yaml"
     yaml_path.write_text(yaml.safe_dump(targets), encoding="utf-8")
+    monkeypatch.setattr(model_targets, "TARGETS_YAML_PATH_DEFAULT", str(yaml_path))
 
-    accuracy = resolve_accuracy_targets("demo-model", "wh_n150", 1, 128, str(yaml_path))
+    accuracy = resolve_accuracy_targets("demo-model", "wh_n150", 1, 128)
     assert accuracy["top1"] == 91

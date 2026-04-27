@@ -188,7 +188,6 @@ def _collect_active_test_combos(tests_yaml_path: Path) -> list[tuple[str, str]]:
 
 def _validate_gap_coverage(
     tests_yaml_path: Path,
-    targets_yaml_path: str,
 ) -> list[str]:
     errors: list[str] = []
     for model, sku in _collect_active_test_combos(tests_yaml_path):
@@ -197,7 +196,6 @@ def _validate_gap_coverage(
             sku=sku,
             batch_size=None,
             seq_len=None,
-            targets_yaml_path=targets_yaml_path,
             include_todo=True,
         )
         if entry is None:
@@ -247,7 +245,7 @@ def main() -> int:
             print(f"::error::{error}")
         return 1
 
-    gap_errors = _validate_gap_coverage(tests_yaml_path, str(targets_yaml_path))
+    gap_errors = _validate_gap_coverage(tests_yaml_path)
     if gap_errors:
         for error in gap_errors:
             print(f"::error::{error}")
@@ -287,7 +285,6 @@ def main() -> int:
             sku=sku,
             batch_size=batch_size,
             seq_len=seq_len,
-            targets_yaml_path=str(targets_yaml_path),
             include_todo=True,
         )
         if entry is None:
