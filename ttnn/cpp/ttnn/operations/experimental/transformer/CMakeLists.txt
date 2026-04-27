@@ -19,7 +19,6 @@ file(
     concatenate_heads/device/kernels/*
     create_qkv_heads/device/kernels/*
     create_qkv_heads_from_separate_tensors/device/kernels/*
-    fused_distributed_rmsnorm/device/kernels/*
     nlp_concat_heads/device/kernels/*
     nlp_concat_heads_boltz/device/kernels/*
     nlp_concat_heads_decode/device/kernels/*
@@ -36,8 +35,6 @@ file(
     rotary_embedding_llama_fused_qk/device/kernels/*
     rotate_half/device/kernels/*
     split_query_key_value_and_split_heads/device/kernels/*
-    dit_layernorm_pre_all_gather/device/kernels/*
-    dit_layernorm_post_all_gather/device/kernels/*
 )
 target_sources(
     ttnn_op_experimental_transformer

@@ -1,5 +1,3 @@
-include(sources.cmake)
-
 add_library(ttnn_op_normalization ${LIB_TYPE})
 add_library(TTNN::Ops::Normalization ALIAS ttnn_op_normalization)
 
@@ -13,31 +11,25 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    batch_norm/device/kernels/*
-    groupnorm/device/kernels/*
-    layernorm/device/kernels/*
-    layernorm_distributed/device/kernels/*
-    rmsnorm_distributed/device/kernels/*
-    softmax/device/kernels/*
-    kernel_util/compute/*
-    kernel_util/dataflow/*
-    kernel_util/generic/*
-)
+file(GLOB_RECURSE kernels batch_norm/device/kernels/*)
 target_sources(
     ttnn_op_normalization
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES ${TTNN_OP_NORMALIZATION_API_HEADERS}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        ${TTNN_OP_NORMALIZATION_SRCS}
+        batch_norm/batch_norm.cpp
+        batch_norm/device/batch_norm_device_operation.cpp
+        batch_norm/device/batch_norm_program_factory.cpp
+        batch_norm/device/running_statistics_device_operation.cpp
+        batch_norm/device/running_statistics_program_factory.cpp
+        batch_norm/device/batch_norm_utils.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})

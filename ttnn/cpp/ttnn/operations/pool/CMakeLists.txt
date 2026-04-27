@@ -1,5 +1,3 @@
-include(sources.cmake)
-
 add_library(ttnn_op_pool ${LIB_TYPE})
 add_library(TTNN::Ops::Pool ALIAS ttnn_op_pool)
 
@@ -17,10 +15,8 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     device/kernels/*
-    generic/device/kernels/*
     grid_sample/device/kernels/*
     rotate/device/kernels/*
-    upsample/device/kernels/*
 )
 
 target_sources(
@@ -35,7 +31,18 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        ${TTNN_OP_POOL_SRCS}
+        global_avg_pool/global_avg_pool.cpp
+        grid_sample/device/grid_sample_device_operation.cpp
+        grid_sample/device/grid_sample_bilinear_program_factory.cpp
+        grid_sample/device/grid_sample_nearest_program_factory.cpp
+        grid_sample/device/grid_sample_utils.cpp
+        grid_sample/grid_sample.cpp
+        grid_sample/grid_sample_prepare_grid.cpp
+        rotate/device/rotate_device_operation.cpp
+        rotate/device/rotate_nearest_program_factory.cpp
+        rotate/device/rotate_bilinear_program_factory.cpp
+        rotate/rotate.cpp
+        pool_utils.cpp
 )
 
 target_include_directories(ttnn_op_pool PRIVATE ${FixmeOpIncDirs})

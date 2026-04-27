@@ -6,9 +6,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     composite_common.cpp
     reduce_scatter_common/reduce_scatter_validate_utils.cpp
     reduce_scatter_common/reduce_scatter_program_utils.cpp
-    ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
-    ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
-    ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
     all_reduce_async/device/all_reduce_async_device_operation.cpp
     all_reduce_async/device/all_reduce_async_program_factory.cpp
     llama_reduce_scatter/llama_reduce_scatter.cpp
