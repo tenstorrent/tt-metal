@@ -423,7 +423,6 @@ static bool run_matmul_block_helper_test(
 
 }  // namespace test_matmul_block_helper
 
-using test_matmul_block_helper::BlockMatmulConfig;
 using test_matmul_block_helper::run_matmul_block_helper_test;
 
 // ─── Baseline: all flags off ────────────────────────────────────────────────

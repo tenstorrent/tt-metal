@@ -342,7 +342,6 @@ static bool run_add_bias_bcast_rows_test(
 
 }  // namespace test_add_bias_bcast_rows
 
-using test_add_bias_bcast_rows::BiasConfig;
 using test_add_bias_bcast_rows::BiasPattern;
 using test_add_bias_bcast_rows::run_add_bias_bcast_rows_test;
 

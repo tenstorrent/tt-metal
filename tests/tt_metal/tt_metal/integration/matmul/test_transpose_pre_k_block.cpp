@@ -316,7 +316,6 @@ static bool run_transpose_pre_k_block_test(
 }  // namespace test_transpose_pre_k_block
 
 using test_transpose_pre_k_block::run_transpose_pre_k_block_test;
-using test_transpose_pre_k_block::XposeConfig;
 
 TEST_F(MeshDispatchFixture, TensixTransposePreKBlockSmall) {
     for (const auto& device : devices_) {
