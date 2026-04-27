@@ -289,10 +289,9 @@ private:
     void pop_bytes(uint32_t num_bytes);
     void notify_sender();
 
-    // Common host-side init shared by both constructors. Brings up pinned host
-    // memory (or hugepage fallback), writes socket metadata to `config_buffer_address_`,
-    // and configures the sender-side TLB. The caller must populate
-    // `config_buffer_address_` (and own the L1 reservation behind it) before calling.
+    // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
+    // into `config_buffer_address_`, and configures the sender-side TLB. The caller must
+    // populate `config_buffer_address_` (and own the backing L1 reservation) first.
     void init_common(const std::shared_ptr<MeshDevice>& mesh_device);
 
     // Owned only by the standard ctor. The external-config ctor leaves this null

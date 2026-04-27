@@ -358,19 +358,12 @@ void py_module(nb::module_& m) {
 
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
 
-    // Register a Python atexit hook to close the AutoContext device while the
-    // Python interpreter is still alive. AutoContext is held in
-    // ttsl::Indestructible<AutoContext>, so its destructor is intentionally
-    // never run; without this hook the underlying MeshDevice (and its
-    // D2HSocket / NamedShm resources) would never be torn down, and the C++
-    // ShmResourceTracker atexit handler that runs after Python finalization
-    // would walk std::set<std::string> entries whose backing heap may already
-    // have been recycled, causing a use-after-free at process exit.
+    // Close the AutoContext device at Python shutdown so MeshDevice (and its
+    // D2HSocket / NamedShm resources) are torn down before ShmResourceTracker's
+    // atexit handler runs. AutoContext is held in ttsl::Indestructible so its
+    // destructor never runs on its own.
     nb::module_::import_("atexit").attr("register")(nb::cpp_function([]() {
-        // Best-effort cleanup at process exit: log and swallow. We can't
-        // re-throw — Python's atexit machinery would translate it into an
-        // unraisable error and we still want subsequent atexit handlers
-        // (and the C++ ShmResourceTracker handler) to run.
+        // Best-effort: log and swallow so later atexit handlers still run.
         try {
             AutoContext::get_instance().close_device();
         } catch (const std::exception& e) {

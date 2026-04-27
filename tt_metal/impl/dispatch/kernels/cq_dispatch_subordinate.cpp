@@ -429,11 +429,8 @@ void kernel_main() {
     realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
     realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
     realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-    // FIFO + buffer IDs must be reset here while core_noc_xy is still zero so
-    // dispatch_d cannot append yet. Deferring this reset until the first loop
-    // iteration after host enables RT races with dispatch_d, which can append
-    // program_host_id entries before dispatch_s runs — wiping the FIFO drops
-    // the first (and sometimes last) program IDs seen by the profiler core.
+    // FIFO + buffer IDs must be reset while core_noc_xy is still zero, before dispatch_d can
+    // append; deferring this would race with dispatch_d and drop the first/last program IDs.
     realtime_profiler_mailbox->program_id_fifo_start = 0;
     realtime_profiler_mailbox->program_id_fifo_end = 0;
     realtime_profiler_mailbox->kernel_start_a.id = 0;
