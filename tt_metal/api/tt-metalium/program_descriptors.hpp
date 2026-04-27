@@ -177,7 +177,7 @@ struct KernelDescriptor {
     void emplace_runtime_args(const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args);
     void emplace_runtime_args(const CoreCoord& core, const RTArgList& args);
     // Vector overload for dynamically-built arg lists.
-    void emplace_runtime_args(const CoreCoord& core, std::vector<std::variant<uint32_t, Buffer*>> args);
+    void emplace_runtime_args(const CoreCoord& core, const std::vector<std::variant<uint32_t, Buffer*>>& args);
 
     // Push common runtime args, automatically registering any Buffer* entries
     // as common buffer bindings.  Use this instead of assigning common_runtime_args

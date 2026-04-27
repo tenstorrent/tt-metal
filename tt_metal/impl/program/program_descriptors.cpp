@@ -236,7 +236,8 @@ void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, const RTArgLi
     emplace_runtime_args_impl(*this, core, args.items_);
 }
 
-void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, std::vector<std::variant<uint32_t, Buffer*>> args) {
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, const std::vector<std::variant<uint32_t, Buffer*>>& args) {
     emplace_runtime_args_impl(*this, core, args);
 }
 
