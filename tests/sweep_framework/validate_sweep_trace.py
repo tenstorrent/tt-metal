@@ -27,98 +27,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# Argument pre-normalization — handle topology, API-version, and infra diffs
-# between master (DB) and sweep (live) traces before generic normalization.
-# This is a self-contained copy of the logic in generic_ops_tracer.py so that
-# validate_sweep_trace.py can run without model_tracer on PYTHONPATH (CI).
-# ---------------------------------------------------------------------------
-
-_TENSOR_NOISE_KEYS = frozenset(
-    {"tensor_placement", "storage_type", "dtype", "shape", "shard_spec"}
-)
-
-_INFRA_ARG_KEYS = frozenset(
-    {
-        "multi_device_global_semaphore",
-        "persistent_output_buffer",
-        "subdevice_id",
-        "barrier_semaphore",
-        "chunks_per_sync",
-        "num_workers_per_link",
-        "num_buffers_per_channel",
-    }
-)
-
-_PAGED_SDPA_STRIP_KEYS = frozenset({"attention_sink", "is_causal"})
-
-_POSITIONAL_REMAP = {
-    "ttnn.experimental.all_gather_async": {
-        "arg1": "persistent_output_buffer",
-        "arg2": "dim",
-        "arg3": "multi_device_global_semaphore",
-    },
-    "ttnn.experimental.reduce_scatter_async": {
-        "arg1": "persistent_output_buffer",
-        "arg2": "dim",
-        "arg3": "multi_device_global_semaphore",
-    },
-    "ttnn.transformer.paged_scaled_dot_product_attention_decode": {
-        "arg3": "page_table_tensor",
-    },
-}
-
-_PAGED_SDPA_OPS = frozenset({
-    "ttnn.transformer.paged_scaled_dot_product_attention_decode",
-})
-
-
-def _is_tensor_descriptor(obj):
-    if not isinstance(obj, dict):
-        return False
-    return obj.get("type") == "ttnn.Tensor" or (
-        "original_dtype" in obj and "original_shape" in obj
-    )
-
-
-def _strip_tensor_noise(obj):
-    if isinstance(obj, list):
-        return [_strip_tensor_noise(item) for item in obj]
-    if not isinstance(obj, dict):
-        return obj
-    is_tensor = _is_tensor_descriptor(obj)
-    result = {}
-    for k, v in obj.items():
-        if is_tensor and k in _TENSOR_NOISE_KEYS:
-            continue
-        if v == "None":
-            continue
-        if v is None:
-            continue
-        result[k] = _strip_tensor_noise(v)
-    return result
-
-
-def normalize_arguments_for_comparison(arguments, op_name):
-    """Normalize operation arguments so master and sweep traces are directly comparable."""
-    args = dict(arguments)
-    remap = _POSITIONAL_REMAP.get(op_name)
-    if remap:
-        for pos_key, named_key in remap.items():
-            if pos_key in args and named_key not in args:
-                args[named_key] = args.pop(pos_key)
-
-    result = {}
-    for k, v in args.items():
-        if k in _INFRA_ARG_KEYS:
-            continue
-        if op_name in _PAGED_SDPA_OPS and k in _PAGED_SDPA_STRIP_KEYS:
-            continue
-        if v is None or v == "None":
-            continue
-        result[k] = _strip_tensor_noise(v)
-    return result
-
 
 # ---------------------------------------------------------------------------
 # Normalization — strip fields that are expected to differ between traces
@@ -342,14 +250,8 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
 
-            # Pre-normalize both sides to strip topology-dependent noise,
-            # remap positional args, and remove infra keys before the
-            # generic normalize() pass.
-            pre_master = normalize_arguments_for_comparison(master_args, op_name)
-            pre_sweep = normalize_arguments_for_comparison(sweep_args, op_name)
-
-            norm_master = normalize(pre_master)
-            norm_sweep = normalize(pre_sweep)
+            norm_master = normalize(master_args)
+            norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
                 # Arguments match — check if config_hash computation also agrees
