@@ -722,6 +722,7 @@ def prepare_attention_weights(
     kv_views = cache_config.cache.get_or_create(
         kv_fp,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_kv_b12,
         raw_tensors=lambda: {kv_b_key: state_dict[kv_b_key]},
     )
@@ -765,6 +766,7 @@ def prepare_attention_weights(
             merged_views = cache_config.cache.get_or_create(
                 merged_fp,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t: _preprocess_merged(t, include_gate=True),
                 raw_tensors=lambda: {k: state_dict[k] for k in merged_src},
             )
@@ -780,6 +782,7 @@ def prepare_attention_weights(
             gate_bias_tt = cache_config.cache.get_or_create(
                 fingerprint,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
                 raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
             )
@@ -815,6 +818,7 @@ def prepare_attention_weights(
         merged_views = cache_config.cache.get_or_create(
             merged_fp_dense,
             device,
+            move_to_device=move_to_device,
             preprocess=lambda t: _preprocess_merged(t, include_gate=False),
             raw_tensors=lambda: {k: state_dict[k] for k in merged_src_dense},
         )
@@ -857,6 +861,7 @@ def prepare_attention_weights(
     q_ab_views = cache_config.cache.get_or_create(
         q_ab_fp,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_q_ab_kv_a,
         raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
     )
@@ -895,6 +900,7 @@ def prepare_attention_weights(
         o_views = cache_config.cache.get_or_create(
             o_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_o_proj_moe,
             raw_tensors=lambda: {k: state_dict[k] for k in o_src},
         )
@@ -910,6 +916,7 @@ def prepare_attention_weights(
         gate_bias_tt = cache_config.cache.get_or_create(
             fingerprint,
             device,
+            move_to_device=move_to_device,
             preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
             raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
         )
@@ -962,6 +969,7 @@ def prepare_attention_weights(
     o_views = cache_config.cache.get_or_create(
         o_fp_dense,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_o_proj_dense,
         raw_tensors=lambda: {k: state_dict[k] for k in o_src_dense},
     )
@@ -1030,6 +1038,7 @@ def prepare_shared_expert_weights(
         gu_views = cache_config.cache.get_or_create(
             gu_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_gate_up_moe,
             raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
         )
@@ -1052,6 +1061,7 @@ def prepare_shared_expert_weights(
         shared_down_proj = cache_config.cache.get_or_create(
             sd_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_shared_down_moe,
             raw_tensors=lambda: {down_k: state_dict[down_k]},
         )
@@ -1077,6 +1087,7 @@ def prepare_shared_expert_weights(
         gu_views = cache_config.cache.get_or_create(
             gu_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_gate_up_dense,
             raw_tensors=lambda: {gate_k: state_dict[gate_k], up_k: state_dict[up_k]},
         )
@@ -1098,6 +1109,7 @@ def prepare_shared_expert_weights(
         shared_down_proj = cache_config.cache.get_or_create(
             sd_fp,
             device,
+            move_to_device=move_to_device,
             preprocess=_preprocess_shared_down_dense,
             raw_tensors=lambda: {down_k: state_dict[down_k]},
         )
@@ -1273,6 +1285,7 @@ def prepare_routed_expert_weights(
             gw = cache_config.cache.get_or_create(
                 fp_g,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t, _gk=gk: {
                     "routed_gate_proj": moe_routed_expert_torch_for_cache(t[_gk].T.contiguous(), num_banks)
                 },
@@ -1290,6 +1303,7 @@ def prepare_routed_expert_weights(
             uw = cache_config.cache.get_or_create(
                 fp_u,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t, _uk=uk: {
                     "routed_up_proj": moe_routed_expert_torch_for_cache(t[_uk].T.contiguous(), num_banks)
                 },
@@ -1307,6 +1321,7 @@ def prepare_routed_expert_weights(
             dw = cache_config.cache.get_or_create(
                 fp_d,
                 device,
+                move_to_device=move_to_device,
                 preprocess=lambda t, _dk=dk: {
                     "routed_down_proj": moe_routed_expert_torch_for_cache(t[_dk].T.contiguous(), num_banks)
                 },
@@ -1368,18 +1383,21 @@ def prepare_routed_expert_weights(
         routed_gate_proj = cache_config.cache.get_or_create(
             fp_g,
             device,
+            move_to_device=move_to_device,
             preprocess=_pre_routed_gate,
             raw_tensors=lambda: {gate_k: state_dict[gate_k]},
         )
         routed_up_proj = cache_config.cache.get_or_create(
             fp_u,
             device,
+            move_to_device=move_to_device,
             preprocess=_pre_routed_up,
             raw_tensors=lambda: {up_k: state_dict[up_k]},
         )
         routed_down_proj = cache_config.cache.get_or_create(
             fp_d,
             device,
+            move_to_device=move_to_device,
             preprocess=_pre_routed_down,
             raw_tensors=lambda: {down_k: state_dict[down_k]},
         )
@@ -1541,6 +1559,7 @@ def prepare_embedding_weights(
     embedding_tt = cache_config.cache.get_or_create(
         fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_embedding,
         raw_tensors=lambda: {_src_key: state_dict[_src_key]},
     )
@@ -1580,6 +1599,7 @@ def prepare_lm_head_weights(
     lm_head_tt = cache_config.cache.get_or_create(
         lm_fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_lm_head,
         raw_tensors=lambda: {_lm_key: state_dict[_lm_key]},
     )
@@ -1598,6 +1618,7 @@ def prepare_lm_head_weights(
     final_norm_tt = cache_config.cache.get_or_create(
         norm_fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=_preprocess_final_norm,
         raw_tensors=lambda: {_norm_key: state_dict[_norm_key]},
     )
@@ -1654,6 +1675,7 @@ def prepare_shared_head_norm(
     shared_norm_tt = cache_config.cache.get_or_create(
         shared_norm_fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=lambda t: {shared_norm_target.name: t[_shared_norm_key].unsqueeze(0).contiguous()},
         raw_tensors=lambda: {_shared_norm_key: state_dict[_shared_norm_key]},
     )
@@ -1706,6 +1728,7 @@ def prepare_mtp_weights(
     h_gamma_tt = cache_config.cache.get_or_create(
         h_fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=lambda t: {h_target.name: t[_h_key].unsqueeze(0).contiguous()},
         raw_tensors=lambda: {_h_key: state_dict[_h_key]},
     )
@@ -1716,6 +1739,7 @@ def prepare_mtp_weights(
     e_gamma_tt = cache_config.cache.get_or_create(
         e_fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=lambda t: {e_target.name: t[_e_key].unsqueeze(0).contiguous()},
         raw_tensors=lambda: {_e_key: state_dict[_e_key]},
     )
@@ -1726,6 +1750,7 @@ def prepare_mtp_weights(
     eh_proj_tt = cache_config.cache.get_or_create(
         eh_fingerprint,
         device,
+        move_to_device=move_to_device,
         preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, eh_target.name),
         raw_tensors=lambda: {_eh_key: state_dict[_eh_key]},
     )
