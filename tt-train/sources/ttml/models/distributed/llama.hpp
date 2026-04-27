@@ -29,15 +29,15 @@ private:
     ops::RotaryEmbeddingParams m_rope_params;
 
 public:
-    // `gather_output_at_lm_head` controls whether the column-parallel LM head all-gathers
-    // its output to produce fully-replicated [B,1,S,V] logits.
-    explicit DistributedLlama(const LlamaConfig& config, bool gather_output_at_lm_head = true);
+    // The column-parallel LM head keeps its output vocab-sharded ([B,1,S,V/tp_size]
+    // per device); pair it with ttml::ops::distributed::vocab_parallel_cross_entropy_loss.
+    explicit DistributedLlama(const LlamaConfig& config);
     virtual ~DistributedLlama() = default;
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) override;
 };
 
-[[nodiscard]] std::shared_ptr<DistributedLlama> create(const LlamaConfig& config, bool gather_output_at_lm_head = true);
-[[nodiscard]] std::shared_ptr<DistributedLlama> create(const YAML::Node& config, bool gather_output_at_lm_head = true);
+[[nodiscard]] std::shared_ptr<DistributedLlama> create(const LlamaConfig& config);
+[[nodiscard]] std::shared_ptr<DistributedLlama> create(const YAML::Node& config);
 
 }  // namespace ttml::models::distributed::llama

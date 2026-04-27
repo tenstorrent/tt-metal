@@ -640,25 +640,25 @@ int main(int argc, char **argv) {
         },
         model_config.transformer_config);
 
-    // When TP is enabled we always use vocab_parallel_cross_entropy_loss, which expects
-    // vocab-sharded logits ([B,1,S,V/tp_size] per device).
+    // When TP is enabled the LM head emits vocab-sharded [B,1,S,V/tp_size] logits and
+    // we use vocab_parallel_cross_entropy_loss; otherwise the LM head emits full
+    // [B,1,S,V] logits and we use the regular cross_entropy_loss.
     const bool use_vocab_parallel_loss = device_config.enable_tp;
-    const bool gather_output_at_lm_head = !use_vocab_parallel_loss;
 
     Model model = std::visit(
-        [&device_config, &multihost_config, gather_output_at_lm_head](auto &&arg) -> Model {
+        [&device_config, &multihost_config](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (multihost_config.pipeline_parallel_config) {
                     return ttml::models::distributed::pipeline_parallel_llama::create(
                         arg, *multihost_config.pipeline_parallel_config, device_config.enable_tp);
                 } else if (device_config.enable_tp || device_config.enable_cp) {
-                    return ttml::models::distributed::llama::create(arg, gather_output_at_lm_head);
+                    return ttml::models::distributed::llama::create(arg);
                 } else {
                     return ttml::models::llama::create(arg);
                 }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
                 if (device_config.enable_tp) {
-                    return ttml::models::distributed::gpt2::create(arg, gather_output_at_lm_head);
+                    return ttml::models::distributed::gpt2::create(arg);
                 } else {
                     return ttml::models::gpt2::create(arg);
                 }

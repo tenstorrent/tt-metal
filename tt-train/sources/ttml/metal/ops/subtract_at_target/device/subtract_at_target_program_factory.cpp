@@ -30,10 +30,10 @@ constexpr uint32_t kSubtractValueIdx = 6U;
 // Writer runtime arg indices
 constexpr uint32_t kOutputBufferIdx = 0U;
 
-// CB indices
-constexpr auto kTargetCbIndex = tt::CBIndex::c_0;        // scratch: target page (uint32)
-constexpr auto kInputScratchCbIndex = tt::CBIndex::c_1;  // scratch: one input tile (bfloat16)
-constexpr auto kOutputCbIndex = tt::CBIndex::c_2;        // output tiles (bfloat16)
+// CB indices.  c_1 is intentionally unused: the reader streams input tiles
+// directly into the output CB and patches them in place before push_back.
+constexpr auto kTargetCbIndex = tt::CBIndex::c_0;  // scratch: target page (uint32)
+constexpr auto kOutputCbIndex = tt::CBIndex::c_2;  // output tiles (bfloat16)
 
 constexpr uint32_t kPageElementsNumber = 32U;
 constexpr uint32_t kNumOutputTiles = 2U;  // double-buffered
@@ -81,9 +81,6 @@ SubtractAtTargetProgramFactory::cached_program_t SubtractAtTargetProgramFactory:
 
     create_circular_buffer(
         program, all_cores, kTargetCbIndex, tt::DataFormat::UInt32, target_read_page_size, /*num_tiles=*/1U);
-
-    create_circular_buffer(
-        program, all_cores, kInputScratchCbIndex, tt::DataFormat::Float16_b, bfloat16_tile_bytes, /*num_tiles=*/1U);
 
     create_circular_buffer(
         program, all_cores, kOutputCbIndex, tt::DataFormat::Float16_b, bfloat16_tile_bytes, kNumOutputTiles);

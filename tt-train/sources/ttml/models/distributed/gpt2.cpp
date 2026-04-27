@@ -43,7 +43,7 @@ void weights_initialization(DistributedTransformer& model) {
 
 }  // namespace
 
-DistributedTransformer::DistributedTransformer(const TransformerConfig& config, bool gather_output_at_lm_head) {
+DistributedTransformer::DistributedTransformer(const TransformerConfig& config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
@@ -109,8 +109,10 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config, 
             embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
+    // LM head keeps its output vocab-sharded ([B,1,S,V/tp_size] per device); pair it
+    // with ttml::ops::distributed::vocab_parallel_cross_entropy_loss.
     fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-        embedding_dim, vocab_size, /* bias */ false, /* gather_output */ gather_output_at_lm_head);
+        embedding_dim, vocab_size, /* bias */ false, /* gather_output */ false);
 
     create_name("transformer");
     register_module(tok_emb, "tok_emb");
@@ -148,13 +150,13 @@ ttml::autograd::TensorPtr DistributedTransformer::operator()(
     return logits;
 }
 
-std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config, bool gather_output_at_lm_head) {
-    return std::make_shared<DistributedTransformer>(config, gather_output_at_lm_head);
+std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config) {
+    return std::make_shared<DistributedTransformer>(config);
 }
 
-std::shared_ptr<DistributedTransformer> create(const YAML::Node& config, bool gather_output_at_lm_head) {
+std::shared_ptr<DistributedTransformer> create(const YAML::Node& config) {
     TransformerConfig transformer_config = models::gpt2::read_config(config);
-    return std::make_shared<DistributedTransformer>(transformer_config, gather_output_at_lm_head);
+    return std::make_shared<DistributedTransformer>(transformer_config);
 }
 
 }  // namespace ttml::models::distributed::gpt2
