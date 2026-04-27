@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from model_tracer.generic_ops_tracer import normalize_arguments_for_comparison
+
 
 # ---------------------------------------------------------------------------
 # Normalization — strip fields that are expected to differ between traces
@@ -250,8 +252,14 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
 
-            norm_master = normalize(master_args)
-            norm_sweep = normalize(sweep_args)
+            # Pre-normalize both sides to strip topology-dependent noise,
+            # remap positional args, and remove infra keys before the
+            # generic normalize() pass.
+            pre_master = normalize_arguments_for_comparison(master_args, op_name)
+            pre_sweep = normalize_arguments_for_comparison(sweep_args, op_name)
+
+            norm_master = normalize(pre_master)
+            norm_sweep = normalize(pre_sweep)
 
             if norm_master == norm_sweep:
                 # Arguments match — check if config_hash computation also agrees
