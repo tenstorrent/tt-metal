@@ -178,6 +178,8 @@ std::optional<ttnn::CoreGrid> find_expected_dram_grid(
             if (!fallback.has_value()) {
                 fallback = ttnn::CoreGrid(gx, gy);
             }
+            // nvc depends only on gx, so gx % nvc is fixed for this gx; smaller gy can only produce
+            // additional partial-utilization candidates we'd discard. Move on to the next gx.
             break;
         }
     }

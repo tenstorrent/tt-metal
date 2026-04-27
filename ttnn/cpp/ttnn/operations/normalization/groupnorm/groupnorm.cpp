@@ -262,11 +262,33 @@ Tensor group_norm(
         }
     }
 
-    if (core_grid_auto_selected && num_out_blocks.has_value()) {
+    TT_FATAL(
+        !(core_grid_auto_selected && num_out_blocks.has_value()),
+        "group_norm: num_out_blocks cannot be specified when core_grid is auto-selected. "
+        "Either provide an explicit core_grid or omit num_out_blocks.");
+
+    // If reciprocals are provided as a sharded tensor, the per-shard numel
+    // (consumed by the compute kernel as the compile-time `reciprocal_size`)
+    // and the per-bank addresses bound to the reciprocals CB are baked for a
+    // specific grid. The compute kernel runs on `core_grid`, so the
+    // reciprocals must be sharded on that same grid; otherwise the LUT is
+    // the wrong length and/or lives on the wrong banks. This covers all
+    // three paths to picking core_grid (sharded input, reciprocals
+    // inference, and an explicit user-provided core_grid).
+    if (reciprocals.has_value() && reciprocals->shard_spec().has_value()) {
+        const auto recip_bbox = reciprocals->shard_spec()->grid.bounding_box();
+        const uint32_t recip_x = recip_bbox.end_coord.x + 1;
+        const uint32_t recip_y = recip_bbox.end_coord.y + 1;
         TT_FATAL(
-            false,
-            "group_norm: num_out_blocks cannot be specified when core_grid is auto-selected. "
-            "Either provide an explicit core_grid or omit num_out_blocks.");
+            recip_x == core_grid->x && recip_y == core_grid->y,
+            "group_norm: reciprocals shard grid (x={}, y={}) must match the compute core_grid "
+            "(x={}, y={}). The reciprocals LUT length and per-bank addresses are baked for a "
+            "specific grid; running the kernel on a different grid will read past the LUT or "
+            "use unallocated banks.",
+            recip_x,
+            recip_y,
+            core_grid->x,
+            core_grid->y);
     }
 
     // For non-sharded DRAM tensors, validate that the requested core grid is not too
