@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated test compute kernel for add_bias_bcast_rows helper
-// (ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp).
+// Isolated test compute kernel for the add_bias_bcast_rows helper.
 //
 // CB layout:
 //   c_24 (partials) — synthetic matmul output (host pre-fills)

@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated test compute kernel for reblock_and_untilize helper
-// (ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp).
+// Isolated test compute kernel for the reblock_and_untilize helper.
 //
 // Drives the helper directly with a synthetic subblock-major input — no
 // matmul involved. Exercises a single row-group per invocation, repeated

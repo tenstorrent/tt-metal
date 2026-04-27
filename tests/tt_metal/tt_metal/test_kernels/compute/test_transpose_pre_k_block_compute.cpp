@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated test compute kernel for TransposePreKBlock
-// (ttnn/cpp/ttnn/kernel_lib/transpose_block_helpers.hpp), used as the
+// Isolated test compute kernel for TransposePreKBlock, used as the
 // PreKBlockFn slot of matmul_block.
 //
 // CB layout matches production fused-bias kernel:

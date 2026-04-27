@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Isolated integration tests for add_bias_bcast_rows helper
-// (ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp).
+// Isolated integration tests for the add_bias_bcast_rows helper.
 //
 // The helper reads matmul partials from partials_cb, adds a row-broadcast
 // bias from bias_cb, and writes to out_cb. Caller owns bias CB wait/pop
