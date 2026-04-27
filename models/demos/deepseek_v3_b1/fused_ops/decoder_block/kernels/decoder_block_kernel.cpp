@@ -1512,7 +1512,6 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
             };
 
-            // TODO: (GR)
             // PipelineStageSync
             // using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::ReaderCTArgs<
             //     get_named_compile_time_arg_val("run_stalling_logic_on_ncrisc"),
@@ -1808,7 +1807,6 @@ void kernel_main() {
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
 
-            // TODO: (GR)
             // PipelineStageSync
             // using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::WriterCTArgs<
             //     get_named_compile_time_arg_val("run_stalling_logic_on_brisc"),
@@ -2104,6 +2102,9 @@ void kernel_main() {
 
             // Compute has no runtime args
             deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
+
+            // PipelineStageSync
+            // using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::ComputeCTArgs;
 #endif
         } routed;
 
@@ -2981,10 +2982,8 @@ void kernel_main() {
             reduce_op(moe.routed.reduce_rt_args);
         }
 
-        // TODO: (GR)
         // {
         //     DeviceZoneScopedN("PIPELINE_STAGE_SYNC");
-        //     // IsReduceCore includes both worker cores and fabric cores
         //     deepseek_b1_ops::PipelineStageSync::Op<Moe::Routed::PipelineStageSyncCTArgs> pipeline_stage_sync_op;
         //     pipeline_stage_sync_op();
         // }

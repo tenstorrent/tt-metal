@@ -31,6 +31,9 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     record_cb_metadata,
 )
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_stage_sync.op import (
+    build_signalling_path as build_pipeline_stage_sync_signalling_path,
+)
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -107,6 +110,9 @@ class MoeContext:
     reduce_params: dict = None
     reduce_intermediate_tensors: Any = None
     reduce_output_tensor: Any = None
+
+    # PipelineStageSync params
+    pipeline_stage_sync_params: dict = None
 
     # RMSNorm runtime args (common across all devices)
     rmsnorm_epsilon_packed: int = 0
@@ -261,6 +267,9 @@ class _MoeRoutedExpertContext:
     reduce_received_cb_descriptors: list = None  # CB for received (3-page) + output
     reduce_scratch_cb_descriptor: Any = None
     reduce_packet_cb_descriptor: Any = None
+
+    # PipelineStageSync
+    pipeline_stage_sync_params: dict = None
 
     # Broadcast
     enable_bcast: bool = False
@@ -776,6 +785,8 @@ class MoeRoutedExpertOp:
         reduce_output_tensor=None,
         reduce_semaphores=None,
         reduce_root_coord=None,
+        # PipelineStageSync parameters
+        pipeline_stage_sync_sem_addr=None,
         # Broadcast parameters
         bcast_input_tensor=None,
         bcast_intermediate_tensor=None,
@@ -1210,7 +1221,7 @@ class MoeRoutedExpertOp:
         )
 
         # ==================================================================
-        # ReduceToOne Setup
+        # ReduceToOne + PipelineStageSync setup
         # ==================================================================
         enable_reduce_to_one = (
             reduce_intermediate_tensors is not None
@@ -1221,8 +1232,11 @@ class MoeRoutedExpertOp:
             and mesh_cols == 2
         )
 
-        reduce_params = {}
+        reduce_params = None  # TODO: (GR) is this correct
+        pipeline_stage_sync_params = None
         if enable_reduce_to_one:
+            # == ReduceToOne ==
+
             # Get semaphore addresses
             reduce_sem_round1_addr = ttnn.get_global_semaphore_address(reduce_semaphores[0])
             reduce_sem_round2_addr = ttnn.get_global_semaphore_address(reduce_semaphores[1])
@@ -1324,6 +1338,46 @@ class MoeRoutedExpertOp:
                 "core_to_slot_idx": reduce_core_to_slot_idx,
                 "core_to_shard_idx": reduce_core_to_shard_idx,
                 "output_core": reduce_output_core,
+            }
+
+            # == PipelineStageSync ==
+            run_signalling_kernel_on_ncrisc = False  # reduce_to_one fabric and socket connection is on brisc
+            run_stalling_kernel_on_ncrisc = False  # bcast fabric connection is on brisc
+            signalling_core = reduce_output_core
+            stalling_core = sender_core
+            src_device_mesh_coord = reduce_root_coord
+            dst_device_mesh_coord = bcast_sender_coord
+
+            (
+                signalling_devices,
+                intermediate_signalling_devices,
+                signaller_device_mapping,
+            ) = build_pipeline_stage_sync_signalling_path(
+                src_device_mesh_coord, dst_device_mesh_coord, mesh_rows, mesh_cols
+            )
+
+            signalling_core_phys = mesh_device.worker_core_from_logical_core(signalling_core)
+            signalling_core_noc_x_addr = signalling_core_phys.x
+            signalling_core_noc_y_addr = signalling_core_phys.y
+
+            stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
+            stalling_core_noc_x_addr = stalling_core_phys.x
+            stalling_core_noc_y_addr = stalling_core_phys.y
+
+            pipeline_stage_sync_params = {
+                "signalling_core": signalling_core,
+                "stalling_core": stalling_core,
+                "signaller_device_mapping": signaller_device_mapping,
+                "intermediate_signalling_devices": intermediate_signalling_devices,
+                "signalling_devices": signalling_devices,
+                "run_signalling_kernel_on_ncrisc": run_signalling_kernel_on_ncrisc,
+                "run_stalling_kernel_on_ncrisc": run_stalling_kernel_on_ncrisc,
+                "dst_device_mesh_coord": dst_device_mesh_coord,
+                "signalling_core_noc_x_addr": signalling_core_noc_x_addr,
+                "signalling_core_noc_y_addr": signalling_core_noc_y_addr,
+                "stalling_core_noc_x_addr": stalling_core_noc_x_addr,
+                "stalling_core_noc_y_addr": stalling_core_noc_y_addr,
+                "semaphore_l1_addr": pipeline_stage_sync_sem_addr,
             }
 
         # ==================================================================
@@ -1498,6 +1552,8 @@ class MoeRoutedExpertOp:
             reduce_scratch_cb=reduce_scratch_cb,
             reduce_packet_cb=reduce_packet_cb,
             reduce_params=reduce_params if enable_reduce_to_one else None,
+            # PipelineStageSync
+            pipeline_stage_sync_params=pipeline_stage_sync_params if enable_reduce_to_one else None,
             # Broadcast
             enable_bcast=enable_bcast,
             bcast_pkt_cb=bcast_pkt_cb if enable_bcast else None,
@@ -1928,6 +1984,30 @@ class MoeRoutedExpertOp:
                 named_compile_time_arg="is_reduce_fabric_sync_core",
                 core_range=ttnn.CoreRangeSet([]),  # Set per-device
                 value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="pipeline_stage_sync_run_signalling_logic_on_ncrisc",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
+                value=0,  # Set per-device
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="pipeline_stage_sync_run_signalling_logic_on_brisc",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
+                value=0,  # Set per-device
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="pipeline_stage_sync_run_stalling_logic_on_ncrisc",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
+                value=0,  # Set per-device
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="pipeline_stage_sync_run_stalling_logic_on_brisc",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
+                value=0,  # Set per-device
                 other_value=0,
             ),
         ]
@@ -4136,6 +4216,94 @@ class MoeOp:
 
         self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(brisc_args=reduce_brisc_per_core_args)
 
+    def _build_pipeline_stage_sync_per_device(self, coord, row, col, chip_id):
+        ctx = self.ctx
+        if not ctx.enable_reduce_to_one:
+            return
+
+        pipeline_stage_sync_params = ctx.pipeline_stage_sync_params
+
+        target_device = pipeline_stage_sync_params["signaller_device_mapping"].get(coord, None)
+
+        signalling_devices = pipeline_stage_sync_params["signalling_devices"]
+
+        intermediate_signalling_devices = pipeline_stage_sync_params["intermediate_signalling_devices"]
+        is_intermediate_signaller = coord in intermediate_signalling_devices
+        is_signalling_to_intermediate_signaller = (
+            coord in signalling_devices and target_device in intermediate_signalling_devices
+        )
+
+        named_ct_args = [
+            ("pipeline_stage_sync_is_intermediate_signaller", is_intermediate_signaller),
+            ("pipeline_stage_sync_is_signalling_to_intermediate_signaller", is_signalling_to_intermediate_signaller),
+            (
+                "pipeline_stage_sync_signalling_core_noc_x_addr",
+                pipeline_stage_sync_params["signalling_core_noc_x_addr"],
+            ),
+            (
+                "pipeline_stage_sync_signalling_core_noc_y_addr",
+                pipeline_stage_sync_params["signalling_core_noc_y_addr"],
+            ),
+            ("pipeline_stage_sync_stalling_core_noc_x_addr", pipeline_stage_sync_params["stalling_core_noc_x_addr"]),
+            ("pipeline_stage_sync_stalling_core_noc_y_addr", pipeline_stage_sync_params["stalling_core_noc_y_addr"]),
+            ("pipeline_stage_sync_semaphore_l1_addr", pipeline_stage_sync_params["semaphore_l1_addr"]),
+        ]
+        self.ncrisc_args.extend(named_ct_args)
+        self.brisc_args.extend(named_ct_args)
+
+        if coord in signalling_devices:
+            if pipeline_stage_sync_params["run_signalling_kernel_on_ncrisc"]:
+                pipeline_stage_sync_run_signalling_logic_on_ncrisc = True
+                pipeline_stage_sync_run_signalling_logic_on_brisc = False
+            else:
+                pipeline_stage_sync_run_signalling_logic_on_ncrisc = False
+                pipeline_stage_sync_run_signalling_logic_on_brisc = True
+        else:
+            pipeline_stage_sync_run_signalling_logic_on_ncrisc = False
+            pipeline_stage_sync_run_signalling_logic_on_brisc = False
+
+        # select risc for stalling cores
+        if coord == pipeline_stage_sync_params["dst_device_mesh_coord"]:
+            if pipeline_stage_sync_params["run_stalling_kernel_on_ncrisc"]:
+                pipeline_stage_sync_run_stalling_logic_on_ncrisc = True
+                pipeline_stage_sync_run_stalling_logic_on_brisc = False
+            else:
+                pipeline_stage_sync_run_stalling_logic_on_ncrisc = False
+                pipeline_stage_sync_run_stalling_logic_on_brisc = True
+        else:
+            pipeline_stage_sync_run_stalling_logic_on_ncrisc = False
+            pipeline_stage_sync_run_stalling_logic_on_brisc = False
+
+        for i, desc in enumerate(self.device_unified_core_descs):
+            if desc.named_compile_time_arg == "pipeline_stage_sync_run_signalling_logic_on_ncrisc":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="pipeline_stage_sync_run_signalling_logic_on_ncrisc",
+                    core_range=pipeline_stage_sync_params["signalling_core"],
+                    value=pipeline_stage_sync_run_signalling_logic_on_ncrisc,
+                    other_value=0,
+                )
+            elif desc.named_compile_time_arg == "pipeline_stage_sync_run_signalling_logic_on_brisc":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="pipeline_stage_sync_run_signalling_logic_on_brisc",
+                    core_range=pipeline_stage_sync_params["signalling_core"],
+                    value=pipeline_stage_sync_run_signalling_logic_on_brisc,
+                    other_value=0,
+                )
+            elif desc.named_compile_time_arg == "pipeline_stage_sync_run_stalling_logic_on_ncrisc":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="pipeline_stage_sync_run_stalling_logic_on_ncrisc",
+                    core_range=pipeline_stage_sync_params["stalling_core"],
+                    value=pipeline_stage_sync_run_stalling_logic_on_ncrisc,
+                    other_value=0,
+                )
+            elif desc.named_compile_time_arg == "pipeline_stage_sync_run_stalling_logic_on_brisc":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="pipeline_stage_sync_run_stalling_logic_on_brisc",
+                    core_range=pipeline_stage_sync_params["stalling_core"],
+                    value=pipeline_stage_sync_run_stalling_logic_on_brisc,
+                    other_value=0,
+                )
+
     def _build_bcast_per_device(self, coord, row, col, chip_id):
         """Apply broadcast per-device modifications. No-op when bcast disabled."""
         ctx = self.ctx
@@ -4385,7 +4553,6 @@ class MoeOp:
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         sem_addrs = self.sem_addrs
         self.persistent_mode = persistent_mode
-        self.persistent_next_iter_sem_addr = int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
 
         if cb_id_context is None:
             self.cb_id_manager = CircularBufferIdManager()
@@ -4412,6 +4579,9 @@ class MoeOp:
             reduce_output_tensor=reduce_output_tensor,
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
+            pipeline_stage_sync_sem_addr=int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
+            if persistent_next_iter_semaphore
+            else 0,
             bcast_input_tensor=bcast_input_tensor,
             bcast_intermediate_tensor=bcast_intermediate_tensor,
             bcast_semaphores=bcast_semaphores,
@@ -4502,6 +4672,8 @@ class MoeOp:
             reduce_params=routed_ctx.reduce_params,
             reduce_intermediate_tensors=reduce_intermediate_tensors,
             reduce_output_tensor=reduce_output_tensor,
+            # PipelineStageSync
+            pipeline_stage_sync_params=routed_ctx.pipeline_stage_sync_params,
             # RMSNorm
             rmsnorm_epsilon_packed=routed_ctx.rmsnorm_epsilon_packed,
             rmsnorm_scalar_packed=routed_ctx.rmsnorm_scalar_packed,
@@ -4719,6 +4891,9 @@ class MoeOp:
 
         # Apply reduce-to-one modifications (no-op when reduce disabled)
         self._build_reduce_per_device(reduce_root_coord, coord, row, col, chip_id)
+
+        # Apply pipeline_stage_sync modifcations (no-op when reduce disable)
+        self._build_pipeline_stage_sync_per_device(coord, row, col, chip_id)
 
         # Apply broadcast modifications (no-op when bcast disabled)
         self._build_bcast_per_device(coord, row, col, chip_id)
