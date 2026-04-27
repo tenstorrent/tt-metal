@@ -14,7 +14,6 @@ from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf
 from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import (
-    DecodersPrecision,
     HfAttentionWrapper,
     HfDecoderWrapper,
     HfModelWrapper,
@@ -94,10 +93,6 @@ class ModelArgs(TTModelArgs):
             optimizations=optimizations,
             cache_hf=cache_hf,
         )
-
-        if self.num_devices > 1 and getattr(self.optimizations, "__name__", None) == "accuracy":
-            self.optimizations = DecodersPrecision.performance(self.n_layers, self.model_name)
-            self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
         # For Gemma3 we still need a real tokenizer even when using dummy_weights,
         # because prompt encoding relies on HF chat templates, not on checkpoint weights.
