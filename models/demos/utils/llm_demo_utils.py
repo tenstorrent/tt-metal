@@ -157,7 +157,6 @@ def verify_perf(
                 f"batch_size={batch_size}, seq_len={seq_len}"
             )
 
-
     expected_measurements_default = {
         "compile_prefill": False,
         "compile_decode": False,
