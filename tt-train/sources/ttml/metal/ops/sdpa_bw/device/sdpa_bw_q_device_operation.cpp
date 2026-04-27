@@ -127,27 +127,44 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
 
 SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Return single grad_query spec
-    if (tensor_args.preallocated_grad_query.has_value()) {
-        return tensor_args.preallocated_grad_query->tensor_spec();
-    } else {
-        return ttnn::TensorSpec(
-            tensor_args.query.logical_shape(),
-            tt::tt_metal::TensorLayout(
-                tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
-    }
+    // grad_query spec
+    ttnn::TensorSpec grad_query_spec =
+        tensor_args.preallocated_grad_query.has_value()
+            ? tensor_args.preallocated_grad_query->tensor_spec()
+            : ttnn::TensorSpec(
+                  tensor_args.query.logical_shape(),
+                  tt::tt_metal::TensorLayout(
+                      tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+
+    // u_scaler spec: one tile per query row, shape = (B*NH*St, 1) in tiles = (B*NH*S, 32) in elements
+    // stored as Float32 DRAM interleaved
+    ttnn::TensorSpec u_scaler_spec =
+        tensor_args.preallocated_u_scaler.has_value() ? tensor_args.preallocated_u_scaler->tensor_spec() : [&]() {
+            const auto [B, NH, S, E] = tensor_args.query.padded_shape().to_array_4D();
+            auto u_scaler_shape = ttnn::Shape({1, 1, B * NH * S, tt::constants::TILE_WIDTH});
+            auto mem_config = tt::tt_metal::MemoryConfig(
+                tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
+            return ttnn::TensorSpec(
+                u_scaler_shape,
+                tt::tt_metal::TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config));
+        }();
+
+    return {grad_query_spec, u_scaler_spec};
 }
 
 SDPABackwardQDeviceOperation::tensor_return_value_t SDPABackwardQDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    spec_return_value_t output_spec = compute_output_specs(operation_attributes, tensor_args);
+    auto [grad_query_spec, u_scaler_spec] = compute_output_specs(operation_attributes, tensor_args);
 
-    // Return single grad_query tensor
-    if (tensor_args.preallocated_grad_query.has_value()) {
-        return tensor_args.preallocated_grad_query.value();
-    } else {
-        return create_device_tensor(output_spec, tensor_args.query.device());
-    }
+    ttnn::Tensor grad_query = tensor_args.preallocated_grad_query.has_value()
+                                  ? tensor_args.preallocated_grad_query.value()
+                                  : create_device_tensor(grad_query_spec, tensor_args.query.device());
+
+    ttnn::Tensor u_scaler = tensor_args.preallocated_u_scaler.has_value()
+                                ? tensor_args.preallocated_u_scaler.value()
+                                : create_device_tensor(u_scaler_spec, tensor_args.query.device());
+
+    return {grad_query, u_scaler};
 }
 
 ttsl::hash::hash_t SDPABackwardQDeviceOperation::compute_program_hash(
@@ -177,7 +194,8 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability,
-    const std::optional<ttnn::Tensor>& preallocated_grad_query) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_query,
+    const std::optional<ttnn::Tensor>& preallocated_u_scaler) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
 
     auto operation_attributes =
@@ -192,6 +210,7 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
         .attn_mask = attn_mask,
         .intermediates = intermediates,
         .preallocated_grad_query = preallocated_grad_query,
+        .preallocated_u_scaler = preallocated_u_scaler,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
