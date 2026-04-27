@@ -98,9 +98,15 @@ def verify_halted_cores(run_checks: RunChecks) -> None:
     """
     Verify that cores halted by triage are still halted.
 
-    If a core was halted by us but is no longer halted, it was broken during
-    triage (cont() is patched to no-op on affected architectures, so it
-    cannot have been continued intentionally).
+    If a core was halted by us but cannot be re-halted now, it was broken
+    during triage (cont() is patched to no-op on affected architectures, so
+    it cannot have been continued intentionally).
+
+    On Blackhole/Wormhole the HW occasionally drops halt spontaneously (see
+    the cont()-bug workaround in triage.py::_patch_risc_debug). That alone
+    does NOT mean the core was broken -- if we can re-halt it, it was a
+    transient HW quirk, not breakage. Only declare the core broken if the
+    re-halt itself fails.
     """
     session = get_triage_session()
 
@@ -108,11 +114,22 @@ def verify_halted_cores(run_checks: RunChecks) -> None:
         if not session.is_halted_core(location, risc_name):
             return None
         risc_debug = location.noc_block.get_risc_debug(risc_name)
-        if not risc_debug.is_halted():
-            log_warning_risc(
-                risc_name, location, "Was halted by triage but is no longer halted — core was broken during triage."
-            )
-            session.add_broken_core(location, risc_name)
+        if risc_debug.is_halted():
+            return None
+        # Try to re-halt several times; the HW occasionally takes more than one
+        # attempt for halt to stick on Blackhole when the core has outstanding
+        # NOC traffic. Only declare broken if every attempt fails.
+        for _ in range(5):
+            try:
+                risc_debug.halt()
+            except Exception:
+                pass
+            if risc_debug.is_halted():
+                return None
+        log_warning_risc(
+            risc_name, location, "Was halted by triage but is no longer halted — core was broken during triage."
+        )
+        session.add_broken_core(location, risc_name)
         return None
 
     run_checks.run_per_core_check(check_core)
