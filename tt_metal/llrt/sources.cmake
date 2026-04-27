@@ -3,7 +3,6 @@ set(LLRT_SRC
     core_descriptor.cpp
     firmware_capability.cpp
     rtoptions.cpp
-    tlb_config.cpp
     tt_cluster.cpp
     tt_elffile.cpp
     tt_memory.cpp
