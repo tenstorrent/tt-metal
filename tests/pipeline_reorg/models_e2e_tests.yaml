@@ -312,7 +312,7 @@
   model: gemma-4-e2b
   skus:
     wh_n150:
-      timeout: 20
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -324,7 +324,7 @@
   model: gemma-4-e4b-n150
   skus:
     wh_n150:
-      timeout: 25
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -336,7 +336,7 @@
   model: gemma-4-e4b-n300
   skus:
     wh_n300:
-      timeout: 25
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -348,7 +348,7 @@
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -360,7 +360,7 @@
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
