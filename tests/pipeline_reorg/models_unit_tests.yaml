@@ -203,6 +203,66 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Gemma-4-E2B unit tests
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E2B-it
+    pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x1"
+  model: gemma-4-e2b
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-4-E4B unit tests (N150)
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
+    pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x1"
+  model: gemma-4-e4b-n150
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-4-E4B unit tests (N300)
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
+    pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x2"
+  model: gemma-4-e4b-n300
+  skus:
+    wh_n300:
+      timeout: 20
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-4-26B-A4B unit tests (T3K)
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
+    pytest --timeout 900 models/demos/gemma4/tests/unit/ -k "1x8"
+  model: gemma-4-26b-a4b
+  skus:
+    wh_llmbox_perf:
+      timeout: 25
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-4-31B unit tests (T3K)
+  cmd: |
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
+    pytest --timeout 900 models/demos/gemma4/tests/unit/ -k "1x8"
+  model: gemma-4-31b
+  skus:
+    wh_llmbox_perf:
+      timeout: 25
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Shallow UNet unit tests
   cmd: |
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
