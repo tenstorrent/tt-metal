@@ -129,6 +129,12 @@ class ProgramConfig:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = cores
+        n_tiles = int(math.ceil(n / 32))
+        # Use ceiling division so that core_x*core_y*per_core_N >= n_tiles even when
+        # n_tiles is not a multiple of the core count (e.g. P300x2 mesh (1,4) yields
+        # per-device intermediate=720 -> 23 tiles, prime; old "// (core_x*core_y)"
+        # truncated to 1 and the C++ kernel asserted "num_blocks_total > num_cores").
+        per_core_N = max(1, math.ceil(n_tiles / (core_x * core_y)))
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=in0_block_w,
@@ -137,7 +143,7 @@ class ProgramConfig:
             out_block_h=1,
             out_block_w=1,
             per_core_M=max(32, m) // 32,
-            per_core_N=int(math.ceil(n / 32)) // (core_x * core_y),
+            per_core_N=per_core_N,
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
