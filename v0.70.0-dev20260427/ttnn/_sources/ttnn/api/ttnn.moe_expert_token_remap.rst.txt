@@ -1,0 +1,8 @@
+﻿ttnn.moe\_expert\_token\_remap
+==============================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.moe_expert_token_remap:
+
+.. autooperation:: ttnn.moe_expert_token_remap
