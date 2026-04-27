@@ -2,174 +2,258 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Speaker similarity evaluation for RVC outputs.
-
-Example:
-    ./python_env/bin/python models/demos/rvc/scripts/eval_speaker_similarity.py \
-      --device cpu
-
-This computes cosine similarity between speaker embeddings extracted from the
-original source audio and the generated audio.
-"""
+"""Content-preservation WER evaluation for RVC outputs."""
 
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
 
+import av
+import librosa
 import numpy as np
 import torch
-import torch.nn.functional as F
 
-from models.demos.rvc.torch_impl.audio import load_audio
+BASE_DIRECTORY = Path(__file__).resolve().parent.parent / "data"
+INPUT_AUDIO_FILE = "sample-speech.wav"
+OUTPUT_AUDIO_FILE = "output/output_torch.wav"
 
-DEFAULT_BACKEND = "transformers_wavlm_xvector"
-DEFAULT_SPEAKER_ENCODER = "microsoft/wavlm-base-plus-sv"
+DEFAULT_BACKEND = "transformers_whisper"
+DEFAULT_ASR_MODEL = "openai/whisper-large-v3"
+DEFAULT_MAX_WER = 2.5
 
 
-class SpeakerEmbeddingBackendError(RuntimeError):
+class ASRBackendError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class SpeakerSimilarityResult:
+class WERResult:
     backend: str
     model_id: str
-    similarity: float
+    reference_transcript: str
+    candidate_transcript: str
+    wer: float
 
 
-def cosine_similarity(reference_embedding: np.ndarray, candidate_embedding: np.ndarray) -> float:
-    reference = np.asarray(reference_embedding, dtype=np.float32).reshape(-1)
-    candidate = np.asarray(candidate_embedding, dtype=np.float32).reshape(-1)
-    if reference.size == 0 or candidate.size == 0:
-        raise ValueError("Speaker embeddings must be non-empty.")
-    if reference.shape != candidate.shape:
-        raise ValueError(f"Speaker embeddings must have the same shape. Got {reference.shape} and {candidate.shape}.")
+def _audio_to_float32_mono(input_file, output_file, output_format, sample_rate):
+    inp = av.open(input_file, "r")
+    out = av.open(output_file, "w", format=output_format)
+    if output_format == "ogg":
+        output_format = "libvorbis"
+    if output_format == "f32le":
+        output_format = "pcm_f32le"
 
-    denom = np.linalg.norm(reference) * np.linalg.norm(candidate)
-    if denom == 0:
-        raise ValueError("Speaker embeddings must have non-zero norm.")
-    return float(np.dot(reference, candidate) / denom)
+    stream = out.add_stream(output_format, rate=sample_rate)
+    try:
+        stream.layout = "mono"
+    except Exception:
+        pass
+
+    for frame in inp.decode(audio=0):
+        for packet in stream.encode(frame):
+            out.mux(packet)
+
+    out.close()
+    inp.close()
 
 
-def _load_speechbrain_encoder(model_id: str, device: str):
-    if importlib.util.find_spec("speechbrain") is None:
-        raise SpeakerEmbeddingBackendError(
-            "SpeechBrain speaker similarity requires optional dependencies. "
-            "Install them with: pip install speechbrain torchaudio"
+def load_audio_input(sample_rate: int) -> torch.Tensor:
+    audio_path = (BASE_DIRECTORY / INPUT_AUDIO_FILE).resolve()
+    if not str(audio_path).startswith(str(BASE_DIRECTORY.resolve())):
+        raise RuntimeError(f"Audio file must be located under {BASE_DIRECTORY}")
+    if not audio_path.exists():
+        raise RuntimeError(f"Audio file does not exist: {audio_path}")
+
+    try:
+        with open(audio_path, "rb") as infile:
+            with BytesIO() as outfile:
+                _audio_to_float32_mono(infile, outfile, "f32le", sample_rate)
+                waveform = np.frombuffer(outfile.getvalue(), np.float32).flatten()
+                return torch.from_numpy(waveform)
+    except AttributeError:
+        waveform, original_sr = librosa.load(str(audio_path), sr=None, mono=True)
+        waveform = librosa.resample(waveform, orig_sr=original_sr, target_sr=sample_rate)
+        return torch.from_numpy(waveform.astype(np.float32))
+
+
+def load_audio_output(sample_rate: int) -> torch.Tensor:
+    audio_path = (BASE_DIRECTORY / OUTPUT_AUDIO_FILE).resolve()
+    if not str(audio_path).startswith(str(BASE_DIRECTORY.resolve())):
+        raise RuntimeError(f"Audio file must be located under {BASE_DIRECTORY}")
+    if not audio_path.exists():
+        raise RuntimeError(f"Audio file does not exist: {audio_path}")
+
+    try:
+        with open(audio_path, "rb") as infile:
+            with BytesIO() as outfile:
+                _audio_to_float32_mono(infile, outfile, "f32le", sample_rate)
+                waveform = np.frombuffer(outfile.getvalue(), np.float32).flatten()
+                return torch.from_numpy(waveform)
+    except AttributeError:
+        waveform, original_sr = librosa.load(str(audio_path), sr=None, mono=True)
+        waveform = librosa.resample(waveform, orig_sr=original_sr, target_sr=sample_rate)
+        return torch.from_numpy(waveform.astype(np.float32))
+
+
+def normalize_transcript(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"[^a-z0-9\s']", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _word_edit_distance(reference_words: list[str], candidate_words: list[str]) -> int:
+    rows = len(reference_words) + 1
+    cols = len(candidate_words) + 1
+    dp = [[0] * cols for _ in range(rows)]
+
+    for i in range(rows):
+        dp[i][0] = i
+    for j in range(cols):
+        dp[0][j] = j
+
+    for i in range(1, rows):
+        for j in range(1, cols):
+            cost = 0 if reference_words[i - 1] == candidate_words[j - 1] else 1
+            dp[i][j] = min(
+                dp[i - 1][j] + 1,
+                dp[i][j - 1] + 1,
+                dp[i - 1][j - 1] + cost,
+            )
+    return dp[-1][-1]
+
+
+def _load_transformers_asr_pipeline(model_id: str, device: str):
+    if importlib.util.find_spec("transformers") is None:
+        raise ASRBackendError(
+            "Transformers-based WER requires optional dependencies. " "Install them with: pip install transformers"
         )
 
-    from speechbrain.inference.speaker import EncoderClassifier
+    from transformers import pipeline
 
-    kwargs = {"source": model_id, "run_opts": {"device": device}}
+    if device == "cpu":
+        pipeline_device = -1
+        torch_dtype = torch.float32
+    else:
+        pipeline_device = device
+        torch_dtype = torch.float16
+
     try:
-        return EncoderClassifier.from_hparams(**kwargs)
+        return pipeline(
+            task="automatic-speech-recognition",
+            model=model_id,
+            device=pipeline_device,
+            torch_dtype=torch_dtype,
+        )
     except Exception as exc:
-        raise SpeakerEmbeddingBackendError(
-            "Failed to initialize the SpeechBrain speaker encoder. "
+        raise ASRBackendError(
+            "Failed to initialize the ASR backend. "
             "If the model is not cached locally, this step may require network access. "
             f"model_id={model_id!r}"
         ) from exc
 
 
-def _load_transformers_wavlm_encoder(model_id: str, device: str):
-    if importlib.util.find_spec("transformers") is None:
-        raise SpeakerEmbeddingBackendError(
-            "Transformers-based speaker similarity requires optional dependencies. "
-            "Install them with: pip install transformers"
-        )
-
-    from transformers import AutoFeatureExtractor, WavLMForXVector
-
-    feature_extractor = AutoFeatureExtractor.from_pretrained(model_id)
-    model = WavLMForXVector.from_pretrained(model_id)
-    model = model.eval().to(device)
-    return feature_extractor, model
-
-
-def compute_speaker_embedding(
+def transcribe_audio(
+    waveform: torch.Tensor,
     *,
     backend: str = DEFAULT_BACKEND,
-    model_id: str = DEFAULT_SPEAKER_ENCODER,
+    model_id: str = DEFAULT_ASR_MODEL,
     device: str = "cpu",
-) -> np.ndarray:
-    waveform = load_audio(16000).unsqueeze(0)
+) -> str:
+    if backend != "transformers_whisper":
+        raise ValueError(f"Unsupported ASR backend: {backend}")
 
-    if backend == "speechbrain_ecapa":
-        classifier = _load_speechbrain_encoder(model_id=model_id, device=device)
-        lengths = torch.tensor([1.0], dtype=torch.float32)
-        embedding = classifier.encode_batch(waveform, lengths=lengths)
-        return embedding.detach().cpu().numpy().reshape(-1).astype(np.float32)
-
-    if backend == "transformers_wavlm_xvector":
-        feature_extractor, model = _load_transformers_wavlm_encoder(
-            model_id=model_id,
-            device=device,
+    asr = _load_transformers_asr_pipeline(model_id=model_id, device=device)
+    asr_input = {"array": waveform.detach().cpu().numpy(), "sampling_rate": 16000}
+    if model_id.endswith(".en"):
+        result = asr(asr_input, return_timestamps=True)
+    else:
+        result = asr(
+            asr_input,
+            return_timestamps=True,
+            generate_kwargs={"language": "english", "task": "transcribe"},
         )
-        inputs = feature_extractor(
-            waveform.squeeze(0).cpu().numpy(),
-            sampling_rate=16000,
-            return_tensors="pt",
-        )
-        inputs = {name: tensor.to(device) for name, tensor in inputs.items()}
-        with torch.inference_mode():
-            embedding = model(**inputs).embeddings
-            embedding = F.normalize(embedding, dim=-1)
-        return embedding.detach().cpu().numpy().reshape(-1).astype(np.float32)
-
-    raise ValueError(f"Unsupported speaker embedding backend: {backend}")
+    return normalize_transcript(result["text"])
 
 
-def compute_speaker_similarity(
+def compute_wer(
     *,
     backend: str = DEFAULT_BACKEND,
-    model_id: str = DEFAULT_SPEAKER_ENCODER,
+    model_id: str = DEFAULT_ASR_MODEL,
     device: str = "cpu",
-) -> SpeakerSimilarityResult:
-    source_embedding = compute_speaker_embedding(
+) -> WERResult:
+    reference_transcript = transcribe_audio(
+        load_audio_input(16000),
         backend=backend,
         model_id=model_id,
         device=device,
     )
-    generated_embedding = compute_speaker_embedding(
+    candidate_transcript = transcribe_audio(
+        load_audio_output(16000),
         backend=backend,
         model_id=model_id,
         device=device,
     )
-    similarity = cosine_similarity(source_embedding, generated_embedding)
-    return SpeakerSimilarityResult(
+
+    reference_words = reference_transcript.split()
+    candidate_words = candidate_transcript.split()
+    if not reference_words:
+        raise ValueError("Reference transcript is empty after normalization.")
+
+    distance = _word_edit_distance(reference_words, candidate_words)
+    wer = 100.0 * distance / len(reference_words)
+    return WERResult(
         backend=backend,
         model_id=model_id,
-        similarity=similarity,
+        reference_transcript=reference_transcript,
+        candidate_transcript=candidate_transcript,
+        wer=wer,
     )
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compute speaker similarity using the fixed RVC demo audio input.")
+    parser = argparse.ArgumentParser(description="Compute content-preservation WER using fixed RVC demo audio.")
     parser.add_argument(
         "--backend",
         default=DEFAULT_BACKEND,
-        choices=["transformers_wavlm_xvector", "speechbrain_ecapa"],
-        help="Speaker embedding backend.",
+        choices=["transformers_whisper"],
+        help="ASR backend.",
     )
     parser.add_argument(
         "--model-id",
-        default=DEFAULT_SPEAKER_ENCODER,
-        help="Speaker embedding model identifier for the selected backend.",
+        default=DEFAULT_ASR_MODEL,
+        help="ASR model identifier for the selected backend.",
     )
-    parser.add_argument("--device", default="cpu", help="Execution device for the embedding backend.")
+    parser.add_argument("--device", default="cpu", help="Execution device for the ASR backend.")
+    parser.add_argument(
+        "--max-wer",
+        type=float,
+        default=DEFAULT_MAX_WER,
+        help="Maximum acceptable WER percentage.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    result = compute_speaker_similarity(
+    result = compute_wer(
         backend=args.backend,
         model_id=args.model_id,
         device=args.device,
     )
-    print(f"speaker_similarity={result.similarity:.6f}")
+    passed = result.wer < args.max_wer
+    print(f"reference_transcript={result.reference_transcript}")
+    print(f"candidate_transcript={result.candidate_transcript}")
+    print(f"wer={result.wer:.6f}")
+    print(f"threshold={args.max_wer:.6f}")
+    print(f"pass={str(passed).lower()}")
+    if not passed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -436,13 +436,16 @@ class Pipeline:
 
         return audio_output
 
-    def infer(self):
+    def prepare_audio_input(self, num_secs: float | None = None) -> torch.Tensor:
         audio = load_audio(self.sr)
         # preprocess
         audio_max = torch.abs(audio).max().item() / 0.95
         if audio_max > 1:
             audio /= audio_max
-
         audio = signal.filtfilt(bh, ah, audio)
-        audio = torch.from_numpy(audio.copy()).unsqueeze(0)
+        audio = torch.from_numpy(audio.copy()).unsqueeze(0).to(torch.float32)
+        return audio
+
+    def infer(self):
+        audio = self.prepare_audio_input()
         return self._run_pipeline(audio)[0]

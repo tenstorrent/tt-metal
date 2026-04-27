@@ -48,10 +48,10 @@ mkdir -p ./models/demos/rvc/data/output
 
 # The current helper scripts still accept `-i`, but the pipeline itself now
 # loads the fixed demo input from `models/demos/rvc/data/sample-speech.wav`.
-uv run --active models/demos/rvc/scripts/infer_ttnn.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output_ttnn.wav
+uv run --active models/demos/rvc/scripts/infer_ttnn.py -o ./models/demos/rvc/data/output/output_ttnn.wav
 
 # torch version
-# uv run --active models/demos/rvc/scripts/infer_torch.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output_torch.wav
+# uv run --active models/demos/rvc/scripts/infer_torch.py -o ./models/demos/rvc/data/output/output_torch.wav
 
 ```
 
@@ -84,7 +84,7 @@ For repeated fixed-shape benchmarking and validation, `rvc` now has a runner sur
 `unet_3d`:
 
 - `models.demos.rvc.runner.performant_runner.RVCRunner`
-- `models.demos.rvc.runner.performant_runner_infra.RVCTestInfra`
+- `models.demos.rvc.runner.performant_runner.RVCTestInfra`
 
 This runner currently assumes a fixed input audio path and fixed inference configuration for the
 life of the initialized runner. That matches the constraints needed for later trace-oriented work:
@@ -100,7 +100,6 @@ Speaker similarity should live under a dedicated eval surface rather than inside
 This demo now exposes:
 
 - module: `models.demos.rvc.evals.speaker_similarity`
-- script: `models/demos/rvc/scripts/eval_speaker_similarity.py`
 - module: `models.demos.rvc.evals.token_accuracy`
 - script: `models/demos/rvc/scripts/eval_token_accuracy.py`
 - module: `models.demos.rvc.evals.wer`
@@ -110,15 +109,12 @@ Recommended backend for the bounty metric:
 
 ```sh
 pip install transformers
-python models/demos/rvc/scripts/eval_speaker_similarity.py \
-  --device cpu
 ```
 
 Notes:
 - The default backend uses a Transformers `WavLMForXVector` speaker encoder and reports cosine similarity.
-- `speechbrain_ecapa` is also supported, but it depends on `torchaudio` and may require a CPU-compatible install.
 - If the model is not already cached locally, backend initialization may need network access to download weights.
-- The current eval path uses the fixed demo audio input under `models/demos/rvc/data/sample-speech.wav`.
+- `compute_speaker_similarity(reference_audio, candidate_audio, ...)` compares two in-memory audio arrays.
 - This is intentionally separate from the TTNN inference pipeline so future evals such as WER, mel similarity,
   and frame-level TT-vs-Torch comparisons can live under `models/demos/rvc/evals/`.
 

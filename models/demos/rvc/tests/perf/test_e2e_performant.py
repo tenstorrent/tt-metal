@@ -10,8 +10,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.demos.rvc.runner.performant_runner import RVCRunner
-from models.demos.rvc.runner.performant_runner_infra import RVCInferenceConfig
+from models.demos.rvc.runner.performant_runner import RVCInferenceConfig, RVCRunner
 
 
 def _require_assets_env() -> None:
@@ -29,7 +28,7 @@ def run_rvc_e2e_inference(device) -> None:
     inference_config = RVCInferenceConfig(num_secs=33.0)
 
     model.initialize_inference(device, {"inference": inference_config})
-    torch_input_tensor, _ = model.test_infra.setup_l1_sharded_input(device)
+    torch_input_tensor = model.test_infra.ttnn_pipeline.prepare_audio_input()
     inference_iter_count = 10
 
     t0 = time.time()
@@ -37,8 +36,6 @@ def run_rvc_e2e_inference(device) -> None:
         _ = model.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
-
-    model.release_inference()
 
     inference_time_avg = round((t1 - t0) / inference_iter_count, 6)
     logger.info(
