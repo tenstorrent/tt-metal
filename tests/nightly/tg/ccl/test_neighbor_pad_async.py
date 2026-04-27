@@ -250,13 +250,13 @@ def _setup_sub_device(mesh_device):
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, num_links, use_persistent_output_buffer",
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, num_links, use_persistent_output_buffer, skip_for_ci_env",
     [
         # Slowest NeighborPadAsync from profiler: VAE 720p full res, H=736, W=1280, C=96
         # Per-device: [1, 81, 184, 160, 96], FW ~17.6ms
-        ([1, 81, 736, 1280, 96], 2, 3, 0, 1, 1, 1, 2, 2, True),
+        ([1, 81, 736, 1280, 96], 2, 3, 0, 1, 1, 1, 2, 2, True, True),
         # Same shape without t_front_pad (regression check)
-        ([1, 83, 736, 1280, 96], 2, 3, 0, 1, 1, 1, 0, 2, True),
+        ([1, 83, 736, 1280, 96], 2, 3, 0, 1, 1, 1, 0, 2, True, True),
     ],
     ids=[
         "vae_720p_full_res_t_front_2",
@@ -280,8 +280,12 @@ def test_neighbor_pad_async_2d_t_front_pad(
     t_front_pad,
     num_links,
     use_persistent_output_buffer,
+    skip_for_ci_env,
+    is_ci_env,
     device_params,
 ):
+    if is_ci_env and skip_for_ci_env:
+        pytest.skip("Skipping large shapes in CI to reduce pipeline time")
     if is_blackhole() and num_links > 2:
         pytest.skip("Skipping num_links > 2 on BH (only 2 ethernet channels available)")
 
@@ -764,32 +768,32 @@ def run_neighbor_pad_2d_combined_impl(
 # ---------------------------------------------------------------------------
 
 _BH_2D_SHAPES = [
-    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, persistent)
-    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, False),
-    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 2, False),
-    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 2, False),
-    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 1, False),
-    ([1, 3, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, False),
-    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, False),
-    ([1, 3, 8 * 4, 8 * 8, 96], 2, 3, 0, 1, 1, 1, False),
-    ([1, 3, 8 * 4, 8 * 8, 128], 2, 3, 0, 1, 1, 1, False),
-    ([1, 4, 12 * 4, 16 * 8, 32], 2, 3, 0, 1, 1, 1, False),
-    ([1, 4, 12 * 4, 16 * 8, 64], 2, 3, 0, 1, 1, 1, False),
-    ([2, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, False),  # B=2
-    ([1, 2, 16 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, False),  # tall H
-    ([1, 2, 8 * 4, 16 * 8, 32], 2, 3, 0, 1, 1, 1, False),  # wide W
-    ([1, 2, 4 * 4, 4 * 8, 128], 2, 3, 0, 1, 1, 1, False),
-    ([1, 2, 4 * 4, 4 * 8, 256], 2, 3, 0, 1, 1, 1, False),
-    ([1, 2, 4 * 4, 4 * 8, 384], 2, 3, 0, 1, 1, 1, False),
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, False),  # VAE-like shape
-    ([1, 3, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, False),
-    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, True),  # persistent
-    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, True),  # persistent medium
-    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 2, 2, False),
-    ([1, 5, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, False),  # T=5
-    ([1, 7, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, False),  # T=7 odd
-    ([1, 2, 4 * 8, 4 * 4, 32], 2, 3, 1, 0, 1, 1, False),  # flipped axes
-    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 2, True),  # persistent pW=2
+    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, persistent, skip_ci)
+    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, False, False),
+    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 2, False, True),
+    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 2, False, True),
+    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 1, False, False),
+    ([1, 3, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 3, 8 * 4, 8 * 8, 96], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 3, 8 * 4, 8 * 8, 128], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 4, 12 * 4, 16 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 4, 12 * 4, 16 * 8, 64], 2, 3, 0, 1, 1, 1, False, True),
+    ([2, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),  # B=2
+    ([1, 2, 16 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),  # tall H
+    ([1, 2, 8 * 4, 16 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),  # wide W
+    ([1, 2, 4 * 4, 4 * 8, 128], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 2, 4 * 4, 4 * 8, 256], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 2, 4 * 4, 4 * 8, 384], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),  # VAE-like shape
+    ([1, 3, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, False, True),
+    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, True, False),  # persistent
+    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, True, True),  # persistent medium
+    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 2, 2, False, True),
+    ([1, 5, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),  # T=5
+    ([1, 7, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, False, True),  # T=7 odd
+    ([1, 2, 4 * 8, 4 * 4, 32], 2, 3, 1, 0, 1, 1, False, True),  # flipped axes
+    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 2, True, True),  # persistent pW=2
 ]
 
 _BH_2D_SHAPES_IDS = [
@@ -824,7 +828,7 @@ _BH_2D_SHAPES_IDS = [
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, use_persistent_output_buffer",
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, use_persistent_output_buffer, skip_for_ci_env",
     _BH_2D_SHAPES,
     ids=_BH_2D_SHAPES_IDS,
 )
@@ -843,9 +847,13 @@ def test_np_bh_2d_shapes(
     pH,
     pW,
     use_persistent_output_buffer,
+    skip_for_ci_env,
+    is_ci_env,
     device_params,
 ):
     """Shape/padding/channel sweep for 2D neighbor pad on 4x8 BH with 2 links."""
+    if is_ci_env and skip_for_ci_env:
+        pytest.skip("Skipping sweep shape in CI to reduce pipeline time")
     if not is_blackhole():
         pytest.skip("Sized for 4x8 BH mesh")
 
@@ -879,22 +887,22 @@ def test_np_bh_2d_shapes(
 # ---------------------------------------------------------------------------
 
 _BH_LH_1D = [
-    # (input_shape, halo_dim, other_shard_dim, cluster_axis, pad_l, pad_r, logical_h)
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90),  # 2 excess rows, C=32
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90),  # T=3
-    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 90),  # C=64
-    ([1, 2, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 90),  # C=96
-    ([1, 2, 23 * 4, 20 * 8, 128], 2, 3, 0, 1, 1, 90),  # C=128
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 23 * 4),  # no masking
-    ([1, 2, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90),  # 6 excess rows
-    ([1, 2, 24 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 90),  # 6 excess, C=64
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 2, 2, 90),  # pad=2
-    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 30),  # small, 2 excess
-    ([1, 2, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 30),  # small C=64
-    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 14),  # tiny, 2 excess
-    ([1, 4, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90),  # T=4
-    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 8 * 4),  # no masking small
-    ([1, 2, 4 * 4, 4 * 8, 96], 2, 3, 0, 1, 1, 14),  # tiny C=96
+    # (input_shape, halo_dim, other_shard_dim, cluster_axis, pad_l, pad_r, logical_h, skip_ci)
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90, True),  # 2 excess rows, C=32
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90, True),  # T=3
+    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 90, True),  # C=64
+    ([1, 2, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 90, True),  # C=96
+    ([1, 2, 23 * 4, 20 * 8, 128], 2, 3, 0, 1, 1, 90, True),  # C=128
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 23 * 4, True),  # no masking
+    ([1, 2, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90, True),  # 6 excess rows
+    ([1, 2, 24 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 90, True),  # 6 excess, C=64
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 2, 2, 90, True),  # pad=2
+    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 30, False),  # small, 2 excess
+    ([1, 2, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 30, True),  # small C=64
+    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 14, True),  # tiny, 2 excess
+    ([1, 4, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90, True),  # T=4
+    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 8 * 4, False),  # no masking small
+    ([1, 2, 4 * 4, 4 * 8, 96], 2, 3, 0, 1, 1, 14, True),  # tiny C=96
 ]
 
 _BH_LH_1D_IDS = [
@@ -919,7 +927,7 @@ _BH_LH_1D_IDS = [
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, halo_dim, other_shard_dim, cluster_axis, padding_left, padding_right, logical_h",
+    "input_shape, halo_dim, other_shard_dim, cluster_axis, padding_left, padding_right, logical_h, skip_for_ci_env",
     _BH_LH_1D,
     ids=_BH_LH_1D_IDS,
 )
@@ -937,9 +945,13 @@ def test_np_bh_logical_h_1d(
     padding_left,
     padding_right,
     logical_h,
+    skip_for_ci_env,
+    is_ci_env,
     device_params,
 ):
     """1D H-only neighbor pad with logical_h masking on 4x8 BH with 2 links."""
+    if is_ci_env and skip_for_ci_env:
+        pytest.skip("Skipping sweep shape in CI to reduce pipeline time")
     if not is_blackhole():
         pytest.skip("Sized for 4x8 BH mesh")
 
@@ -961,27 +973,27 @@ def test_np_bh_logical_h_1d(
 # ---------------------------------------------------------------------------
 
 _BH_LH_2D = [
-    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, persistent)
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False),  # core repro
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False),  # T=3
-    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, False),  # C=64
-    ([1, 2, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, False),  # C=96
-    ([1, 2, 23 * 4, 20 * 8, 128], 2, 3, 0, 1, 1, 1, 90, False),  # C=128
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 23 * 4, False),  # no masking
-    ([1, 2, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False),  # 6 excess rows
-    ([1, 2, 24 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, False),  # 6 excess C=64
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 2, 1, 90, False),  # pH=2
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 2, 90, False),  # pW=2
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 2, 2, 90, False),  # pH=pW=2
-    ([1, 4, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False),  # T=4 (2 per W link)
-    ([1, 5, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False),  # T=5
-    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 30, False),  # small 2 excess
-    ([1, 2, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 30, False),  # small C=64
-    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 14, False),  # tiny 2 excess
-    ([1, 2, 24 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, False),  # 6 excess C=96
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, True),  # persistent
-    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, True),  # persistent C=64
-    ([2, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 30, False),  # B=2
+    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, persistent, skip_ci)
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False, True),  # core repro
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False, True),  # T=3
+    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, False, True),  # C=64
+    ([1, 2, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, False, True),  # C=96
+    ([1, 2, 23 * 4, 20 * 8, 128], 2, 3, 0, 1, 1, 1, 90, False, True),  # C=128
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 23 * 4, False, True),  # no masking
+    ([1, 2, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False, True),  # 6 excess rows
+    ([1, 2, 24 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, False, True),  # 6 excess C=64
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 2, 1, 90, False, True),  # pH=2
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 2, 90, False, True),  # pW=2
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 2, 2, 90, False, True),  # pH=pW=2
+    ([1, 4, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False, True),  # T=4 (2 per W link)
+    ([1, 5, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, False, True),  # T=5
+    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 30, False, False),  # small 2 excess
+    ([1, 2, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 30, False, True),  # small C=64
+    ([1, 2, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 14, False, True),  # tiny 2 excess
+    ([1, 2, 24 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, False, True),  # 6 excess C=96
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, True, False),  # persistent
+    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, True, True),  # persistent C=64
+    ([2, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 30, False, True),  # B=2
 ]
 
 _BH_LH_2D_IDS = [
@@ -1011,7 +1023,7 @@ _BH_LH_2D_IDS = [
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, use_persistent_output_buffer",
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, use_persistent_output_buffer, skip_for_ci_env",
     _BH_LH_2D,
     ids=_BH_LH_2D_IDS,
 )
@@ -1031,9 +1043,13 @@ def test_np_bh_logical_h_2d(
     pW,
     logical_h,
     use_persistent_output_buffer,
+    skip_for_ci_env,
+    is_ci_env,
     device_params,
 ):
     """2D H+W neighbor pad with logical_h masking — verifies W reader Phase 1 fix."""
+    if is_ci_env and skip_for_ci_env:
+        pytest.skip("Skipping sweep shape in CI to reduce pipeline time")
     if not is_blackhole():
         pytest.skip("Sized for 4x8 BH mesh")
 
@@ -1057,17 +1073,17 @@ def test_np_bh_logical_h_2d(
 # ---------------------------------------------------------------------------
 
 _BH_TF_1D = [
-    # (input_shape, h_dim, h_axis, other_shard_dim, padding_h, t_front_pad)
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 0, 3, 1, 2),
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 0, 3, 1, 1),
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 0, 3, 1, 0),  # t_front=0 regression
-    ([1, 4, 8 * 4, 8 * 8, 32], 2, 0, 3, 1, 2),
-    ([1, 2, 8 * 4, 8 * 8, 64], 2, 0, 3, 1, 1),
-    ([1, 5, 4 * 4, 4 * 8, 32], 2, 0, 3, 1, 4),
-    ([1, 3, 4 * 4, 4 * 8, 96], 2, 0, 3, 1, 2),
-    ([1, 3, 23 * 4, 20 * 8, 64], 2, 0, 3, 1, 2),
-    ([1, 2, 8 * 4, 8 * 8, 128], 2, 0, 3, 1, 1),
-    ([1, 7, 4 * 4, 4 * 8, 32], 2, 0, 3, 1, 4),
+    # (input_shape, h_dim, h_axis, other_shard_dim, padding_h, t_front_pad, skip_ci)
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 0, 3, 1, 2, True),
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 0, 3, 1, 1, True),
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 0, 3, 1, 0, False),  # t_front=0 regression
+    ([1, 4, 8 * 4, 8 * 8, 32], 2, 0, 3, 1, 2, False),
+    ([1, 2, 8 * 4, 8 * 8, 64], 2, 0, 3, 1, 1, True),
+    ([1, 5, 4 * 4, 4 * 8, 32], 2, 0, 3, 1, 4, True),
+    ([1, 3, 4 * 4, 4 * 8, 96], 2, 0, 3, 1, 2, True),
+    ([1, 3, 23 * 4, 20 * 8, 64], 2, 0, 3, 1, 2, True),
+    ([1, 2, 8 * 4, 8 * 8, 128], 2, 0, 3, 1, 1, True),
+    ([1, 7, 4 * 4, 4 * 8, 32], 2, 0, 3, 1, 4, True),
 ]
 
 _BH_TF_1D_IDS = [
@@ -1087,7 +1103,7 @@ _BH_TF_1D_IDS = [
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, h_dim, h_axis, other_shard_dim, padding_h, t_front_pad",
+    "input_shape, h_dim, h_axis, other_shard_dim, padding_h, t_front_pad, skip_for_ci_env",
     _BH_TF_1D,
     ids=_BH_TF_1D_IDS,
 )
@@ -1104,9 +1120,13 @@ def test_np_bh_t_front_1d(
     other_shard_dim,
     padding_h,
     t_front_pad,
+    skip_for_ci_env,
+    is_ci_env,
     device_params,
 ):
     """1D H-only neighbor pad with t_front_pad fusion on 4x8 BH with 2 links."""
+    if is_ci_env and skip_for_ci_env:
+        pytest.skip("Skipping sweep shape in CI to reduce pipeline time")
     if not is_blackhole():
         pytest.skip("Sized for 4x8 BH mesh")
 
@@ -1127,22 +1147,22 @@ def test_np_bh_t_front_1d(
 # ---------------------------------------------------------------------------
 
 _BH_TF_2D = [
-    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, persistent)
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 2, False),
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 1, False),
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 0, False),  # regression
-    ([1, 4, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 2, False),
-    ([1, 2, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 1, False),
-    ([1, 5, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 4, False),
-    ([1, 3, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 2, False),
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 1, True),  # persistent
-    ([1, 2, 4 * 4, 4 * 8, 128], 2, 3, 0, 1, 1, 1, 2, False),
-    ([1, 3, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 2, 1, False),  # pH=pW=2
-    ([1, 4, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 1, 2, False),  # pH=2
-    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 2, 1, False),  # pW=2
-    ([1, 9, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 2, False),  # T=9 odd
-    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 2, True),  # persist medium
-    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 2, False),
+    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, persistent, skip_ci)
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 2, False, True),
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 1, False, True),
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 0, False, True),  # regression
+    ([1, 4, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 2, False, False),
+    ([1, 2, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 1, False, True),
+    ([1, 5, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 4, False, True),
+    ([1, 3, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 2, False, True),
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 1, True, False),  # persistent
+    ([1, 2, 4 * 4, 4 * 8, 128], 2, 3, 0, 1, 1, 1, 2, False, True),
+    ([1, 3, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 2, 1, False, True),  # pH=pW=2
+    ([1, 4, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 2, 1, 2, False, True),  # pH=2
+    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 2, 1, False, True),  # pW=2
+    ([1, 9, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 2, False, True),  # T=9 odd
+    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 2, True, True),  # persist medium
+    ([1, 2, 23 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 2, False, True),
 ]
 
 _BH_TF_2D_IDS = [
@@ -1167,7 +1187,7 @@ _BH_TF_2D_IDS = [
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, use_persistent_output_buffer",
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, t_front_pad, use_persistent_output_buffer, skip_for_ci_env",
     _BH_TF_2D,
     ids=_BH_TF_2D_IDS,
 )
@@ -1187,9 +1207,13 @@ def test_np_bh_t_front_2d(
     pW,
     t_front_pad,
     use_persistent_output_buffer,
+    skip_for_ci_env,
+    is_ci_env,
     device_params,
 ):
     """2D H+W neighbor pad with t_front_pad fusion on 4x8 BH with 2 links."""
+    if is_ci_env and skip_for_ci_env:
+        pytest.skip("Skipping sweep shape in CI to reduce pipeline time")
     if not is_blackhole():
         pytest.skip("Sized for 4x8 BH mesh")
 
@@ -1213,22 +1237,22 @@ def test_np_bh_t_front_2d(
 # ---------------------------------------------------------------------------
 
 _BH_COMBINED = [
-    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, t_front_pad, persistent)
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, False),
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False),
-    ([1, 2, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, 1, False),
-    ([1, 4, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False),
-    ([1, 2, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, False),  # 6 excess
-    ([1, 3, 24 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, 2, False),
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, True),  # persistent
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 23 * 4, 2, False),  # no H mask
-    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 30, 1, False),
-    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 30, 2, False),
-    ([1, 5, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 14, 3, False),
-    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 4, False),  # large tf
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 2, 1, 90, 1, False),  # pH=2
-    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 2, 90, 2, False),  # pW=2
-    ([1, 2, 24 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, 2, False),
+    # (input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, t_front_pad, persistent, skip_ci)
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, False, True),
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False, True),
+    ([1, 2, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, 1, False, True),
+    ([1, 4, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False, True),
+    ([1, 2, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, False, True),  # 6 excess
+    ([1, 3, 24 * 4, 20 * 8, 64], 2, 3, 0, 1, 1, 1, 90, 2, False, True),
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, True, True),  # persistent
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 23 * 4, 2, False, False),  # no H mask
+    ([1, 2, 8 * 4, 8 * 8, 32], 2, 3, 0, 1, 1, 1, 30, 1, False, False),
+    ([1, 3, 8 * 4, 8 * 8, 64], 2, 3, 0, 1, 1, 1, 30, 2, False, True),
+    ([1, 5, 4 * 4, 4 * 8, 32], 2, 3, 0, 1, 1, 1, 14, 3, False, True),
+    ([1, 2, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 4, False, True),  # large tf
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 2, 1, 90, 1, False, True),  # pH=2
+    ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 2, 90, 2, False, True),  # pW=2
+    ([1, 2, 24 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, 2, False, True),
 ]
 
 _BH_COMBINED_IDS = [
@@ -1253,7 +1277,7 @@ _BH_COMBINED_IDS = [
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, t_front_pad, use_persistent_output_buffer",
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, t_front_pad, use_persistent_output_buffer, skip_for_ci_env",
     _BH_COMBINED,
     ids=_BH_COMBINED_IDS,
 )
@@ -1274,9 +1298,13 @@ def test_np_bh_combined(
     logical_h,
     t_front_pad,
     use_persistent_output_buffer,
+    skip_for_ci_env,
+    is_ci_env,
     device_params,
 ):
     """2D neighbor pad with both logical_h masking and t_front_pad active."""
+    if is_ci_env and skip_for_ci_env:
+        pytest.skip("Skipping sweep shape in CI to reduce pipeline time")
     if not is_blackhole():
         pytest.skip("Sized for 4x8 BH mesh")
 
