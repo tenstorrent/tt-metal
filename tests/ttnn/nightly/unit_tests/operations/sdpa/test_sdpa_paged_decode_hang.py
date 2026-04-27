@@ -65,31 +65,39 @@ import os
 
 
 # ── Production shapes ─────────────────────────────────────────────────────────
-B = 32  # per-chip batch (128 total / 4 DP groups)
-NH = 8  # Q heads per chip (64 / TP=8)
-NKV = 1  # KV heads per chip (8 / TP=8)
-D = 64  # head dimension
-BLOCK_SIZE = 64  # KV page size
-K_CHUNK = 128  # k_chunk_size — matches production
-SCALE = D**-0.5
+B          = 32        # per-chip batch (128 total / 4 DP groups)
+NH         = 8         # Q heads per chip (64 / TP=8)
+NKV        = 1         # KV heads per chip (8 / TP=8)
+D          = 64        # head dimension
+BLOCK_SIZE = 64        # KV page size
+K_CHUNK    = 128       # k_chunk_size — matches production
+SCALE      = D ** -0.5
 
 # Exact production hang position: 10*64+3 = 643, causing partial last page
-CUR_POS = 643
-NUM_PAGES = CUR_POS // BLOCK_SIZE + 2  # 12 pages
+CUR_POS    = 643
+NUM_PAGES  = CUR_POS // BLOCK_SIZE + 2   # 12 pages
+
+# Production Q memory: height-sharded across B cores (1 shard per batch item).
+# padded_num_heads = nearest_pow_2(nearest_n(NH=8, n=32)) = 32
+# num_to_corerange(B=32) → 8×4 grid = 32 cores.
+_PADDED_NH  = 32
+_SHARD_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+_SHARD_SPEC = ttnn.ShardSpec(_SHARD_GRID, (_PADDED_NH, D), ttnn.ShardOrientation.ROW_MAJOR)
+Q_MEM_CFG   = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _SHARD_SPEC)
 
 # Production compute kernel config
 COMPUTE_CFG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
-    fp32_dest_acc_en=False,  # BFP8 dst → overflow triggers eltwise_typecast hang
+    fp32_dest_acc_en=False,   # BFP8 dst → overflow triggers eltwise_typecast hang
     packer_l1_acc=False,
 )
 
-# Production program config — 8×8 grid, no max cap
+# Production program config — 8×8 grid, q_chunk_size=0 (dynamic), no max cap
 # → num_cores_per_head = min(64, 64*32*1)//32//1 = 2 (reducer + worker)
 PROG_CFG = ttnn.SDPAProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-    q_chunk_size=NH,
+    q_chunk_size=0,    # 0 = DYNAMIC_CHUNK_SIZE (matches production decode_q_chunk_size=0)
     k_chunk_size=K_CHUNK,
 )
 
@@ -139,27 +147,25 @@ def build_tensors(device):
     K_tt = K_paged.permute(0, 2, 1, 3, 4).reshape(B * NUM_PAGES, NKV, BLOCK_SIZE, D)
     V_tt = V_paged.permute(0, 2, 1, 3, 4).reshape(B * NUM_PAGES, NKV, BLOCK_SIZE, D)
 
-    tt_Q = ttnn.as_tensor(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
-    tt_K = ttnn.as_tensor(K_tt, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
-    tt_V = ttnn.as_tensor(V_tt, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
-    tt_pt = ttnn.as_tensor(
-        page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram
-    )
+    tt_Q  = ttnn.as_tensor(Q,    device=device, dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT, memory_config=Q_MEM_CFG)
+    tt_K  = ttnn.as_tensor(K_tt, device=device, dtype=ttnn.bfloat8_b,
+                            layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_V  = ttnn.as_tensor(V_tt, device=device, dtype=ttnn.bfloat8_b,
+                            layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_pt = ttnn.as_tensor(page_table, device=device, dtype=ttnn.int32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
     tt_cp = ttnn.from_torch(
         torch.tensor([CUR_POS] * B, dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=dram,
+        dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device, memory_config=dram,
     )
     return tt_Q, tt_K, tt_V, tt_pt, tt_cp
 
 
 def run_sdpa(device, tt_Q, tt_K, tt_V, tt_pt, tt_cp):
     return ttnn.transformer.paged_scaled_dot_product_attention_decode(
-        tt_Q,
-        tt_K,
-        tt_V,
+        tt_Q, tt_K, tt_V,
         cur_pos_tensor=tt_cp,
         page_table_tensor=tt_pt,
         scale=SCALE,
@@ -200,17 +206,14 @@ def test_sdpa_paged_decode_hang(device_under_test, request):
     device = device_under_test
     mode = request.config.getoption("--device-mode", default="single")
     max_iters = request.config.getoption("--iterations", default=20)
-    use_trace = True  # always use trace (production path)
+    use_trace = True   # always use trace (production path)
 
-    print(
-        f"\n[hang_repro] mode={mode} cur_pos={CUR_POS} B={B} NH={NH} "
-        f"k_chunk={K_CHUNK} trace={use_trace} max_iters={max_iters or 'inf'}"
-    )
-    print(
-        f"[hang_repro] num_cores_per_head = min(64,64*{B}*{NKV})//{B}//{NKV} = "
-        f"{min(64,64*B*NKV)//B//NKV}  (1 reducer + {min(64,64*B*NKV)//B//NKV - 1} worker(s))"
-    )
-    print(f"[hang_repro] k_num_chunks = ceil({CUR_POS+1}/{K_CHUNK}) = " f"{-(-(CUR_POS+1)//K_CHUNK)}")
+    print(f"\n[hang_repro] mode={mode} cur_pos={CUR_POS} B={B} NH={NH} "
+          f"k_chunk={K_CHUNK} trace={use_trace} max_iters={max_iters or 'inf'}")
+    print(f"[hang_repro] num_cores_per_head = min(64,64*{B}*{NKV})//{B}//{NKV} = "
+          f"{min(64,64*B*NKV)//B//NKV}  (1 reducer + {min(64,64*B*NKV)//B//NKV - 1} worker(s))")
+    print(f"[hang_repro] k_num_chunks = ceil({CUR_POS+1}/{K_CHUNK}) = "
+          f"{-(-(CUR_POS+1)//K_CHUNK)}")
     print()
 
     tt_Q, tt_K, tt_V, tt_pt, tt_cp = build_tensors(device)
@@ -225,7 +228,7 @@ def test_sdpa_paged_decode_hang(device_under_test, request):
     if use_trace:
         print("[hang_repro] Capturing trace...")
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        tt_out = run_sdpa(device, tt_Q, tt_K, tt_V, tt_pt, tt_cp)
+        tt_out   = run_sdpa(device, tt_Q, tt_K, tt_V, tt_pt, tt_cp)
         ttnn.end_trace_capture(device, trace_id, cq_id=0)
         print("[hang_repro] Trace captured.")
 
@@ -243,7 +246,8 @@ def test_sdpa_paged_decode_hang(device_under_test, request):
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
         total_s = time.perf_counter() - t_start
-        print(f"[hang_repro] iter {n:3d}  {elapsed_ms:7.1f} ms  total={total_s:.1f}s  " f"cur_pos={CUR_POS}  PASS")
+        print(f"[hang_repro] iter {n:3d}  {elapsed_ms:7.1f} ms  total={total_s:.1f}s  "
+              f"cur_pos={CUR_POS}  PASS")
 
         if max_iters and n >= max_iters:
             break
