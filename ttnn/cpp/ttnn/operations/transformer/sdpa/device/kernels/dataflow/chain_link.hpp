@@ -136,9 +136,11 @@ public:
         tile_bytes_(tile_bytes),
         next_core_x_(next_core_x),
         next_core_y_(next_core_y) {
-        // Initialize valid semaphore
-        volatile tt_l1_ptr uint32_t* valid_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_sem_addr);
-        *valid_sem_ptr = VALID;
+        // Initialize valid semaphore (skip if address is 0 to avoid corrupting memory)
+        if (valid_sem_addr != 0) {
+            volatile tt_l1_ptr uint32_t* valid_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_sem_addr);
+            *valid_sem_ptr = VALID;
+        }
 
         if constexpr (mcast_enabled) {
             if (is_injector) {
