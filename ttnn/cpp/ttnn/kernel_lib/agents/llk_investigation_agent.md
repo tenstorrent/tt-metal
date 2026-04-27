@@ -79,16 +79,43 @@ Produce these tables:
 
 Search ALL kernel call sites across the codebase.
 
-Search directories:
-- ttnn/cpp/ttnn/operations/**/kernels/compute/*.cpp
-- tt_metal/kernels/compute/*.cpp
-- tests/**/test_kernels/compute/*.cpp
+**Search set**: read the kernel file list produced by the catalog agent at
+`${LOG_DIR}/kernel_files.txt` (where `${LOG_DIR}` = `agent_logs/${CATEGORY_SLUG}`).
+This list is content-derived (files importing `compute_kernel_api` / `llk_*`) and
+covers paths that historically slipped past glob-based search:
+- `kernels_ng/compute/` (binary_ng — `kernels_ng` not `kernels`)
+- `kernels/attention/compute/` (softmax — extra subdir)
+- `ttnn/cpp/ttnn/kernel/compute/` (singular `kernel`)
+- `tt-train/sources/ttml/metal/.../kernels/compute/` (sister tree)
+- `tt_metal/programming_examples/.../kernels/compute/`
+
+Do NOT re-derive the list with path globs and do NOT skip files under
+`tt-train/`, `kernels_ng/`, `attention/`, or `kernel/` (singular). If
+`kernel_files.txt` is missing, fall back to:
+
+  grep -rlE '#include[[:space:]]+["<](compute_kernel_api|compute_kernel_lib|llk_math|llk_unpack|llk_pack)' \
+    --include='*.cpp' \
+    ttnn tt_metal tt-train tools \
+    2>/dev/null \
+    | grep -vE '\.cpmcache|/build|/third_party|/3rd_party' \
+    | sort -u
+
+Grep within KERNEL_FILES for op call sites. Tag each call-site row with one of:
+`production` (`ttnn/cpp/ttnn/operations/`), `test` (`tests/`,
+`tt_metal/kernels/compute/`), `train` (`tt-train/`), `example`
+(`tt_metal/programming_examples/`, `ttnn/examples/`). Production weighs heaviest
+for design constraints; example/train rows are weaker signal but still useful for
+catching missed patterns.
+
+Exclude `tools/tests/triage/hang_apps/` — deliberately broken hang fixtures.
 
 Produce these tables:
 
 ### Call Sites
-| Op | File:Line | Pattern | Init Placement | Batching |
-|---|---|---|---|---|
+| Op | File:Line | Source | Pattern | Init Placement | Batching |
+|---|---|---|---|---|---|
+
+(Source = production / test / train / example)
 
 ### Init/Exec Pairing Rules
 | Op | Rule | Evidence |

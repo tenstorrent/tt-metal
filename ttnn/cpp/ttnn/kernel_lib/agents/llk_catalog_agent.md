@@ -1,6 +1,6 @@
 ---
 name: LLK Catalog Agent Prompt
-description: "Phase 0: Understand — catalog step (new helper mode). Enumerates all ops via bidirectional grep, assigns to groups. Runs before the investigation step within the same phase."
+description: "Phase 0: Understand — catalog step (new helper mode). Enumerates all ops via bidirectional grep, assigns to groups, and discovers the call-site kernel-file set by content (not path globs). Runs before the investigation step within the same phase."
 type: reference
 ---
 
@@ -57,6 +57,41 @@ Compare LLK_OPS and API_OPS:
 
   echo '{"ts":"'"$(date -Iseconds)"'","event":"gap","op":"OP","found_via":"API","missing_from":"LLK"}' >> $BCRUMB
   echo '{"ts":"'"$(date -Iseconds)"'","event":"phase_done","phase":"1C","both":N,"top_down_only":A,"llk_only":B}' >> $BCRUMB
+
+PHASE 1D: KERNEL FILE DISCOVERY (content-based)
+
+Discover the set of compute kernel files that downstream agents (investigation Dimension 3,
+fleet-migration audits) must search for call sites. Do NOT use path globs — they have
+historically missed real kernels:
+- `kernels_ng/compute/` (binary_ng production path) — `kernels_ng` not `kernels`.
+- `kernels/attention/compute/` (softmax) — extra subdir between `kernels/` and `compute/`.
+- `ttnn/cpp/ttnn/kernel/compute/` — singular `kernel`, not `kernels`.
+- `tt-train/sources/ttml/metal/.../kernels/compute/` — sister tree, not under `ttnn/` or `tests/`.
+- `tt_metal/programming_examples/.../kernels/compute/` — examples dir.
+
+Discover by content (file imports the compute kernel API):
+
+  grep -rlE '#include[[:space:]]+["<](compute_kernel_api|compute_kernel_lib|llk_math|llk_unpack|llk_pack)' \
+    --include='*.cpp' \
+    ttnn tt_metal tt-train tools \
+    2>/dev/null \
+    | grep -vE '\.cpmcache|/build|/third_party|/3rd_party' \
+    | sort -u
+
+Produce KERNEL_FILES = the resulting list.
+
+Do NOT read these files in the catalog phase — produce the list only. The investigation
+agent (Dimension 3) consumes KERNEL_FILES to grep for op call sites.
+
+Notes for downstream consumers:
+- `tt-train/` kernels build against ttnn helpers (same monorepo, shared build). Include
+  unless the helper being designed is explicitly scoped out of tt-train.
+- `tt_metal/programming_examples/` kernels are reference / illustrative. Treat their
+  patterns as weak signal vs. production `ttnn/cpp/ttnn/operations/` kernels.
+- `tools/tests/triage/hang_apps/` kernels are deliberately broken fixtures — exclude
+  from pattern mining (they model hangs, not idiomatic usage).
+
+  echo '{"ts":"'"$(date -Iseconds)"'","event":"discovery","phase":"1D","kernel_files":N,"method":"content"}' >> $BCRUMB
 
 PHASE 2: GROUP ASSIGNMENT
 
@@ -125,4 +160,18 @@ One row per group. Ops is a comma-separated list.
 |----|----------|-------------|
 
 Only ops found in secondary source but NOT in Phases 1A+1B.
+
+## 6. Kernel Files (call-site search set)
+
+Plain list — one repo-relative path per line, sorted, deduped. Result of Phase 1D.
+
+```
+<path/to/kernel1.cpp>
+<path/to/kernel2.cpp>
+...
+```
+
+Also write the same list to `${LOG_DIR}/kernel_files.txt` so downstream agents can
+read it directly without re-deriving. Investigation Dimension 3 grep call sites
+within this list — not within path globs.
 ```
