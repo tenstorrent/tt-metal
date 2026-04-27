@@ -952,7 +952,8 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             // and the ERISC crashed before writing 0xA0A0A0A0, L1 would still show 0x49706550
             // (indistinguishable from a live relay).  The host canary breaks this by stamping
             // 0xDEADB07E before the launch message is sent — so this session can detect the gap.
-            static constexpr uint32_t kHostPreLaunchCanary = 0xDEADB07Eu;
+            static constexpr uint32_t kHostPreLaunchCanary =
+                static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
             const bool is_base_umd = (status_buf[0] == kBaseUmdFirmwareSentinel);
             const bool is_canary = (status_buf[0] == kFabricKernelMainCanary);
             const bool is_host_canary = (status_buf[0] == kHostPreLaunchCanary);

@@ -390,7 +390,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 // Maps a raw EDMStatus uint32 to its enum name for log readability.
-// Sentinels 0xDEAD5B5B (deadline-skipped) and 0xDEADECE7 (read-exception) are also named.
+// EthDiagSentinel values (deadline-skipped, read-exception, etc.) are also named.
 // Defined once here and shared by configure_fabric(), quiesce_and_restart_fabric_workers(),
 // phase5b_erisc_health_check(), and wait_for_fabric_workers_ready() to avoid duplication.
 // edm_status_str(), edm_status_name(), and is_known_edm_status() are defined in
@@ -557,7 +557,8 @@ void Device::configure_fabric(
     const auto& builder_ctx_cf = fabric_context_cf.get_builder_context();
     const auto router_sync_address =
         builder_ctx_cf.get_fabric_router_sync_address_and_status().first;
-    static constexpr uint32_t kHostPreLaunchCanary = 0xDEADB07Eu;
+    static constexpr uint32_t kHostPreLaunchCanary =
+        static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
     std::vector<uint32_t> canary_buf{kHostPreLaunchCanary};
 
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
@@ -806,7 +807,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     this->id(),
                     eth_chan_id,
                     ex.what());
-                diag_buf[0] = 0xDEADBEEF;
+                diag_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
             }
             log_info(
                 tt::LogMetal,
@@ -1587,7 +1588,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     detail::ReadFromDeviceL1(
                         this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
                 } catch (const std::exception& e) {
-                    pre_launch_buf[0] = 0xDEADBEEF;
+                    pre_launch_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
                     log_warning(
                         tt::LogMetal,
                         "quiesce_and_restart_fabric_workers: Device {} Phase 3 pre-launch status "
@@ -1597,7 +1598,7 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         logical_core.y,
                         e.what());
                 } catch (...) {
-                    pre_launch_buf[0] = 0xDEADBEEF;
+                    pre_launch_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
                     log_warning(
                         tt::LogMetal,
                         "quiesce_and_restart_fabric_workers: Device {} Phase 3 pre-launch status "
@@ -1996,7 +1997,7 @@ void Device::launch_eth_cores_for_quiesce() {
                     detail::ReadFromDeviceL1(
                         this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
                 } catch (const std::exception& e) {
-                    pre_launch_buf[0] = 0xDEADBEEF;
+                    pre_launch_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
                     log_warning(
                         tt::LogMetal,
                         "launch_eth_cores_for_quiesce: Device {} Phase 3 pre-launch status "
@@ -2006,7 +2007,7 @@ void Device::launch_eth_cores_for_quiesce() {
                         logical_core.y,
                         e.what());
                 } catch (...) {
-                    pre_launch_buf[0] = 0xDEADBEEF;
+                    pre_launch_buf[0] = static_cast<uint32_t>(EthDiagSentinel::READ_EXCEPTION);
                     log_warning(
                         tt::LogMetal,
                         "launch_eth_cores_for_quiesce: Device {} Phase 3 pre-launch status "
@@ -2355,7 +2356,7 @@ bool Device::phase5b_erisc_health_check(
                     total_chans);
                 still_pending.push_back(idx);
                 // 0xDEAD5B5B: Phase 5b per-iteration deadline exceeded — read was skipped.
-                still_pending_statuses.push_back({ch.eth_chan_id, 0xDEAD5B5B});
+                still_pending_statuses.push_back({ch.eth_chan_id, static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED)});
                 continue;
             }
             chans_checked++;
@@ -2377,7 +2378,7 @@ bool Device::phase5b_erisc_health_check(
                     ch.eth_chan_id,
                     e.what());
                 // 0xDEADECE7: Phase 5b relay read threw an exception.
-                status_buf[0] = 0xDEADECE7;
+                status_buf[0] = static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION);
             }
             if (status_buf[0] != expected_ready) {
                 still_pending.push_back(idx);
@@ -2430,7 +2431,7 @@ bool Device::phase5b_erisc_health_check(
                         kDiagBudgetMs,
                         ch.eth_chan_id);
                     // 0xDEAD5B5B: Phase 5b deadline exceeded — read skipped.
-                    status_buf[0] = 0xDEAD5B5B;
+                    status_buf[0] = static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED);
                 } else {
                     try {
                         detail::ReadFromDeviceL1(
@@ -2449,7 +2450,7 @@ bool Device::phase5b_erisc_health_check(
                             ch.eth_chan_id,
                             e.what());
                         // 0xDEADECE7: Phase 5b relay read threw an exception.
-                        status_buf[0] = 0xDEADECE7;
+                        status_buf[0] = static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION);
                     }
                 }
                 unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
@@ -2517,8 +2518,8 @@ bool Device::phase5b_erisc_health_check(
                 truly_unhealthy.end(),
                 [](const UnhealthyChannel& u) {
                     return u.actual_status == 0x0 ||
-                           u.actual_status == 0xDEAD5B5B ||
-                           u.actual_status == 0xDEADECE7;
+                           u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED) ||
+                           u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION);
                 });
             if (all_dead) {
                 if (!this->is_mmio_capable()) {
@@ -2555,8 +2556,8 @@ bool Device::phase5b_erisc_health_check(
                 truly_unhealthy.end(),
                 [](const UnhealthyChannel& u) {
                     return u.actual_status == 0x0 ||
-                           u.actual_status == 0xDEAD5B5B ||
-                           u.actual_status == 0xDEADECE7 ||
+                           u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED) ||
+                           u.actual_status == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION) ||
                            u.actual_status == static_cast<uint32_t>(EDMSt::STARTED) ||
                            u.actual_status == static_cast<uint32_t>(EDMSt::REMOTE_HANDSHAKE_COMPLETE) ||
                            u.actual_status == static_cast<uint32_t>(EDMSt::LOCAL_HANDSHAKE_COMPLETE);

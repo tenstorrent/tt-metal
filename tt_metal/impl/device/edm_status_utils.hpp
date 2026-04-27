@@ -22,6 +22,29 @@
 
 namespace tt::tt_metal {
 
+// Host-side sentinel values written to or inferred for ETH channel status
+// fields when no valid EDMStatus enumerator applies.  These are purely
+// host-side diagnostics — firmware never writes these values.
+enum class EthDiagSentinel : uint32_t {
+    // Host wrote this value to router_sync_address before sending the launch
+    // message.  If the field still reads this value after launch, ERISC never
+    // polled — the channel is stuck in base firmware or crashed.
+    HOST_PRE_LAUNCH_CANARY = 0xDEADB07Eu,
+
+    // A read_core() call for this channel threw an exception.  The status field
+    // is set to this value as a placeholder so the channel is included in
+    // diagnostic output with a recognisable sentinel rather than a stale value.
+    READ_EXCEPTION = 0xDEADBEEFu,
+
+    // Phase 5b per-iteration deadline exceeded — the read was skipped to avoid
+    // blocking subsequent channels.  The actual hardware value was not observed.
+    PHASE5B_DEADLINE_SKIPPED = 0xDEAD5B5Bu,
+
+    // Phase 5b relay read threw an exception.  Equivalent to READ_EXCEPTION but
+    // specifically in the Phase 5b polling path (distinct value aids grep).
+    PHASE5B_READ_EXCEPTION = 0xDEADECE7u,
+};
+
 inline const char* edm_status_name(tt::tt_fabric::EDMStatus s) {
     switch (s) {
         case tt::tt_fabric::EDMStatus::STARTED:                      return "STARTED";
@@ -64,8 +87,8 @@ inline const char* edm_status_str(uint32_t v) {
         case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:       return "INITIALIZATION_COMPLETE";
         default: break;
     }
-    if (v == 0xDEAD5B5B) return "(deadline-skipped)";
-    if (v == 0xDEADECE7) return "(read-exception)";
+    if (v == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_DEADLINE_SKIPPED)) return "(deadline-skipped)";
+    if (v == static_cast<uint32_t>(EthDiagSentinel::PHASE5B_READ_EXCEPTION))   return "(read-exception)";
     return "(unknown)";
 }
 
