@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     create_dram_expert_tensors_multi_device,
     encode_expert_indices,
 )
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
 def shuffle_tensor_tiles(tensor, tile_size, num_banks, subblock_k=None, subblock_n=None):
@@ -596,16 +597,35 @@ def _validate_dram_output_accum(
     pcc_threshold,
     tile_w,
     tp_expert=True,
+    gather_to_next=False,
+    cores_per_dram_bank=1,
 ):
-    """Validate accumulated DRAM output from dram_core_grid output tensor."""
+    """Validate accumulated DRAM output from dram_core_grid output tensor.
+
+    gather_to_next: each core's shard widens to cores_per_dram_bank * dram_per_core_N
+    tiles. Receivers (last core in each bank) hold the bank's full N output
+    [c0_n_slice | c1_n_slice | ...]; senders' upper slots are junk. Read receiver
+    shards across banks to reconstruct the full N output.
+    """
     dram_core_width = dram_per_core_N * tile_w
+
+    if gather_to_next:
+        assert num_dram_cores_active % cores_per_dram_bank == 0
+        num_banks = num_dram_cores_active // cores_per_dram_bank
+        per_core_shard_w = cores_per_dram_bank * dram_core_width
 
     for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
         output_dev = ttnn.to_torch(out_dev)
         slices = []
-        for ci in range(num_dram_cores_active):
-            start = ci * dram_core_width
-            slices.append(output_dev[..., start : start + dram_core_width])
+        if gather_to_next:
+            for bank_idx in range(num_banks):
+                receiver_core_idx = bank_idx * cores_per_dram_bank + (cores_per_dram_bank - 1)
+                start = receiver_core_idx * per_core_shard_w
+                slices.append(output_dev[..., start : start + per_core_shard_w])
+        else:
+            for ci in range(num_dram_cores_active):
+                start = ci * dram_core_width
+                slices.append(output_dev[..., start : start + dram_core_width])
         accum_output = torch.cat(slices, dim=-1)
         # Expert parallel: each device accumulates only its own expert.
         dev_active_dram = active_dram if tp_expert else [active_dram[dev_idx]]
@@ -613,8 +633,9 @@ def _validate_dram_output_accum(
             torch_a_per_expert[eidx].float() @ torch_b_all[eidx][dev_idx].float() for eidx in dev_active_dram
         ).bfloat16()
         passing, msg = comp_pcc(torch_expected, accum_output, pcc_threshold)
-        logger.info(f"Device {dev_idx} accum (DRAM) PCC: {msg}")
-        assert passing, f"Device {dev_idx} accum (DRAM) failed: {msg}"
+        label = "DRAM gather" if gather_to_next else "DRAM"
+        logger.info(f"Device {dev_idx} accum ({label}) PCC: {msg}")
+        assert passing, f"Device {dev_idx} accum ({label}) failed: {msg}"
 
 
 def _validate_sram_output_slice_k(
@@ -669,7 +690,12 @@ def _setup_core_grids(mesh_device, cores_per_dram_bank, num_sram_cores, sram_cor
 
     DRAM cores are always included. SRAM cores are included only when has_sram is True.
     """
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    # Use the pinned list so the test's compute_core_grid matches op.py's
+    # create_dram_expert_metadata bank assignment exactly. The device-determined
+    # optimal mapping can vary with harvesting and end up disagreeing with
+    # op.py's pinned primaries — leaves some compute cores with default
+    # core_in_bank_idx=0 / blank expert_offsets, blocking on cb_in1.
+    primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
     dram_cores_list = []
     for pc in primary_cores_list:
         for offset in range(cores_per_dram_bank):
@@ -1336,10 +1362,20 @@ def _run_accum(
     fmt_distribution="random",
     fmt_ratios=None,
     num_loop_iters=1,
+    gather_to_next=False,
 ):
-    """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place."""
+    """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place.
+
+    gather_to_next: when True, each sender (cores 0..cores_per_dram_bank-2) NOC-writes
+    its accum result onto the receiver (last core in bank), so the receiver's shard
+    holds the full bank N output [c0_n_slice | c1_n_slice | ...]. Output tensor's
+    per-core shard width widens to cores_per_dram_bank * dram_per_core_N.
+    """
     cores_per_dram_bank = n_parallel_per_bank
     assert tp_expert, "Expert parallel (tp_expert=False) not supported in accum path"
+    if gather_to_next:
+        assert not sram_expert_ids, "gather_to_next test path: DRAM-only for now"
+        assert cores_per_dram_bank >= 2, "gather_to_next requires cores_per_dram_bank >= 2"
     tile_w = 32
     sram_id_set = set(sram_expert_ids)
     has_sram = bool(sram_expert_ids)
@@ -1451,10 +1487,14 @@ def _run_accum(
         if has_sram
         else None
     )
+    # gather_to_next: each core's shard widens along N to hold cores_per_dram_bank
+    # per_core_n slots — receiver ends up with the bank's full N output, sender's
+    # tail slot is junk. Express as a wider per-core N (not more experts).
+    out_dram_per_core_N = dram_per_core_N * cores_per_dram_bank if gather_to_next else dram_per_core_N
     out_tensor = _build_dram_output(
         mesh_device,
         M,
-        dram_per_core_N,
+        out_dram_per_core_N,
         1,
         num_dram_cores,
         num_devices,
@@ -1491,6 +1531,7 @@ def _run_accum(
         sram_output_tensor=sram_out_tensor,
         tp_expert=tp_expert,
         num_loop_iters=num_loop_iters,
+        gather_to_next=gather_to_next,
     )
     if active_sram:
         _validate_sram_output_accum(
@@ -1514,6 +1555,8 @@ def _run_accum(
             pcc_threshold,
             tile_w,
             tp_expert=tp_expert,
+            gather_to_next=gather_to_next,
+            cores_per_dram_bank=cores_per_dram_bank,
         )
 
 
@@ -1763,6 +1806,7 @@ def _run_hybrid_expert_multi_device(
     fmt_ratios=None,
     k_parallel_per_bank=1,
     num_loop_iters=1,
+    gather_to_next=False,
 ):
     """Dispatcher: delegate to the appropriate variant.
 
@@ -1773,6 +1817,8 @@ def _run_hybrid_expert_multi_device(
     """
     assert dram_expert_ids, "DRAM expert path is always required"
     assert len(dram_expert_ids) <= num_experts, "dram_expert_ids exceeds num_experts"
+    if gather_to_next:
+        assert accum_experts, "gather_to_next is only supported in accum mode"
     if not tp_expert:
         assert not sram_expert_ids, "Expert parallel (tp_expert=False) only supports DRAM matmul"
         assert (
@@ -1826,6 +1872,7 @@ def _run_hybrid_expert_multi_device(
             fmt_distribution,
             fmt_ratios,
             num_loop_iters=num_loop_iters,
+            gather_to_next=gather_to_next,
         )
     else:
         _run_standard(
@@ -2351,6 +2398,34 @@ def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
         k_parallel_per_bank=1,
         fmt_distribution="uniform",
         fmt_ratios=fmt_ratios,
+        num_loop_iters=100,
+    )
+
+
+def test_benchmark_down_proj_gather_to_next(device):
+    """Accum + gather_to_next: 2-core bank splits N, sender NOC-writes its slice
+    onto the receiver so receiver's shard holds the bank's full N output.
+
+    Validates the gather path: mirrors test_benchmark_down_proj's shape (down-proj)
+    but with cores_per_dram_bank=2 and gather_to_next=True.
+    """
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4"]],
+        accum_experts=True,
+        gather_to_next=True,
+        num_subblocks_k=1,
+        num_subblocks_n=2,
+        n_parallel_per_bank=2,
+        k_parallel_per_bank=1,
+        fmt_distribution="uniform",
         num_loop_iters=100,
     )
 

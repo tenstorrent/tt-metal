@@ -328,6 +328,8 @@ def _build_program_for_device(
     partial_sem_addr: int = 0,
     pipeline_sem_addr: int = 0,
     num_loop_iters: int = 1,
+    gather_to_next: bool = False,
+    gather_sync_sem_addr: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -497,6 +499,15 @@ def _build_program_for_device(
         # Ops also drain their own cb_out pushes via a pop_out template flag.
         ("num_loop_iters", num_loop_iters),
         ("cb_in1_dram_buf_addr", in1_backing_tensor.buffer_address()),
+        # gather_to_next (accum mode only): when 1, sender NOC-writes its accum
+        # result onto the next core in the bank so the bank's full N output ends
+        # up on the receiver (last core in bank). Output tensor's per-core shard
+        # must be sized cores_per_dram_bank * per_core_n when this is enabled.
+        ("gather_to_next", 1 if gather_to_next else 0),
+        # Global L1 sem for sender TRISC → NCRISC sync (gather mode only).
+        # TRISC inc(1) once after the per-expert accum loop, NCRISC spins on
+        # load >= 1 then dec(1). See kernel hpp for full rationale.
+        ("gather_sync_sem_addr", gather_sync_sem_addr),
     ]
 
     # Per-core descriptors.
@@ -853,6 +864,8 @@ def _assemble_dram_results(
     pipeline_sem_addr,
     partial_sem,
     pipeline_sem,
+    gather_sync_sem_addr,
+    gather_sync_sem,
 ):
     """Phase 3: assemble per-device result tuples.
 
@@ -885,6 +898,8 @@ def _assemble_dram_results(
                 pipeline_sem_addr,
                 partial_sem,
                 pipeline_sem,
+                gather_sync_sem_addr,
+                gather_sync_sem,
             )
     logger.info("  All device metadata created")
     return result
@@ -996,6 +1011,10 @@ def create_dram_expert_tensors_multi_device(
     # Pipeline ring sem (per-core, cores_per_bank > 1) — global so we pass L1 addr.
     pipeline_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     pipeline_sem_addr = ttnn.get_global_semaphore_address(pipeline_sem)
+    # Gather TRISC → NCRISC sync (sender side, gather_to_next mode only). Replaces
+    # the 1-page cb_gather_sync; same protocol shape but a raw L1 sem.
+    gather_sync_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
+    gather_sync_sem_addr = ttnn.get_global_semaphore_address(gather_sync_sem)
     ttnn.synchronize_device(mesh_device)
     fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
 
@@ -1081,6 +1100,8 @@ def create_dram_expert_tensors_multi_device(
         pipeline_sem_addr,
         partial_sem,
         pipeline_sem,
+        gather_sync_sem_addr,
+        gather_sync_sem,
     )
 
 
@@ -1155,6 +1176,7 @@ class ExpertKernel:
         tp_expert: bool = True,
         subblock_n: int = 1,
         num_loop_iters: int = 1,
+        gather_to_next: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -1257,6 +1279,8 @@ class ExpertKernel:
                     pipeline_sem_addr,
                     _partial_sem,
                     _pipeline_sem,
+                    gather_sync_sem_addr,
+                    _gather_sync_sem,
                 ) = dram_meta_tensors[coord]
                 # Per-core active flags — each core runs only the path it belongs to.
                 all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)
@@ -1299,6 +1323,8 @@ class ExpertKernel:
                     partial_sem_addr=partial_sem_addr,
                     pipeline_sem_addr=pipeline_sem_addr,
                     num_loop_iters=num_loop_iters,
+                    gather_to_next=gather_to_next,
+                    gather_sync_sem_addr=gather_sync_sem_addr,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
