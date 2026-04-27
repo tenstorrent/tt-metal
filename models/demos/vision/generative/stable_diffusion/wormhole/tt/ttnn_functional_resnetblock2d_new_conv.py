@@ -18,11 +18,9 @@ from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional
     weight_to_bfp8,
 )
 
-config_override = {
-    (320, 320, 64, 64): {"act_block_h": 32 * 16},
-    (640, 1920, 32, 32): {"act_block_h": 32 * 4},
-    (640, 1280, 32, 32): {"act_block_h": 32 * 4},
-    (320, 960, 64, 64): {"act_block_h": 32 * 4},
-    (320, 640, 64, 64): {"act_block_h": 32 * 8},
-    (640, 640, 32, 32): {"act_block_h": 32 * 4},
-}
+# This file is a placeholder for ResNetBlock2D optimization specific to SD 1.4.
+# Currently, no changes are required for the stable diffusion 1.4 model.
+# Any modifications should be scoped to the relevant model and issue.
+# Refer to the specific model's requirements before making changes to this test file.
+
+config_override = {}
