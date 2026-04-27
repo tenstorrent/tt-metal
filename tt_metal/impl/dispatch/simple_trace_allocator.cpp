@@ -103,7 +103,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     // these slots. TODO: sweepline algorithm, so the best position can be calculated in linear
     // time relative to the number of regions.
     if (top_down) {
-        auto first_top_down_scan_begin = [&](std::map<uint32_t, MemoryUsage>::const_reverse_iterator reverse_begin,
+        auto first_top_down_scan_begin = [&](const std::map<uint32_t, MemoryUsage>::const_reverse_iterator& reverse_begin,
                                              std::map<uint32_t, MemoryUsage>::const_iterator default_begin,
                                              uint32_t addr) {
             auto scan_begin = default_begin;
