@@ -103,7 +103,7 @@ void kernel_main() {
                     rem = (bsrc_offs & 2047);
                 }
 
-                uint64_t banked_addr = get_noc_addr(batch_itile, s0);
+                uint64_t banked_addr = s0.get_noc_addr(batch_itile);
                 banked_addr += rem;
 
                 if constexpr (MISALIGNED) {
