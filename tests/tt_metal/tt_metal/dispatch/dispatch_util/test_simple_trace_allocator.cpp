@@ -35,6 +35,16 @@ protected:
 
     RegionAllocator make_allocator(uint32_t ringbuffer_size) { return RegionAllocator(ringbuffer_size, extra_data_); }
 
+    void add_memory_usage(
+        RegionAllocator& alloc,
+        uint32_t addr,
+        uint32_t trace_idx,
+        uint32_t data_type,
+        uint32_t size,
+        uint64_t program_id) {
+        alloc.regions_[addr] = {.trace_idx = trace_idx, .data_type = data_type, .size = size, .program_id = program_id};
+    }
+
     std::vector<ExtraData> extra_data_;
 };
 // NOLINTEND(cppcoreguidelines-virtual-class-destructor)
@@ -269,6 +279,19 @@ TEST_F(SimpleTraceAllocatorFixture, AllocationExactFit) {
     auto [sync, addr] = alloc.allocate_region(100, 0, ExtraData::kNonBinary, 100);
     ASSERT_TRUE(addr.has_value());
     EXPECT_EQ(*addr, 0u);
+}
+
+TEST_F(SimpleTraceAllocatorFixture, TopDownScanIncludesPreviousOverlappingRegion) {
+    extra_data_.resize(2);
+    auto alloc = make_allocator(300);
+    add_memory_usage(alloc, 220, 0, ExtraData::kNonBinary, 40, 20);
+    add_memory_usage(alloc, 260, 1, ExtraData::kNonBinary, 40, 10);
+
+    auto [sync, addr] = alloc.allocate_region(40, 1, ExtraData::kBinary, 30, /*top_down=*/true);
+
+    ASSERT_TRUE(addr.has_value());
+    EXPECT_EQ(*addr, 180u);
+    EXPECT_FALSE(sync.has_value());
 }
 
 TEST_F(SimpleTraceAllocatorFixture, EvictionWhenBufferFull) {
