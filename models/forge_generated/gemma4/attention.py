@@ -441,6 +441,9 @@ class Attention:
 
         # 6) SDPA decode with sliding window. The op handles GQA (8 Q heads
         #    over 4 KV heads), causal masking, and the window cutoff.
+        #    `exp_approx_mode=False` keeps the softmax exact (default uses
+        #    a polynomial approximation that introduces noticeable drift
+        #    over multi-step generation).
         attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
             q_for_sdpa,
             k_cache,
@@ -451,8 +454,17 @@ class Attention:
             # leaves the dot-product unscaled. `scale=1.0` matches.
             scale=1.0,
             sliding_window_size=256,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
+            ),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
             ),
             memory_config=_DRAM,
         )
