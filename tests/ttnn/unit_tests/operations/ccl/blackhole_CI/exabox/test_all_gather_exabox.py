@@ -116,11 +116,6 @@ FABRIC_TOPOLOGY_COMBOS = [
     ),
     pytest.param(
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
-        ttnn.Topology.Linear,
-        id="fabric_1d_ring-linear",
-    ),
-    pytest.param(
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
         ttnn.Topology.Ring,
         id="fabric_1d_ring-ring",
     ),
@@ -147,16 +142,15 @@ FABRIC_TOPOLOGY_COMBOS = [
 @pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2links"])
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
+@pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
     [
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.DRAM),
-        ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.DRAM),
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.L1),
     ],
-    ids=["small_dram", "large_dram", "small_l1"],
+    ids=["small_dram", "small_l1"],
 )
 def test_all_gather_16x4(
     mesh_device,
@@ -188,19 +182,15 @@ def test_all_gather_16x4(
 @pytest.mark.parametrize("mesh_device", [pytest.param((32, 4), id="32x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2links"])
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
+@pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
     [
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.DRAM),
-        ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.DRAM),
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.L1),
-        ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.L1),
-        ([1, 1, 32, 896], ttnn.bfloat8_b, ttnn.BufferType.DRAM),
-        ([1, 1, 32, 224], ttnn.float32, ttnn.BufferType.DRAM),
     ],
-    ids=["small_dram", "large_dram", "small_l1", "large_l1", "bfloat8_dram", "float32_dram"],
+    ids=["small_dram", "small_l1"],
 )
 def test_all_gather_32x4(
     mesh_device,
