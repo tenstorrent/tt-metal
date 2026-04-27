@@ -44,8 +44,7 @@ def main():
     from safetensors.torch import load_file
 
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-    model_path = snapshot_download(model_id, allow_patterns=["*.safetensors"])
-    model_path = Path(model_path)
+    model_path = Path(snapshot_download(model_id, allow_patterns=["*.safetensors"])).resolve()
 
     speech_path = model_path / "speech_tokenizer" / "model.safetensors"
     speech_dict = load_file(speech_path)
@@ -77,14 +76,17 @@ def main():
     for i in range(2):  # 2 upsample blocks
         prefix = f"upsample.{i}."
         block_weights = {k.replace(prefix, ""): v for k, v in decoder_weights.items() if k.startswith(prefix)}
-        ref_upsample = upsample_block(ref_upsample, block_weights, upsample_rate=2)
+        conv_w = block_weights["0.conv.weight"]
+        conv_b = block_weights.get("0.conv.bias")
+        convnext_w = {k[len("1.") :]: v for k, v in block_weights.items() if k.startswith("1.")}
+        ref_upsample = upsample_block(ref_upsample, conv_w, conv_b, convnext_w, 2)
         print(f"  Reference upsample block {i}: {ref_upsample.shape}")
 
     pcc_upsample = compute_pcc(ref_upsample, official_upsample)
     print(f"\n  Upsampler PCC: {pcc_upsample:.6f}")
 
     if pcc_upsample < 0.99:
-        print(f"  *** MISMATCH ***")
+        print("  *** MISMATCH ***")
         print(f"  Ref: mean={ref_upsample.mean():.4f}, std={ref_upsample.std():.4f}")
         print(f"  Off: mean={official_upsample.mean():.4f}, std={official_upsample.std():.4f}")
 
@@ -111,8 +113,8 @@ def main():
     ref_dec = ref_upsample.clone()
 
     # First conv (initial)
-    init_conv_weight = decoder_weights["decoder.0.conv.weight"]
-    init_conv_bias = decoder_weights.get("decoder.0.conv.bias")
+    init_conv_weight = decoder_weights["0.conv.weight"]
+    init_conv_bias = decoder_weights.get("0.conv.bias")
     kernel_size = init_conv_weight.shape[-1]
     ref_dec = F.pad(ref_dec, (kernel_size - 1, 0), mode="constant", value=0)
     ref_dec = F.conv1d(ref_dec, init_conv_weight, init_conv_bias)
@@ -126,8 +128,8 @@ def main():
 
     # Upsample blocks
     for i, (rate, in_ch, out_ch) in enumerate(zip(upsample_rates, channels[:-1], channels[1:])):
-        prefix = f"decoder.{i + 1}."
-        block_weights = {k.replace(prefix, ""): v for k, v in decoder_weights.items() if k.startswith(prefix)}
+        prefix = f"{i + 1}."
+        block_weights = {k[len(prefix) :]: v for k, v in decoder_weights.items() if k.startswith(prefix)}
 
         if not block_weights:
             print(f"  No weights for decoder.{i + 1}")
@@ -136,12 +138,12 @@ def main():
         ref_dec = conv_decoder_block(ref_dec, block_weights, upsample_rate=rate)
         print(f"  Reference decoder block {i + 1}: {ref_dec.shape}")
 
-    # Final snake + conv
-    if "decoder.5.snake.alpha" in decoder_weights:
-        ref_dec = snake_activation(ref_dec, decoder_weights["decoder.5.snake.alpha"])
+    # Final snake + conv (keys match speech_tokenizer_decoder_forward in functional.py)
+    if "5.alpha" in decoder_weights and "5.beta" in decoder_weights:
+        ref_dec = snake_activation(ref_dec, decoder_weights["5.alpha"], decoder_weights["5.beta"])
 
-    final_conv_weight = decoder_weights.get("decoder.5.conv.weight")
-    final_conv_bias = decoder_weights.get("decoder.5.conv.bias")
+    final_conv_weight = decoder_weights.get("6.conv.weight")
+    final_conv_bias = decoder_weights.get("6.conv.bias")
     if final_conv_weight is not None:
         kernel_size = final_conv_weight.shape[-1]
         ref_dec = F.pad(ref_dec, (kernel_size - 1, 0), mode="constant", value=0)
@@ -155,7 +157,7 @@ def main():
     print(f"\n  Conv Decoder PCC: {pcc_dec:.6f}")
 
     if pcc_dec < 0.99:
-        print(f"  *** MISMATCH ***")
+        print("  *** MISMATCH ***")
         print(
             f"  Ref: mean={ref_dec.mean():.6f}, std={ref_dec.std():.4f}, range=[{ref_dec.min():.4f}, {ref_dec.max():.4f}]"
         )

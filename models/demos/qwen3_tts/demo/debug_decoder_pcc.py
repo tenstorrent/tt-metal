@@ -43,8 +43,7 @@ def main():
     from safetensors.torch import load_file
 
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-    model_path = snapshot_download(model_id, allow_patterns=["*.safetensors"])
-    model_path = Path(model_path)
+    model_path = Path(snapshot_download(model_id, allow_patterns=["*.safetensors"])).resolve()
 
     speech_path = model_path / "speech_tokenizer" / "model.safetensors"
     speech_dict = load_file(speech_path)
@@ -227,7 +226,10 @@ def main():
     for i in range(2):
         prefix = f"upsample.{i}."
         block_weights = {k.replace(prefix, ""): v for k, v in decoder_weights.items() if k.startswith(prefix)}
-        ref_upsample_input = upsample_block(ref_upsample_input, block_weights, upsample_rate=2)
+        conv_w = block_weights["0.conv.weight"]
+        conv_b = block_weights.get("0.conv.bias")
+        convnext_w = {k[len("1.") :]: v for k, v in block_weights.items() if k.startswith("1.")}
+        ref_upsample_input = upsample_block(ref_upsample_input, conv_w, conv_b, convnext_w, 2)
 
     ref_upsample = ref_upsample_input
     print(f"    Reference upsample: {ref_upsample.shape}")
@@ -255,17 +257,17 @@ def main():
     channels = [512, 256, 128, 64, 32]
 
     for i, (rate, in_ch, out_ch) in enumerate(zip(upsample_rates, channels[:-1], channels[1:])):
-        prefix = f"decoder.{i}."
-        block_weights = {k.replace(prefix, ""): v for k, v in decoder_weights.items() if k.startswith(prefix)}
+        prefix = f"{i + 1}."
+        block_weights = {k[len(prefix) :]: v for k, v in decoder_weights.items() if k.startswith(prefix)}
         ref_decoder_input = conv_decoder_block(ref_decoder_input, block_weights, upsample_rate=rate)
 
-    # Final conv
-    final_conv_weight = decoder_weights["decoder.4.conv.weight"]
-    final_conv_bias = decoder_weights["decoder.4.conv.bias"]
+    # Final snake + conv (aligned with speech_tokenizer_decoder_forward)
+    final_conv_weight = decoder_weights["6.conv.weight"]
+    final_conv_bias = decoder_weights.get("6.conv.bias")
 
-    # Apply snake activation first
-    snake_alpha = decoder_weights["decoder.4.snake.alpha"]
-    ref_decoder_input = snake_activation(ref_decoder_input, snake_alpha)
+    snake_alpha = decoder_weights["5.alpha"]
+    snake_beta = decoder_weights["5.beta"]
+    ref_decoder_input = snake_activation(ref_decoder_input, snake_alpha, snake_beta)
 
     # Final conv (no padding needed for kernel_size=7)
     kernel_size = final_conv_weight.shape[2]
