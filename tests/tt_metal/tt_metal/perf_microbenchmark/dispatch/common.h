@@ -929,6 +929,10 @@ static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << SD_LOG_DISPATCH_B
 static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BLOCKS = 4;
 static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BYTES = 768 * 1024;
 static constexpr uint32_t SD_PREFETCHER_PAGE_BATCH_SIZE = 1;
+static_assert(SD_DISPATCH_BUFFER_SIZE_BYTES % SD_DISPATCH_BUFFER_PAGE_SIZE == 0);
+static_assert((SD_DISPATCH_BUFFER_SIZE_BYTES / SD_DISPATCH_BUFFER_PAGE_SIZE) % SD_DISPATCH_BUFFER_SIZE_BLOCKS == 0);
+// spoof_prefetch loop uses (cmd_cb_pages-1)/page_batch_size with no remainder handling
+static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically

@@ -1080,10 +1080,10 @@ public:
     void execute_generated_commands(
         const std::vector<HostMemDeviceCommand>& commands_per_iteration,
         Common::DeviceData& device_data,
-        size_t num_cores_to_log,
+        size_t /*num_cores_to_log*/,
         uint32_t num_iterations,
-        bool wait_for_completion = true,
-        bool wait_for_host_writes = false) override {
+        bool /*wait_for_completion*/ = true,
+        bool /*wait_for_host_writes*/ = false) override {
         const uint32_t page_size = Common::SD_DISPATCH_BUFFER_PAGE_SIZE;
         constexpr size_t prefetch_hdr = sizeof(CQPrefetchCmd);
 
