@@ -22,7 +22,9 @@ import torch
 from loguru import logger
 
 from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
-from models.demos.dots_ocr.tt.vision_transformer import VisionTransformerTT
+
+# from models.demos.dots_ocr.tt.vision_transformer import VisionTransformerTT
+from models.demos.dots_ocr.tt.dots_vision_tt import DotsVisionTransformerTT
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.model import Transformer as TTTransformer
 
@@ -236,7 +238,7 @@ class DropInVisionTransformer(torch.nn.Module):
             except Exception:
                 weight_cache_path = None
 
-        self.tt_model = VisionTransformerTT(
+        self.tt_model = DotsVisionTransformerTT(
             mesh_device=model_args.mesh_device,
             model_args=model_args,
             state_dict=state_dict,
