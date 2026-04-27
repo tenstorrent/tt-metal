@@ -220,7 +220,7 @@ RealtimeProfilerManager::DeviceState::~DeviceState() = default;
 RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     device(o.device),
     chip_id(o.chip_id),
-    mesh_coord(o.mesh_coord),
+    mesh_coord(std::move(o.mesh_coord)),
     realtime_profiler_core(o.realtime_profiler_core),
     socket(std::move(o.socket)),
     core_l1(o.core_l1),
