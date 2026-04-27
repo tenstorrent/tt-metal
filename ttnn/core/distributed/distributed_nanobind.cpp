@@ -1168,7 +1168,7 @@ void py_module(nb::module_& mod) {
                 throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
 
-            auto* world = DistributedContext::get_current_world();
+            const ContextPtr& world = DistributedContext::get_current_world();
             const auto subcontext_count = world->subcontext_count();
             if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
                 throw std::out_of_range(
@@ -1195,7 +1195,7 @@ void py_module(nb::module_& mod) {
                 throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
 
-            auto* world = DistributedContext::get_current_world();
+            const ContextPtr& world = DistributedContext::get_current_world();
             const auto subcontext_count = world->subcontext_count();
             if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
                 throw std::out_of_range(
@@ -1204,11 +1204,11 @@ void py_module(nb::module_& mod) {
             }
 
             const auto subcontext_sz = world->subcontext_size(SubcontextId{subcontext_id});
-            if (local_rank < 0 || local_rank >= subcontext_sz) {
+            if (local_rank < 0 || local_rank >= subcontext_sz.get()) {
                 throw std::out_of_range(
                     "local_rank out of range for subcontext " + std::to_string(subcontext_id) +
-                    ": expected 0 <= local_rank < " + std::to_string(subcontext_sz) +
-                    ", got " + std::to_string(local_rank));
+                    ": expected 0 <= local_rank < " + std::to_string(subcontext_sz.get()) + ", got " +
+                    std::to_string(local_rank));
             }
 
             return world->local_to_world_rank(SubcontextId{subcontext_id}, Rank{local_rank});
