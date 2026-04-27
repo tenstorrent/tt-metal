@@ -122,7 +122,7 @@ void kernel_main() {
     const uint32_t my_core_idx = get_arg_val<uint32_t>(8);
     const uint32_t my_slice_start = get_arg_val<uint32_t>(9);
     const uint32_t my_slice_end = get_arg_val<uint32_t>(10);
-    constexpr uint32_t worker_stride = num_total_cores;  // was RT arg, always == num_total_cores
+    constexpr uint32_t worker_stride = num_total_cores;  // strided tile-row interleave
 
     // ---- Address generators ----
     const auto plan_addrgen = TensorAccessor(plan_args, plan_addr);
@@ -402,16 +402,16 @@ void kernel_main() {
     noc_semaphore_wait(plan_ready_sem, 1U);
 
     // Pull offsets[e_local] from DRAM so we can short-circuit reads for
-    // tail tiles past the last active expert slice.
+    // tile-rows past the last active expert slice.
     noc_async_read(get_noc_addr(0, off_addrgen), (uint32_t)stage, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
     const uint32_t max_active_tiles = stage[e_local] / TILE_H;
 
-    // Compute this core's active iteration count from the interleaved
-    // tile-row layout (tile_row = my_worker_start + step * worker_stride).
-    // Largest active step k satisfies my_worker_start + k*stride < max.
-    // Publish to compute via cb_ctrl so its bulk tilize call only streams
-    // active blocks. Reader and writer drop their tail-skip branches.
+    // Each core processes interleaved tile-rows [my_worker_start, my_worker_start+72,
+    // my_worker_start+144, ...]. my_worker_count is uniform (= tiles_group_1) so
+    // every core potentially gets up to that many; the runtime my_active_count
+    // (published via cb_ctrl) clips to actual work. This naturally distributes
+    // any active range across all 72 cores in parallel.
     uint32_t my_active_count;
     if (my_worker_start >= max_active_tiles) {
         my_active_count = 0U;
@@ -419,14 +419,13 @@ void kernel_main() {
         my_active_count = (max_active_tiles - my_worker_start + worker_stride - 1U) / worker_stride;
     }
     if (my_active_count > my_worker_count) {
-        my_active_count = my_worker_count;  // safety clamp
+        my_active_count = my_worker_count;
     }
     cb_reserve_back(cb_id_ctrl, 1U);
     volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_ctrl));
     ctrl_l1[0] = my_active_count * num_chunks;
     cb_push_back(cb_id_ctrl, 1U);
 
-    // Existing worker-reader logic.
     cb_reserve_back(cb_plan, 1U);
     uint32_t plan_l1_addr = get_write_ptr(cb_plan);
     volatile tt_l1_ptr uint32_t* plan_l1_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_l1_addr);

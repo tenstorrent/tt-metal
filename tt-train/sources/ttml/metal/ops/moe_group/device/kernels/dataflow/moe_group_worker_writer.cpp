@@ -63,8 +63,10 @@ void kernel_main() {
     noc_async_read_barrier();
     uint32_t max_active_tiles = scratch_buf[e_local] / TILE_H;
 
-    // Match the reader's active-block bound — interleaved tile-row layout:
-    // largest active step k satisfies my_start + k*stride < max_active_tiles.
+    // Strided tile-row layout: tile_row = my_start + step*stride.
+    // Reader publishes my_active_count per core via cb_ctrl; writer recomputes
+    // it independently from the same offsets DRAM (same formula, no shared
+    // state between reader and writer).
     uint32_t my_active_count;
     if (my_start >= max_active_tiles) {
         my_active_count = 0U;

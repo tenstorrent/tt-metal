@@ -28,9 +28,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_id_in0, cb_id_out0);
 
-    // NCRISC reader publishes per-core active block count (= active_tile_rows
-    // * num_chunks) after pulling offsets at the start of the worker phase.
-    // read_tile_value mailbox-syncs the value across the three TRISC threads.
     cb_wait_front(cb_id_ctrl, 1U);
     uint32_t active_blocks = read_tile_value(cb_id_ctrl, 0U, 0U);
     cb_pop_front(cb_id_ctrl, 1U);

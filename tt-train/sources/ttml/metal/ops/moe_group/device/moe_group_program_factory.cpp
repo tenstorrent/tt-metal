@@ -326,9 +326,16 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // Since CB allocation is the same on all cores in the same CoreRangeSet, that
     // local address is identical → kernel can compute it itself. We pass the offset.
 
+    // Strided tile-row layout: tile_row = my_worker_start + step * num_workers.
+    // We use a UNIFORM my_worker_count = tiles_group_1 (the worst case) for ALL
+    // cores so the runtime my_active_count formula in the kernel correctly
+    // covers every active tile-row regardless of group_1/group_2 split. The
+    // kernel's runtime cb_ctrl protocol clips the loop to the actual active
+    // count per core, so cores that "would" have done tiles_group_2 worth
+    // simply do fewer iterations at runtime.
     uint32_t worker_idx = 0;
     for (const auto& core : worker_cores_vec) {
-        uint32_t tiles_this_core = worker_group_1.contains(core) ? tiles_group_1 : tiles_group_2;
+        uint32_t tiles_this_core = tiles_group_1;
 
         // Scan slice for this core (worker_idx == my_core_idx for scan purposes).
         uint32_t my_slice_start = worker_idx * scan_slice_size;
@@ -357,8 +364,6 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
             my_slice_end,               // 10
         };
 
-        // Writer RT args (stride / plan_ready_sem_id are globally-constant →
-        // CT args now; only per-core + buffer addrs stay RT).
         std::vector<uint32_t> writer_rt = {
             grouped_buf->address(),  // 0
             worker_idx,              // 1 my_start
