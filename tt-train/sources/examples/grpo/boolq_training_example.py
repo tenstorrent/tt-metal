@@ -27,11 +27,14 @@ class GRPOMonitor(TrainerCallback):
     def on_step_end(self, trainer, step, **kwargs):
         reward = kwargs["reward_mean"]
         length = kwargs["mean_completion_len"]
+        min_length = kwargs["min_completion_len"]
+        max_length = kwargs["max_completion_len"]
         step_time_s = kwargs.get("step_time_s", float("nan"))
         generation_time_s = kwargs.get("generation_time_s", float("nan"))
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         print(
-            f"[{timestamp}] Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens "
+            f"[{timestamp}] Step {step} | Reward: {reward:.4f} "
+            f"| Len: {length:.2f} (min {min_length}, max {max_length}) tokens "
             f"| Step: {step_time_s:.2f}s | Gen: {generation_time_s:.2f}s"
         )
         with open(self.file_path, mode="a", newline="") as f:
