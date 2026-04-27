@@ -12,15 +12,18 @@
 namespace ckernel::sfpu
 {
 
+// celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void _calculate_elu_(std::uint32_t slope)
+inline void _calculate_celu_(std::uint32_t param0, std::uint32_t param1)
 {
-    sfpi::vFloat alpha = Converter::as_float(slope);
+    sfpi::vFloat alpha       = Converter::as_float(param0);
+    sfpi::vFloat alpha_recip = Converter::as_float(param1);
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat x      = sfpi::dst_reg[0];
-        sfpi::vFloat result = alpha * expm1_cw_clamped(x);
+        sfpi::vFloat result = alpha * expm1_cw_clamped(alpha_recip * x);
 
         v_if (x >= 0.0f)
         {
