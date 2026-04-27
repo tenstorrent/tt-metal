@@ -178,6 +178,40 @@ def _normalize_original_shape(value: Any) -> Any:
     return value
 
 
+def _normalize_ccl_positional_args(args: dict, op_name: str) -> dict:
+    """Remap positional args for CCL ops whose API changed since the master trace.
+
+    The master trace for all_gather_async was recorded when ``dim`` was a keyword
+    argument.  The current C++ binding requires ``persistent_output_buffer`` and
+    ``multi_device_global_semaphore`` as positional args before ``dim``, shifting
+    it from a keyword to ``arg2``.  This function remaps positional args to their
+    original named-keyword form so the comparison matches.
+
+    Positional→keyword mappings (all_gather_async / reduce_scatter_async):
+        arg1 → persistent_output_buffer  (new, None → stripped by normalize)
+        arg2 → dim                       (was keyword, now positional)
+        arg3 → multi_device_global_semaphore  (new infra arg → stripped)
+    """
+    _CCL_OPS = {
+        "ttnn.experimental.all_gather_async",
+        "ttnn.experimental.reduce_scatter_async",
+    }
+    if op_name not in _CCL_OPS:
+        return args
+
+    result = dict(args)
+
+    # Remap arg2 → dim (if dim is not already present as a named key)
+    if "arg2" in result and "dim" not in result:
+        result["dim"] = result.pop("arg2")
+
+    # Strip infrastructure positional args (persistent_output_buffer, semaphore)
+    for key in ("arg1", "arg3"):
+        result.pop(key, None)
+
+    return result
+
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -406,6 +440,11 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             matched_hashes.add(source_hash)
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
+
+            # CCL ops: remap positional args to named kwargs before normalizing.
+            # The master trace was recorded with dim as a keyword arg, but the
+            # current API takes it positionally (after persistent_buf and semaphore).
+            sweep_args = _normalize_ccl_positional_args(sweep_args, op_name)
 
             norm_master = normalize(master_args)
             norm_sweep = normalize(sweep_args)
