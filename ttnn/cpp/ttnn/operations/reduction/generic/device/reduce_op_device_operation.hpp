@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "reduce_op_device_operation_types.hpp"
+#include "tt_stl/reflection.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
