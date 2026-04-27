@@ -81,7 +81,7 @@ inline void _calculate_relu_min_sfp_rows_()
 }
 
 // Implements relu min which returns x when x > threshold, otherwise return 0
-template <bool APPROXIMATION_MODE = false, int ITERATIONS = SFPU_ITERATIONS>
+template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_min_(const std::uint32_t threshold)
 {
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
@@ -117,7 +117,7 @@ inline void _calculate_relu_max_sfp_rows_()
 }
 
 // Implements relu max
-inline void _calculate_relu_max_(const int iterations, const std::uint32_t threshold)
+inline void _relu_max_(const int iterations, const std::uint32_t threshold)
 {
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                               // enable cc

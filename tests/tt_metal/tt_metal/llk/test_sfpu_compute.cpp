@@ -280,7 +280,7 @@ bool run_sfpu_all_same_buffer(
 
         vector<uint32_t> compute_kernel_args = {
             uint32_t(test_config.num_tiles),  // per_core_block_cnt
-            1                                 // per_core_block_cnt
+            1                                 // per_core_block_dim
         };
 
         if (device->arch() == ARCH::QUASAR) {
