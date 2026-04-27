@@ -693,7 +693,7 @@ def assert_numeric_metrics(
         check_pcc (bool, optional): If True, run PCC when the tensor has more than one element. Defaults to True.
         check_ulp (bool, optional): If True, run ULP comparison (non-finite mismatches fail). Defaults to False.
         assert_on_fail (bool, optional): If True, assert when any check fails. If False, return (passed, message) tuple.
-            Defaults to True for backward compatibility.
+            Defaults to True.
 
     Returns:
         None if assert_on_fail=True (default behavior)
