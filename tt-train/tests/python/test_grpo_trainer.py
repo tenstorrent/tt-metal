@@ -87,6 +87,31 @@ TINY_TRANSFORMER_CONFIG = TransformerConfig(
     }
 )
 
+LLAMA_1B_TRANSFORMER_CONFIG = TransformerConfig(
+    {
+        "transformer_config": {
+            "model_type": "llama",
+            "num_heads": 32,
+            "num_groups": 8,
+            "embedding_dim": 2048,
+            "intermediate_dim": 8192,
+            "dropout_prob": 0.0,
+            "num_blocks": 16,
+            "weight_tying": "enabled",
+            "vocab_size": 32000,
+            "max_sequence_length": 1024,
+            "runner_type": "memory_efficient",
+            "theta": 500000.0,
+            "rope_scaling": {
+                "scaling_factor": 32.0,
+                "high_freq_factor": 4.0,
+                "low_freq_factor": 1.0,
+                "original_context_length": 8192,
+            },
+        }
+    }
+)
+
 DEVICE_CONFIG = DeviceConfig(
     {
         "device_config": {
@@ -95,6 +120,26 @@ DEVICE_CONFIG = DeviceConfig(
         }
     }
 )
+
+CAPITALS_SYSTEM_PROMPT = (
+    "You are a precise geography assistant.\n"
+    "Given a country, reply with exactly one word: its capital city in English.\n"
+    "Feel free to describe the capital city or the country."
+)
+
+
+@pytest.fixture(autouse=True)
+def _close_device_after_test():
+    """Close the device after each test so the next ``LlamaGRPOCompleter``
+    construction doesn't trip ``open_device was called after the device was
+    created``. ``LlamaGRPOCompleter.__init__`` opens the device unconditionally
+    (see ``utils/llama_completer.py``), so we have to balance that here.
+    """
+    yield
+    try:
+        ttml.autograd.AutoContext.get_instance().close_device()
+    except Exception:
+        pass
 
 
 class _RecordingCallback(TrainerCallback):
@@ -241,6 +286,64 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     assert not np.array_equal(before, after), (
         f"parameter {snapshot_name!r} was unchanged after one optimizer step; "
         "either backward did not run or the gradient was identically zero"
+    )
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def _to_capitals_chat_prompt(tokenizer, user_text: str) -> str:
+    return tokenizer.apply_chat_template(
+        [
+            {"role": "system", "content": CAPITALS_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+def test_capitals_one_by_one_equals_single_batch():
+    """Greedy generation must give the same output one-by-one and batched.
+
+    Loads the real Llama-3.2-1B-Instruct weights (no monkey-patch) and runs
+    the same four prompts through ``LlamaGRPOCompleter.generate_str`` twice:
+    once one prompt at a time, once as a single batch. With temperature=0
+    and ``num_generations=1`` the outputs must match exactly; any drift
+    indicates a batching / padding / mask bug in the generation path.
+    """
+    completer = LlamaGRPOCompleter(
+        ctx=LlamaCompletionCtx(
+            max_tokens_to_complete=256,
+            temperature=0.0,
+            completions_per_prompt=1,
+        ),
+        transformer_config=LLAMA_1B_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
+    )
+
+    tokenizer = completer.tokenizer
+    user_prompts = [
+        "The capital of France is",
+        "The capital of Portugal is",
+        "The capital of United Kingdom is",
+        "The capital of Czech Republic is",
+    ]
+    prompts = [_to_capitals_chat_prompt(tokenizer, p) for p in user_prompts]
+
+    single_outputs = []
+    for prompt in prompts:
+        completions = completer.generate_str([prompt])
+        assert len(completions) == 1
+        single_outputs.append(completions[0])
+
+    batched_outputs = completer.generate_str(prompts)
+    assert len(batched_outputs) == len(prompts)
+
+    assert batched_outputs == single_outputs, (
+        "Mismatch between one-by-one and batched outputs.\n" f"single={single_outputs}\n" f"batch={batched_outputs}"
     )
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
