@@ -41,7 +41,7 @@ def get_rot_mats_hf(seq_len: int, dim: int, theta: float = 10000.0) -> tuple[tor
     `ttnn.experimental.rotary_embedding` expects `cos_cached`/`sin_cached` shaped like HF:
     `[1, 1, seq_len, head_dim]`, where the first half is repeated in the second half.
     """
-    from models.tt_transformers.tt.common import precompute_freqs
+    from models.demos.dots_ocr.tt.rope_freqs import precompute_freqs
 
     # Match tt_transformers' HF-format precompute (supports rope scaling / types).
     cos_freqs, sin_freqs = precompute_freqs(
@@ -105,7 +105,7 @@ def get_hf_rot_mats_from_model(model: torch.nn.Module, input_ids: torch.Tensor) 
     scale_factor = rope_scaling.get("factor", None)
     orig_context_len = rope_scaling.get("original_max_position_embeddings", None)
 
-    from models.tt_transformers.tt.common import precompute_freqs
+    from models.demos.dots_ocr.tt.rope_freqs import precompute_freqs
 
     seq_len = input_ids.shape[1]
     cos_freqs, sin_freqs = precompute_freqs(

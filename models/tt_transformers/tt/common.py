@@ -807,7 +807,7 @@ def create_tt_model(
     optimizations,
     max_seq_len,
     paged_attention_config: PagedAttentionConfig = None,
-    dtype=ttnn.bfloat8_b,
+    dtype=None,
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
@@ -839,6 +839,12 @@ def create_tt_model(
     # Avoid loading state_dict for every DP model
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
+
+    if dtype is None:
+        # Resolve default dtype lazily to avoid import-time AttributeErrors on some TTNN builds.
+        dtype = getattr(ttnn, "bfloat8_b", None) or getattr(ttnn, "bfloat16", None)
+        if dtype is None:
+            raise AttributeError("TTNN is missing both bfloat8_b and bfloat16 dtypes; please pass dtype explicitly.")
 
     model = Transformer(
         args=tt_model_args,

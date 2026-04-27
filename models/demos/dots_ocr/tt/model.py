@@ -240,7 +240,9 @@ class DropInVisionTransformer(torch.nn.Module):
 
         self.tt_model = DotsVisionTransformerTT(
             mesh_device=model_args.mesh_device,
-            model_args=model_args,
+            vision_config=getattr(
+                model_args, "vision_config", getattr(getattr(reference_model, "config", None), "vision_config", None)
+            ),
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             dtype=dtype,
