@@ -131,8 +131,14 @@ constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled
 // may be unavailable to the prefetcher at any time
 constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb_blocks;
 
+// Dispatch-core-local L1 region assigned by DispatchMemMap via
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address is supplied by host through
+// the REALTIME_PROFILER_MSG_ADDR compile-time define; the same value is wired into the
+// co-located cq_dispatch_subordinate kernel and the reserved RT-profiler tensix core, so
+// all three view the same physical L1. The embedded program_id_fifo is the BRISC
+// (producer) / dispatch_s NCRISC (consumer) handoff.
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
