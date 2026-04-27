@@ -4,6 +4,7 @@
 
 #include "layernorm_post_all_gather_device_operation.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer.hpp>

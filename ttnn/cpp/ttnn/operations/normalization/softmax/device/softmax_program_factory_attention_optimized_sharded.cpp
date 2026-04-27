@@ -133,10 +133,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
     uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    CoreRange all_device_cores(
+    const CoreRangeSet all_device_cores{CoreRange(
         {static_cast<std::size_t>(start_core_x), static_cast<std::size_t>(start_core_y)},
         {static_cast<std::size_t>(start_core_x) + num_cores_c - 1,
-         static_cast<std::size_t>(start_core_y) + num_cores_r - 1});
+         static_cast<std::size_t>(start_core_y) + num_cores_r - 1})};
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(program_config.block_w)};
     TensorAccessorArgs(tensor_args.mask ? tensor_args.mask->buffer() : nullptr).append_to(reader_compile_time_args);
