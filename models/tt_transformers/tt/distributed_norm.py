@@ -78,7 +78,17 @@ class DistributedNorm(LightweightModule):
                     compute_kernel_config=self.ln_cfg,
                 )
 
-        input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
+        if mode == Mode.DECODE:
+            input_mem_cfg = sharded_output_config
+        else:
+            # Prefill: respect the short-seq L1 path when enabled. Unconditionally
+            # spilling to DRAM here forces the entire residual stream (LayerNorm,
+            # subsequent matmul inputs, createheads inputs) through DRAM for short
+            # sequences where everything fits in L1. That was costing ~15-20% of
+            # kernel time on Qwen3-Embedding prefill (batch=1, ISL<=512).
+            input_mem_cfg = self.args.get_prefill_activation_mem_config(
+                seq_len=int(x.shape[-2]) if hasattr(x, "shape") else None
+            )
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):

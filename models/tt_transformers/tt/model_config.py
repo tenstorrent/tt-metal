@@ -528,6 +528,12 @@ class ModelArgs:
         self.embed_scale = None
         self.use_hf_rope = use_hf_rope
 
+        # For embedding / feature-extraction workloads the KV cache is never read
+        # again after prefill; skipping paged_fill_cache + the K/V bf16->bfp8
+        # typecasts that feed it removes ~0.3ms of device work per iteration.
+        # Opt-in via env var so non-embedding models are unaffected.
+        self.skip_kv_cache_fill = os.getenv("TT_SKIP_KV_CACHE_FILL", "0") == "1"
+
         assert not os.getenv(
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
@@ -1192,6 +1198,23 @@ class ModelArgs:
         """Preferred prefill activation memory placement (L1 for guarded short-seq path)."""
         return ttnn.L1_MEMORY_CONFIG if self.use_short_seq_l1_prefill(seq_len) else ttnn.DRAM_MEMORY_CONFIG
 
+    def use_minimal_matmul_prefill(self, seq_len: int) -> bool:
+        """Return True iff the QKV / FF2 prefill matmul should route to
+        ``ttnn.experimental.minimal_matmul`` (vs. plain ``ttnn.linear``).
+
+        ``minimal_matmul`` is the right choice for medium-to-long sequences because
+        it exposes larger per-core block reuse. For very short sequences on
+        single-chip (e.g. Qwen3-Embedding-0.6B prefill at ISL<=512) its fixed
+        kernel/launch cost actually makes it slower than the well-tuned
+        ``MatmulMultiCoreReuseMultiCastProgramConfig`` path — per-op it was 53us
+        vs 21us in the profile. Force the traditional path in that regime.
+        """
+        if seq_len <= 128:
+            return False
+        if self.use_short_seq_l1_prefill(seq_len):
+            return False
+        return True
+
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
@@ -1264,6 +1287,14 @@ class ModelArgs:
                         num_cores=self.mlp_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
+            if self.use_minimal_matmul_prefill(seq_len):
+                grid = self.mlp1_3_grid(seq_len)
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
             return self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
@@ -1315,7 +1346,7 @@ class ModelArgs:
                         num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
-            if seq_len > 128:
+            if self.use_minimal_matmul_prefill(seq_len):
                 grid = self.mlp2_grid(seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
@@ -1479,7 +1510,7 @@ class ModelArgs:
     # =========================================================================
 
     @lru_cache(maxsize=None)
-    def get_attn_sdpa_prefill_program_config(self, seq_len: int = 1, chunk_start_idx: int = None):
+    def get_attn_sdpa_prefill_program_config(self, seq_len: int = 1, chunk_start_idx: int = None, batch_size: int = 1):
         """Get the SDPA program config for prefill mode."""
         # Sequence length and chunk start index are both required for prefill
         # Chunk values based on what works best empirically
@@ -1487,28 +1518,54 @@ class ModelArgs:
         # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
         # Here (x & -x) is the highest power of 2 that divides x.
         # When chunk_start_idx=0, we use default values since 0 is a multiple of any number.
+        # For batched prefill (batch>1) we have many independent batch-head
+        # work units, so we can afford larger q/k chunks which improve the
+        # per-core compute-to-memory ratio. Empirically:
+        #   bs=1  seq=512: q_chunk=64  (16 batch-heads only — need many Q chunks to keep 64 cores busy)
+        #   bs=32 seq=512: q_chunk=128 (512 batch-heads — bigger chunks save ~22ms; q_chunk=256 showed
+        #                               bs8-short regression + negligible bs32 win so we cap at 128)
+        short_seq_chunk = 128 if batch_size > 1 and seq_len % 128 == 0 and seq_len >= 128 else 64
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
+            else short_seq_chunk
             if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
             else min(256, chunk_start_idx & -chunk_start_idx)
             if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else min(short_seq_chunk, chunk_start_idx & -chunk_start_idx)
         )
         # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225:
         k_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
+            else short_seq_chunk
             if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
             else min(256, chunk_start_idx & -chunk_start_idx)
             if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else min(short_seq_chunk, chunk_start_idx & -chunk_start_idx)
         )
+        # Blackhole exposes 8x10 compute cores (80 workers) vs Wormhole's 8x8 (64).
+        # SDPA parallelises work units across this grid. Larger grid only helps
+        # when the number of work units significantly exceeds the current grid
+        # — for short sequences at bs=1 (16 work units for Qwen3-Embedding-0.6B
+        # with 16 Q heads) the extra cores sit idle and the kernel setup overhead
+        # of a larger grid becomes net negative (regressed bs1 by ~1 ms).
+        # SDPA work is distributed over (batch * n_q_heads) independent
+        # batch-heads, so use the bigger grid only when that total is well above
+        # 64 — which kicks in reliably for batched prefill (bs32*16=512 units)
+        # but NOT for bs1 (16 units) or bs8 (128 units, same rounds as 8x8).
+        # Threshold >128 picks up bs32+ without regressing bs8.
+        n_q_heads = getattr(self, "n_heads", 32)
+        use_big_grid = is_blackhole() and (batch_size * n_q_heads) > 128
+        sdpa_grid = (8, 10) if use_big_grid else (8, 8)
+        # exp_approx_mode uses a fast piecewise-polynomial approximation of exp()
+        # inside the online softmax; verified to have negligible impact on
+        # Qwen3-Embedding cosine-similarity accuracy and cuts SDPA kernel time
+        # materially. Opt out with TT_SDPA_EXACT_EXP=1 if needed for QA runs.
+        use_exp_approx = os.getenv("TT_SDPA_EXACT_EXP", "0") != "1"
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            exp_approx_mode=False,
+            compute_with_storage_grid_size=sdpa_grid,
+            exp_approx_mode=use_exp_approx,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
         )
@@ -1539,13 +1596,18 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_program_config(
-        self, mode: Mode, seq_len: int = 1, chunk_start_idx: int = None, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        seq_len: int = 1,
+        chunk_start_idx: int = None,
+        prefetcher: Prefetcher = None,
+        batch_size: int = 1,
     ):
         """Get the SDPA program config for attention."""
         if mode == Mode.DECODE:
             return self.get_attn_sdpa_decode_program_config(prefetcher)
         elif mode == Mode.PREFILL:
-            return self.get_attn_sdpa_prefill_program_config(seq_len, chunk_start_idx)
+            return self.get_attn_sdpa_prefill_program_config(seq_len, chunk_start_idx, batch_size)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1614,7 +1676,7 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            if seq_len > 128:
+            if self.use_minimal_matmul_prefill(seq_len):
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1954,6 +2016,14 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            if self.use_minimal_matmul_prefill(seq_len) and not self.is_galaxy:
+                grid = self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE)
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
             return self.matmul_config(
                 m=min(seq_len, 1024),
                 k=k_dim,
@@ -2376,9 +2446,36 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-Embedding-0.6B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen3-Embedding-4B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-0.6B": {
+                    "N150": 4,
+                    "N300": 64,
+                    "T3K": 128,
+                    "TG": 128,
+                    "P150": 128,
+                    "P300": 128,
+                    "P150x4": 128,
+                    "P150x8": 128,
+                },
+                "Qwen3-Embedding-4B": {
+                    "N150": 4,
+                    "N300": 64,
+                    "T3K": 128,
+                    "TG": 128,
+                    "P150": 128,
+                    "P300": 128,
+                    "P150x4": 128,
+                    "P150x8": 128,
+                },
+                "Qwen3-Embedding-8B": {
+                    "N150": 4,
+                    "N300": 64,
+                    "T3K": 128,
+                    "TG": 128,
+                    "P150": 128,
+                    "P300": 128,
+                    "P150x4": 128,
+                    "P150x8": 128,
+                },
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
@@ -2439,6 +2536,31 @@ class ModelArgs:
                 "T3K": [128, 1024, 2048, 4096, 8192],
                 "TG": [128, 1024, 2048, 4096, 8192],
                 "P150x4": [128, 1024, 2048, 4096, 8192],
+            },
+            # Embedding models: add the full ISL sweep range used by demo.py (32..8192).
+            # Without these entries, P150 falls back to the default [128, 1024], which
+            # means any ISL != {128,1024} silently runs without hardware trace and pays
+            # full host-dispatch overhead per op. For ISL=512 on Qwen3-Embedding-0.6B
+            # that was the difference between ~17ms (no-trace) and ~6ms (traced).
+            "Qwen3-Embedding-0.6B": {
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x8": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+            "Qwen3-Embedding-4B": {
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x8": [128, 256, 512, 1024, 2048, 4096, 8192],
             },
             "Llama-3.2-3B": {
                 "N150": [],

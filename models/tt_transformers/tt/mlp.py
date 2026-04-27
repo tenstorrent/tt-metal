@@ -156,32 +156,67 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
-        w1_out = ttnn.linear(
-            x,
-            self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_mem_seq),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
+        # For long-seq prefill (and specifically for batched prefill where seq_len is
+        # batch*per_user_seq), routing FF1/FF3 through minimal_matmul instead of
+        # MatmulMultiCoreReuseMultiCast picks up measurable utilization:
+        # per-op FLOP efficiency was ~45% for ttnn.linear vs ~57% for minimal_matmul
+        # on FF2 at the same shape family on Qwen3-Embedding-0.6B bs32/isl512.
+        use_mm_ff1_3 = (
+            mode != Mode.DECODE
+            and self.args.use_minimal_matmul_prefill(seq_len)
+            and isinstance(pc_1, ttnn.MinimalMatmulConfig)
         )
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_mem_seq),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
-        )
+
+        if use_mm_ff1_3:
+            w1_out = ttnn.experimental.minimal_matmul(
+                x,
+                self.w1,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                config=pc_1,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(
+                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
+                ),
+            )
+            w3_out = ttnn.experimental.minimal_matmul(
+                x,
+                self.w3,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                config=pc_3,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(
+                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
+                ),
+            )
+        else:
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_1,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(
+                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
+                ),
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_3,
+                memory_config=self.args.get_mlp_ff1_3_mem_config(
+                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
+                ),
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id
+                if self.prefetcher is not None and mode == Mode.DECODE
+                else None,
+            )
         ttnn.deallocate(x)
 
         if TG:
@@ -286,12 +321,13 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if seq_len > 128 and mode != Mode.DECODE:
+        if mode != Mode.DECODE and self.args.use_minimal_matmul_prefill(seq_len):
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
                 self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2,
+                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_mem_seq),
             )
         else:
             w2_out = ttnn.linear(

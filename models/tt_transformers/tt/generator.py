@@ -537,7 +537,9 @@ class Generator(WarmupForwardMixin):
             )
 
             logger.info(
-                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, "
+                f"trace: {enable_trace_current_prompt}, batched_prefill: {use_batched_prefill} "
+                f"(users={len(empty_slots) if use_batched_prefill else 1})"
             )
 
             if page_table is not None:
@@ -689,6 +691,52 @@ class Generator(WarmupForwardMixin):
                         output_tokens[slot] = tokens_host[slot]
                         if log_probs_host is not None:
                             output_log_probs[slot] = log_probs_host[slot]
+                elif return_hidden_states:
+                    # Embedding batched-prefill path: slice per-user hidden states and
+                    # apply final norm (no LM head) instead of producing full-vocab logits.
+                    #
+                    # Fast path: when all users share the same tile-aligned last-token
+                    # offset (typical — batched prefill already requires all users to
+                    # share a padded prefill_seq_len), run slice + norm + to_layout once
+                    # on the whole [padded_batch, 1, S, H] tensor and do a single host
+                    # copy + synchronize. That keeps the post-trace tail compute-bound
+                    # on device instead of serialized by N host-device round trips — on
+                    # Qwen3-Embedding-0.6B at batch=32 / ISL=512 this collapses ~96 OOB
+                    # device ops + 32 syncs down to 3 ops + 1 sync.
+                    tile_offsets = [(last_token_idx[slot] // 32) * 32 for slot in empty_slots]
+                    if (
+                        len(tile_offsets) > 0
+                        and len(set(tile_offsets)) == 1
+                        and self.model_args[model_id].num_devices == 1
+                    ):
+                        batch_hidden_norm = self.model[model_id].process_hidden_states_after_prefill_trace_batched(
+                            logits, tile_offsets[0]
+                        )
+                        batch_host = batch_hidden_norm.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        batch_torch = ttnn.to_torch(ttnn.get_device_tensors(batch_host)[0])
+                        dim_full = self.model_args[model_id].dim
+                        for local_idx, slot in enumerate(empty_slots):
+                            last_token_idx_relative = last_token_idx[slot] % 32
+                            output_tensor[slot] = batch_torch[slot, 0, last_token_idx_relative, :dim_full]
+                    else:
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_hidden = logits[slot : slot + 1, :, :, :]
+                            user_hidden_norm = self.model[model_id].process_hidden_states_after_prefill_trace(
+                                user_hidden, last_token_idx[slot]
+                            )
+                            user_hidden_host = user_hidden_norm.cpu(blocking=False)
+                            ttnn.synchronize_device(self.model[model_id].mesh_device)
+                            last_token_idx_relative = last_token_idx[slot] % 32
+                            if self.model_args[model_id].num_devices == 1:
+                                hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(user_hidden_host)[0])
+                                output_tensor[slot] = hidden_states_torch[
+                                    0, 0, last_token_idx_relative, : self.model_args[model_id].dim
+                                ]
+                            else:
+                                output_tensor[slot] = self.model[model_id].process_output_prefill_hidden_states(
+                                    user_hidden_host, last_token_idx=last_token_idx_relative
+                                )
                 else:
                     for local_idx, slot in enumerate(empty_slots):
                         user_logits = logits[slot : slot + 1, :, :, :]

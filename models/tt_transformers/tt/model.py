@@ -254,6 +254,35 @@ class Transformer(LightweightModule):
         )
         return hidden_states
 
+    def process_hidden_states_after_prefill_trace_batched(self, hidden_states, get_last_token):
+        """
+        Batched variant of ``process_hidden_states_after_prefill_trace`` for use with
+        batched prefill (``use_batched_prefill=True``). Assumes the per-user tile-aligned
+        last-token offset is the same across all users (which is the case whenever all
+        users in a batch share the same prefill_seq_len — a prerequisite for batched
+        prefill).
+
+        Takes a batched hidden-states tensor of shape ``[padded_batch, 1, prefill_seq_len, H]``
+        and returns ``[padded_batch, 1, 32, H]`` after slicing + norm + to_layout.
+
+        Doing this in a single slice + norm + to_layout (rather than once per user) is
+        critical for batched prefill throughput: for batch=32 it cuts post-trace device
+        ops from 96 to 3 and avoids 32 back-to-back ``synchronize_device`` calls on the
+        host.
+        """
+        hidden_dim = hidden_states.shape[-1]
+        batch = hidden_states.shape[0]
+        hidden_states = ttnn.slice(
+            hidden_states,
+            (0, 0, get_last_token, 0),
+            (batch, 1, get_last_token + 32, hidden_dim),
+        )
+        hidden_states = self.norm(hidden_states, mode="prefill")
+        hidden_states = ttnn.to_layout(
+            hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        return hidden_states
+
     def prepare_prefill_inputs_trace(
         self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
     ):

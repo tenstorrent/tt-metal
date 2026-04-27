@@ -59,6 +59,7 @@ SAMPLE_TEXTS = [
 MESH_SHAPES = {
     1: (1, 1),
     2: (1, 2),
+    4: (1, 4),
     8: (1, 8),
     32: (8, 4),
 }
@@ -235,6 +236,177 @@ def clear_all_kv_caches(generator):
             256,
             256,
             {"page_block_size": 32, "page_max_num_blocks": 512},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-seqlt1024: batch=1, max_seq_len and ISL both < 1024 (synthetic tokens)
+            1,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl32
+            1,
+            128,
+            32,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl64
+            1,
+            128,
+            64,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl128
+            1,
+            128,
+            128,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl256
+            1,
+            256,
+            256,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl512
+            1,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl1024
+            1,
+            1024,
+            1024,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl2048
+            1,
+            2048,
+            2048,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl4096
+            1,
+            4096,
+            4096,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-isl8192
+            1,
+            8192,
+            8192,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl32
+            32,
+            128,
+            32,
+            {"page_block_size": 32, "page_max_num_blocks": 128},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl64
+            32,
+            128,
+            64,
+            {"page_block_size": 32, "page_max_num_blocks": 128},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl128
+            32,
+            128,
+            128,
+            {"page_block_size": 32, "page_max_num_blocks": 128},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl256
+            32,
+            256,
+            256,
+            {"page_block_size": 32, "page_max_num_blocks": 256},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl512
+            32,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl1024
+            32,
+            1024,
+            1024,
+            {"page_block_size": 32, "page_max_num_blocks": 1024},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl2048
+            32,
+            2048,
+            2048,
+            {"page_block_size": 32, "page_max_num_blocks": 2048},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl4096
+            32,
+            4096,
+            4096,
+            {"page_block_size": 32, "page_max_num_blocks": 4096},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch32-isl8192
+            32,
+            8192,
+            8192,
+            {"page_block_size": 32, "page_max_num_blocks": 8192},
             3,
             True,
             1,
@@ -297,6 +469,25 @@ def clear_all_kv_caches(generator):
     ids=[
         "dp1-batch1-short",
         "dp1-batch1-seqlt512",
+        "dp1-batch1-seqlt1024",
+        "dp1-batch1-isl32",
+        "dp1-batch1-isl64",
+        "dp1-batch1-isl128",
+        "dp1-batch1-isl256",
+        "dp1-batch1-isl512",
+        "dp1-batch1-isl1024",
+        "dp1-batch1-isl2048",
+        "dp1-batch1-isl4096",
+        "dp1-batch1-isl8192",
+        "dp1-batch32-isl32",
+        "dp1-batch32-isl64",
+        "dp1-batch32-isl128",
+        "dp1-batch32-isl256",
+        "dp1-batch32-isl512",
+        "dp1-batch32-isl1024",
+        "dp1-batch32-isl2048",
+        "dp1-batch32-isl4096",
+        "dp1-batch32-isl8192",
         "dp1-batch8-short",
         "dp32-isl512",
         "dp32-isl1024",
@@ -312,7 +503,7 @@ def clear_all_kv_caches(generator):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": 200000000, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -323,6 +514,11 @@ def clear_all_kv_caches(generator):
             "N300": (1, 2),
             "T3K": (1, 8),
             "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+            "BHGLX": (8, 4),
         }.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())
     ],
     indirect=True,
@@ -353,8 +549,32 @@ def test_embedding_perf(
     if batch_size % data_parallel != 0:
         pytest.skip(f"batch_size={batch_size} not evenly divisible by data_parallel={data_parallel}")
 
+    # Allow disabling hardware trace capture for reporting/profiling runs.
+    # TTNN_CONFIG_OVERRIDES with enable_logging=true issues per-op device syncs and
+    # reads, which are illegal inside ttnn.begin_trace_capture. Set QWEN_DISABLE_TRACE=1
+    # to fall back to the no-trace execution path for those runs.
+    if os.environ.get("QWEN_DISABLE_TRACE", "0") == "1":
+        logger.info("QWEN_DISABLE_TRACE=1 set; disabling hardware trace capture for this run.")
+        enable_trace = False
+
+    # Optional: capture a single-iteration ttnn graph report for the ttnn-visualizer.
+    # Set QWEN_GRAPH_CAPTURE=/abs/path/to/report.json to wrap ONE benchmark iteration
+    # in ttnn.graph.full_graph_capture(...). Produces a JSON file that can then be
+    # imported offline with: python -m ttnn.graph_report <report.json> <visualizer_db/>
+    # This path also forces enable_trace=False (graph capture is incompatible with
+    # hardware trace capture).
+    graph_capture_path = os.environ.get("QWEN_GRAPH_CAPTURE")
+    if graph_capture_path:
+        logger.info(f"QWEN_GRAPH_CAPTURE set; will write graph report to {graph_capture_path}")
+        enable_trace = False
+
     skip_warmup = data_parallel > 1
     isl = input_seq_len or max_seq_len
+
+    # Embedding workloads never read the KV cache back, so skip the paged_fill_cache
+    # pipeline (+ the K/V bf16->bfp8 typecasts that feed it). Users can still opt out
+    # by exporting TT_SKIP_KV_CACHE_FILL=0 before invoking pytest.
+    os.environ.setdefault("TT_SKIP_KV_CACHE_FILL", "1")
 
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -414,20 +634,45 @@ def test_embedding_perf(
     embeddings = None
 
     for i in range(num_iterations):
-        clear_all_kv_caches(generator)
+        # NOTE: clear_all_kv_caches intentionally NOT called here.
+        # paged_fill_cache in attention.forward_prefill unconditionally overwrites
+        # the page range for this prompt, and SDPA is causal (reads only [0, seq_len)),
+        # so there is no stale-data path for an embedding workload. Clearing was
+        # profiling at ~31% of per-iteration kernel time for a 4 MB DRAM->DRAM write
+        # that gets immediately overwritten by the much-cheaper (0.2 ms) paged_fill.
         generator.prev_page_table = None
 
         profiler.start(f"inference_prefill_{i}")
-        result = run_embedding_prefill(
-            generator,
-            input_ids,
-            page_table,
-            kv_caches,
-            prompt_lens,
-            enable_trace,
-            return_hidden_states=True,
-            warmup_prefill=False,
-        )
+        if graph_capture_path and i == 0:
+            # Capture exactly one iteration into a ttnn-visualizer report JSON.
+            import pathlib as _pl
+
+            _out = _pl.Path(graph_capture_path)
+            _out.parent.mkdir(parents=True, exist_ok=True)
+            with ttnn.graph.full_graph_capture(str(_out)):
+                result = run_embedding_prefill(
+                    generator,
+                    input_ids,
+                    page_table,
+                    kv_caches,
+                    prompt_lens,
+                    enable_trace,
+                    return_hidden_states=True,
+                    warmup_prefill=False,
+                )
+            logger.info(f"ttnn graph report written to {_out}")
+            logger.info(f"Import it with: python -m ttnn.graph_report {_out} {_out.with_suffix('')}_db/")
+        else:
+            result = run_embedding_prefill(
+                generator,
+                input_ids,
+                page_table,
+                kv_caches,
+                prompt_lens,
+                enable_trace,
+                return_hidden_states=True,
+                warmup_prefill=False,
+            )
         profiler.end(f"inference_prefill_{i}")
 
         t = profiler.get_duration(f"inference_prefill_{i}")
@@ -565,7 +810,8 @@ if __name__ == "__main__":
         logger.info(f"Benchmarking {args.iterations} iterations...")
         times = []
         for i in range(args.iterations):
-            clear_all_kv_caches(generator)
+            # See note in test_embedding_perf: paged_fill_cache overwrites, so no
+            # clear is needed for embedding prefill.
             generator.prev_page_table = None
             t0 = time.perf_counter()
             _ = run_embedding_prefill(generator, input_ids, page_table, kv_caches, prompt_lens, True, True)
