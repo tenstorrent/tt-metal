@@ -99,16 +99,29 @@ class LayerNorm1D(LightweightModule):
 
         max_b = cfg.max_batch_size if cfg.max_batch_size is not None else 1
         out_mem = cfg.output_memcfg or bge_m3_linear_activation_memory_config(cfg.max_seq_len, max_b)
-        return ttnn.layer_norm(
+        sharded_ln = _b1s512_layernorm_sharded_config(cfg.max_seq_len, max_b)
+        program_config = None
+        memory_config = out_mem
+        if sharded_ln is not None:
+            sharded_mem, program_config = sharded_ln
+            x = ttnn.to_memory_config(x, memory_config=sharded_mem)
+            if residual_input_tensor is not None:
+                residual_input_tensor = ttnn.to_memory_config(residual_input_tensor, memory_config=sharded_mem)
+            memory_config = sharded_mem
+
+        output = ttnn.layer_norm(
             x,
             epsilon=cfg.eps,
             weight=self.weight,
             bias=self.bias,
             residual_input_tensor=residual_input_tensor,
-            program_config=None,  # None to pc
-            memory_config=out_mem,
+            program_config=program_config,  # None to pc
+            memory_config=memory_config,
             compute_kernel_config=cfg.compute_kernel_config,
         )
+        if sharded_ln is not None and out_mem != memory_config:
+            output = ttnn.to_memory_config(output, memory_config=out_mem)
+        return output
 
 
 ################################################################################
@@ -138,6 +151,43 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LayerNorm1DCo
 
     assert isinstance(x, ttnn.Tensor), f"x must be ttnn.Tensor or LazyWeight, got {type(x)}"
     return x
+
+
+def _b1s512_layernorm_sharded_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+) -> tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig] | None:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len != 512 or max_batch != 1:
+        return None
+
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+    core_range = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1),
+            )
+        }
+    )
+    shard_height = 512 // core_grid.y
+    shard_width = 1024 // core_grid.x
+    sharded_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_range, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+        subblock_w=shard_width // TILE_SIZE,
+        block_h=shard_height // TILE_SIZE,
+        block_w=shard_width // TILE_SIZE,
+        inplace=False,
+        use_welford=False,
+        legacy_reduction=True,
+        legacy_rsqrt=True,
+    )
+    return sharded_mem, program_config
 
 
 def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
