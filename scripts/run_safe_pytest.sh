@@ -37,9 +37,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISPATCH_TIMEOUT=5
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
+TRIAGE_JSON_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
+TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
 
 # --- Detect simulator mode ---
 SIM_MODE=false
@@ -113,15 +115,27 @@ fi
 # zero overhead for passing tests. On sim there is no hang detection because
 # wall-clock timeouts are meaningless at kHz clock speeds.
 rm -f "$TRIAGE_LOG"
+MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == false ]]; then
     export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
     # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
+    # Defer the missing-tool warning to EXIT via trap — otherwise it gets buried
+    # in pytest / triage output and users never see it.
     if ! python3 -c "import ttexalens" 2>/dev/null; then
-        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
+        MISSING_TTEXALENS=true
+    fi
+    mkdir -p "${TRIAGE_JSON_DIR}"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --json-path=${TRIAGE_JSON} > ${TRIAGE_LOG} 2>&1"
+fi
+
+emit_missing_ttexalens_warning() {
+    if [[ "$MISSING_TTEXALENS" == true ]]; then
+        echo "" >&2
+        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang is unavailable." >&2
         echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
     fi
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
-fi
+}
+trap emit_missing_ttexalens_warning EXIT
 
 if [[ "$DEV_MODE" == true ]]; then
     # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
@@ -245,6 +259,11 @@ if [[ "$IS_HANG" == true ]]; then
         tail -50 "$WATCHER_LOG" >&2
         echo "=== END WATCHER LOG ===" >&2
         echo "" >&2
+    fi
+
+    # Print the JSON triage path as the last line so machine-readers can find it.
+    if [[ -f "$TRIAGE_JSON" ]]; then
+        echo "SAFE_PYTEST: JSON triage: ${TRIAGE_JSON}" >&2
     fi
 
     rm -f "$TRIAGE_LOG"
