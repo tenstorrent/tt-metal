@@ -476,7 +476,7 @@ class HubertModel(nn.Module):
     ):
         super().__init__()
         self._is_generation_fast = False
-        feature_enc_layers = eval(cfg["conv_feature_layers"])  # noqa
+        feature_enc_layers = [(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512, 2, 2)] * 2
         self.embed = feature_enc_layers[-1][0]
 
         self.feature_extractor = ConvFeatureExtractionModel(
