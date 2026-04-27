@@ -133,3 +133,14 @@ class MatmulUnpacker(Unpacker):
             f"        }}\n"
             f"    }}\n"
         )
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        face_r_dim_a = compute_unit.src_a.tile_shape.face_r_dim
+        face_r_dim_b = compute_unit.src_b.tile_shape.face_r_dim
+        return f"_llk_unpack_AB_matmul_uninit_({face_r_dim_a}, {face_r_dim_b});\n"

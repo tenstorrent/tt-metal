@@ -91,6 +91,7 @@ int main(void)
         ZONE_SCOPED("KERNEL")
 
         asm volatile("" ::: "memory");
+        // reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
 
         run_kernel(temp_args);
 

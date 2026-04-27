@@ -81,7 +81,7 @@ class DatacopyFpu(Fpu):
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        unpack_to_dest = "true" if operation.unpack_to_dest else "false"
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
         num_faces = operation.output.tile_shape.total_num_faces()
 

@@ -168,3 +168,15 @@ class UnpackerA(Unpacker):
             f"    L1_ADDRESS({buffer_a}[{block.tile_id_global}]), {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
             f");\n"
         )
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+
+        return f"_llk_unpack_A_uninit_<{broadcast_type}>({face_r_dim});\n"
