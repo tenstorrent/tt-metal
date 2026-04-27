@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/descriptor_patching.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
@@ -231,7 +232,7 @@ void KernelDescriptor::emplace_runtime_args(
     emplace_runtime_args_impl(*this, core, args);
 }
 
-void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, RTArgList args) {
+void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, const RTArgList& args) {
     emplace_runtime_args_impl(*this, core, args.items_);
 }
 
@@ -239,7 +240,7 @@ void KernelDescriptor::emplace_common_runtime_args(std::initializer_list<std::va
     emplace_common_runtime_args_impl(*this, args);
 }
 
-void KernelDescriptor::emplace_common_runtime_args(RTArgList args) {
+void KernelDescriptor::emplace_common_runtime_args(const RTArgList& args) {
     emplace_common_runtime_args_impl(*this, args.items_);
 }
 
@@ -294,7 +295,7 @@ ResolvedBindings resolve_bindings(
                 b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
                 b.buffer->address());
 
-            result.rt_args.push_back({&data, b.arg_idx, find_idx(b.buffer, "buffer_bindings")});
+            result.rt_args.push_back({k, b.core, b.arg_idx, find_idx(b.buffer, "buffer_bindings"), false});
             registered_positions.insert(rt_binding_key(k, b.core, b.arg_idx));
             registered_addresses.insert(b.buffer->address());
         }
@@ -312,7 +313,7 @@ ResolvedBindings resolve_bindings(
                 b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
                 b.buffer->address());
 
-            result.rt_args.push_back({&data, b.arg_idx, find_idx(b.buffer, "common_buffer_bindings")});
+            result.rt_args.push_back({k, {}, b.arg_idx, find_idx(b.buffer, "common_buffer_bindings"), true});
             registered_positions.insert(rt_binding_key(k, kCommonArgSentinel, b.arg_idx));
             registered_addresses.insert(b.buffer->address());
         }
@@ -373,7 +374,13 @@ ResolvedBindings resolve_bindings(
 void apply_resolved_bindings(
     Program& program, const ResolvedBindings& bindings, const std::vector<Buffer*>& current_buffers) {
     for (const auto& b : bindings.rt_args) {
-        (*b.data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
+        // Re-derive the RuntimeArgsData reference on every call via GetRuntimeArgs /
+        // GetCommonRuntimeArgs rather than storing a cross-call raw pointer.  This is
+        // safe across first-enqueue (when the dispatch path retargets rt_args_data to
+        // the command-sequence buffer) because we look up the live struct each time.
+        RuntimeArgsData& data =
+            b.is_common ? GetCommonRuntimeArgs(program, b.kernel_idx) : GetRuntimeArgs(program, b.kernel_idx, b.core);
+        data[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
         UpdateDynamicCircularBufferAddress(
