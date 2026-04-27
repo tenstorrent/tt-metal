@@ -312,7 +312,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 } else {
                     constexpr int kMaxPollMs = 1000;
-                    constexpr auto kPollInterval = std::chrono::milliseconds(5);
+                    constexpr auto kPollInterval = std::chrono::milliseconds(10);
                     for (const tt::ChipId poll_mmio_id : mmio_ids_set) {
                         for (const auto& poll_logical_core :
                              this->get_control_plane_().get_active_ethernet_cores(poll_mmio_id)) {
@@ -480,7 +480,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 } else {
                     constexpr int kMaxPollMs = 1000;
-                    constexpr auto kPollInterval = std::chrono::milliseconds(5);
+                    constexpr auto kPollInterval = std::chrono::milliseconds(10);
                     for (const tt::ChipId poll_mmio_id : mmio_ids_set) {
                         for (const auto& poll_logical_core :
                              this->get_control_plane_().get_active_ethernet_cores(poll_mmio_id)) {
