@@ -659,6 +659,7 @@ def test_per_core_cb_no_collision_on_disjoint_cores(mesh_device, use_from_torch)
     # Allocate I/O first so lockstep places them at top of L1 (no per-core ranges to avoid yet).
     io_tensors = _make_io_tensors(mesh_device, b_grid)
     _per_core_tensor = _alloc_large_per_core_tensor(mesh_device, a_grid, use_from_torch=use_from_torch)
+    assert _per_core_tensor is not None  # keep alive until CB validation runs
 
     # Same-size CB, but on cores B (disjoint from A). Should succeed: per-core tensor on A must
     # not tighten B's budget.
