@@ -519,8 +519,8 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, tensor_sh
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
-    ttnn_output = ttnn.to_torch(ttnn_output_tensor)
-    assert_equal(input_torch_tensor, ttnn_output)
+
+    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

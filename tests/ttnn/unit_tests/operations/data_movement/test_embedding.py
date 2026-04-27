@@ -452,7 +452,7 @@ def test_tg_llama_sharded_embedding(
         ttnn.Shape((batch_size, 32, hidden_embedding_dim)),
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_equal(output_tensor, torch_output_tensor[:, 0, :].unsqueeze(1))
+    assert_equal(torch_output_tensor[:, 0, :].unsqueeze(1), output_tensor)
 
 
 @run_for_wormhole_b0()
@@ -510,7 +510,7 @@ def test_tg_llama_sharded_rm_embedding(device):
             input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config
         )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_equal(output_tensor, torch_output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
     assert device.num_program_cache_entries() == 1
 
 

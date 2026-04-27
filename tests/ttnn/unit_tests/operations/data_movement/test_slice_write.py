@@ -6,12 +6,10 @@ import pytest
 
 import torch
 
-import ttnn
-from tests.ttnn.unit_tests.operations.test_utils import round_up
-from models.common.utility_functions import skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_equal
-import math
 import random
+
+import ttnn
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 def random_torch_tensor(dtype, shape):
@@ -126,5 +124,5 @@ def test_slice_write_nd(rank, layout, device):
     out_host = ttnn.to_torch(tt_out)
     written_region = out_host[slices]
 
-    assert_equal(written_region, torch_src)
-    assert_equal(out_host, torch_out_ref)
+    assert_equal(torch_src, written_region)
+    assert_equal(torch_out_ref, out_host)

@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-from loguru import logger
 from tests.ttnn.utils_for_testing import assert_equal
 
 
