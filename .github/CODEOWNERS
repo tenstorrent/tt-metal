@@ -20,6 +20,9 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 .github/workflows/multi-host-physical.yaml @sjameelTT @aliuTT @cfjchu @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/ttsim.yaml @mcraigheadTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/workflows/models-t2*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/workflows/models-t3*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 /infra/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
