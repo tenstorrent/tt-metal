@@ -10,16 +10,15 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
     get_model_traced_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
     mesh_tensor_to_torch,
-    get_mesh_composer,
 )
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 TIMEOUT = 300
 
@@ -33,10 +32,9 @@ TIMEOUT = 300
 # Until such a golden is implemented, we deliberately *do not* enable the
 # model_traced suite for this op to avoid claiming coverage we do not have.
 #
-# The sample suite below still exercises the operation shape/layout path; the
-# traced configurations will be wired in a follow-up once a proper golden exists.
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-_model_traced_params = loader.get_suite_parameters("transformer::paged_scaled_dot_product_attention_decode")
+model_traced_params = loader.get_suite_parameters("ttnn.transformer.paged_scaled_dot_product_attention_decode")
 
 parameters = {
     "model_traced_sample": {
@@ -61,8 +59,9 @@ parameters = {
     },
 }
 
-if _model_traced_params:
-    parameters["model_traced"] = _model_traced_params
+# Only add model_traced suite if it has valid configurations
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
 
 
 def mesh_device_fixture():
@@ -71,6 +70,7 @@ def mesh_device_fixture():
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
+    del device
 
 
 def run(
@@ -115,53 +115,12 @@ def run(
         shape_d = input_a_shape.get("input_d")
         shape_e = input_a_shape.get("input_e")
     else:
-        # V2 generic loader: input_a_shape is just Q's shape tuple.
-        # Other input shapes are in kwargs as input_b_shape, input_c_shape,
-        # input_d_shape (page_table from positional arg3), and
-        # cur_pos_tensor_shape (from named kwarg).
+        # Fallback for sample configurations
         if isinstance(input_a_shape, (tuple, list)):
-            shape_a = tuple(input_a_shape)
+            shape = tuple(input_a_shape)
         else:
-            shape_a = input_a_shape
-
-        shape_b = kwargs.get("input_b_shape", shape_a)
-        shape_c = kwargs.get("input_c_shape", shape_a)
-
-        # page_table: from positional arg3 (input_d) or named kwarg
-        shape_d = kwargs.get("input_d_shape")
-        if shape_d is None:
-            pt_info = extract_named_tensor_kwargs(kwargs, "page_table_tensor")
-            if pt_info and pt_info["shape"]:
-                shape_d = pt_info["shape"]
-                if input_d_dtype is None:
-                    input_d_dtype = pt_info.get("dtype")
-                if input_d_memory_config is None:
-                    input_d_memory_config = pt_info.get("memory_config")
-
-        # cur_pos: from input_e or named kwarg cur_pos_tensor
-        shape_e = kwargs.get("input_e_shape")
-        if shape_e is None:
-            cp_info = extract_named_tensor_kwargs(kwargs, "cur_pos_tensor")
-            if cp_info and cp_info["shape"]:
-                shape_e = cp_info["shape"]
-                if input_e_dtype is None:
-                    input_e_dtype = cp_info.get("dtype")
-                if input_e_memory_config is None:
-                    input_e_memory_config = cp_info.get("memory_config")
-
-        # Fallback shapes if still None
-        if shape_b is None:
-            shape_b = shape_a
-        if shape_c is None:
-            shape_c = shape_a
-        if shape_d is None:
-            # page_table default: [B, 1024] where B = Q's batch dim (dim 1)
-            B = shape_a[1] if len(shape_a) > 1 else 1
-            shape_d = (B, 1024)
-        if shape_e is None:
-            # cur_pos default: [B] matching page_table's first dim
-            B = shape_d[0] if shape_d else 1
-            shape_e = (B,)
+            shape = input_a_shape
+        shape_a = shape_b = shape_c = shape_d = shape_e = shape
 
     # Use provided params directly - these are optional (None is fine if not in V2 JSON)
     dtype_a = input_a_dtype
@@ -183,13 +142,8 @@ def run(
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(shape_a)
     torch_input_b = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_b)(shape_b)
     torch_input_c = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c)(shape_c)
-    # page_table (input_d) must be INT32 — generate random page indices
-    torch_input_d = torch.randint(0, 64, shape_d, dtype=torch.int32)
-    # cur_pos_tensor (input_e) and page_table (input_d) must be INT32
-    # Override dtype_e to INT32 since master trace requires it for cur_pos
-    dtype_e = ttnn.int32
-    dtype_d = ttnn.int32
-    torch_input_e = torch.randint(0, 128, shape_e, dtype=torch.int32)
+    torch_input_d = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_d)(shape_d)
+    torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_e)(shape_e)
 
     # TODO: Compute a true PyTorch attention golden using traced K/V/page table inputs.
     torch_output_tensor = torch_input_a.clone()
@@ -263,20 +217,22 @@ def run(
     # (input_tensor_q, input_tensor_k, input_tensor_v, page_table_tensor, *, is_causal=True, attn_mask=None, cur_pos_tensor=None, ...)
     # So tensor_a=Q, tensor_b=K, tensor_c=V, tensor_d=page_table, tensor_e=cur_pos
     #
-    # Extract is_causal from op_kwargs to avoid duplicate keyword argument error
-    # (the generic loader may include it as a named kwarg from the master trace).
-    is_causal = op_kwargs.pop("is_causal", True)
+    # The master trace records page_table_tensor as a NAMED kwarg (the model
+    # called it by name), so the sweep must also pass it by name to produce a
+    # matching trace.  Only pass is_causal when the master config includes it
+    # (most traces omit it, relying on the default).
+    is_causal = op_kwargs.pop("is_causal", None)
+    if is_causal is not None:
+        op_kwargs["is_causal"] = is_causal
     output_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q
         tensor_b,  # K
         tensor_c,  # V
-        tensor_d,  # page_table (required positional)
-        is_causal=is_causal,
+        page_table_tensor=tensor_d,
         cur_pos_tensor=tensor_e,
         **op_kwargs,
     )
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
