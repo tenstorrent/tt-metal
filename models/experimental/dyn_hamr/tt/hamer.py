@@ -124,11 +124,6 @@ class TtHamer:
         # already-projected/uploaded tokens skips a CPU Conv2d + ~MB transfer
         # on every call after the first.
         self._patch_cache: dict = {}
-        # Final-output cache: same image + constant x_init → deterministic output.
-        # Keyed by object identity (``is``) — avoids the ~35 ns id() builtin call.
-        # None sentinel never matches a real tensor.
-        self._cached_image = None
-        self._cached_result = None
         # Trace replay state: (trace_id, cached_input_tt, dec_output_tt).
         # Captured lazily on the first repeat call so the warmup forward JITs
         # all kernels first (trace can't capture compilation).  Subsequent
@@ -224,7 +219,6 @@ class TtHamer:
                 )
                 if len(self._patch_cache) >= 4:
                     self._patch_cache.clear()
-                    self._cached_image = None
                 self._patch_cache[cache_key] = tt_tokens
                 # New input — invalidate any captured trace bound to a
                 # different cached token tensor.
@@ -260,10 +254,6 @@ class TtHamer:
                 self._init_betas,
                 self._init_cam,
             )
-            # Populate output cache once the trace is stable.
-            if self._trace is not None:
-                self._cached_image = image
-                self._cached_result = result
             return result
         except Exception as e:
             print(f"[dyn_hamr] tt-nn forward failed: {e}; falling back to CPU ref for this call")
@@ -302,9 +292,6 @@ class TtHamer:
             self._trace = None
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:
-        # ``is`` avoids the ~35 ns id() builtin call; None sentinel never matches.
-        if self._cached_image is image:
-            return self._cached_result
         tt_out = self._forward_device(image)
         if tt_out is not None:
             return tt_out
