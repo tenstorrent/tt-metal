@@ -185,6 +185,10 @@ def test_prefill_block(
         with torch.no_grad():
             torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
         logger.info(f"Embedded input shape: {torch_input.shape}")
+    elif input_source == "abc_1k" and hf_model is None:
+        logger.info("Loading abc_1k torch_input from reference cache")
+        ref_cached = torch.load(torch_ref_cache, weights_only=True)
+        torch_input = ref_cached["torch_input"]
     else:
         torch.manual_seed(123)
         torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
@@ -203,12 +207,28 @@ def test_prefill_block(
                 past_key_value=ref_cache,
                 use_cache=True,
             )
-            torch_output = layer_out[0]
-        logger.info(f"Torch reference output shape: {torch_output.shape}")
-        if ref_cache is not None:
-            ref_kvpe = ref_cache.key_cache[layer_idx]
-            logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
-        profiler.end("torch_reference")
+
+    # Free HF model early
+    if hf_model is not None:
+        del hf_model
+
+    # --- Build TTNN cache if needed ---
+    if not ttnn_cache_complete:
+        logger.info("Building TTNN cache...")
+        profiler.start("ttnn_cache_build")
+        TtPrefillBlock.build_ttnn_cache(
+            state_dict=state_dict,
+            layer_idx=layer_idx,
+            cache_path=cache_dir,
+            mesh_device=mesh_device,
+            config=config,
+            seq_len=isl_total,
+            num_links=num_links,
+            topology=topology,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+        )
+        profiler.end("ttnn_cache_build")
 
         logger.info(f"Saving reference to {torch_ref_cache}")
         torch.save(
