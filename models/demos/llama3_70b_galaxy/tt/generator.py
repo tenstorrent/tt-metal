@@ -169,88 +169,6 @@ class Generator(WarmupForwardMixin):
         self.trace_output_decode = defaultdict(lambda: None)
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
-        self._uniform_seed_replicate_slots = None
-
-    @staticmethod
-    def _compact_values(value, count):
-        if isinstance(value, torch.Tensor):
-            value = value.tolist()
-        if isinstance(value, list):
-            return value[:count]
-        return [value] * count
-
-    @staticmethod
-    def _all_equal(values):
-        return len(values) > 0 and all(value == values[0] for value in values)
-
-    def _should_replicate_uniform_seeded_batch(
-        self,
-        sampling_params,
-        tokens,
-        prompt_lens,
-        empty_slots,
-        num_cached_tokens_list,
-    ):
-        if len(empty_slots) <= 1 or any(num_cached_tokens_list):
-            return False
-
-        active_count = len(empty_slots)
-        active_seeds = self._compact_values(getattr(sampling_params, "seed", None), active_count)
-        if any(seed is None for seed in active_seeds) or not self._all_equal(active_seeds):
-            return False
-
-        if any(self._compact_values(getattr(sampling_params, "enable_log_probs", False), active_count)):
-            return False
-
-        for field_name in (
-            "temperature",
-            "top_k",
-            "top_p",
-            "presence_penalty",
-            "frequency_penalty",
-            "repetition_penalty",
-        ):
-            if not self._all_equal(self._compact_values(getattr(sampling_params, field_name), active_count)):
-                return False
-
-        ref_len = int(prompt_lens[0])
-        ref_tokens = tokens[0, :ref_len]
-        for idx in range(1, active_count):
-            seq_len = int(prompt_lens[idx])
-            if seq_len != ref_len or not torch.equal(tokens[idx, :seq_len], ref_tokens):
-                return False
-
-        return True
-
-    def _replicate_uniform_compact_output(self, output_toks):
-        if self._uniform_seed_replicate_slots is None or len(output_toks) <= 1:
-            return output_toks
-        output_toks = output_toks.clone()
-        output_toks[:] = output_toks[0]
-        return output_toks
-
-    def _replicate_uniform_decode_output(self, output, start_pos):
-        slots = self._uniform_seed_replicate_slots
-        if slots is None:
-            return output
-
-        if not isinstance(start_pos, torch.Tensor):
-            start_pos = torch.tensor(start_pos)
-        active_slots = torch.nonzero(start_pos >= 0, as_tuple=False).flatten().tolist()
-        if active_slots != slots:
-            self._uniform_seed_replicate_slots = None
-            return output
-
-        tokens, log_probs = output
-        if len(slots) <= 1:
-            return output
-
-        tokens = tokens.clone()
-        tokens[slots] = tokens[slots[0]].clone()
-        if log_probs is not None:
-            log_probs = log_probs.clone()
-            log_probs[slots] = log_probs[slots[0]].clone()
-        return tokens, log_probs
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -507,9 +425,6 @@ class Generator(WarmupForwardMixin):
         do_device_sampling = (not return_logits) and (not save_logits_to_host)
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
-        if not do_device_sampling:
-            self._uniform_seed_replicate_slots = None
-
         all_users = [0] if use_batched_prefill else empty_slots
 
         for id, user_id in enumerate(all_users):
@@ -655,18 +570,6 @@ class Generator(WarmupForwardMixin):
             # Setting sampling module up after switch to decode mode
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
-            self._uniform_seed_replicate_slots = (
-                list(empty_slots)
-                if self._should_replicate_uniform_seeded_batch(
-                    sampling_params,
-                    tokens,
-                    prompt_lens,
-                    empty_slots,
-                    num_cached_tokens_list,
-                )
-                else None
-            )
-
             slot_sampling_params = _scatter_sampling_params_to_slots(
                 sampling_params,
                 empty_slots,
@@ -696,7 +599,6 @@ class Generator(WarmupForwardMixin):
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
             output_toks = sampled_tensor[empty_slots]
-            output_toks = self._replicate_uniform_compact_output(output_toks)
 
             if tt_log_probs is not None:
                 tt_lp = tt_log_probs
@@ -1190,10 +1092,7 @@ class Generator(WarmupForwardMixin):
             if async_read:
                 return tt_out
             else:
-                tt_out = self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
-                if not return_logits:
-                    tt_out = self._replicate_uniform_decode_output(tt_out, start_pos)
-                return tt_out
+                return self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
 
         return tt_tok, tt_log_probs
 

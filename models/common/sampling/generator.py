@@ -598,6 +598,8 @@ class SeedManager:
 
     def __init__(self, tt_sampling, max_batch_size=32, cq_id=0):
         self.max_batch_size = max_batch_size
+        self.local_batch_size = tt_sampling.max_batch_size
+        self.sampling_dp = tt_sampling._sampling_dp
         self.cq_id = cq_id
         self.seeds = [None for _ in range(max_batch_size)]
         # Pre-allocate RNG objects; actual seeds are set via reset_seed().
@@ -619,6 +621,24 @@ class SeedManager:
         self._needs_skip = False
         # Match the persistent seed tensor layout owned by TTSampling.
         self._seed_mapper = tt_sampling._seed_mapper
+
+    def _is_local_slot_list(self, user_ids):
+        return self.sampling_dp > 1 and all(0 <= int(user) < self.local_batch_size for user in user_ids)
+
+    def _expanded_user_ids(self, user_ids):
+        """Expand local 0..31 slot ids to every sampling shard when sampling_dp > 1."""
+        user_ids = [int(user) for user in user_ids]
+        if not self._is_local_slot_list(user_ids):
+            return user_ids
+        return [group * self.local_batch_size + user for group in range(self.sampling_dp) for user in user_ids]
+
+    def _seed_for_user(self, seeds, request_idx, expanded_user):
+        # Concatenated per-shard params are already indexed by expanded user id.
+        if self.sampling_dp > 1 and len(seeds) == self.max_batch_size:
+            return seeds[expanded_user]
+        # Otherwise seeds are in compact request order and reset_seed maps them
+        # onto the supplied slot ids.
+        return seeds[request_idx]
 
     def apply_slot_remap(self, remap):
         """Reindex RNG state after batch condense.
@@ -653,10 +673,26 @@ class SeedManager:
             seeds: List of seed values (int or None) for each user in ``user_ids``.
             user_ids: Batch slot indices being prefilled.
         """
+        if isinstance(seeds, torch.Tensor):
+            seeds = seeds.tolist()
+        elif isinstance(seeds, tuple):
+            seeds = list(seeds)
+        elif not isinstance(seeds, list):
+            seeds = [seeds]
+
+        user_ids = [int(user) for user in user_ids]
+        local_slots = self._is_local_slot_list(user_ids)
         for i, user in enumerate(user_ids):
-            self.seeds[user] = seeds[i]
-            # Re-seed the RNG; use random seed as fallback when no explicit seed is given.
-            self.rngs[user].seed(seeds[i] if seeds[i] is not None else secrets.randbits(64))
+            expanded_users = (
+                [group * self.local_batch_size + user for group in range(self.sampling_dp)]
+                if local_slots
+                else [user]
+            )
+            for expanded_user in expanded_users:
+                seed = self._seed_for_user(seeds, i, expanded_user)
+                self.seeds[expanded_user] = seed
+                # Re-seed the RNG; use random seed as fallback when no explicit seed is given.
+                self.rngs[expanded_user].seed(seed if seed is not None else secrets.randbits(64))
         # Mark seeds active only when at least one slot has an explicit seed.
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
@@ -694,8 +730,13 @@ class SeedManager:
         ``reset_seed`` always sets ``_reseted=True``, so any new prefill
         re-enters state 1 to refresh the device RNG.
         """
+        requested_empty_slots = None
         if empty_slots is None:
-            empty_slots = range(self.max_batch_size)
+            expanded_empty_slots = list(range(self.max_batch_size))
+        else:
+            requested_empty_slots = [int(slot) for slot in empty_slots]
+            expanded_empty_slots = self._expanded_user_ids(requested_empty_slots)
+        active_slots = set(expanded_empty_slots)
 
         if not self._seed_active:
             if self._reseted:
@@ -716,11 +757,12 @@ class SeedManager:
         else:
             # Advance RNG for each user in empty_slots; non-active slots get MAX_UINT32.
             new_seeds = [
-                rng.randint(0, 1000000) if i in empty_slots else MAX_UINT32 for i, rng in enumerate(self.rngs)
+                rng.randint(0, 1000000) if i in active_slots else MAX_UINT32 for i, rng in enumerate(self.rngs)
             ]
             if replicate_seeds:
-                assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
-                new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
+                if requested_empty_slots is not None:
+                    assert len(requested_empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
+                new_seeds = self.max_batch_size * [new_seeds[expanded_empty_slots[0]]]
 
         new_seed_tt = ttnn.from_torch(
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
