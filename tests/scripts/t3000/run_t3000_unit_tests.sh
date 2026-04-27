@@ -201,6 +201,21 @@ run_t3000_ttnn_tests() {
   # PhaseZFixture: FIX Z regression — relay-broken CQ fast-throw accessor check.
   timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
     --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*' ; record_test
+
+  # GAP regression tests — validate race condition / ETH hang fixes.
+  # Each test is a direct regression for one or more numbered fixes.
+  # Run with timeout to ensure CI doesn't hang indefinitely on a regression.
+  # GAP-21: Rapid AllGather+quiesce stress (FIX AE/AF/AN)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
+  # GAP-22: AllGather interrupted mid-flight by mesh close (FIX AO/AP/AD)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
+  # GAP-23: Partial-mesh quiesce cycling with AllGather (FIX AK/AM/AE)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
+  # GAP-24: Rapid mesh close/reopen cycling under FABRIC_2D (FIX AD/AC/AL/AQ)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
+  # GAP-25: Back-to-back AllGather without explicit sync (FIX AE/AF)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
