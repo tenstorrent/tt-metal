@@ -78,7 +78,7 @@ using namespace ckernel;
 // =============================================================================
 
 template <Approx approx, Approx fast, Dst Slot>
-ALWI void Exp<approx, fast, Slot>::init() const { exp_tile_init<static_cast<bool>(approx), static_cast<bool>(fast)>(); }
+ALWI void Exp<approx, fast, Slot>::init() const { exp_tile_init<static_cast<bool>(approx)>(); }
 template <Approx approx, Approx fast, Dst Slot>
 ALWI void Exp<approx, fast, Slot>::call(uint32_t d0) const { exp_tile<static_cast<bool>(approx), static_cast<bool>(fast)>(d0); }
 
