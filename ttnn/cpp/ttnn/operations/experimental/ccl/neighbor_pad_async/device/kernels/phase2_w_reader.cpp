@@ -107,7 +107,7 @@ void kernel_main() {
                     uint32_t input_col = direction ? (num_interior_sticks - 1) : 0;
                     uint32_t src_stick = input_row_base + input_col;
                     uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                    noc_async_read(get_noc_addr(src_stick, src_accessor), dst_l1_addr, stick_size);
+                    noc_async_read(src_accessor.get_noc_addr(src_stick), dst_l1_addr, stick_size);
                     noc_async_read_barrier();
                 }
                 cb_push_back(cb_output_id, 1);
@@ -128,7 +128,7 @@ void kernel_main() {
                         uint32_t input_col = direction ? (padding - pad_id) : (num_interior_sticks - pad_id);
                         uint32_t src_stick = input_row_base + input_col;
                         uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                        noc_async_read(get_noc_addr(src_stick, src_accessor), dst_l1_addr, stick_size);
+                        noc_async_read(src_accessor.get_noc_addr(src_stick), dst_l1_addr, stick_size);
                         noc_async_read_barrier();
                     }
                     cb_push_back(cb_output_id, 1);
@@ -166,7 +166,7 @@ void kernel_main() {
                     // direction=0: leftmost interior col; direction=1: rightmost
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
                     uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                    noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                    noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                     noc_async_read_barrier();
                 }
                 cb_push_back(cb_output_id, 1);
@@ -183,7 +183,7 @@ void kernel_main() {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);
                         uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                        noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                        noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                         noc_async_read_barrier();
                     }
                     cb_push_back(cb_output_id, 1);
@@ -204,7 +204,7 @@ void kernel_main() {
                 } else {
                     uint32_t col = direction ? (pad2_left + num_interior_sticks - 1) : pad2_left;
                     uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                    noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                    noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                     noc_async_read_barrier();
                 }
                 cb_push_back(cb_output_id, 1);
@@ -221,7 +221,7 @@ void kernel_main() {
                         uint32_t col = direction ? (pad2_left + (padding - pad_id))
                                                  : (pad2_left + num_interior_sticks - pad_id);
                         uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                        noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                        noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                         noc_async_read_barrier();
                     }
                     cb_push_back(cb_output_id, 1);

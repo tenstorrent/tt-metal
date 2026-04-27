@@ -234,7 +234,7 @@ class TtMultiHeadAttentionModel:
             else:
                 qkv_bias_torch = torch.cat((qb, kb, vb), -1)
 
-            qkv_bias_torch = pad_weight(qkv_bias_torch)
+            qkv_bias_torch = qkv_bias_torch.reshape(1, 1, 1, -1)
 
             return ttnn.from_torch(
                 qkv_bias_torch,
@@ -250,7 +250,7 @@ class TtMultiHeadAttentionModel:
         )
 
         qkv_bias = load_or_compute_and_cache(
-            qkv_bias_cache_path,
+            None,
             compute_qkv_bias,
             device=device,
             mem_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],

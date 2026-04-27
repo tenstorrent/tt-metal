@@ -40,7 +40,7 @@ void kernel_main() {
     // Phase A: zero-fill this core's slice of the T-front output region.
     // Covers all H positions (interior + H-halo) at T < t_front_pad.
     for (uint32_t s = 0; s < zero_fill_count; ++s) {
-        uint64_t dst_noc_addr = get_noc_addr(zero_fill_start + s, dst_accessor);
+        uint64_t dst_noc_addr = dst_accessor.get_noc_addr(zero_fill_start + s);
         noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, stick_size);
         noc_async_write_barrier();
     }
@@ -58,7 +58,7 @@ void kernel_main() {
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_wait_front(cb_output_id, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+            uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
             // For masked rows: drain the CB but write zeros to DRAM instead of CB data.
             noc_async_write(masked ? (uint32_t)MEM_ZEROS_BASE : l1_read_addr, dst_noc_addr, stick_size);
             dst_stick_id++;
