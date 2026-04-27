@@ -1311,6 +1311,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::optional<DeviceAddr> lowest_address =
         device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
+    const auto& allocator = device->allocator_impl();
+    const bool hybrid_mode = allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
+
+    // In HYBRID mode, per-core allocations live on each per-device allocator (not the mesh
+    // allocator). Collect the physical allocators we must consult so we can see per-core state.
+    std::vector<AllocatorImpl*> physical_allocators;
+    if (hybrid_mode) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                physical_allocators.push_back(dev->allocator_impl().get());
+            }
+        } else {
+            physical_allocators.push_back(allocator.get());
+        }
+    }
 
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
@@ -1324,6 +1339,23 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_allocator.core_range.str(),
                 cb_region_end,
                 max_l1_size);
+        }
+        if (hybrid_mode) {
+            // Per-core allocations (experimental_set_per_core_allocation) can land at different
+            // addresses per core, so query only the banks this CB covers on each physical allocator.
+            // Prevents per-core tensors on unrelated cores from spuriously tightening this CB's
+            // budget, and lets us see per-core state that lives on per-device (not mesh) allocators.
+            lowest_address = std::nullopt;
+            for (const auto& core : cb_allocator.core_range) {
+                for (auto* phys_alloc : physical_allocators) {
+                    auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
+                    if (addr.has_value()) {
+                        lowest_address =
+                            lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
+                    }
+                }
+            }
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
             TT_THROW(
