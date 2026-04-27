@@ -247,7 +247,7 @@ def bge_m3_attention_output_compute_kernel_config(
 ) -> ttnn.WormholeComputeKernelConfig:
     """Attention output projection compute config.
 
-    B1/S512 sweep: test HiFi2 on the BFP8 x BFP8 attention ``Wo`` matmul only, keeping QKV on default HiFi4.
+    B1/S512 sweep: test HiFi2 on the BFP8 x BFP8 attention ``Wo`` matmul only.
     """
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
     if max_seq_len == 512 and max_batch == 1:
@@ -303,8 +303,12 @@ def bge_m3_sdpa_compute_kernel_config(
     max_seq_len: int | None = None,
     max_batch_size: int | None = None,
 ) -> ttnn.WormholeComputeKernelConfig:
-    """SDPA compute config: same HiFi2/HiFi4 and ``packer_l1_acc`` rules as ``bge_m3_matmul_compute_kernel_config``."""
-    if ttnn_is_blackhole(mesh_device) or is_wormhole_family_device(mesh_device):
+    """SDPA compute config: B1/S512 uses HiFi2; other long-seq paths keep the established HiFi4 policy."""
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    b1s512 = max_seq_len == 512 and max_batch == 1
+    if b1s512:
+        sdpa_fidelity = ttnn.MathFidelity.HiFi2
+    elif ttnn_is_blackhole(mesh_device) or is_wormhole_family_device(mesh_device):
         sdpa_fidelity = ttnn.MathFidelity.HiFi4
     else:
         sdpa_fidelity = ttnn.MathFidelity.HiFi2
