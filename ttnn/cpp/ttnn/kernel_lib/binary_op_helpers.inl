@@ -97,9 +97,14 @@ ALWI constexpr uint32_t get_binary_dst_index(AccumT accum) {
 // =============================================================================
 
 template <BinaryOpType op_type, BroadcastDim bcast_dim>
-ALWI void binary_init(uint32_t icb_a, uint32_t icb_b) {
+ALWI void binary_init(uint32_t icb_a, uint32_t icb_b, uint32_t call_line) {
     constexpr EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
     constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
+
+    // Reset unpacker layout — required when binary_init follows a matmul-path consumer
+    // (e.g. reduce<>, which leaves the unpacker in matmul state via state_configure).
+    // Matches the pattern in eltwise_binary.h::binary_tiles_init.
+    state_configure(icb_a, icb_b, call_line);
 
     // MUL uses configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
     if constexpr (op_type == BinaryOpType::MUL) {

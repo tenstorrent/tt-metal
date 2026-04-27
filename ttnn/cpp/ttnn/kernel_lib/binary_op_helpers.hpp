@@ -201,7 +201,7 @@ struct BinaryAccumulate {
  * control over initialization timing.
  */
 template <BinaryOpType op_type, BroadcastDim bcast_dim>
-ALWI void binary_init(uint32_t icb_a, uint32_t icb_b);
+ALWI void binary_init(uint32_t icb_a, uint32_t icb_b, uint32_t call_line = __builtin_LINE());
 
 /**
  * @brief Execute a single binary tile operation
