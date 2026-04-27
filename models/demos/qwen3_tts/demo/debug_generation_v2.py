@@ -161,7 +161,7 @@ def main():
 
     talker.model.forward = patched_forward
 
-    wavs, sr = model.generate_voice_clone(
+    _ = model.generate_voice_clone(
         text=target_text,
         language="English",
         ref_audio=ref_audio_path,

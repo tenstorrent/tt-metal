@@ -83,7 +83,7 @@ def main():
     ref_text = "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you."
     target_text = "Hello, this is a test."
 
-    prompt_items = model.create_voice_clone_prompt(
+    model.create_voice_clone_prompt(
         ref_audio=ref_audio_path,
         ref_text=ref_text,
     )
@@ -235,10 +235,6 @@ def main():
         h = F.linear(text_embeds, text_proj_fc1_weight, text_proj_fc1_bias)
         h = F.silu(h)
         return F.linear(h, text_proj_fc2_weight, text_proj_fc2_bias)
-
-    tts_pad_token_id = 151671
-    tts_pad_tokens = torch.tensor([[tts_pad_token_id]])
-    tts_pad_embed = project_text(F.embedding(tts_pad_tokens, text_embed_weight))
 
     # NOTE: Testing without tts_pad addition to see if that's the source of divergence
     # Add tts_pad to last position (streaming mode)
