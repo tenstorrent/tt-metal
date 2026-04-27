@@ -90,7 +90,7 @@ class YOLOv11PerformanceRunnerInfra:
         )
         return tt_inputs_host, input_mem_config
 
-    def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+    def setup_dram_sharded_input(self, device):
         tt_inputs_host, input_mem_config = self._setup_l1_sharded_input(device)
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(

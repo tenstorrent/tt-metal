@@ -11,13 +11,6 @@ from models.demos.yolov11l.reference.yolov11 import Conv, YoloV11
 from models.demos.yolov11l.tt.common import get_mesh_mappers
 
 
-def _as_plain_torch_tensor(tensor: torch.Tensor) -> torch.Tensor:
-    """Convert tensor subclasses (e.g. TracedTorchTensor) to base torch.Tensor."""
-    if type(tensor) is torch.Tensor:
-        return tensor
-    return tensor.as_subclass(torch.Tensor)
-
-
 def create_yolov11_input_tensors(
     device, batch=1, input_channels=3, input_height=640, input_width=640, is_sub_module=True
 ):
@@ -79,7 +72,7 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5, mesh_mapper=None)
     )
 
 
-def custom_preprocessor(model, name, mesh_mapper=None):
+def custom_preprocessor(model, _name, mesh_mapper=None):
     parameters = {}
     if isinstance(model, nn.Conv2d):
         parameters["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
@@ -105,7 +98,6 @@ def create_yolov11_model_parameters(model: YoloV11, input_tensor: torch.Tensor, 
         custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
-    parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
     parameters["model_args"] = model
@@ -136,7 +128,6 @@ def create_yolov11_model_parameters_detect(
         custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
-    parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(
         model=model, run_model=lambda model: model(input_tensor_1, input_tensor_2, input_tensor_3), device=None
     )

@@ -4,7 +4,6 @@
 
 
 import pytest
-from loguru import logger
 
 from models.common.utility_functions import is_wormhole_b0
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -42,8 +41,6 @@ def test_perf_device_bare_metal_yolov11(name_suffix, batch_size, resolution, exp
         op_support_count=6000,
     )
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
-
-    logger.info(f"{expected_results}")
 
     prep_device_perf_report(
         model_name=f"ttnn_yolov11l_{name_suffix}",

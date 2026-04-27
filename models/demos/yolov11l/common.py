@@ -9,7 +9,6 @@ from ultralytics import YOLO
 
 from models.demos.yolov11l.reference import yolov11
 
-YOLOV11_SUPPORTED_INPUT_RESOLUTIONS = (640, 1280)
 YOLOV11_DEFAULT_INPUT_H = 640
 YOLOV11_DEFAULT_INPUT_W = 640
 
