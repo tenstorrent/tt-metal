@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv, os, threading, time, torch, ttnn
+import os, threading, time, torch, ttnn
 
 
 def main():

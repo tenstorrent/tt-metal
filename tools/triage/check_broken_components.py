@@ -123,6 +123,8 @@ def verify_halted_cores(run_checks: RunChecks) -> None:
             try:
                 risc_debug.halt()
             except Exception:
+                # Transient halt failures are tolerated here; we only declare
+                # the core broken if every retry below also fails to re-halt.
                 pass
             if risc_debug.is_halted():
                 return None
