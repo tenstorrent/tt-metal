@@ -760,7 +760,7 @@ def test_binary_bitwise_right_shift(device):
 )
 @pytest.mark.parametrize(
     "ttnn_op",
-    [ttnn.lt, ttnn.gt],
+    [ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge],
 )
 def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, device):
     num_elements = max(int(torch.prod(torch.tensor(shape)).item()), 1)
@@ -794,6 +794,53 @@ def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, 
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+# TODO: Need to add support for (tensor,scalar) in uint16
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (torch.Size([1, 1, 64, 128])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a",
+    [
+        (0, 65535),
+        (1000, 10000),
+        (30000, 40000),
+    ],
+)
+@pytest.mark.parametrize(
+    "scalar",
+    [0.0, 1.0, 500.5, 32767.5, 65535.0],
+)
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge],
+)
+def test_binary_relational_uint16_float_scalar(shape, low_a, high_a, scalar, ttnn_op, device):
+    num_elements = max(int(torch.prod(torch.tensor(shape)).item()), 1)
+    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
+    corner_cases = torch.tensor([0, 1, 65535], dtype=torch.int32)
+    torch_input_tensor_a = torch.cat([torch_input_tensor_a, corner_cases])
+    torch_input_tensor_a = torch_input_tensor_a[-num_elements:].reshape(shape)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn_op(input_tensor_a, scalar, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
