@@ -54,6 +54,14 @@ IGNORED_KEYS = frozenset(
     }
 )
 
+# Keys inside tensor descriptors (argN dicts) that differ between DB-stored
+# master traces and live sweep traces due to different serialization versions.
+# Master traces store tensor_placement but not dtype/shape; sweep traces store
+# dtype/shape but not tensor_placement.  Both describe the same tensor.
+_TENSOR_DESCRIPTOR_NOISE_KEYS = frozenset(
+    {"tensor_placement", "dtype", "shape", "shard_spec"}
+)
+
 
 def _normalize_distribution_shape(value: Any) -> Any:
     """Canonicalize distribution_shape to total device count.
@@ -221,8 +229,17 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """
     if isinstance(obj, dict):
         result = {}
+        # Detect if this dict is a tensor descriptor (parent is argN)
+        _is_tensor_desc = bool(
+            _parent_key and (
+                _parent_key.startswith("arg") and _parent_key[3:].isdigit()
+            )
+        )
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
+                continue
+            # Strip tensor-descriptor-specific noise keys (only inside argN dicts)
+            if _is_tensor_desc and k in _TENSOR_DESCRIPTOR_NOISE_KEYS:
                 continue
             # memory_config.hash is a device pointer — always differs between runs; skip numeric values only
             if k == "hash" and isinstance(v, (int, float)):
@@ -232,7 +249,9 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
                 continue
             # Filter None-valued keys — treat None as equivalent to absent.
             # This handles cases like compute_kernel_config=None vs absent.
-            if v is None:
+            # Also treat the string "None" the same way — the operation_tracer
+            # uses json.dump(default=str) which converts Python None to "None".
+            if v is None or v == "None":
                 continue
             # storage_type can differ between HOST and DEVICE when running on
             # a different topology than the trace was captured on — ignore it.
