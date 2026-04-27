@@ -834,10 +834,21 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, NonTensixBinaryInConfigContiguousAlloc
     auto allocator = make_allocator(256);
     allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
 
+    const auto& program_config = program->get_program_config(*core_index);
+    constexpr uint32_t full_config_size = 32 + 16;
+    constexpr uint32_t expected_config_base = 256 - full_config_size;
     // The non-binary allocation covers the full config size (32 + 16 = 48) because
-    // there is no separate binary write offset for non-TENSIX core types.
-    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
-    // Binary is not separately allocated; binary_addr stays at 0.
+    // there is no separate binary write offset for non-TENSIX core types. Full configs
+    // are short-lived and packed top-down, so the single allocation starts at 256 - 48 = 208.
+    EXPECT_EQ(program->get_program_config_sizes()[*core_index], full_config_size);
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, expected_config_base);
+    // Binary is not separately allocated. It remains contiguous with the config base via kernel_text_offset.
+    EXPECT_EQ(program_config.kernel_text_offset, 32u);
+    EXPECT_EQ(
+        trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr +
+            program_config.kernel_text_offset,
+        240u);
+    // The separate binary address is unused for this core type and stays at 0.
     EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 0u);
     EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
 }
@@ -859,9 +870,15 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, NonTensixBinaryInConfigTwoPrograms) {
     auto allocator = make_allocator(256);
     allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
 
-    // Each program gets a full config allocation (32 + 16 = 48 bytes each).
-    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
-    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 48u);
+    constexpr uint32_t full_config_size = 32 + 16;
+    // Each program gets a full config allocation (32 + 16 = 48 bytes each), packed top-down.
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 256u - full_config_size);
+    EXPECT_EQ(
+        trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr,
+        256u - 2 * full_config_size);
+    EXPECT_EQ(
+        trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr + full_config_size,
+        trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr);
     EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
     EXPECT_TRUE(trace_nodes[1].dispatch_metadata.send_binary);
 }
