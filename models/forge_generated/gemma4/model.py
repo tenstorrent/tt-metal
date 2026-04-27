@@ -15,23 +15,14 @@ from gemma4.layer_table import LAYER_TABLE_DECODE, LAYER_TABLE_PREFILL
 import ttnn
 
 
-class Gemma4Model:
-    """Decoder-only stack: scaled embed → preludes → 60 layers → final
-    norm. Placeholder; the real body lives in Gemma4ForCausalLM until
-    a future commit splits the postlude out.
-    """
-
-    def __init__(self, *, is_decode):
-        self._is_decode = is_decode
-
-
 class Gemma4ForCausalLM:
-    """Full Gemma4 forward: embedding → preludes → decoder layer loop →
-    L58/L59 specials → LMHead postlude. Returns the legacy `_main`
-    return tuple (logits + per-layer KV outputs in the order the
-    codegen captured).
+    """Full Gemma4 forward: embedding → preludes → 60-layer loop → LMHead.
 
-    `is_decode` is fixed at construction time.
+    `is_decode` is fixed at construction time. Decode runs L0..L58 in
+    the regular layer loop and L59 (terminal) as `self.l59(...)`.
+    Prefill runs L0..L57 in the loop and treats L58/L59 explicitly
+    (L58 has dead prestage concats in the codegen; L59 is terminal).
+    `__call__` returns the LMHead logits tensor.
     """
 
     def __init__(
@@ -62,7 +53,6 @@ class Gemma4ForCausalLM:
         # bf16 (1,1,256,1) one_hot helper used to build the causal mask
         # at the top of _call_*.
         self.causal_mask_one_hot = causal_mask_one_hot
-        self.model = Gemma4Model(is_decode=is_decode)
 
     def __call__(self, input):
         if self._is_decode:

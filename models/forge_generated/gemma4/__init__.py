@@ -29,7 +29,7 @@ from gemma4.runtime_inputs import (
     synthesize_decode_inputs,
 )
 from gemma4.layer_table import LAYER_TABLE_PREFILL, LAYER_TABLE_DECODE
-from gemma4.model import Gemma4Model, Gemma4ForCausalLM
+from gemma4.model import Gemma4ForCausalLM
 
 __all__ = [
     "RMSNorm",
@@ -48,6 +48,5 @@ __all__ = [
     "synthesize_decode_inputs",
     "LAYER_TABLE_PREFILL",
     "LAYER_TABLE_DECODE",
-    "Gemma4Model",
     "Gemma4ForCausalLM",
 ]
