@@ -31,6 +31,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+
+class BoundMigrationEndpoint:
+    """Wraps a MigrationLayerEndpoint with a fixed remote_endpoint_id.
+
+    Passed as migration_layer into TtDeepSeekPrefillPipeline so that the
+    per-layer callback in MLA never needs to know about endpoint topology.
+    """
+
+    def __init__(self, endpoint, remote_endpoint_id: int):
+        self._endpoint = endpoint
+        self._remote_id = remote_endpoint_id
+
+    def migrate_layer(self, layer: int, pos_start: int, pos_end: int, src_slot: int, dst_slot: int):
+        return self._endpoint.migrate_layer(self._remote_id, layer, pos_start, pos_end, src_slot, dst_slot)
+
+
 import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
@@ -244,6 +260,22 @@ class TtDeepSeekPrefillPipeline:
             ),
         )
 
+    def setup_migration(self, endpoint, remote_endpoint_id: int) -> None:
+        """Wire up the migration endpoint after compile().
+
+        Wraps endpoint in BoundMigrationEndpoint so that the per-layer
+        callback never needs to know the remote endpoint ID directly.
+
+        Call this on rank 0 only. Worker ranks leave migration_layer=None
+        so their _build_migration_callback returns None and MLA skips migration.
+
+        Args:
+            endpoint: MigrationLayerEndpoint from make_mpi_endpoint_device().
+            remote_endpoint_id: The decode side's endpoint ID (pre-agreed at startup).
+        """
+        assert self.compiled, "Call compile() before setup_migration()"
+        self.migration_layer = BoundMigrationEndpoint(endpoint, remote_endpoint_id)
+
     def _build_migration_callback(self, slot_id: int, actual_isl: int):
         """Build the per-layer migration callback passed to MLA via forward().
 
@@ -259,15 +291,9 @@ class TtDeepSeekPrefillPipeline:
         mesh_device = self.mesh_device
         migration_layer = self.migration_layer
 
-        def on_layer_complete(layer_idx, kvpe_cache):
+        def on_layer_complete(layer_idx: int) -> None:
             ttnn.synchronize_device(mesh_device)
-            migration_layer.migrate_slot(
-                layer=layer_idx,
-                pos_start=0,
-                pos_end=actual_isl,
-                src_slot=slot_id,
-                dst_slot=slot_id,
-            )
+            migration_layer.migrate_layer(layer_idx, 0, actual_isl, slot_id, slot_id)
 
         return on_layer_complete
 

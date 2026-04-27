@@ -503,7 +503,7 @@ class ttMLA:
         rope_tensors: dict,
         kvpe_cache: ttnn.Tensor,
         cache_user_idx: int = 0,
-        on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
     ) -> ttnn.Tensor:
         num_heads_local = self.num_heads // self.tp_factor
@@ -668,7 +668,7 @@ class ttMLA:
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_user_idx)
 
         if on_layer_complete is not None:
-            on_layer_complete(self.layer_idx, kvpe_cache)
+            on_layer_complete(self.layer_idx)
 
         tt_v_embedding = ttnn.linear(
             tt_kv_nope,
