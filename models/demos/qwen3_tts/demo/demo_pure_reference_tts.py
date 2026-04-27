@@ -39,10 +39,16 @@ def _existing_user_audio_path(path: str) -> Path:
     p = Path(path).expanduser()
     if ".." in p.parts:
         raise ValueError(f"Invalid audio path: {path!r}")
-    p = p.resolve()
-    if not p.is_file():
+
+    resolved = p.resolve()
+    allowed_roots = (Path.cwd().resolve(), Path.home().resolve(), Path("/tmp").resolve())
+    if not any(root == resolved or root in resolved.parents for root in allowed_roots):
+        roots = ", ".join(str(root) for root in allowed_roots)
+        raise ValueError(f"Audio path must resolve under one of: {roots}")
+
+    if not resolved.is_file():
         raise FileNotFoundError(path)
-    return p
+    return resolved
 
 
 @dataclass
