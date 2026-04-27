@@ -237,7 +237,7 @@ void kernel_main() {
                 for (uint32_t r = 0; r < TILE_H; ++r) {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_idx = tr_global * TILE_H + r;
-                    if (flat == SENTINEL || row_idx >= active_end_row) {
+                    if (flat == SENTINEL) {
                         continue;
                     }
                     noc_async_read(get_noc_addr(flat, md_addrgen), md_buf_addr + r * md_aligned_page, md_aligned_page);
@@ -249,7 +249,7 @@ void kernel_main() {
                 for (uint32_t r = 0; r < TILE_H; ++r) {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_idx = tr_global * TILE_H + r;
-                    if (flat == SENTINEL || row_idx >= active_end_row) {
+                    if (flat == SENTINEL) {
                         w_buf[r] = 0.0f;
                         is_first[r] = false;
                         continue;
@@ -330,7 +330,7 @@ void kernel_main() {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_idx = tr_global * TILE_H + r;
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
-                    if (flat == SENTINEL || row_idx >= active_end_row) {
+                    if (flat == SENTINEL) {
                         // Skipped row — fill via NOC DMA so tilize sees zeros.
                         fill_zeros_async(row_buf, hidden_chunk_bytes);
                         continue;
@@ -351,7 +351,7 @@ void kernel_main() {
                     for (uint32_t r = 0; r < TILE_H; ++r) {
                         uint32_t flat = plan_buf[r];
                         uint32_t row_idx = tr_global * TILE_H + r;
-                        if (flat == SENTINEL || row_idx >= active_end_row) {
+                        if (flat == SENTINEL) {
                             continue;
                         }
                         uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;

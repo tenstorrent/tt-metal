@@ -75,16 +75,13 @@ def moe_ungroup_torch_reference(
     sentinel = int(SENTINEL)
     for e in range(E_local):
         eid = int(leids_np[e])
-        start = int(offsets_np[e])
-        n = int(counts_np[e])
-        end = start + n
         for i in range(int(offsets_np[e]), int(offsets_np[e + 1])):
             flat = int(plan_np[i])
             if flat == sentinel:
-                continue
-            if i >= end:
-                # Past the active region for this expert (per-core SENTINEL pad).
-                # plan[i] should be SENTINEL there, but guard anyway.
+                # Pad slot (per-core round_up_4 padding or tile-alignment tail).
+                # Real entries can be interleaved with SENTINELs across the
+                # whole [offsets[e], offsets[e+1]) range — do NOT cut off at
+                # offsets[e]+counts[e]; the SENTINEL check is what filters pads.
                 continue
             # Decode (d_, b_, s_) from flat = d_*B*S + b_*S + s_
             d_ = flat // (b * s)
@@ -308,9 +305,16 @@ class TestMoeUngroupDevice:
         le_tt = _to_device_tensor(local_expert_ids.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint16)
         scores_tt = _to_device_tensor(scores.float(), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
 
-        grouped, counts, offsets, plan, grouped_t, counts_t, offsets_t, plan_t = (
-            TestMoeUngroupDevice._build_group_inputs(dispatched, metadata, local_expert_ids, k)
-        )
+        (
+            grouped,
+            counts,
+            offsets,
+            plan,
+            grouped_t,
+            counts_t,
+            offsets_t,
+            plan_t,
+        ) = TestMoeUngroupDevice._build_group_inputs(dispatched, metadata, local_expert_ids, k)
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
         ttnn.synchronize_device(device)
@@ -502,16 +506,36 @@ class TestMoeUngroupProfile:
         # Warmup.
         for _ in range(warmup):
             ttml.ops.metal_ops.moe_ungroup(
-                grouped, plan, offsets, counts, md_tt, sc_tt, le_tt,
-                int(E_local), int(K), int(D), int(B), int(S),
+                grouped,
+                plan,
+                offsets,
+                counts,
+                md_tt,
+                sc_tt,
+                le_tt,
+                int(E_local),
+                int(K),
+                int(D),
+                int(B),
+                int(S),
             )
         ttnn.synchronize_device(device)
 
         # Timed iters with per-iter profiler flush.
         for _ in range(num_iters):
             ttml.ops.metal_ops.moe_ungroup(
-                grouped, plan, offsets, counts, md_tt, sc_tt, le_tt,
-                int(E_local), int(K), int(D), int(B), int(S),
+                grouped,
+                plan,
+                offsets,
+                counts,
+                md_tt,
+                sc_tt,
+                le_tt,
+                int(E_local),
+                int(K),
+                int(D),
+                int(B),
+                int(S),
             )
             ttnn.synchronize_device(device)
             ttnn.ReadDeviceProfiler(device)
