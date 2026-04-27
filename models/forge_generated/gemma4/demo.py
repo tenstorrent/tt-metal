@@ -1,24 +1,17 @@
-"""Gemma4-31B-it single-step demo — tokenize a question, run prefill,
-print the predicted next token.
+"""Gemma4-31B-it multi-token generation demo.
 
-The codegen artifact bakes prefill seq_len=19 into the model
-(the input slot 7 has shape [1, 19]). So the prompt — wrapped by
-gemma's chat template — must fit in 19 tokens. Short questions like
-"What is your favorite city?" wrap to exactly 19 tokens.
+Runs prefill in a loop: at each step the prompt + tokens-generated-so-far
+are padded to seq_len, fed through the prefill model, and the logits at
+the last "real" position give the next token. The generated tokens
+accumulate until either max_new_tokens is reached or seq_len fills up.
 
-This is a *single-token* demo: it shows the model produces a sensible
-next-token prediction for a user prompt. Full multi-token generation
-needs a Generator class that threads KV cache state from prefill
-output → decode input — see gap analysis #1 (HIGH priority).
+This uses prefill-only (the codegen prefill body is what we have a
+verified PCC for). True decode-mode continuation would need KV-cache
+handoff between prefill and decode — out of scope for this demo.
 
 Usage:
     python -m gemma4.demo "What is your favorite city?"
-    python -m gemma4.demo "Why is the sky blue?"
-
-Environment:
-    Activated venv (`source venv/activate`), TT_MLIR_HOME set,
-    PYTHONPATH including {TT_METAL_RUNTIME_ROOT}/ttnn (the legacy
-    `gemma4_prefill/run` script set these for the test harness).
+    python -m gemma4.demo "Why is the sky blue?" --seq-len 64 --max-new-tokens 32
 """
 import argparse
 
@@ -29,11 +22,11 @@ from transformers import AutoTokenizer
 
 import ttnn
 
-PREFILL_SEQ_LEN = 19  # baked into the codegen
 
-
-def _tokenize(prompt: str, tokenizer) -> list[int]:
-    """Apply gemma's chat template + tokenize. Pad/truncate to PREFILL_SEQ_LEN."""
+def _tokenize_prompt(prompt: str, tokenizer) -> list[int]:
+    """Apply gemma's chat template + tokenize. Returns the un-padded
+    list of token IDs (length = chat-template-wrapped prompt length).
+    """
     messages = [{"role": "user", "content": prompt}]
     enc = tokenizer.apply_chat_template(
         messages,
@@ -41,21 +34,20 @@ def _tokenize(prompt: str, tokenizer) -> list[int]:
         return_tensors="pt",
         return_dict=True,
     )
-    ids = enc["input_ids"][0].tolist()
-    if len(ids) > PREFILL_SEQ_LEN:
-        print(f"[warn] prompt is {len(ids)} tokens after chat-template; " f"truncating to {PREFILL_SEQ_LEN}.")
-        ids = ids[:PREFILL_SEQ_LEN]
-    elif len(ids) < PREFILL_SEQ_LEN:
-        pad_id = tokenizer.pad_token_id or 0
-        print(f"[info] padding from {len(ids)} → {PREFILL_SEQ_LEN} tokens " f"(pad_id={pad_id}).")
-        ids = ids + [pad_id] * (PREFILL_SEQ_LEN - len(ids))
-    return ids
+    return enc["input_ids"][0].tolist()
 
 
-def _override_token_ids(runtime: dict, ids: list[int], device) -> None:
-    """Replace runtime[7] with the user's tokenized prompt."""
-    user_tokens = torch.tensor(ids, dtype=torch.int32).reshape(1, PREFILL_SEQ_LEN)
-    runtime[7] = ttnn.as_tensor(
+def _build_token_slot(ids: list[int], seq_len: int, pad_id: int, device):
+    """Pad/truncate `ids` to length `seq_len` and build the ttnn.Tensor
+    for runtime input slot 7 (shape [1, seq_len], INT32, ROW_MAJOR,
+    replicated across the (1,4) mesh).
+    """
+    if len(ids) > seq_len:
+        ids = ids[:seq_len]
+    elif len(ids) < seq_len:
+        ids = ids + [pad_id] * (seq_len - len(ids))
+    user_tokens = torch.tensor(ids, dtype=torch.int32).reshape(1, seq_len)
+    return ttnn.as_tensor(
         user_tokens,
         dtype=ttnn.DataType.INT32,
         layout=ttnn.Layout.ROW_MAJOR,
@@ -65,42 +57,86 @@ def _override_token_ids(runtime: dict, ids: list[int], device) -> None:
     )
 
 
-def run(prompt: str) -> tuple[int, str]:
-    print(f"\n>>> Prompt: {prompt!r}\n")
+def _logits_to_torch(logits, device):
+    """Bring the device-side logits back to CPU as a [1, seq_len, vocab]
+    float tensor (concatenating shards along the vocab dim)."""
+    host = ttnn.from_device(logits)
+    return ttnn.to_torch(
+        host,
+        mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
+    )[:1, :, :].float()
+
+
+def run(prompt: str, *, seq_len: int = 64, max_new_tokens: int = 32) -> tuple[list[int], str]:
+    print(f"\n>>> Prompt: {prompt!r}")
+    print(f"    seq_len={seq_len}, max_new_tokens={max_new_tokens}\n")
 
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-4-31B-it")
-    ids = _tokenize(prompt, tokenizer)
-    print(f"Tokenized (len={len(ids)}): {ids}")
+    pad_id = tokenizer.pad_token_id or 0
+    prompt_ids = _tokenize_prompt(prompt, tokenizer)
+    if len(prompt_ids) >= seq_len:
+        print(
+            f"[error] prompt is {len(prompt_ids)} tokens after chat-template, "
+            f"≥ seq_len={seq_len}; nothing to generate."
+        )
+        return [], ""
+    print(f"Prompt tokens (len={len(prompt_ids)}): {prompt_ids}")
+    print(f"Prompt text: {tokenizer.decode(prompt_ids)!r}")
 
     device = gemma4.utils.DeviceGetter.get_device((1, 4))
 
-    runtime = gemma4.synthesize_prefill_inputs(device)
-    _override_token_ids(runtime, ids, device)
-
+    # Build the model once at the chosen seq_len. Re-running prefill at
+    # different seq_lens would mean rebuilding (preludes / scalar tensors
+    # bake the seq_len in at construction time).
+    print("\nLoading HF weights and building prefill model...")
     hf = gw.load_hf_weights()
-    n_slots = max(runtime) + 1
-    input_list = [None] * n_slots
-    for slot, t in runtime.items():
-        input_list[slot] = t
-
     model = gemma4.Gemma4ForCausalLM.from_state_dict(
         hf,
         device,
         is_decode=False,
+        seq_len=seq_len,
     )
-    logits = model(input_list)
 
-    logits_host = ttnn.from_device(logits)
-    logits_torch = ttnn.to_torch(
-        logits_host,
-        mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
-    )[:1, :, :].float()
+    sequence = list(prompt_ids)
+    generated = []
+    cap = min(max_new_tokens, seq_len - len(prompt_ids))
+    if cap < max_new_tokens:
+        print(f"[info] capping max_new_tokens at {cap} (seq_len - prompt_len).")
 
-    last_pos = logits_torch.shape[1] - 1
-    next_id = logits_torch[0, last_pos].argmax().item()
-    next_text = tokenizer.decode([next_id])
-    print(f"\n<<< Next token: id={next_id}, text={next_text!r}\n")
-    return next_id, next_text
+    print(f"\nGenerating up to {cap} tokens...")
+    for step in range(cap):
+        # Fresh runtime inputs each step — the KV caches start from zeros
+        # and prefill writes them in-place. Override slot 7 with the
+        # current sequence padded to seq_len.
+        runtime = gemma4.synthesize_prefill_inputs(device, seq_len=seq_len)
+        runtime[7] = _build_token_slot(sequence, seq_len, pad_id, device)
+
+        n_slots = max(runtime) + 1
+        input_list = [None] * n_slots
+        for slot, t in runtime.items():
+            input_list[slot] = t
+
+        logits = model(input_list)
+        logits_torch = _logits_to_torch(logits, device)
+
+        # The next-token prediction is the logits at the position of the
+        # last real token: index len(sequence) - 1 (positions [len:seq_len]
+        # contain pad tokens; under causal masking they don't influence
+        # the position-(len-1) logits).
+        last_real = len(sequence) - 1
+        next_id = int(logits_torch[0, last_real].argmax().item())
+        next_text = tokenizer.decode([next_id])
+        sequence.append(next_id)
+        generated.append(next_id)
+        print(f"  step {step:>2}: id={next_id:>6}  text={next_text!r}")
+
+        if next_id == tokenizer.eos_token_id:
+            print("  [eos reached]")
+            break
+
+    completion = tokenizer.decode(generated)
+    print(f"\n<<< Generated ({len(generated)} tokens): {completion!r}\n")
+    return generated, completion
 
 
 def main():
@@ -109,10 +145,24 @@ def main():
         "prompt",
         nargs="?",
         default="What is your favorite city?",
-        help="A short question (must fit in 19 tokens after chat-template " "wrapping).",
+        help="A short question. Will be wrapped by Gemma's chat template.",
+    )
+    parser.add_argument(
+        "--seq-len",
+        type=int,
+        default=64,
+        help="Prefill sequence length. Must be > prompt token count. "
+        "Larger seq_len → more headroom for generation but more compute "
+        "per step. Max ≈ 256 (KV cache buffer size).",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=32,
+        help="Cap on generated tokens (also bounded by seq_len - prompt_len).",
     )
     args = parser.parse_args()
-    run(args.prompt)
+    run(args.prompt, seq_len=args.seq_len, max_new_tokens=args.max_new_tokens)
 
 
 if __name__ == "__main__":

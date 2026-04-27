@@ -595,7 +595,7 @@ class SlidingPreludePrefill:
         )
         ttnn_reshape_17 = ttnn.reshape(
             ttnn_ge_0,
-            [1, 1, 1, 275],
+            [1, 1, 1, 256 + self.seq_len],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_ge_0, False)
@@ -606,7 +606,7 @@ class SlidingPreludePrefill:
         )
         ttnn_reshape_19 = ttnn.reshape(
             ttnn_concat_4,
-            [1, 1, 1, 275],
+            [1, 1, 1, 256 + self.seq_len],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn_ge_1 = ttnn.ge(
@@ -720,7 +720,7 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_where_4, False)
         ttnn_reshape_22 = ttnn.reshape(
             ttnn_typecast_7,
-            [275, 1],
+            [256 + self.seq_len, 1],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_typecast_7, False)
@@ -745,7 +745,7 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_to_layout_10, False)
         ttnn_reshape_23 = ttnn.reshape(
             ttnn_embedding_5,
-            [1, 1, 1, 275],
+            [1, 1, 1, 256 + self.seq_len],
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_embedding_5, False)
