@@ -139,6 +139,8 @@ void kernel_main() {
     // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
     // Runtime args: []
     // ============================================================================
+    constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
+    constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
     constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
     constexpr uint32_t mla_cb_config_l1_addr = get_named_compile_time_arg_val("mla_reconfig_cb_config_l1_addr");
     uint32_t tt_l1_ptr* mla_cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(mla_cb_config_l1_addr);
@@ -531,7 +533,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_is_root"),
         get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
         get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
-        get_named_compile_time_arg_val("bcast_num_chunks")>;
+        get_named_compile_time_arg_val("bcast_num_chunks"),
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_num_tiles")>;
 
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
@@ -2233,12 +2237,24 @@ void kernel_main() {
             {
                 DeviceZoneScopedN("CCL_BROADCAST");
                 deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
-                bcast(bcast_args);
+                bcast.open_connections(bcast_args);
+#if defined(COMPILE_FOR_NCRISC)
+                if constexpr (persistent_mode) {
+                    constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
+                    if constexpr (is_bcast_root && Core::is_sender_core) {
+                        auto next_iter_sem =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
+                        noc_semaphore_wait(next_iter_sem, 1);
+                        noc_semaphore_set(next_iter_sem, 0);
+                    }
+                }
+#endif
+                bcast.run(bcast_args);
             }
         }
 
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_input_core) {
+        if constexpr (Core::is_input_core && Core::skip_ccl) {
             // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
@@ -2255,10 +2271,28 @@ void kernel_main() {
         }
 
         if constexpr (!Core::is_input_core) {
-            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            unified_kernels::sync_riscs_enter(ccl_sync_sem);
-            unified_kernels::sync_riscs_exit(ccl_sync_sem);
+            volatile tt_l1_ptr uint32_t* risc_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("risc_sync_semaphore_addr"));
+            unified_kernels::sync_riscs_enter<true, false>(risc_sync_sem);
+            unified_kernels::sync_riscs_exit<true>(risc_sync_sem);
+        } else {
+#ifdef COMPILE_FOR_NCRISC
+            constexpr uint32_t sdpa_forwarder0_noc_x = get_named_compile_time_arg_val("sdpa_forwarder0_noc_x");
+            constexpr uint32_t sdpa_forwarder0_noc_y = get_named_compile_time_arg_val("sdpa_forwarder0_noc_y");
+            constexpr uint32_t sdpa_forwarder1_noc_x = get_named_compile_time_arg_val("sdpa_forwarder1_noc_x");
+            constexpr uint32_t sdpa_forwarder1_noc_y = get_named_compile_time_arg_val("sdpa_forwarder1_noc_y");
+            constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
+            constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
+            constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore_addr");
+            uint64_t ccl_sync_sem_noc_addr =
+                get_noc_addr(sdpa_forwarder0_noc_x, sdpa_forwarder0_noc_y, ccl_sync_sem_addr);
+            noc_semaphore_inc(ccl_sync_sem_noc_addr, 2);
+            ccl_sync_sem_noc_addr = get_noc_addr(sdpa_forwarder1_noc_x, sdpa_forwarder1_noc_y, ccl_sync_sem_addr);
+            noc_semaphore_inc(ccl_sync_sem_noc_addr, 2);
+            ccl_sync_sem_noc_addr = get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, ccl_sync_sem_addr);
+            noc_semaphore_inc(ccl_sync_sem_noc_addr, 2);
+            noc_async_atomic_barrier();
+#endif
         }
         // ====================================================================
         // Input core: RMSNorm + Mcast send
@@ -2488,6 +2522,12 @@ void kernel_main() {
             }
             if constexpr (Core::is_sdpa_forwarder_core) {
                 deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+                volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
+                noc_semaphore_wait_min(ccl_sync_sem, 1);
+                unified_kernels::semaphore_dec(ccl_sync_sem, 1);
+#endif
                 sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
                 constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore2_addr");
@@ -2578,10 +2618,14 @@ void kernel_main() {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             PacketHeaderPool::reset();
+            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
+            noc_semaphore_wait_min(ccl_sync_sem, 1);
+            unified_kernels::semaphore_dec(ccl_sync_sem, 1);
             deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
             ccl_writer.open_connections(ccl_sender_args, false);
             deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
-            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
             noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores"));
             allgather_sender.open_connections(allgather_transport_args, false);
@@ -2665,14 +2709,11 @@ void kernel_main() {
             DeviceZoneScopedN("RESIDUAL_MCAST");
             residual_mcast(moe.routed.residual_mcast_args);
         }
-        if constexpr (!Core::is_input_core) {
-            // TODO: This is probably a stricter sync than what we actually need
-            // MLA syncs all riscs since the ops depend on reading updated position id
-            // We can simplify the moe sync back to only DM riscs if we use a different semaphore for moe
+        if constexpr (Core::is_reduce_fabric_core) {
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            unified_kernels::sync_riscs_enter(ccl_sync_sem);
-            unified_kernels::sync_riscs_exit(ccl_sync_sem);
+                get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
+            unified_kernels::sync_riscs_enter<false, false>(ccl_sync_sem);
+            unified_kernels::sync_riscs_exit<false>(ccl_sync_sem);
         }
 
         // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
@@ -2970,14 +3011,6 @@ void kernel_main() {
             uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
             noc_semaphore_inc(sync_sem_noc_addr, 1);
         }
-#elif defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_sender_core) {
-            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
-            constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
-            volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
-            noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
-            noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
-        }
 #endif
 #endif
     };
@@ -2989,9 +3022,17 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
-
-    constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
-    constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
+#ifdef ENABLE_REDUCE_TO_ONE
+#if defined(COMPILE_FOR_NCRISC)
+    // Check is at the start of the loop, so simulate an increment before the loop starts
+    if constexpr (Core::is_sender_core) {
+        constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
+        constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
+        volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
+        noc_semaphore_set(sync_sem_ptr, num_fabric_cores);
+    }
+#endif
+#endif
     uint32_t iteration = 0;
     while (true) {
         {
@@ -2999,15 +3040,16 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (persistent_mode) {
-            constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
-            if constexpr (is_bcast_root && Core::is_sender_core) {
-                auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
-                noc_semaphore_wait(next_iter_sem, 1);
-                noc_semaphore_set(next_iter_sem, 0);
-            }
+#ifdef ENABLE_REDUCE_TO_ONE
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
+            constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
+            volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
+            noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
+            noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
         }
+#endif
 #endif
         {
             DeviceZoneScopedN("MLA");
