@@ -511,19 +511,19 @@ def main():
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=38 * 1024,
+        default=16384,
         help="Maximum sequence length for KV cache",
     )
     parser.add_argument(
         "--max-video-frames",
         type=int,
-        default=384,
+        default=40,
         help="Maximum frames to extract per video",
     )
     parser.add_argument(
         "--max-video-fps",
         type=float,
-        default=10,
+        default=2.0,
         help="HF max_fps cap for sampling (default: omit; HF uses processor default, often 2.0)",
     )
     parser.add_argument(
