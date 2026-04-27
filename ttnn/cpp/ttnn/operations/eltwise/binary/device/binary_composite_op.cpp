@@ -253,12 +253,13 @@ Tensor div(
         (rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    // Workaround for a known bfloat16 fast_and_approximate divide bug: 0/0 returns 0
-    // instead of NaN, and sign-of-zero is lost. The pre-legacy-removal path used a
-    // float32 typecast as a safety guard; we restore the same invariant by suppressing
-    // fast_and_approximate on bfloat16 inside the rounding-mode branch. The same kernel
-    // issue is also documented for rounding_mode=None via the existing test skip in
-    // tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py.
+    // Workaround for a known bfloat16 fast_and_approximate divide bug (issue #43209):
+    // 0/0 returns 0 instead of NaN, and sign-of-zero is lost. The pre-legacy-removal
+    // path used a float32 typecast as a safety guard; we restore the same invariant by
+    // suppressing fast_and_approximate on bfloat16 inside the rounding-mode branch.
+    // The rounding_mode=None case is documented via the existing test skip in
+    // tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py. Remove this
+    // workaround when #43209 is fixed.
     const bool suppress_fap = fast_and_approximate_mode && input.dtype() == DataType::BFLOAT16;
     const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
 
@@ -370,12 +371,13 @@ Tensor div(
         (rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    // Workaround for a known bfloat16 fast_and_approximate divide bug: 0/0 returns 0
-    // instead of NaN, and sign-of-zero is lost. The pre-legacy-removal path used a
-    // float32 typecast as a safety guard; we restore the same invariant by suppressing
-    // fast_and_approximate on bfloat16 inside the rounding-mode branch. The same kernel
-    // issue is also documented for rounding_mode=None via the existing test skip in
-    // tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py.
+    // Workaround for a known bfloat16 fast_and_approximate divide bug (issue #43209):
+    // 0/0 returns 0 instead of NaN, and sign-of-zero is lost. The pre-legacy-removal
+    // path used a float32 typecast as a safety guard; we restore the same invariant by
+    // suppressing fast_and_approximate on bfloat16 inside the rounding-mode branch.
+    // The rounding_mode=None case is documented via the existing test skip in
+    // tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py. Remove this
+    // workaround when #43209 is fixed.
     const bool suppress_fap = fast_and_approximate_mode && input_dtype == DataType::BFLOAT16;
     const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
 
