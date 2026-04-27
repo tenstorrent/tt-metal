@@ -1,52 +1,83 @@
 # TurboQuant KV Cache Quantization
 
-## ⏸ Session pause (2026-04-24) — resume here tomorrow
+## 🚨 Resume here (2026-04-27) — kernel is the bottleneck, Step 6 required
 
-**Where we are:** Full Dequant path (Section 6, Step 3) works end-to-end on
-N150 and mesh-compatible on N150×4, but has a **non-linear scaling problem**.
+**Where we are:** Full Dequant path is end-to-end functional (N150 + N150×4
+mesh, paged cache, page_table plumbing all done). Functional correctness
+validated at the kernel level (cos 0.998+ at all seqlens 128–131072). The
+remaining issue is purely **performance**: the fused-SDPA kernel costs
+~117 ms/layer × 32 layers ≈ 3.7 s/tok ≈ **100× the 37 ms baseline**.
 
-**Latest commits on `mtairum/kvcache_turboquant`:**
+### Diagnosis summary (after 2026-04-27 probes)
+
+We tested four hypotheses for the per-layer slowdown:
+
+| Hypothesis | Verdict | How tested |
+|--|--|--|
+| Program cache thrashing | **REJECTED** | Cache holds at 55 entries through decode, no growth |
+| Per-layer cache allocation | **REJECTED** | Sharing one TTNNTurboQuantCache (commit `ff548d2d19c`) didn't change perf |
+| Python dispatch overhead | **REJECTED** | Trace mode (which removes dispatch) gives same per-layer cost |
+| Mesh sync overhead | **REJECTED** | Single-device shows the same scaling |
+
+**Trace numbers (N150, --tq-full-dequant, 2026-04-27):**
+
+| Layers | No-trace ms/tok | Trace ms/tok | Per-layer (trace) |
+|-:|-:|-:|-:|
+| 2 | 7 | **237** | 117 |
+| 3 | 120 | **354** | 117 |
+
+Important: the no-trace numbers were **misleading** — `eval_e2e.py`'s
+`elapsed = perf_counter() - t0` is taken right after `ttnn_decode_forward`
+returns, but TTNN dispatch is **async**. The 2L = 7 ms data point measured
+dispatch latency, not work done. Trace numbers (which use `blocking=True`)
+are the correct sync'd kernel cost.
+
+**Conclusion:** the bottleneck is the fused-SDPA kernel arithmetic itself —
+specifically the centroid gather (~50 SFPU ops/tile) repeated for every K and
+V chunk, every layer. This is not a caching/dispatch/mesh problem; it's
+genuine compute. Step 6 (centroid gather optimization) is now **required**,
+not optional, for the Full Dequant path to be production-viable.
+
+### Latest commits on `mtairum/kvcache_turboquant`
+
 | Commit | What |
 |--|--|
-| `3da187312b0` | Step 1 (Multi-chunk online softmax fix — cos 0.998+) |
+| `3da187312b0` | Step 1 (multi-chunk online softmax fix — cos 0.998+) |
 | `c833e062f15` | Step 2 core (paged TQ cache + page_table-aware reader) |
 | `39e590d6f03` | Step 2E (eval_e2e `--tq-full-dequant` flag + attention.py plumbing) |
 | `a5160d2fd60` | Step 3A (mesh_mapper=ReplicateTensorToMesh for paged cache) |
 | `ff548d2d19c` | Shared TQ cache across layers + `tq_layer_idx` attr |
 | `2a7fbbbb76b` | PLAN: scaling characterization + 8L data |
+| `0f9e1f17fa7` | PLAN: N150 perf benchmarks + non-linear scaling table |
+| `627b36cd5cc` | PLAN: session-pause marker (superseded by this section) |
 
-**Scaling data (N150, single device, --no-trace, `--tq-full-dequant`):**
-| Layers | ms/tok | Δ per layer |
-|-:|-:|-:|
-| 2 | 7 | — (fast path) |
-| 3 | 121 | **+114** (big jump) |
-| 4 | 238 | +117 |
-| 8 | 707 | +117 |
-| 32 projected | ~3500 | ~100× baseline 37 ms/tok |
+### Next: Step 6 (centroid gather optimization)
 
-Multi-device (N150×4, 2-layer) also hangs — scales with layers × devices total
-fused-SDPA invocations per step.
+See Section 6 → "Step 6: Centroid gather optimization" below for three
+candidate approaches. Recommended order:
 
-**Next debug actions (pick one):**
-1. **Tracy-profile a 3-layer run** — find where the 114 ms/layer goes. Launch
-   with `TT_METAL_TRACY=1` or profile from Python side. Check if each layer's
-   `fused_sdpa_decode` is hitting the program cache or recompiling.
-2. **Check program cache hit rate** — print `device.get_program_cache().num_entries()`
-   before + after decode, or set `TT_METAL_PROGRAM_CACHE_STATS=1`.
-3. **Fold the `ttnn.permute(Q, (1,2,0,3))` into `fused_sdpa_decode`** so we save
-   one Python-dispatch op per layer per step. If dispatch-bound, this ≈ 30 ms ×
-   32 layers reduction.
-4. **Profile trace-mode** — earlier trace hung in `execute_trace`. Smaller
-   model (2 or 3 layers) + trace may narrow down whether it's a trace-only
-   issue or same core bottleneck.
+1. **6A — LUT matmul gather**: replace the 50-op cascade with a single matmul
+   against a one-hot expansion of the indices. Lowest implementation cost,
+   biggest expected win if FPU-bound.
+2. **6B — Post-softmax expansion**: never expand to BF16; do the centroid×
+   norm × softmax × V multiply inline. Largest theoretical win, hardest
+   refactor.
+3. **6C — Vectorize the cascade**: keep the structure but parallelize the
+   8 levels with SFPU batched ops. Smallest change but smallest win.
 
-**Useful repro commands:**
+Effort estimate: 6A is ~3 days for prototype + validate. 6B is 1 week.
+
+### Useful repro commands
+
 ```bash
 # Single device, specific layer count
+timeout 240 python -u turbo_quant/eval_e2e.py --tq-full-dequant --num-layers 3 --max-new-tokens 5 --max-seq-len 128
+
+# Same with --no-trace (note: no-trace times under-measure due to async dispatch)
 timeout 240 python -u turbo_quant/eval_e2e.py --tq-full-dequant --num-layers 3 --max-new-tokens 5 --max-seq-len 128 --no-trace
 
-# 4-device mesh (needs env)
-TT_NUM_DEVICES=4 timeout 300 python -u turbo_quant/eval_e2e.py --tq-full-dequant --num-layers 2 --max-new-tokens 5 --max-seq-len 128 --no-trace
+# 4-device mesh
+TT_NUM_DEVICES=4 timeout 300 python -u turbo_quant/eval_e2e.py --tq-full-dequant --num-layers 2 --max-new-tokens 5 --max-seq-len 128
 ```
 
 Full details in Section 6 below.
@@ -888,39 +919,236 @@ issue as single-device layers×devices total-invocation count (2 layers × 4 dev
 T3K validation is meaningful.
 
 **Followups before accuracy runs can be meaningful:**
-1. Profile the 3L run with Tracy to identify where the ~117 ms/layer cost is spent
-2. Test with `--tq-full-dequant` + trace mode after resolving the trace-mode hang
-3. Check program cache hit rate (TT_METAL_PROGRAM_CACHE_STATS or similar)
-4. If dispatch-bound, reduce Python-side permute overhead by fusing into the
-   `fused_sdpa_decode` wrapper
+1. ~~Profile the 3L run with Tracy to identify where the ~117 ms/layer cost is spent~~
+   Trace-mode probe (2026-04-27) localizes the cost to the kernel itself — see
+   resume-block at top of plan for diagnosis.
+2. ~~Test with `--tq-full-dequant` + trace mode after resolving the trace-mode hang~~ DONE
+3. ~~Check program cache hit rate~~ DONE — cache holds at 55 entries, no thrash
+4. ~~If dispatch-bound, reduce Python-side permute overhead~~ Not the bottleneck
 
-**3. Multi-device / T3K support** — PENDING
+---
+
+### Step 6: Centroid gather optimization — REQUIRED (was Optional)
+
+The trace-mode results elevate Step 6 from "optional" to "**critical path**".
+Without it the Full Dequant path is ~100× slower than baseline and not
+production-viable — Steps 3 (T3K) and 5 (accuracy/latency) become moot until
+Step 6 lands.
+
+#### Where the cost is
+
+`sdpa_tq_decode.cpp::dequantize_one_tile()` (lines 55–111) contains the hot
+loop. For `NumLevels=8` (3-bit centroids):
+
+```
+Phase 1 (centroid gather, per tile):
+  copy_tile                      // 1
+  fill_tile                      // 1
+  for lev in 1..7:               // 7 iterations × 6 ops = 42 ops
+      copy_tile + unary_ge_tile + fill_tile +
+      sub_binary_tile + mul_binary_tile + add_binary_tile
+Phase 2 (norm multiply, per tile):
+  mul_tiles_bcast_cols           // 1
+                          Total: ~46 SFPU op-issues per tile
+```
+
+This runs on **every K and V tile, every chunk, every layer, every token**:
+
+```
+chunk_tiles  = Sk_chunk_t × DHt   = 8 × 4   = 32  (typ. for head_dim=128)
+per-chunk    = 32 K + 32 V        = 64 tiles
+seq=128      = 4 chunks           = 256 tiles/layer
+× 32 layers  = 8192 tiles/tok
+× 46 ops/tile= ~377K SFPU op-issues per token
+```
+
+At seq=8K it's 16× more (~6M SFPU ops/tok). The SFPU pipeline plus its
+per-issue dispatch overhead is the dominant cost in the trace-measured
+117 ms/layer.
+
+#### Approach 6A — LUT matmul gather (recommended first, ~3 days)
+
+**Idea.** Replace the 8-level conditional cascade with one matmul. The gather
+is mathematically `centroid_value = onehot(idx) · centroids_vector`. If we
+expand a tile of indices into a `[32, NumLevels]` one-hot and matmul against a
+`[NumLevels, 32]` constant centroid LUT broadcast across head-dim, we get the
+gather as **one FPU matmul tile** instead of ~46 SFPU ops.
+
+**Sketch:**
+```cpp
+// New helper: expand BFP4 idx tile (32×32 indices in 0..7) → one-hot [32, 8]
+// Implementation option: SFPU `eq_binary_tile` against 8 level constants,
+// packing each result into one of 8 output columns. Costs 8 ops, but only
+// once per tile — vs 46 in the cascade.
+expand_indices_to_onehot(cb_idx, cb_onehot);    // [32 rows × 8 cols] BF16
+
+// Pre-load constant LUT tile: [8 rows × 32 cols] where row k = centroids[k]
+// replicated across columns. This lives in DRAM as a baked compile-time
+// tensor (one [8,32] BF16 tile per layer; identical across layers if shared
+// centroids).
+matmul_tiles(cb_onehot, cb_centroid_lut, dst);   // 1 FPU matmul → [32×32] gathered
+
+// Phase 2 norm multiply unchanged
+mul_tiles_bcast_cols(cb_gathered, cb_norms, ...);
+```
+
+**Cost estimate.** Matmul of two `[32×32]` tiles on Wormhole FPU is ~1 cycle
+under saturation (vs ~46 SFPU op-issues). Even with the 8-op one-hot expansion
+overhead, **expected ~5×** kernel-arithmetic speedup. If we can fold the
+one-hot expansion into the unpacker (BFP4 → one-hot via a small lookup
+table at unpack time), the win goes higher.
+
+**Risks.**
+- BFP4 unpack semantics: BFP4 values come in pre-scaled as floats; the index
+  0..7 lives in the mantissa bits. Need to verify `copy_tile` from a BFP4 CB
+  yields integer-valued floats we can `eq_binary_tile` against.
+- Constant LUT must be re-uploaded per layer if centroids differ per layer.
+  If centroids are shared (one global codebook), bake it as a kernel CT-arg
+  array — same as today's `centroids[16]`.
+- One-hot expansion needs validation: SFPU `eq_binary_tile` produces 0/1
+  outputs that must be packed into the right column of the output tile.
+
+**Validation.** Reuse `bench_fused_sdpa.py`. Pass criterion: cos ≥ 0.998 at
+seq 128–131072 (matches Step 1 baseline) **and** ≥3× speedup vs current
+kernel at trace-measured 3L decode.
+
+**Files.**
+- `sdpa_tq_decode.cpp::dequantize_one_tile` — replace cascade with onehot+matmul
+- `sdpa_tq_decode.cpp::dequant_k_chunk`, `dequant_v_chunk` — same, in their
+  inlined cascades (lines ~175–215 for K, ~253–290 for V)
+- `sdpa_tq_program_factory.cpp` — add LUT CB allocation + initialization
+- `reader_tq_decode.cpp` — read centroid LUT once (or via CT-arg if static)
+
+#### Approach 6B — Post-softmax centroid expansion (largest win, ~1 week)
+
+**Idea.** Don't expand indices to BF16 K/V at all. Keep K and V as BFP4
+indices through the Q×Kᵀ and softmax×V matmuls. The math is:
+
+```
+Q × Kᵀ = Q × (centroids[K_idx] ⊙ K_norm)ᵀ
+       = (Q ⊙ K_norm)  ×  centroids[K_idx]ᵀ      (norm is per-row; broadcasts)
+       = (Q ⊙ K_norm)  ×  C[K_idx]ᵀ
+```
+
+We can rewrite Q×Kᵀ as `(Q · centroids_packed_as_LUT)[K_idx]` — the matmul of
+Q against the **8 centroids** (a tiny `[Q_rows × 8]` matrix), then a per-tile
+scatter using K_idx. This makes Q×Kᵀ ~32× cheaper because the inner dim
+collapses from `head_dim=128` to `NumLevels=8`.
+
+Same trick for softmax × V. The savings compound across both matmuls and the
+gather.
+
+**Sketch:**
+```cpp
+// Phase 1: Q · centroidsᵀ → small [Q_rows × NumLevels] tile (constant for
+// all K positions in this Q step). Done once per chunk.
+matmul_tiles(cb_q, cb_centroids_lut_T, cb_q_dot_centroids);  // [B*NQH × 8]
+
+// Phase 2: scatter-gather: for each K row, look up indices and select from
+// the precomputed Q·centroids vector, multiply by K_norm.
+// This is essentially a "matmul against one-hot" step but the inner data is
+// already reduced.
+scatter_gather_qk(cb_q_dot_centroids, cb_k_idx, cb_k_norms, cb_qk_scores);
+
+// Same trick for softmax × V on the output side.
+```
+
+**Cost estimate.** Q×Kᵀ inner-dim drops from 128 to 8 → **~16× cheaper matmul**
+plus the gather is now a scatter (no SFPU cascade at all). Combined gain:
+expected **8–15× speedup**. This brings projected 32-layer decode to ~250ms,
+within striking distance of baseline (37ms) given the BFP4 memory savings.
+
+**Risks.**
+- Significant kernel rewrite — affects all four phases of fused SDPA decode
+  (gather, Q×Kᵀ, softmax, softmax×V) and the matmul block layouts.
+- The "scatter via index" step has no direct primitive on Tensix — needs to
+  be expressed as masked sums or an SFPU lookup. Empirical: probably needs
+  a custom data-flow pattern in unpacker.
+- Numerical: applying norm post-matmul changes accumulation order. Need to
+  verify cos ≥ 0.998 still holds.
+
+**Validation.** Same as 6A plus a numerical equivalence test against the
+current kernel at low seqlens to confirm reordering doesn't drift.
+
+**When to do.** Only if 6A doesn't hit the latency target (i.e. if 6A gives
+<3× speedup). 6B is harder but uncaps the win.
+
+#### Approach 6C — Vectorize the cascade (smallest change, smallest win, ~1 day)
+
+**Idea.** Keep the cascade structure but parallelize the 8 levels. Tensix
+SFPU has 32-wide SIMD. Today's cascade serializes on the cross-tile
+dependencies (each `add_binary_tile` reads the previous level's accumulator).
+We can compute all 8 level contributions independently and reduce them in
+log₂(8)=3 levels of pairwise add.
+
+**Sketch:**
+```cpp
+// Level contributions in parallel (8 independent fill+sub+ge+mul):
+fill_tile(R0, centroids[0]);
+for k in 1..7:
+    fill_tile(Rk, centroids[k]);
+    sub_binary_tile(Rk, R0, Rk);          // delta_k = c_k - c_0
+    unary_ge_tile(idx, level_bits[k]) → mask_k;
+    mul_binary_tile(Rk, mask_k, Rk);
+
+// Log-tree reduction:
+add_binary_tile(R1, R2, R1);  add_binary_tile(R3, R4, R3);
+add_binary_tile(R5, R6, R5);  add_binary_tile(R7, R0, R7);  // R0 absorbed here
+add_binary_tile(R1, R3, R1);  add_binary_tile(R5, R7, R5);
+add_binary_tile(R1, R5, R1);  // result in R1
+```
+
+**Cost estimate.** Same op count, but with 8 DST registers in flight and the
+log-tree reduction the critical path is ~8 op-issues + 3 add-issues = ~11
+ops vs 46 today. **Expected ~3× speedup** of the gather phase. Norm multiply
+is unchanged.
+
+**Risks.**
+- DST register pressure: need 8+ DST tiles concurrently. Wormhole has 8 DST
+  tiles per math thread; 8 levels × 1 tile each saturates the file. May
+  need to spill to L1.
+- Less aggressive than 6A/6B; may not be enough.
+
+**When to do.** If 6A turns out infeasible (BFP4 unpack issue blocks
+one-hot expansion), 6C is the conservative fallback.
+
+#### Recommended path
+
+1. Implement **6A (LUT matmul gather)**, validate cos + perf at 3L. Target:
+   ≥3× speedup → 32L extrapolation under ~1 second/tok.
+2. If 6A meets the bar, run Step 5 (accuracy benchmark + latency on T3K).
+3. If 6A doesn't suffice, layer 6B on top; 6A's onehot+LUT primitives are
+   reusable.
+4. Ship 6C only as a fallback if 6A is blocked.
+
+---
+
+### Steps 3–5 (deferred until Step 6 lands)
+
+**3. Multi-device / T3K support** — DEFERRED behind Step 6
 - Replicate centroids across devices, shard indices/norms by heads
 - `fused_sdpa_decode` to use mesh_composer/mesh_mapper where needed
 - Verify on 8-device T3K with FABRIC_1D (same setup as pre_rescaled path)
-- Effort: 1 day
+- Code already mesh-compatible (commit `a5160d2fd60`); blocked on perf
+- Effort: 1 day after Step 6
 
 **4. Full validation of single-device path** — PARTIAL (basic e2e validated)
 - ✅ `--tq-full-dequant` flag present in eval_e2e.py
 - ✅ 2-layer end-to-end decode works
-- ⏳ Full 32-layer validation (first run needs cold-cache compile, scales with layers)
+- ⏳ Full 32-layer validation (deferred until per-layer cost is reasonable)
 - ⏳ Port flag into `eval_e2e_prefill.py` for real prefill → decode
 - ⏳ Quality comparison vs baseline/pre-rescaled at full 32L
-- Effort: 1-2 days
+- Effort: 1-2 days after Step 6
 
-**5. Accuracy + latency validation** — PENDING
+**5. Accuracy + latency validation** — DEFERRED behind Step 6
 - Run token accuracy benchmark → expect >95% top-1 (vs pre-rescaled's 72%)
 - Measure decode latency → target <30ms on T3K (2× baseline acceptable given accuracy)
 - Run seqlen + batch sweeps to confirm long context + multi-batch works
-- Effort: 1-2 days
+- Effort: 1-2 days after Step 6
 
-**6. Optional: optimize centroid gather** (only if latency is unacceptable) — PENDING
-- Current: ~50 SFPU ops/tile via conditional cascades
-- Alternative: LUT-style gather via unpacker + matmul
-- Alternative: do centroid×norm expansion post-softmax instead of on K/V read
-- Effort: 3-5 days if needed
-
-**Total effort estimate for remaining work: ~1 week.**
+**Total effort estimate for remaining work: 1-2 weeks (Step 6 is ~3 days
+to 1 week depending on which approaches land; Steps 3-5 are ~3-5 days
+afterwards).**
 
 **Alternative approach (simpler but higher risk):**
 Modify the standard SDPA decode reader to support TQ dequant on-read. Reuse std
