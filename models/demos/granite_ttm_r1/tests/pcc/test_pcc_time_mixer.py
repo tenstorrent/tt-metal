@@ -41,7 +41,7 @@ def test_pcc_time_mixer(device, batch_size):
     hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
 
     # Preprocess all parameters; extract the decoder block's patch_mixer subtree.
-    parameters = preprocess_parameters(hf_model, device)
+    parameters = preprocess_parameters(hf_model, device, model_name=DEFAULT_MODEL_NAME)
     patch_mixer_params = parameters.decoder.decoder_block.mixers[0].patch_mixer
 
     # Input: [B, C, num_patches, decoder_d_model]

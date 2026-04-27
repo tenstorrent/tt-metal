@@ -62,7 +62,7 @@ def test_pcc_full_model(device, batch_size):
     torch_prediction = extract_prediction_tensor(ref_outputs)
 
     # TTNN path
-    parameters = preprocess_parameters(hf_model, device)
+    parameters = preprocess_parameters(hf_model, device, model_name=DEFAULT_MODEL_NAME)
     ttnn_model = TtnnGraniteTTMModel(
         parameters=parameters,
         config=model_config,

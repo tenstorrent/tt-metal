@@ -86,7 +86,7 @@ def _run_zero_shot_accuracy(device, dataset_name: str):
     hf_config = load_granite_ttm_config(DEFAULT_MODEL_NAME)
     model_config = GraniteTTMModelConfig.from_hf_config(hf_config, num_channels=num_channels)
     hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
-    parameters = preprocess_parameters(hf_model, device)
+    parameters = preprocess_parameters(hf_model, device, model_name=DEFAULT_MODEL_NAME)
     ttnn_model = TtnnGraniteTTMModel(parameters=parameters, config=model_config, reference_model=hf_model)
 
     all_preds_ttnn = []

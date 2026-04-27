@@ -73,7 +73,7 @@ def run_granite_ttm_demo(
         }
 
     # Pre-process weights for TTNN.
-    parameters = preprocess_parameters(hf_model, device)
+    parameters = preprocess_parameters(hf_model, device, model_name=DEFAULT_MODEL_NAME)
 
     # Build the TTNN model.
     ttnn_model = TtnnGraniteTTMModel(

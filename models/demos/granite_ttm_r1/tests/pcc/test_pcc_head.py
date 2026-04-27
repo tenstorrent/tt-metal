@@ -43,7 +43,7 @@ def test_pcc_head(device, batch_size):
     hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
 
     # Parameters
-    parameters = preprocess_parameters(hf_model, device)
+    parameters = preprocess_parameters(hf_model, device, model_name=DEFAULT_MODEL_NAME)
     head_params = parameters.head
 
     # Input: [B, C, num_patches, decoder_d_model]

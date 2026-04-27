@@ -51,7 +51,7 @@ def _build_model_and_example(device, batch_size=1):
     model_config = GraniteTTMModelConfig.from_hf_config(hf_config, num_channels=num_channels)
 
     hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
-    parameters = preprocess_parameters(hf_model, device)
+    parameters = preprocess_parameters(hf_model, device, model_name=DEFAULT_MODEL_NAME)
 
     ttnn_model = TtnnGraniteTTMModel(
         parameters=parameters,
@@ -291,7 +291,7 @@ def test_multi_model_serving(device):
     hf_model = load_granite_ttm_reference_model(DEFAULT_MODEL_NAME, dtype=torch.float32)
 
     # Pre-process weights ONCE
-    parameters = preprocess_parameters(hf_model, device)
+    parameters = preprocess_parameters(hf_model, device, model_name=DEFAULT_MODEL_NAME)
 
     # Build a synthetic input
     example = create_synthetic_example(
