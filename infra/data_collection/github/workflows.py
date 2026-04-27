@@ -15,6 +15,7 @@ from infra.data_collection import junit_xml_utils, pydantic_models
 
 
 smi_pattern = re.compile(r'.*"tt_smi":\s*"([a-zA-Z0-9\-\.]+)"')
+tt_smi_reset_pattern = re.compile(r'"tt_smi_reset":\s*({.*})')
 # Define a regex pattern to match timestamps in ISO 8601 format (e.g., 2025-03-26T19:18:31.7521333Z)
 timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
@@ -27,6 +28,17 @@ def search_for_tt_smi_version_in_log_file_(log_file):
                 return regex_match.group(1)
     return None
 
+def search_for_tt_smi_reset_in_log_file_(log_file):
+    with open(log_file, "r") as log_f:
+        for line in log_f:
+            if '"tt_smi_reset"' in line:
+                try:
+                    # try parsing full JSON line
+                    json_obj = json.loads(line.strip())
+                    return json_obj.get("tt_smi_reset")
+                except Exception:
+                    continue
+    return None
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
     """
@@ -42,14 +54,19 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
     log_files = logs_dir.glob("*.log")
 
     github_job_ids_to_tt_smi_versions = {}
+    github_job_ids_to_tt_smi_resets = {}
     for log_file in log_files:
         tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
+        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
+        github_job_id = log_file.name.replace(".log", "")
+        assert github_job_id.isnumeric(), f"{github_job_id}"
+        github_job_id = int(github_job_id)
         if tt_smi_version:
-            github_job_id = log_file.name.replace(".log", "")
-            assert github_job_id.isnumeric(), f"{github_job_id}"
-            github_job_id = int(github_job_id)
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
-    return github_job_ids_to_tt_smi_versions
+
+        if tt_smi_reset:
+            github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
+    return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
 
 
 def parse_github_log_timestamp(line):
