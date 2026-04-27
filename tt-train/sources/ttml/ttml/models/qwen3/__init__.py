@@ -131,7 +131,7 @@ class Qwen3(AbstractModuleBase):
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            self.tok_emb.weight = self.fc.weight
 
         self.blocks = ModuleList([Qwen3Block(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
 
