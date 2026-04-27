@@ -411,7 +411,6 @@ TEST_F(ParallelHeartbeatPollFixture, ParallelBulkHeartbeatPollBeatsSequential) {
         tt::LogTest,
         "[GAP-9] Verifying fabric operational with AllGather — proves >=20 MMIO ETH cores alive");
 
-    const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
     const int kNumRingDevices = std::min(static_cast<int>(mesh_device_->num_cols()), 4);
 
     if (kNumRingDevices < 2) {
