@@ -6,20 +6,19 @@ import argparse
 import json
 import math
 import sys
+import yaml
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import yaml
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 try:
     from models.demos.utils.model_targets import resolve_target_entry
 except ModuleNotFoundError:
     # Allow direct invocation without PYTHONPATH set by adding repo root.
-    REPO_ROOT = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(REPO_ROOT))
     from models.demos.utils.model_targets import resolve_target_entry
-
 
 LOWER_IS_BETTER_METRICS = {
     "prefill_time_to_token",
