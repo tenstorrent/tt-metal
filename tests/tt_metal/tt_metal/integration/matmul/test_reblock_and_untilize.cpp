@@ -211,7 +211,12 @@ static bool run_reblock_and_untilize_test(
         var_g += gd * gd;
         max_err = std::max(max_err, std::abs(ed - gd));
     }
-    float pcc = (var_e == 0.0f || var_g == 0.0f) ? (var_e == var_g ? 1.0f : 0.0f) : (cov / std::sqrt(var_e * var_g));
+    float pcc;
+    if (var_e == 0.0f || var_g == 0.0f) {
+        pcc = (var_e == var_g) ? 1.0f : 0.0f;
+    } else {
+        pcc = cov / std::sqrt(var_e * var_g);
+    }
 
     log_info(
         LogTest,
@@ -230,7 +235,6 @@ static bool run_reblock_and_untilize_test(
 
 }  // namespace test_reblock_and_untilize
 
-using test_reblock_and_untilize::ReblockConfig;
 using test_reblock_and_untilize::run_reblock_and_untilize_test;
 
 // Single subblock per row, single row-group

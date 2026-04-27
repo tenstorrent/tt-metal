@@ -202,13 +202,11 @@ uint32_t compute_l1_safety_margin(
         return kSecondaryCbFloor;
     }
     uint32_t output_per_core_bytes = 0;
-    if (output_is_sharded) {
+    // Defensive fallback when num_l1_banks == 0: treat as sharded (per_core_M * per_core_N).
+    if (output_is_sharded || num_l1_banks == 0) {
         output_per_core_bytes = per_core_M * per_core_N * output_tile_size_bytes;
-    } else if (num_l1_banks > 0) {
-        output_per_core_bytes = tt::div_up(Mt * Nt, num_l1_banks) * output_tile_size_bytes;
     } else {
-        // Defensive fallback: treat as sharded.
-        output_per_core_bytes = per_core_M * per_core_N * output_tile_size_bytes;
+        output_per_core_bytes = tt::div_up(Mt * Nt, num_l1_banks) * output_tile_size_bytes;
     }
     return output_per_core_bytes + kSecondaryCbFloor;
 }

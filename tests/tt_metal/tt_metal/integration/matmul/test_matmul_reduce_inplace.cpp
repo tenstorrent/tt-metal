@@ -257,7 +257,6 @@ static bool run_matmul_reduce_inplace_test(
 
 }  // namespace test_matmul_reduce_inplace
 
-using test_matmul_reduce_inplace::ReduceConfig;
 using test_matmul_reduce_inplace::run_matmul_reduce_inplace_test;
 
 // STATS_GRANULARITY=1 (default SDPA decode path)
