@@ -14,7 +14,6 @@ Typical `state_dict` prefix: ``"vision_tower."`` (keys like ``vision_tower.block
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
@@ -423,7 +422,8 @@ class DotsMlpTt(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Host fallback: avoids TT matmul shape strictness when physical padding persists (K=1632 vs 1536).
-        host_mlp = os.environ.get("DOTS_VISION_MLP_HOST", "1").strip().lower() in ("1", "true", "yes", "y")
+        # Keep always-on for now (no env-var dependency).
+        host_mlp = True
         if host_mlp:
             xt = ttnn.to_torch(x)  # [1, 1, S, D_pad]
             ttnn.deallocate(x)
@@ -454,14 +454,9 @@ class DotsMlpTt(LightweightModule):
         # even when the logical dim prints as 1536. When that happens, a TILE-layout slice may
         # not remove the padding, and matmul validation fails. Most robust: D2H -> slice -> H2D.
         #
-        # Enable by default for demo correctness; disable by setting DOTS_VISION_FORCE_HOST_TRIM=0.
-        debug_shapes = os.environ.get("DOTS_VISION_MLP_DEBUG_SHAPES", "").strip().lower() in ("1", "true", "yes", "y")
-        force_host_trim = os.environ.get("DOTS_VISION_FORCE_HOST_TRIM", "1").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "y",
-        )
+        # No env-var dependency: keep trimming behavior always enabled and debug disabled.
+        debug_shapes = False
+        force_host_trim = True
         need_trim = int(x.shape[-1]) != int(self.cfg.embed_dim)
         if force_host_trim or need_trim:
             if int(x.shape[-1]) < int(self.cfg.embed_dim):

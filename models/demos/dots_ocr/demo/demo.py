@@ -11,8 +11,8 @@ Two backends, selected with ``--backend``:
 - ``ttnn``: Builds the Dots TT stack (``DotsTransformer`` + optional
             ``DropInVisionTransformer`` for ``--vision-backend ttnn``) and runs prefill + decode via
             :class:`models.tt_transformers.tt.generator.Generator`. Requires ``MESH_DEVICE`` to be set.
-            By default, device-side fusion/prefill padding is ON (disable with ``--no-device-fusion`` or
-            ``DOTS_DEVICE_FUSION=0``). Greedy token selection uses TTNN argmax (with host ``torch.argmax`` only
+            By default, device-side fusion/prefill padding is ON (disable with ``--no-device-fusion``). Greedy
+            token selection uses TTNN argmax (with host ``torch.argmax`` only
             when ``--ttnn-repetition-penalty`` is set, since penalty is applied on host logits). Optional
             ``--fixed-decode-steps`` runs Option A fixed-length decode.
 
@@ -775,8 +775,7 @@ def main() -> None:
         "--ttnn-repetition-penalty",
         type=float,
         default=None,
-        help="TTNN decode only: HF-style repetition penalty (>1.0, e.g. 1.12–1.2) to reduce **/token loops. "
-        "Also DOTS_TTNN_REPETITION_PENALTY.",
+        help="TTNN decode only: HF-style repetition penalty (>1.0, e.g. 1.12–1.2) to reduce **/token loops.",
     )
     parser.add_argument(
         "--no-device-fusion",
@@ -786,8 +785,7 @@ def main() -> None:
     parser.add_argument(
         "--fixed-decode-steps",
         action="store_true",
-        help="Option A: run exactly --max-new-tokens decode steps, then trim at EOS. Default is EOS-aware per-step loop. "
-        "Also DOTS_FIXED_DECODE_STEPS=1.",
+        help="Option A: run exactly --max-new-tokens decode steps, then trim at EOS. Default is EOS-aware per-step loop.",
     )
     args = parser.parse_args()
 
@@ -795,31 +793,10 @@ def main() -> None:
     preset = args.ocr_preset
 
     ttnn_repetition_penalty = args.ttnn_repetition_penalty
-    if ttnn_repetition_penalty is None:
-        _rp = os.environ.get("DOTS_TTNN_REPETITION_PENALTY", "").strip()
-        if _rp:
-            try:
-                ttnn_repetition_penalty = float(_rp)
-            except ValueError:
-                ttnn_repetition_penalty = None
 
-    # Device fusion: default ON. Disable via --no-device-fusion or DOTS_DEVICE_FUSION=0.
-    device_fusion = not bool(args.no_device_fusion) and os.environ.get(
-        "DOTS_DEVICE_FUSION", "1"
-    ).strip().lower() not in (
-        "0",
-        "false",
-        "no",
-        "n",
-    )
-    fixed_decode_steps = bool(args.fixed_decode_steps) or os.environ.get(
-        "DOTS_FIXED_DECODE_STEPS", ""
-    ).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "y",
-    )
+    # No env-var dependency: drive behavior via CLI only.
+    device_fusion = not bool(args.no_device_fusion)
+    fixed_decode_steps = bool(args.fixed_decode_steps)
 
     # Resolve prompt set
     if args.prompts_json:
