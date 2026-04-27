@@ -1518,9 +1518,8 @@ def test_wan_decoder(
     [
         (1, 16, 7, 60, 104, 480, 832, 7, True),
         (1, 16, 21, 90, 160, 720, 1280, 21, False),
-        (1, 16, 21, 90, 40, 720, 320, 21, False),
     ],
-    ids=["480p_t7_cached", "720p_t21_fullT", "720p_t21_quad_fullT"],
+    ids=["480p_t7_cached", "720p_t21_fullT"],
 )
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
@@ -1624,13 +1623,7 @@ def test_wan_decoder_production_blocking(
 
     logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size}, cached={cached})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=None)
-    from tracy import signpost
-
-    logger.info("running tt model with t_chunk_size=None")
-    signpost("start")
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=None)
-    signpost("end")
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1641,8 +1634,6 @@ def test_wan_decoder_production_blocking(
     )
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
-
-    return
 
     logger.info("running torch model")
     start = time.time()

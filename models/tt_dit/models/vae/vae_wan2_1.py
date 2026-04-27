@@ -1412,7 +1412,7 @@ class WanDecoder(Module):
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
-        if t_chunk_size is None:
+        if t_chunk_size is None or t_chunk_size >= T:
             # No-cache full-T single-pass mode
             out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
             output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
