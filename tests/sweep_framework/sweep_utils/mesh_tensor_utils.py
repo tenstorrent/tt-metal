@@ -493,10 +493,26 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     only reproduced when the sweep re-executes on a mesh device.
 
     Returns ``MESH_DEVICE_SHAPE`` from the environment when set, otherwise
-    falls back to ``(1, 1)`` so that the sweep device topology matches the
-    trace topology.
+    auto-detects from available hardware so that the sweep device topology
+    matches the trace topology.
     """
-    return get_mesh_shape() or (1, 1)
+    shape = get_mesh_shape()
+    if shape:
+        return shape
+    # Auto-detect mesh shape from available hardware when env var not set.
+    # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
+    # mesh matching the topology used during model tracing.
+    try:
+        num_devices = ttnn.get_num_devices()
+        if num_devices >= 32:
+            return (4, 8)  # Galaxy (32 Wormhole devices)
+        elif num_devices >= 8:
+            return (1, 8)  # T3000 (8 devices)
+        elif num_devices >= 2:
+            return (1, num_devices)
+    except Exception:
+        pass
+    return (1, 1)
 
 
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
