@@ -734,12 +734,14 @@ def assert_numeric_metrics(
     if check_allclose:
         num_checks_enabled += 1
         passed, message = comp_allclose(expected_result, actual_result, rtol, atol)
+        # Convert to Python boolean if it's a tensor
+        passed = bool(passed.item() if hasattr(passed, "item") else passed)
         if passed:
             num_checks_passed += 1
             messages.append(f"[ALLCLOSE PASSED] {message}")
         else:
             messages.append(f"[ALLCLOSE FAILED] {message}")
-        overall_passed &= passed
+        overall_passed = overall_passed and passed
 
     # Check 2: Global error-magnitude check using relative Frobenius norm.
     if check_frobenius:
@@ -759,7 +761,7 @@ def assert_numeric_metrics(
                 f"Relative Frobenius norm {rel_frob:.6e} {'<=' if passed else '>'} threshold {frobenius_threshold}"
             )
         messages.append(f"{prefix} {message}")
-        overall_passed &= passed
+        overall_passed = overall_passed and passed
 
     # Check 3: PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
     if check_pcc:
@@ -768,23 +770,27 @@ def assert_numeric_metrics(
         else:
             num_checks_enabled += 1
             passed, pcc_value = comp_pcc(expected_result, actual_result, pcc_threshold)
+            # Convert to Python boolean if it's a tensor
+            passed = bool(passed.item() if hasattr(passed, "item") else passed)
             if passed:
                 num_checks_passed += 1
                 messages.append(f"[PCC PASSED] PCC={pcc_value:.6f} >= threshold {pcc_threshold}")
             else:
                 messages.append(f"[PCC FAILED] PCC={pcc_value:.6f} < threshold {pcc_threshold}")
-            overall_passed &= passed
+            overall_passed = overall_passed and passed
 
     # Check 4: ULP-based comparison is stricter for floating-point representation differences.
     if check_ulp:
         num_checks_enabled += 1
         passed, message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite=False)
+        # Convert to Python boolean if it's a tensor
+        passed = bool(passed.item() if hasattr(passed, "item") else passed)
         if passed:
             num_checks_passed += 1
             messages.append(f"[ULP PASSED] {message}")
         else:
             messages.append(f"[ULP FAILED] {message}")
-        overall_passed &= passed
+        overall_passed = overall_passed and passed
 
     # Build final message
     if num_checks_enabled == 0:
