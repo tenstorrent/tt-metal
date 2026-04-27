@@ -362,7 +362,11 @@ class DecoderBlock:
             attn_ncrisc_common = ctx["ncrisc_common_runtime_args"]
             attn_trisc_common = ctx["trisc_common_runtime_args"]
             moe_ncrisc_ct = _patch_named_compile_time_args(
-                moe_ncrisc_ct, {"reduce_ncrisc_common_rt_arg_base": len(attn_ncrisc_common)}
+                moe_ncrisc_ct,
+                {
+                    "reduce_ncrisc_common_rt_arg_base": len(attn_ncrisc_common),
+                    "pipeline_stage_sync_rt_arg_base": len(attn_ncrisc_common) + 3,
+                },
             )
             moe_trisc_ct = _patch_named_compile_time_args(
                 moe_trisc_ct, {"moe_rmsnorm_trisc_common_rt_arg_base": len(attn_trisc_common)}

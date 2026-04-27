@@ -1673,6 +1673,8 @@ class MoeRoutedExpertOp:
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_received_cb", ctx.reduce_received_cb),
             ("reduce_ncrisc_common_rt_arg_base", 0),
+            # PipelineStageSync
+            ("pipeline_stage_sync_rt_arg_base", 3),
             # Broadcast (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
             ("bcast_ncrisc_common_rt_arg_base", 0),
@@ -1775,6 +1777,7 @@ class MoeRoutedExpertOp:
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
             ("reduce_brisc_worker_core_rt_arg_base", 0),
             ("reduce_brisc_fabric_core_rt_arg_base", 0),
+            # PipelineStageSync
             ("pipeline_stage_sync_rt_arg_base", 7),
             # Broadcast (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
