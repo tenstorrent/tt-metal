@@ -95,7 +95,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
-            1 if is_blackhole() else 1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
