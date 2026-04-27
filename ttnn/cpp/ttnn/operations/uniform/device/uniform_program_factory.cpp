@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
+#include <ctime>
+#include <limits>
+#include <random>
 #include <string>
 
 #include <tt-metalium/constants.hpp>
@@ -15,10 +19,12 @@ namespace ttnn::operations::uniform {
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
 std::mt19937 rng(std::time(nullptr));
-std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max());
+std::uniform_int_distribution<int32_t> distribution(1, std::numeric_limits<int32_t>::max());
 
-auto get_random_seed() -> uint32_t { return distribution(rng); }
+uint32_t get_random_seed() { return distribution(rng); }
+}  // namespace
 
 static constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/writer_uniform.cpp";
 static constexpr const char* COMPUTE_KERNEL_PATH =
@@ -112,13 +118,10 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     compute_desc.runtime_args.reserve(num_cores_total);
 
     // Runtime args per core
-    const float eps = 1e-6;
-    union {
-        float f;
-        uint32_t u;
-    } f2u_from{}, f2u_to{};
-    f2u_from.f = operation_attributes.from;
-    f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
+    const float eps = 1e-6f;
+    const uint32_t f2u_from = std::bit_cast<uint32_t>(operation_attributes.from);
+    // -eps make sure that generated number is < operation_attributes.to
+    const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
     const uint32_t output_addr = output.buffer()->address();
     uint32_t tile_offset = 0;
@@ -137,7 +140,7 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
         uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
 
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from.u, f2u_to.u, tile_offset, units_per_core});
+            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, tile_offset, units_per_core});
 
         writer_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{output_addr, tile_offset, units_per_core});
