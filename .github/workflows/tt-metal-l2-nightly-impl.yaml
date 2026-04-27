@@ -839,6 +839,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - name: ttnn nightly data_movement/ccl tests group 1
+        if: ${{ !cancelled() }}
         run: pytest --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 1 -m "not disable_fast_runtime_mode"
       - name: ttnn nightly data_movement/ccl tests group 2
         if: ${{ !cancelled() }}
