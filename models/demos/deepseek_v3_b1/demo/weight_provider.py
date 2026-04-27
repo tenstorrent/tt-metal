@@ -242,22 +242,22 @@ class CacheWeightProvider:
         return two_phase_upload(device, host_weights)
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        host_weights = prepare_embedding_weights(
+        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
+        return prepare_embedding_weights(
             self._state_dict,
             device,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
         )
-        return self._upload_prepared_weights(device, host_weights)
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        host_weights = prepare_lm_head_weights(
+        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
+        return prepare_lm_head_weights(
             self._state_dict,
             device,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
         )
-        return self._upload_prepared_weights(device, host_weights)
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         host_weights = prepare_moe_layer_weights(
@@ -281,22 +281,22 @@ class CacheWeightProvider:
         return self._upload_prepared_weights(device, host_weights)
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        host_weights = prepare_mtp_weights(
+        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
+        return prepare_mtp_weights(
             self._state_dict,
             device,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
         )
-        return self._upload_prepared_weights(device, host_weights)
 
     def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
-        host_weights = prepare_spec_weights(
+        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
+        return prepare_spec_weights(
             self._state_dict,
             device,
-            move_to_device=False,
+            move_to_device=True,
             cache_config=self._cache_config(device),
         )
-        return self._upload_prepared_weights(device, host_weights)
 
 
 class SyntheticWeightProvider:
