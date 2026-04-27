@@ -21,10 +21,13 @@ Run unit tests (device-free subset by default):
 pytest models/demos/dots_ocr/tests -q
 ```
 
-Run demo with full TTNN vision (recommended):
+Run demo with TTNN backend (text + optional TTNN vision):
 
 ```bash
-MESH_DEVICE=N300 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.demo.demo --image path/to/image.png --backend ttnn
+MESH_DEVICE=N300 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.demo.demo \
+  --image path/to/image.png \
+  --backend ttnn \
+  --vision-backend ttnn
 ```
 
 Run HF reference only:
@@ -78,8 +81,10 @@ HF `vision_tower`). Includes `PatchEmbedTT`, `VisionBlockTT` (post-norm), and
 integration with the existing `PatchMergerTT`. Vision weights are currently
 replicated across the mesh, so effective vision TP is 1 even on N300 / T3K.
 
-The TTNN text decoder uses embeddings-based prefill with proper RoPE alignment.
-See `tt/model.py`, `tt/vision_transformer.py`, and `tt/generator.py`.
+The TTNN text decoder uses embeddings-based prefill with proper RoPE alignment and
+greedy token selection via TTNN argmax by default.
+
+See `models/demos/dots_ocr/demo/demo.py` for CLI flags.
 
 ## Notes
 - The full `rednote-hilab/dots.mocr` checkpoint is large; CI runs skip device tests unless `MESH_DEVICE` is set.

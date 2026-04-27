@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 
 import torch
@@ -187,7 +186,8 @@ class Generator(WarmupForwardMixin):
             ttnn = get_ttnn()
             if ttnn is None:
                 raise RuntimeError("ttnn is required for prefill_forward")
-            debug_sync = os.getenv("DOTS_PREFILL_DEBUG_SYNC", "").lower() in ("1", "true", "yes", "y")
+            # No env-var dependency: keep debug sync disabled by default.
+            debug_sync = False
             t0 = time.time()
             logger.info(f"Prefill(single-user): preparing inputs seq_len={seq_len} user_id={user_id}")
 
@@ -311,7 +311,7 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
             )
             if debug_sync:
-                logger.info("Prefill(single-user): synchronizing mesh device (DOTS_PREFILL_DEBUG_SYNC=1)")
+                logger.info("Prefill(single-user): synchronizing mesh device")
                 ttnn.synchronize_device(self.mesh_device)
 
             logger.info("Prefill(single-user): transferring logits to host (tt_logits.cpu())")
