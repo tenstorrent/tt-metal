@@ -96,7 +96,7 @@ def test_prefill_block(
     topology,
     pcc_validation,
     input_source,
-    request,
+    tokenizer,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -138,11 +138,12 @@ def test_prefill_block(
     # --- Create input ---
     if input_source == "abc_1k":
         profiler.start("tokenization")
-        tok = request.getfixturevalue("tokenizer")
         prompts = load_prompts_from_json(str(ABC_1K_PATH))
         prompt_text = prompts[0] if isinstance(prompts, list) else prompts
-        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
-        attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(
+            tokenizer, max_isl=isl_total, prompt_text=prompt_text
+        )
+        attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
         profiler.end("tokenization")
         logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
         with torch.no_grad():

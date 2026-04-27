@@ -236,7 +236,11 @@ void kernel_main() {
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
 
-        {
+        // Scatter write requires chunk_count >= 2 (NOC_SCATTER_WRITE_MIN_CHUNKS).
+        // When num_tiles_to_write_per_packet < 2 (e.g. float32 with large pages),
+        // the dispatch loop falls back to individual unicast writes, so we skip
+        // scatter header initialization entirely.
+        if constexpr (num_tiles_to_write_per_packet >= 2) {
             uint64_t dummy_addrs[4] = {0, 0, 0, 0};
             uint16_t chunk_sizes[3] = {
                 static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)};
