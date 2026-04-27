@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
@@ -51,6 +52,17 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
             unpA_num_faces,
             unpB_num_faces)),
         "");
+
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        unpack_src_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandA_id],
+        unpack_dst_format[operandB_id],
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE);
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -102,6 +114,17 @@ inline void llk_unpack_AB_matmul(
             partial_face_a ? 1 : get_operand_num_faces(operandB_id),
             partial_face_b ? 1 : get_operand_num_faces(operandA_id))),
         "");
+
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        unpack_src_format[operandB_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandB_id],
+        unpack_dst_format[operandA_id],
+        get_operand_face_r_dim(operandB_id),
+        get_operand_face_r_dim(operandA_id),
+        partial_face_a ? 1 : get_operand_num_faces(operandB_id),
+        partial_face_b ? 1 : get_operand_num_faces(operandA_id));
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(

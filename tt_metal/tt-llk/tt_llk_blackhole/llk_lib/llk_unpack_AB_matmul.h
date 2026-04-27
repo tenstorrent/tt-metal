@@ -203,6 +203,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     // 16x16 matmul not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(!(unpA_num_faces == 1 && unpB_num_faces == 1), "16x16 by 16x16 matmul is not supported");
 
+    // sstanisic todo: unpb_num_faces is annoying
     llk::san::unpack_operand_check(
         llk::san::IGNORE,
         llk::san::IGNORE,
@@ -212,7 +213,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces);
+        llk::san::IGNORE);
     llk::san::operation_init<llk::san::Operation::UnpackABMatmul>(
         kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
     // sstanisic todo: implement
