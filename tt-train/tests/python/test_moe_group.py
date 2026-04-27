@@ -216,7 +216,7 @@ class TestMoeGroupReference:
                 row_i = grouped[0, 0, start + i]
                 src = int(plan[start + i])
                 assert src != SENTINEL.item()
-                assert torch.allclose(row_i, flat[src])
+                assert torch.equal(row_i, flat[src])
 
     def test_pad_rows_are_zero_and_sentinel(self):
         D, B, S, H = 2, 1, 32, 16
@@ -321,10 +321,6 @@ def _to_device_tensor(t: torch.Tensor, layout, dtype) -> "ttnn.Tensor":
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
-
-def _from_device_tensor(t: "ttnn.Tensor") -> np.ndarray:
-    return ttnn.to_torch(t).float().numpy()
 
 
 @pytest.mark.skipif(not _TTML_AVAILABLE, reason="ttml / ttnn not importable")
@@ -463,15 +459,16 @@ class TestMoeGroupDevice:
             for row_idx in range(start, end):
                 src = int(plan_np[row_idx])
                 if src == sentinel:
-                    # pad slot (per-core or tail) — grouped row must be zero
-                    if not np.allclose(grouped_np[0, 0, row_idx], 0.0, atol=1e-6):
+                    # pad slot (per-core or tail) — grouped row must be exactly zero
+                    pad_row = torch.from_numpy(grouped_np[0, 0, row_idx])
+                    if not torch.equal(pad_row, torch.zeros_like(pad_row)):
                         raise AssertionError(
                             f"{label}: expert {e} pad row {row_idx} is not zero: " f"{grouped_np[0, 0, row_idx, :8]}"
                         )
                     continue
-                expected_row = flat[src]
-                got_row = grouped_np[0, 0, row_idx]
-                if not np.allclose(got_row, expected_row, atol=1e-2):
+                expected_row = torch.from_numpy(flat[src])
+                got_row = torch.from_numpy(grouped_np[0, 0, row_idx])
+                if not torch.equal(got_row, expected_row):
                     raise AssertionError(
                         f"{label}: expert {e}, grouped row {row_idx} "
                         f"(src {src}) mismatch.\n"
