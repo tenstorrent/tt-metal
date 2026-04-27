@@ -209,7 +209,9 @@ def _validate_gap_coverage(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate benchmark artifacts against centralized perf/accuracy targets.")
+    parser = argparse.ArgumentParser(
+        description="Validate benchmark artifacts against centralized perf/accuracy targets."
+    )
     parser.add_argument(
         "--path-profile",
         choices=[profile.value for profile in PathProfile],
