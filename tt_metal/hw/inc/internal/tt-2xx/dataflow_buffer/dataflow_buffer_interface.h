@@ -49,7 +49,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 61, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 87, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -73,7 +73,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 60, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface (unpack TRISC) size is incorrect");
 
 #else
 
@@ -106,7 +106,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 121, "LocalDFBInterface size is incorrect");
 
 #endif
 

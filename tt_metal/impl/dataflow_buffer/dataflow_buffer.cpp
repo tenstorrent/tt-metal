@@ -232,11 +232,11 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
     return desc;
 }
 
-// Returns the largest n in [1, NUM_TXN_IDS] satisfying the divisibility constraint that
+// Returns the smallest n in (1, NUM_TXN_IDS] satisfying the divisibility constraint that
 // compute_txn_descriptor() enforces:
 //   blocked consumer:  num_entries % (n * num_tcs_per_risc) == 0
 //   all other cases:   num_entries % (n * num_prods_or_cons * num_tcs_per_risc) == 0
-// Using the maximum valid n maximises ISR double-buffering opportunities.
+// Falls back to 1 if no n > 1 satisfies the constraint.
 // If even n=1 does not satisfy the constraint the configuration is invalid
 // and compute_txn_descriptor() will catch it with a TT_FATAL.
 static uint8_t compute_optimal_txn_id_count(
@@ -244,16 +244,15 @@ static uint8_t compute_optimal_txn_id_count(
     uint8_t num_prods_or_cons,
     uint8_t num_tcs_per_risc,
     bool is_blocked_consumer) {
-    uint8_t best = 1;
     for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
         uint32_t divisor = is_blocked_consumer
             ? static_cast<uint32_t>(n) * num_tcs_per_risc
             : static_cast<uint32_t>(n) * num_prods_or_cons * num_tcs_per_risc;
         if (num_entries % divisor == 0) {
-            best = n;
+            return n;
         }
     }
-    return best;
+    return 1;
 }
 
 bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }

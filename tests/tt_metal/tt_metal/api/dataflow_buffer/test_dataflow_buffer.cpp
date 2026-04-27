@@ -428,6 +428,401 @@ void run_single_dfb_program(
     }
 }
 
+// =====================================================================================
+// Gap 7 harness – concurrent DFBs on the same core (TC allocator stress)
+//
+// Runs `num_dfbs` independent 1Sx1S DM→DM DFBs simultaneously on core (0,0).
+//
+// Thread assignment (Quasar has 8 DM threads total):
+//   Producer threads : DM[0 .. num_dfbs-1]  (combined_producer_mask = low  num_dfbs bits)
+//   Consumer threads : DM[num_dfbs .. 2*num_dfbs-1] (combined_consumer_mask = next num_dfbs bits)
+//
+// All num_dfbs DFBs are created in a single Program so their TCs are allocated
+// simultaneously, stressing the TC allocator.  Each DFB is bound to the same
+// multi-producer and multi-consumer kernel; each DM thread derives its DFB ID from
+// its position in the combined mask (via mhartid) and owns a contiguous slice of
+// the shared DRAM buffers.
+//
+// num_dfbs must satisfy: 2 * num_dfbs <= 8 (Quasar DM thread limit).
+// dfb_config must use num_producers=1, num_consumers=1 (1Sx1S).
+// =====================================================================================
+void run_concurrent_dfbs_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t num_dfbs,
+    experimental::dfb::DataflowBufferConfig& dfb_config) {
+    TT_FATAL(
+        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
+        "Concurrent DFB tests require Quasar (multi-threaded DM)");
+    TT_FATAL(
+        dfb_config.num_producers == 1 && dfb_config.num_consumers == 1,
+        "run_concurrent_dfbs_program requires 1Sx1S per DFB");
+    TT_FATAL(2 * num_dfbs <= 8, "2*num_dfbs must fit in the 8 available Quasar DM threads");
+
+    const CoreCoord core(0, 0);
+    const CoreRangeSet core_range_set(CoreRange(core, core));
+
+    const uint32_t entry_size      = dfb_config.entry_size;
+    const uint32_t entries_per_dfb = dfb_config.num_entries;
+    const uint32_t total_buf_size  = num_dfbs * entries_per_dfb * entry_size;
+
+    distributed::DeviceLocalBufferConfig local_cfg{.page_size = entry_size, .buffer_type = BufferType::DRAM};
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto in_buffer  = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_buf_size}, local_cfg, mesh_device.get());
+    auto out_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_buf_size}, local_cfg, mesh_device.get());
+
+    log_info(
+        tt::LogTest,
+        "Gap7: {} concurrent 1Sx1S DFBs, {} entries/DFB, total {}B in/out buffers",
+        num_dfbs, entries_per_dfb, total_buf_size);
+
+    Program program = CreateProgram();
+
+    // Create one producer kernel instance and one consumer kernel instance per DFB,
+    // each running on a single DM thread.  Encoding dfb_id and chunk_offset in the CTA
+    // makes each instance unique so the runtime allocates a distinct DM thread to it.
+    // This ensures BindDataflowBufferToProducerConsumerKernels registers exactly 1 DM
+    // thread as producer and 1 as consumer for each DFB – matching num_producers=1 /
+    // num_consumers=1 in the DFB config.  A shared N-thread kernel bound to N DFBs
+    // would erroneously register all N threads as producers for every DFB, causing the
+    // consumer to wait for N acks that never arrive (hang).
+    std::vector<KernelHandle> producer_kernels, consumer_kernels;
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const uint32_t chunk_offset = i * entries_per_dfb;
+
+        std::vector<uint32_t> prod_cta = {
+            entries_per_dfb,
+            (uint32_t)dfb_config.enable_implicit_sync,
+            (uint32_t)in_buffer->address(),
+            i,             // dfb_id
+            chunk_offset}; // chunk_offset
+        tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(prod_cta);
+
+        producer_kernels.push_back(experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer.cpp",
+            core_range_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = prod_cta}));
+
+        std::vector<uint32_t> cons_cta = {
+            entries_per_dfb,
+            (uint32_t)dfb_config.enable_implicit_sync,
+            (uint32_t)out_buffer->address(),
+            i,             // dfb_id
+            chunk_offset}; // chunk_offset
+        tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(cons_cta);
+
+        consumer_kernels.push_back(experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer.cpp",
+            core_range_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = cons_cta}));
+    }
+
+    // All DFBs created in the same Program so TCs are allocated simultaneously.
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range_set, dfb_config);
+        experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program, dfb_id, producer_kernels[i], consumer_kernels[i]);
+    }
+
+    // No runtime args needed: dfb_id and chunk_offset are already in each kernel's CTA.
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 100, total_buf_size / sizeof(uint32_t));
+    execute_program_and_verify(mesh_device, program, in_buffer, out_buffer, zero_coord, input);
+}
+
+// =====================================================================================
+// Gap 7 harness – Tensix→DM concurrent DFBs (TC allocator stress)
+//
+// Runs num_dfbs independent 1Sx1S Tensix→DM DFBs on core (0,0) with a single
+// Neo thread looping through all DFBs sequentially and num_dfbs DM consumer threads
+// running concurrently (each draining its own DFB the moment entries arrive).
+//
+// Using a sequential Tensix kernel (dfb_t6_seq_producer.cpp) avoids any dependency
+// on Neo hartid values: the single Neo thread signals DFB_0 fully, waits for acks,
+// then moves to DFB_1.  DM consumer threads start simultaneously but block on
+// wait_front until their DFB has entries.
+//
+// All num_dfbs DFBs are created in one Program so all their TCs are allocated at
+// once (the TC-allocator stress).  Each DFB has its own DRAM out_buffer.
+// The host pre-fills each DFB's L1 ring at l1_base + i * dfb.total_size().
+//
+// dfb_config must use num_producers=1, num_consumers=1 (1Sx1S).
+// =====================================================================================
+void run_concurrent_tensix_dm_dfbs_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t num_dfbs,
+    experimental::dfb::DataflowBufferConfig& dfb_config) {
+    TT_FATAL(
+        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
+        "Concurrent Tensix→DM DFB tests require Quasar");
+    TT_FATAL(
+        dfb_config.num_producers == 1 && dfb_config.num_consumers == 1,
+        "run_concurrent_tensix_dm_dfbs_program requires 1Sx1S per DFB");
+    TT_FATAL(num_dfbs <= 8, "num_dfbs must fit in the 8 Quasar DM threads");
+
+    const CoreCoord core(0, 0);
+    const CoreRangeSet core_range_set(CoreRange(core, core));
+    IDevice* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+
+    const uint32_t entry_size     = dfb_config.entry_size;
+    const uint32_t entries_per_dfb = dfb_config.num_entries;
+    const uint32_t wpe             = entry_size / sizeof(uint32_t);
+    const uint32_t buf_size        = entries_per_dfb * entry_size;
+
+    // Separate DRAM out_buffer per DFB (DM consumers write here).
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> out_buffers;
+    distributed::DeviceLocalBufferConfig local_cfg{.page_size = entry_size, .buffer_type = BufferType::DRAM};
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        distributed::ReplicatedBufferConfig buf_cfg{.size = buf_size};
+        out_buffers.push_back(distributed::MeshBuffer::create(buf_cfg, local_cfg, mesh_device.get()));
+    }
+
+    // Generate input – each DFB gets its own slice (entries_per_dfb entries).
+    const uint32_t total_words = num_dfbs * entries_per_dfb * wpe;
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_words);
+
+    Program program = CreateProgram();
+
+    // Tensix sequential producer: 1 Neo thread, loops through num_dfbs DFBs.
+    std::vector<uint32_t> producer_cta = {num_dfbs, entries_per_dfb};
+    auto producer_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer.cpp",
+        core_range_set,
+        experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 1, .compile_args = producer_cta});
+
+    // DM concurrent consumers: one 1-thread kernel instance per DFB.
+    // Encoding dfb_id and the per-DFB dst_addr in each instance's CTA makes each
+    // instance unique, so the runtime allocates a separate DM thread to it and
+    // BindDataflowBufferToProducerConsumerKernels registers exactly 1 consumer per
+    // DFB – matching num_consumers=1 in the DFB config.
+    const uint32_t num_entries_per_consumer = entries_per_dfb;  // 1Sx1S: sole consumer gets all
+
+    std::vector<KernelHandle> consumer_kernels;
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        std::vector<uint32_t> cons_cta = {
+            num_entries_per_consumer,
+            (uint32_t)dfb_config.enable_implicit_sync,
+            (uint32_t)out_buffers[i]->address(),
+            i}; // dfb_id
+        tt::tt_metal::TensorAccessorArgs(out_buffers[i]).append_to(cons_cta);
+
+        consumer_kernels.push_back(experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_sep.cpp",
+            core_range_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = cons_cta}));
+    }
+
+    // Create all DFBs in the same Program (simultaneous TC allocation).
+    std::vector<uint32_t> dfb_ids;
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range_set, dfb_config);
+        experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program, dfb_id, producer_kernel, consumer_kernels[i]);
+        dfb_ids.push_back(dfb_id);
+    }
+
+    // Producer runtime args: nothing extra needed (loop bounds are in CTA).
+    SetRuntimeArgs(program, producer_kernel, core, {});
+    // No consumer runtime args: dfb_id and dst_addr are in each instance's CTA.
+
+    // Pre-fill each DFB's L1 ring with its input slice.
+    // DFBs are allocated consecutively starting at the base L1 allocator address.
+    auto dfb0 = program.impl().get_dataflow_buffer(dfb_ids[0]);
+    const uint32_t l1_base   = static_cast<uint32_t>(
+        device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t ring_stride = dfb0->total_size();  // bytes; same for all identical configs
+    const uint32_t ring_words  = ring_stride / sizeof(uint32_t);
+
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const uint32_t dfb_l1_addr = l1_base + i * ring_stride;
+        std::vector<uint32_t> slice(ring_words, 0u);
+        for (uint32_t e = 0; e < entries_per_dfb; ++e) {
+            const uint32_t src = (i * entries_per_dfb + e) * wpe;
+            std::copy(input.begin() + src, input.begin() + src + wpe, slice.begin() + e * wpe);
+        }
+        detail::WriteToDeviceL1(device, core, dfb_l1_addr, slice);
+    }
+
+    // Launch program (slow dispatch; same pattern as execute_program_and_verify).
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+
+    // Verify: each out_buffer must match its DFB's L1 pre-fill slice.
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        std::vector<uint32_t> output;
+        distributed::ReadShard(
+            mesh_device->mesh_command_queue(), output, out_buffers[i], zero_coord, true);
+
+        std::vector<uint32_t> expected(entries_per_dfb * wpe);
+        for (uint32_t e = 0; e < entries_per_dfb; ++e) {
+            const uint32_t src = (i * entries_per_dfb + e) * wpe;
+            std::copy(input.begin() + src, input.begin() + src + wpe, expected.begin() + e * wpe);
+        }
+        EXPECT_EQ(expected, output) << "TensixDM concurrent DFB " << i << " output mismatch";
+    }
+}
+
+// =====================================================================================
+// Gap 7 harness – sequential DM→DM DFBs for TC-exhaustion tests
+//
+// N DM producer threads and N DM consumer threads cooperate sequentially through
+// num_dfbs DFBs.  All DFBs are created in a single Program so their TCs are all
+// allocated simultaneously (TC-pool stress), even though data flows through them
+// one DFB at a time.  Each DFB has its own DRAM in_buffer and out_buffer.
+//
+// Producer threads: DM[0..num_producers-1]
+// Consumer threads: DM[num_producers..num_producers+num_consumers-1]
+//
+// Supports mixed configs: configs[i].cap can be STRIDED or BLOCKED independently.
+// All configs must share the same num_producers, num_consumers, num_entries, and
+// entry_size so that num_entries_per_producer (a single CTA value) is consistent.
+// =====================================================================================
+void run_sequential_dfbs_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::vector<experimental::dfb::DataflowBufferConfig>& configs) {
+    TT_FATAL(!configs.empty(), "configs must not be empty");
+    TT_FATAL(
+        mesh_device->get_devices()[0]->arch() == ARCH::QUASAR,
+        "Sequential multi-DFB TC-exhaustion tests require Quasar");
+
+    const uint32_t num_dfbs      = static_cast<uint32_t>(configs.size());
+    const uint32_t num_producers = configs[0].num_producers;
+    const uint32_t num_consumers = configs[0].num_consumers;
+    const uint32_t num_entries   = configs[0].num_entries;
+    const uint32_t entry_size    = configs[0].entry_size;
+
+    for (const auto& c : configs) {
+        TT_FATAL(c.num_producers == num_producers && c.num_consumers == num_consumers &&
+                     c.num_entries == num_entries && c.entry_size == entry_size,
+            "All DFB configs must share num_producers/num_consumers/num_entries/entry_size");
+    }
+
+    // Producer DM threads: low num_producers bits; consumer threads: next num_consumers bits.
+    TT_FATAL(
+        num_producers + num_consumers <= 8,
+        "num_producers + num_consumers must fit in 8 Quasar DM threads");
+
+    const uint32_t producer_mask =  (1u << num_producers) - 1u;
+    const uint32_t consumer_mask = ((1u << num_consumers) - 1u) << num_producers;
+
+    const CoreCoord core(0, 0);
+    const CoreRangeSet core_range_set(CoreRange(core, core));
+    IDevice* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+
+    const uint32_t buf_size = num_entries * entry_size;
+
+    // Separate in_buffer and out_buffer per DFB.
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> in_buffers, out_buffers;
+    distributed::DeviceLocalBufferConfig local_cfg{.page_size = entry_size, .buffer_type = BufferType::DRAM};
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        distributed::ReplicatedBufferConfig buf_cfg{.size = buf_size};
+        in_buffers.push_back(distributed::MeshBuffer::create(buf_cfg, local_cfg, mesh_device.get()));
+        out_buffers.push_back(distributed::MeshBuffer::create(buf_cfg, local_cfg, mesh_device.get()));
+    }
+
+    // Generate and write input data for each DFB's in_buffer.
+    std::vector<std::vector<uint32_t>> inputs(num_dfbs);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        inputs[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+            0, 100, buf_size / sizeof(uint32_t));
+        distributed::WriteShard(
+            mesh_device->mesh_command_queue(), in_buffers[i], inputs[i], zero_coord, true);
+    }
+
+    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        for (uint32_t i = 0; i < num_dfbs; ++i) {
+            std::vector<uint32_t> rdback;
+            distributed::ReadShard(
+                mesh_device->mesh_command_queue(), rdback, in_buffers[i], zero_coord, true);
+            tt_driver_atomics::mfence();
+            EXPECT_EQ(rdback, inputs[i]) << "in_buffer[" << i << "] DRAM write verify failed";
+        }
+    }
+
+    Program program = CreateProgram();
+
+    const uint32_t num_entries_per_producer =
+        (num_entries + num_producers - 1) / num_producers;  // ceiling; all configs share this
+
+    // Sequential DM producer kernel.
+    std::vector<uint32_t> prod_cta = {
+        num_entries_per_producer,
+        (uint32_t)configs[0].enable_implicit_sync};
+    tt::tt_metal::TensorAccessorArgs(in_buffers[0]).append_to(prod_cta);
+
+    auto producer_kernel = experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer.cpp",
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = num_producers, .compile_args = prod_cta});
+
+    // Sequential DM consumer kernel.
+    std::vector<uint32_t> cons_cta = {(uint32_t)configs[0].enable_implicit_sync};
+    tt::tt_metal::TensorAccessorArgs(out_buffers[0]).append_to(cons_cta);
+
+    auto consumer_kernel = experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_consumer.cpp",
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = num_consumers, .compile_args = cons_cta});
+
+    // Create all DFBs in the same Program (simultaneous TC allocation stress).
+    std::vector<uint32_t> dfb_ids;
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        auto cfg_copy = configs[i];  // CreateDataflowBuffer takes by const ref; copy is fine
+        auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range_set, cfg_copy);
+        experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program, dfb_id, producer_kernel, consumer_kernel);
+        dfb_ids.push_back(dfb_id);
+    }
+
+    // Producer runtime args: mask | num_dfbs | src_addr[0..N-1]
+    std::vector<uint32_t> prod_rta = {producer_mask, num_dfbs};
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        prod_rta.push_back(static_cast<uint32_t>(in_buffers[i]->address()));
+    }
+    SetRuntimeArgs(program, producer_kernel, core, prod_rta);
+
+    // Consumer runtime args: mask | num_dfbs | dst_addr[0..N-1] | epc[0..N-1] | is_blocked[0..N-1]
+    std::vector<uint32_t> cons_rta = {consumer_mask, num_dfbs};
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        cons_rta.push_back(static_cast<uint32_t>(out_buffers[i]->address()));
+    }
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const bool is_blocked = (configs[i].cap == dfb::AccessPattern::BLOCKED);
+        const uint32_t epc = is_blocked ? num_entries : (num_entries + num_consumers - 1) / num_consumers;
+        cons_rta.push_back(epc);
+    }
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        cons_rta.push_back(configs[i].cap == dfb::AccessPattern::BLOCKED ? 1u : 0u);
+    }
+    SetRuntimeArgs(program, consumer_kernel, core, cons_rta);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+
+    // Verify: out_buffer[i] should equal in_buffer[i] (strided and blocked alike).
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        std::vector<uint32_t> output;
+        distributed::ReadShard(
+            mesh_device->mesh_command_queue(), output, out_buffers[i], zero_coord, true);
+        EXPECT_EQ(inputs[i], output) << "Sequential DFB " << i << " output mismatch";
+    }
+}
+
 void run_in_dfb_out_dfb_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     experimental::dfb::DataflowBufferConfig& dm2tensix_config,
@@ -910,6 +1305,113 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx4B) {
 
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set);
+}
+
+// =====================================================================================
+// Gap 7 -- Concurrent DFBs on Same Core (TC Allocator Stress)
+//
+// DMTest4xDFB_1Sx1S
+//   4 truly-concurrent 1Sx1S DFBs.  DM threads 0..3 produce, DM threads 4..7 consume;
+//   all 8 Quasar DM threads active simultaneously.  4 TCs allocated at once.
+//   Harness: run_concurrent_dfbs_program + dfb_multi_producer.cpp + dfb_multi_consumer.cpp
+//
+// TensixDMTest4xDFB_1Sx1S
+//   4 concurrent 1Sx1S Tensix→DM DFBs.  Single Neo thread fills DFBs sequentially;
+//   4 DM consumer threads drain each DFB as soon as entries arrive.
+//   Harness: run_concurrent_tensix_dm_dfbs_program
+//            + dfb_t6_seq_producer.cpp + dfb_multi_consumer_sep.cpp
+//
+// DMTest4xDFB_4Sx4S
+//   4× 4Sx4S DFBs = 16 TCs total: fully exhausts the DM-visible TC pool of one Tensix.
+//   DM threads 0..3 cooperate on each DFB in sequence; DM threads 4..7 consume.
+//   All 16 TCs allocated simultaneously in one Program.
+//   Harness: run_sequential_dfbs_program + dfb_seq_producer.cpp + dfb_seq_consumer.cpp
+//
+// DMTest4xDFB_Mixed
+//   2× 4Sx4S (strided) + 2× 4Sx4B (blocked) on the same core.
+//   Mixed TC allocation (strided TCs + remapper-backed blocked TCs) near the 16-TC limit.
+//   Harness: run_sequential_dfbs_program + dfb_seq_producer.cpp + dfb_seq_consumer.cpp
+// =====================================================================================
+
+TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_1Sx1S) { // hanging implicit sync
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping: concurrent DFB test requires Quasar multi-threaded DM";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size    = 1024,
+        .num_entries   = 16,
+        .num_producers = 1,
+        .pap           = dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap           = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = GetParam()};
+    run_concurrent_dfbs_program(this->devices_.at(0), /*num_dfbs=*/2, config);
+}
+
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest4xDFB_1Sx1S) {
+    // 4 concurrent 1Sx1S DFBs: single Neo thread produces to all 4 sequentially while
+    // 4 DM consumer threads drain their DFBs as soon as entries become available.
+    // Uses dfb_t6_seq_producer.cpp + dfb_multi_consumer_sep.cpp.
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping: Tensix concurrent DFB test requires Quasar";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size    = 1024,
+        .num_entries   = 16,
+        .num_producers = 1,
+        .pap           = dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap           = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = GetParam()};
+    run_concurrent_tensix_dm_dfbs_program(this->devices_.at(0), /*num_dfbs=*/4, config);
+}
+
+TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_4Sx4S) {
+    // 4 DFBs × 4Sx4S = 16 TCs: fully exhausts the DM-visible TC pool of one Tensix.
+    // DM threads 0..3 cooperatively produce all 4 DFBs in sequence; DM threads 4..7
+    // cooperatively consume all 4 DFBs in sequence.  All 16 TCs are allocated in a
+    // single Program compilation step, stressing the TC allocator.
+    // Uses dfb_seq_producer.cpp + dfb_seq_consumer.cpp.
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping: sequential multi-DFB TC exhaustion test requires Quasar";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size    = 1024,
+        .num_entries   = 16,
+        .num_producers = 4,
+        .pap           = dfb::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap           = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = GetParam()};
+    run_sequential_dfbs_program(this->devices_.at(0), {config, config, config, config});
+}
+
+TEST_P(DFBImplicitSyncParamFixture, DMTest4xDFB_Mixed) {
+    // 2× 4Sx4S (strided consumers) + 2× 4Sx4B (blocked consumers) on the same core.
+    // Mixed TC allocation exercises both plain strided TCs and remapper-backed blocked TCs
+    // simultaneously, near the 16-TC limit (4+4 strided + 4+1+4+1 = 14 TCs total for blocked).
+    // Uses dfb_seq_producer.cpp + dfb_seq_consumer.cpp with per-DFB is_blocked flags.
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping: mixed multi-DFB TC exhaustion test requires Quasar";
+    }
+    experimental::dfb::DataflowBufferConfig strided_cfg{
+        .entry_size    = 1024,
+        .num_entries   = 16,
+        .num_producers = 4,
+        .pap           = dfb::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap           = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = GetParam()};
+    experimental::dfb::DataflowBufferConfig blocked_cfg{
+        .entry_size    = 1024,
+        .num_entries   = 16,
+        .num_producers = 4,
+        .pap           = dfb::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap           = dfb::AccessPattern::BLOCKED,
+        .enable_implicit_sync = GetParam()};
+    run_sequential_dfbs_program(
+        this->devices_.at(0), {strided_cfg, strided_cfg, blocked_cfg, blocked_cfg});
 }
 
 INSTANTIATE_TEST_SUITE_P(
