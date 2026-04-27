@@ -366,8 +366,10 @@ private:
     //     Phase 5b health-check relay read threw; relay ERISC confirmed non-functional.
     //
     //   SET site 6 (FIX AN — device.cpp, Phase 2.5 catch in quiesce):
-    //     Phase 2.5 relay read threw during quiesce; only on !is_mmio_capable() devices
-    //     (relay-dependent reads only).  Added by FIX AN (#42429).
+    //     Phase 2.5 L1 read threw (relay not ready, or out-of-mesh MMIO channel has no
+    //     SOC descriptor entry).  Applies to BOTH MMIO and non-MMIO devices — Phase 5
+    //     has an unconditional fabric_relay_path_broken_ early-return that protects all
+    //     device types from reading indeterminate ETH state.  Added by FIX AN (#42429).
     //
     //   CLEAR site (configure_fabric, top of function):
     //     Fresh fabric firmware is loaded on all ETH channels.  Relay is restored.

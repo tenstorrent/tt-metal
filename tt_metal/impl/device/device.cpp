@@ -1009,23 +1009,24 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
             try {
                 detail::ReadFromDeviceL1(this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
             } catch (const std::exception& e) {
-                // Non-MMIO relay read failed (e.g. UMD relay ERISC not running relay firmware
-                // after Phase 3 loaded fabric firmware on the MMIO device's channels, OR the
-                // relay ETH channel was force-reset in Phase 2.5 because it was stuck in handshake).
-                // We cannot safely send TERMINATE because WriteToDeviceL1 via the relay can hang
-                // indefinitely with no write timeout.  Skip this channel.
+                // L1 read failed in Phase 2.5.  Two distinct failure modes:
+                // (a) Non-MMIO: UMD relay ERISC is not running relay firmware (Phase 3 loaded
+                //     fabric firmware on the MMIO device's relay channels, or relay was
+                //     force-reset).  WriteToDeviceL1 via relay would hang indefinitely.
+                // (b) MMIO: channel is out-of-mesh (e.g. chan 14/15 not in SOC descriptor for
+                //     a partial-mesh N300 peer) — get_eth_core_for_channel throws
+                //     "No core type found".
+                // In both cases: set fabric_relay_path_broken_ = true.  Phase 5 has an
+                // unconditional fabric_relay_path_broken_ skip (line ~2315) that protects BOTH
+                // MMIO and non-MMIO devices from reading channels whose ETH state is
+                // indeterminate after a failed Phase 2.5 read.  Without this skip on MMIO
+                // devices, Phase 5 proceeds, sees ETH at 0x0 (not booted), returns "cleanly"
+                // via FIX W, but leaves dispatch cores stuck — causing a teardown timeout.
                 //
-                // FIX AN (#42429): Set fabric_relay_path_broken_ = true so that Phase 3's FIX Q
-                // guard skips configure_fabric_cores() / WriteRuntimeArgsToDevice / l1_barrier /
-                // write_launch_msg_to_core — all of which also go through the relay and would throw.
-                // Without this, Phase 3 throws in TearDown() → GoogleTest marks the (SKIPPED) test
-                // as FAILED.  The underlying scenario: Phase 2.5 force-reset Device N chan 0 (the
-                // relay ETH channel to the MMIO device), which broke the relay mid-quiesce.
-                // Only applies to non-MMIO devices — MMIO devices have direct UMD access and do
-                // not depend on a relay path.
-                if (!is_mmio_capable()) {
-                    fabric_relay_path_broken_ = true;
-                }
+                // FIX AN (#42429): Set fabric_relay_path_broken_ = true unconditionally so
+                // that Phase 3's FIX Q guard skips configure_fabric_cores() and Phase 5 is
+                // skipped via the relay-broken early-return for this device.
+                fabric_relay_path_broken_ = true;
                 log_warning(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
