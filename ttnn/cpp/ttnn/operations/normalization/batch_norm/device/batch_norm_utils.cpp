@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ DeviceComputeKernelConfig resolve_compute_kernel_config(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
     const auto default_fp32_acc_math_fidelity =
-        (arch == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+        (arch == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     const auto default_approx_mode = false;
     const auto default_fp32_acc = true;
     const auto default_l1_acc = true;

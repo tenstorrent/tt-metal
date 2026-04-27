@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -130,7 +130,8 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
     const CoreCoord& logical_core,
     const ReduceConfig& test_config,
     const std::shared_ptr<distributed::MeshBuffer>& src_dram_buffer,
-    const std::shared_ptr<distributed::MeshBuffer>& dst_dram_buffer) {
+    const std::shared_ptr<distributed::MeshBuffer>& dst_dram_buffer,
+    uint32_t dst_buffer_id) {
     uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
     uint32_t N = test_config.shape[0] * test_config.shape[1];
@@ -172,7 +173,7 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
                         .defines = reader_defines});
             }
 
-            std::vector<uint32_t> writer_compile_args = {};
+            std::vector<uint32_t> writer_compile_args = {dst_buffer_id};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
@@ -235,7 +236,7 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
                         .compile_args = reader_compile_args});
             }
 
-            std::vector<uint32_t> writer_compile_args = {};
+            std::vector<uint32_t> writer_compile_args = {dst_buffer_id};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
@@ -451,7 +452,12 @@ void run_single_core_reduce_program(
         tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
     }
 
-    auto [reader_kernel, writer_kernel] = add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
+    const uint32_t dst_buffer_id = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR
+                                       ? dst_dfb
+                                       : static_cast<uint32_t>(tt::CBIndex::c_16);
+
+    auto [reader_kernel, writer_kernel] = add_reader_writer_kernels(
+        workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer, dst_buffer_id);
 
     vector<uint32_t> compute_kernel_args = {
         uint(Ht),
@@ -602,10 +608,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -644,10 +646,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -691,10 +689,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -737,10 +731,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -780,10 +770,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -827,10 +813,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {

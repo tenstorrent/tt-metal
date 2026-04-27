@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Tests for TensorSpec validation of sharding configurations.
@@ -23,6 +23,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
@@ -122,3 +123,152 @@ INSTANTIATE_TEST_SUITE_P(
     )  // Values
     // clang-format on
 );
+
+class MemoryConfigEqualityTest : public ::testing::Test {
+protected:
+    CoreRangeSet core_grid_ = num_cores_to_corerangeset(4, grid_size, true);
+    ShardSpec shard_spec_a_{core_grid_, {32, 32}, ShardOrientation::ROW_MAJOR};
+    ShardSpec shard_spec_b_{core_grid_, {64, 64}, ShardOrientation::ROW_MAJOR};
+    NdShardSpec nd_shard_spec_a_{Shape{32, 32}, core_grid_, ShardOrientation::ROW_MAJOR};
+    NdShardSpec nd_shard_spec_b_{Shape{64, 64}, core_grid_, ShardOrientation::ROW_MAJOR};
+};
+
+TEST_F(MemoryConfigEqualityTest, DefaultInterleaved) {
+    MemoryConfig a;
+    MemoryConfig b;
+    EXPECT_EQ(a, b);
+}
+
+TEST_F(MemoryConfigEqualityTest, DifferentBufferType) {
+    MemoryConfig dram(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    MemoryConfig l1(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+    EXPECT_NE(dram, l1);
+}
+
+TEST_F(MemoryConfigEqualityTest, DifferentMemoryLayout) {
+    MemoryConfig interleaved(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+    MemoryConfig height_sharded(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    EXPECT_NE(interleaved, height_sharded);
+}
+
+TEST_F(MemoryConfigEqualityTest, BothLegacyShardSpec_Equal) {
+    MemoryConfig a(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    MemoryConfig b(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    EXPECT_EQ(a, b);
+}
+
+TEST_F(MemoryConfigEqualityTest, BothLegacyShardSpec_Different) {
+    MemoryConfig a(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    MemoryConfig b(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_b_);
+    EXPECT_NE(a, b);
+}
+
+TEST_F(MemoryConfigEqualityTest, BothNdShardSpec_Equal) {
+    MemoryConfig a(BufferType::L1, nd_shard_spec_a_);
+    MemoryConfig b(BufferType::L1, nd_shard_spec_a_);
+    EXPECT_EQ(a, b);
+}
+
+TEST_F(MemoryConfigEqualityTest, BothNdShardSpec_Different) {
+    MemoryConfig a(BufferType::L1, nd_shard_spec_a_);
+    MemoryConfig b(BufferType::L1, nd_shard_spec_b_);
+    EXPECT_NE(a, b);
+}
+
+TEST_F(MemoryConfigEqualityTest, BothNoShardSpec) {
+    MemoryConfig a(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+    MemoryConfig b(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+    EXPECT_EQ(a, b);
+}
+
+TEST_F(MemoryConfigEqualityTest, NdShardCreatedIgnoresLegacyField) {
+    // Two configs both created with nd_shard_spec should compare equal on nd_shard_spec alone,
+    // even if one has a legacy shard_spec prepopulated and the other does not.
+    MemoryConfig user_config(BufferType::L1, nd_shard_spec_a_);
+    MemoryConfig tensor_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/true);
+    EXPECT_EQ(user_config, tensor_config);
+}
+
+TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
+    // Two configs both created with legacy shard_spec should compare equal on shard_spec alone,
+    // even if one has an nd_shard_spec prepopulated and the other does not.
+    MemoryConfig user_config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    MemoryConfig tensor_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/false);
+    EXPECT_EQ(user_config, tensor_config);
+}
+
+TEST_F(MemoryConfigEqualityTest, MixedCreationPath_BothFieldsMatch) {
+    // One created with nd_shard_spec, the other with legacy shard_spec.
+    // Equality falls through to comparing both fields.
+    MemoryConfig nd_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/true);
+    MemoryConfig legacy_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/false);
+    EXPECT_EQ(nd_config, legacy_config);
+}
+
+TEST_F(MemoryConfigEqualityTest, MixedCreationPath_NdFieldDiffers) {
+    MemoryConfig nd_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/true);
+    MemoryConfig legacy_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_b_,
+        /*created_with_nd_shard_spec=*/false);  // This is not a realistic scenario, but it's here to test the equality
+                                                // operator.
+    EXPECT_NE(nd_config, legacy_config);
+}
+
+TEST_F(MemoryConfigEqualityTest, MixedCreationPath_LegacyFieldDiffers) {
+    MemoryConfig nd_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/true);
+    MemoryConfig legacy_config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::ND_SHARDED,
+        BufferType::L1,
+        shard_spec_b_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/false);  // This is not a realistic scenario, but it's here to test the equality
+                                                // operator.
+    EXPECT_NE(nd_config, legacy_config);
+}
+
+TEST_F(MemoryConfigEqualityTest, NotEqualOperator) {
+    MemoryConfig a(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    MemoryConfig b(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_b_);
+    EXPECT_TRUE(a != b);
+    EXPECT_FALSE(a != a);
+}
+
+TEST_F(MemoryConfigEqualityTest, NotEqualOperator_NdShardSpec) {
+    MemoryConfig a(BufferType::L1, nd_shard_spec_a_);
+    MemoryConfig b(BufferType::L1, nd_shard_spec_b_);
+    EXPECT_TRUE(a != b);
+    EXPECT_FALSE(a != a);
+}

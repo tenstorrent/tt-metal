@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -68,11 +70,22 @@ Alignment legacyShapeToAlignment(
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
     ttsl::SmallVector<uint32_t> values(padded_rank);
-    values[padded_rank - 1] = legacy_padded_shape[-1];
-    values[padded_rank - 2] = legacy_padded_shape[-2];
 
-    for (int i = padded_rank - 3; i >= 0; i--) {
-        values[i] = legacy_padded_shape[i] * values[i + 1];
+    if (page_config.get_layout() == Layout::TILE && logical_shape[-1] == legacy_padded_shape[-1] &&
+        logical_shape[-2] == legacy_padded_shape[-2]) {
+        // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
+        // for the innermost alignment; otherwise use the legacy padded H/W.
+        values[padded_rank - 1] = page_config.get_tile().get_width();
+        values[padded_rank - 2] = page_config.get_tile().get_height();
+    } else {
+        values[padded_rank - 1] = legacy_padded_shape[-1];
+        values[padded_rank - 2] = legacy_padded_shape[-2];
+    }
+
+    uint32_t cumulative_padded_volume = legacy_padded_shape[-2];
+    for (int dim = padded_rank - 3; dim >= 0; dim--) {
+        cumulative_padded_volume *= legacy_padded_shape[dim];
+        values[dim] = cumulative_padded_volume;
     }
 
     for (auto& value : values) {
@@ -97,39 +110,41 @@ void validate_alignment(const TensorLayout& tensor_layout) {
     page_config.validate_alignment(alignment, dtype, memory_config);
 }
 
-void validate_shard_spec(const TensorLayout& tensor_layout) {
-    const auto& memory_config = tensor_layout.get_memory_config();
-    const auto& layout = tensor_layout.get_layout();
+std::optional<std::string> get_shard_align_error(
+    const MemoryConfig& memory_config, const Layout& layout, const Tile& tile) {
     if (memory_config.is_sharded() && layout == Layout::TILE) {
-        const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
+        const auto& tile_shape = tile.get_tile_shape();
         if (memory_config.shard_spec().has_value()) {
-            const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
-            TT_FATAL(
-                (physical_shard_shape.height() % tile_shape[0] == 0 &&
-                 physical_shard_shape.width() % tile_shape[1] == 0),
-                "Physical shard shape {} must be tile {} sized!",
-                physical_shard_shape,
-                tile_shape);
+            const auto& physical_shard_shape = Shape2D(memory_config.shard_spec().value().shape);
+            if (!(physical_shard_shape.height() % tile_shape[0] == 0 &&
+                  physical_shard_shape.width() % tile_shape[1] == 0)) {
+                return fmt::format("Physical shard shape {} must be tile {} sized!", physical_shard_shape, tile_shape);
+            }
         } else {
             const auto& shard_shape = memory_config.nd_shard_spec().value().shard_shape;
-            TT_FATAL(
-                (shard_shape[-2] % tile_shape[0] == 0 && shard_shape[-1] % tile_shape[1] == 0),
-                "Physical shard shape {} must be tile {} sized!",
-                shard_shape,
-                tile_shape);
+            if (!(shard_shape[-2] % tile_shape[0] == 0 && shard_shape[-1] % tile_shape[1] == 0)) {
+                return fmt::format("Physical shard shape {} must be tile {} sized!", shard_shape, tile_shape);
+            }
         }
     }
+    return std::nullopt;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, const Tile& tile) {
+    return !CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config, layout, tile).has_value();
+}
 
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
     initialize_alignment();
     CMAKE_UNIQUE_NAMESPACE::validate_alignment(*this);
-    CMAKE_UNIQUE_NAMESPACE::validate_shard_spec(*this);
+
+    auto shard_align_error = CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config_, get_layout(), get_tile());
+    TT_FATAL(!shard_align_error.has_value(), "{}", shard_align_error);
 }
 
 TensorLayout TensorLayout::fromPaddedShape(
@@ -227,8 +242,12 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
             nd_shard_spec->orientation,
             nd_shard_spec->shard_distribution_strategy);
     }
-    return BufferShardingArgs(
-        std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    auto sharding_args =
+        BufferShardingArgs(std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(memory_config_)) {
+        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
+    return sharding_args;
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {

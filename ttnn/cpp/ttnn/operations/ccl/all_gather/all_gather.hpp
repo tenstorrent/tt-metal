@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
@@ -22,6 +22,7 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool use_l1_small_for_semaphores = false);
 
 }  // namespace ttnn

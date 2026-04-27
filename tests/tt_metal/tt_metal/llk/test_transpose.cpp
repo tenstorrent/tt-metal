@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,6 +27,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -36,6 +37,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -132,43 +134,59 @@ void run_single_core_transpose(
     std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    uint32_t src0_cb_index = 0;
     uint32_t num_buffer_tiles = 32;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
-            num_buffer_tiles * test_config.single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, test_config.single_tile_size);
-    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-
-    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_buffer_tiles * test_config.single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, test_config.single_tile_size);
-    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+
+    uint32_t dfb_src0 = 0;
+    uint32_t dfb_output = 0;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        tt::tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
+            .entry_size = test_config.single_tile_size,
+            .num_entries = num_buffer_tiles,
+            .num_producers = 1,
+            .pap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b};
+
+        tt::tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
+            .entry_size = test_config.single_tile_size,
+            .num_entries = num_output_buffer_tiles,
+            .num_producers = 1,
+            .pap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b};
+
+        dfb_src0 = tt::tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
+        dfb_output = tt::tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
+    } else {
+        uint32_t src0_cb_index = 0;
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                num_buffer_tiles * test_config.single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, test_config.single_tile_size);
+        tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
+        tt_metal::CircularBufferConfig cb_output_config =
+            tt_metal::CircularBufferConfig(
+                num_output_buffer_tiles * test_config.single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, test_config.single_tile_size);
+        tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+    }
 
     std::vector<uint32_t> reader_cta;
+    reader_cta.push_back(
+        MetalContext::instance().get_cluster().arch() == ARCH::QUASAR ? dfb_src0 : static_cast<uint32_t>(tt::CBIndex::c_0));
     tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_cta);
-    auto unary_reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_cta});
-
     std::vector<uint32_t> writer_cta;
+    writer_cta.push_back(
+        MetalContext::instance().get_cluster().arch() == ARCH::QUASAR ? dfb_output
+                                                                      : static_cast<uint32_t>(tt::CBIndex::c_16));
     tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_cta);
-    auto unary_writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = writer_cta});
 
     vector<uint32_t> compute_kernel_args = {uint(Ht * Wt * NC)};
 
@@ -178,12 +196,64 @@ void run_single_core_transpose(
         defines["SHORT_INIT"] = "1";
     }
 
-    tt_metal::CreateKernel(
-        program_,
-        test_config.transpose_dest ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
-                                   : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
-        core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
+    KernelHandle unary_reader_kernel;
+    KernelHandle unary_writer_kernel;
+    KernelHandle compute_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = reader_cta});
+
+        unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = writer_cta});
+
+        compute_kernel_args.push_back(dfb_src0);
+        compute_kernel_args.push_back(dfb_output);
+        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            test_config.transpose_dest ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
+                                       : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1, .compile_args = compute_kernel_args, .defines = defines});
+
+        tt::tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dfb_src0, unary_reader_kernel, compute_kernel);
+        tt::tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dfb_output, compute_kernel, unary_writer_kernel);
+    } else {
+        unary_reader_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_cta});
+
+        unary_writer_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = writer_cta});
+
+        compute_kernel = tt_metal::CreateKernel(
+            program_,
+            test_config.transpose_dest ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
+                                       : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
+            core,
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
+    }
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -198,7 +268,7 @@ void run_single_core_transpose(
             Ht,
             Wt,
             Ht * Wt,
-            0 /* no scaler */
+            (uint32_t)0  // unused scaler slot kept for compat
         });
 
     tt_metal::SetRuntimeArgs(
@@ -212,8 +282,11 @@ void run_single_core_transpose(
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    auto blocking = device->arch() == ARCH::QUASAR;
+    distributed::EnqueueMeshWorkload(cq, workload, blocking);
+    if (not blocking) {
+        distributed::Finish(cq);
+    }
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -248,6 +321,9 @@ TEST_F(MeshDeviceFixture, TensixComputeTransposeWHShortInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeTransposeWHDest) {
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << "TensixComputeTransposeWHDest not implemented for Quasar yet";
+    }
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
         .transpose_dest = true,

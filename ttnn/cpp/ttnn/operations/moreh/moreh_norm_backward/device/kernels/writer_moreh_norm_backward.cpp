@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,8 +19,7 @@ void kernel_main() {
     const auto cb_id_input_grad = cb_id++;
 
     // input_grad
-    const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
-    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
     auto input_grad_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {

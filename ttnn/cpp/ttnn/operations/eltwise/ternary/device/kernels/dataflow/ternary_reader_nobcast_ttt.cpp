@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,9 +27,9 @@ void kernel_main() {
     const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
     const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
     const uint32_t tile_bytes_2 = get_tile_size(cb_id_in2);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes_0);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, tile_bytes_1);
-    const auto s2 = TensorAccessor(src2_args, src2_addr, tile_bytes_2);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const auto s2 = TensorAccessor(src2_args, src2_addr);
     constexpr uint32_t onetile = 1;
 
     experimental::Noc noc;

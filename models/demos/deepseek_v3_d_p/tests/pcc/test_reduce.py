@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,7 @@ def test_ttnn_reduce(
     use_weights,
 ):
     """Test TTNN reduce module in isolation using synthetic sparse inputs."""
+    torch.manual_seed(42)
 
     signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
 
@@ -85,9 +86,10 @@ def test_ttnn_reduce(
         topk=topk,
         emb_dim=emb_dim,
         sparsity=0.75,
-        seed=42,
     )
     logger.debug(f"Created sparse combine output: {torch_combine_output.shape}")
+
+    num_routed_experts = 64
 
     # Create random gate weights for weighted reduce (if enabled)
     torch_gate_weights = None
@@ -96,14 +98,21 @@ def test_ttnn_reduce(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len,
             emb_dim=emb_dim,
-            num_routed_experts=64,
+            num_routed_experts=num_routed_experts,
             num_experts_per_tok=topk,
             max_dispatched_tokens_per_expert=1000,
-            seed=123,
             validate=False,
             skip_x_initialization=True,
         )
         logger.debug(f"Created gate weights: {torch_gate_weights.shape}")
+
+    # Create indices and dispatch table for the reduce kernel.
+    # Use a dispatch table where ALL experts are valid (no -1 entries) so
+    # the kernel processes every expert slot — matching the torch reference.
+    # Non-local expert skipping correctness is tested separately in
+    # test_deepseek_moe_post_combine_reduce.py::test_skip_nonlocal_experts.
+    torch_indices = torch.randint(0, num_routed_experts, (dispatch_group_size, seq_len, topk), dtype=torch.int32)
+    expert_dispatch_table = torch.zeros((num_dispatch_groups, num_routed_experts), dtype=torch.int32)
 
     # Compute reference output using torch
     torch_reduce = TorchReduceModule(
@@ -125,7 +134,7 @@ def test_ttnn_reduce(
     tt_combine_output = ttnn.from_torch(
         torch_combine_output,
         mesh_mapper=mesh_mapper,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
@@ -137,11 +146,36 @@ def test_ttnn_reduce(
         tt_gate_weights = ttnn.from_torch(
             torch_gate_weights,
             mesh_mapper=mesh_mapper,
-            layout=ttnn.ROW_MAJOR_LAYOUT,  # Will be converted to TILE inside reduce module
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             dtype=ttnn.bfloat16,
         )
         logger.debug(f"{tt_gate_weights.shape=}")
+
+    # Convert indices and dispatch table to TTNN tensors
+    indices_mapper = ttnn.ShardTensor2dMesh(
+        mesh_device,
+        mesh_shape=mesh_device.shape,
+        dims=(0, None),
+    )
+    tt_indices = ttnn.from_torch(
+        torch_indices,
+        mesh_mapper=indices_mapper,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+    tt_expert_dispatch_table = ttnn.from_torch(
+        expert_dispatch_table,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(None, 0),
+        ),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
 
     # Run TTNN reduce
     # NOTE: TTNN adds a batch dim, so [seq, topk, hidden] becomes [1, seq, topk, hidden]
@@ -154,7 +188,12 @@ def test_ttnn_reduce(
         topology=topology,
     )
 
-    tt_output = tt_reduce(tt_combine_output, weights=tt_gate_weights)
+    tt_output = tt_reduce(
+        tt_combine_output,
+        weights=tt_gate_weights,
+        indices=tt_indices,
+        expert_dispatch_table=tt_expert_dispatch_table,
+    )
     logger.debug(f"{tt_output.shape=}")
 
     composer = get_tp_mesh_composer(mesh_device)

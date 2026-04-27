@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,10 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
+#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -144,9 +147,126 @@ inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+// =============================================================================
+// Forward GELU - Piecewise CDF Approximation
+// =============================================================================
+// GELU(x) = x * Phi(x) where Phi(x) = 0.5*(1+erf(x/sqrt(2))) is the CDF
+//
+// Strategy: approximate Phi(x) via piecewise polynomials, then multiply by x.
+// This ensures GELU(0) = 0 exactly and handles linear growth naturally.
+//
+// Three active regions (plus zero default):
+//   x >= 2.78125:          Identity (result = x)
+//   -3.125 <= x < 2.78125: Core CDF polynomial (degree-15 in u=x²)
+//   -13.1875 < x < -3.125: Inline Cody-Waite exp with correction polynomial
+//   x <= -13.1875:          Zero (BF16 natural saturation)
+//
+// The exp region uses inline Cody-Waite range reduction instead of the library
+// _sfpu_exp_f32_accurate_ call, skipping special-case checks (no overflow/
+// underflow/NaN possible in the known input range) and reducing Taylor degree
+// from 7 to 5. The correction factor (replacing the asymptotic Mills ratio
+// 1 - 1/x² + 3/x⁴ - ...) is a degree-4 minimax polynomial in x, fitted to
+// the TRUE erfc-based function. This eliminates the reciprocal call and its
+// LUT init entirely.
+//
+// Saturation thresholds verified by exhaustive BF16 sweep with RNE rounding.
+// =============================================================================
+
+// Degree-15 CDF polynomial for Phi(x) over [-3.125, 2.78125]
+// Phi(x) is an even function offset by 0.5: Phi(x) = 0.5 + odd_function(x)
+// Only odd-power coefficients are non-zero; evaluated via u=x^2 factoring
+// to avoid wasting SFPU cycles on zero even-power coefficients.
+// Covers the extended range [-3.125, 2.78125) to eliminate the LEFT polynomial
+// region entirely, reducing from 4 active regions to 3.
+constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
+constexpr float GELU_CDF_CORE_C1 = 3.9894151688e-01f;
+constexpr float GELU_CDF_CORE_C3 = -6.6479682922e-02f;
+constexpr float GELU_CDF_CORE_C5 = 9.9489670247e-03f;
+constexpr float GELU_CDF_CORE_C7 = -1.1655492708e-03f;
+constexpr float GELU_CDF_CORE_C9 = 1.0574820044e-04f;
+constexpr float GELU_CDF_CORE_C11 = -7.0036203397e-06f;
+constexpr float GELU_CDF_CORE_C13 = 2.9501944709e-07f;
+constexpr float GELU_CDF_CORE_C15 = -5.7769380390e-09f;
+
+// Degree-4 correction polynomial for the exp-based region (-13.1875, -3.125)
+// P(x) ≈ GELU(x) · exp(x²/2), so result = exp(-x²/2) · P(x)
+// Fitted to the TRUE erfc-based function via minimax (Chebyshev) approximation.
+// Replaces the reciprocal + 3-term Mills ratio, saving ~8 ops + LUT init.
+// Validated: Max ULP = 1 across all 266 BF16 values in the region.
+constexpr float GELU_EXP_CORR_C0 = -2.9069766448e-01f;
+constexpr float GELU_EXP_CORR_C1 = 3.9288617802e-02f;
+constexpr float GELU_EXP_CORR_C2 = 5.8260409601e-03f;
+constexpr float GELU_EXP_CORR_C3 = 3.9454728181e-04f;
+constexpr float GELU_EXP_CORR_C4 = 1.0058581740e-05f;
+
+// Forward GELU Evaluation with CDF Polynomial Approximation
+// GELU(x) = x * Phi(x) where Phi is approximated piecewise
+sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
+    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
+    sfpi::vFloat x2 = x * x;              // Hoisted: used by both core CDF and exp regions
+
+    // v_if/v_and narrowing pattern: start with widest region, progressively
+    // narrow the mask. Each v_and overwrites the result for the narrowed set.
+    // This avoids separate branch mask setup per region (v_elseif).
+    v_if(x > -13.1875f) {
+        // Exp-based region (-13.1875, -3.125): exp(-x²/2) · P(x)
+        // P(x) is a degree-4 correction polynomial fitted to the TRUE function
+        // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-13.1875, -3.125).
+        //
+        // Uses Moroz exp_21f instead of Cody-Waite range reduction.
+        // The intermediate t = -x²/2 is folded into the log2 constant,
+        // computing x2 * (-0.5/ln2) + 127 directly (saves 1 mul).
+        // Moroz exp_21f: compact exp via integer bit tricks
+        // Fold t = -x²/2 into the log2 constant: x2 * (-0.5 / ln2) + 127
+        constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
+        sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
+
+        sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
+        sfpi::vInt exponential_part = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));
+        sfpi::vInt fractional_part = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
+
+        sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+        frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+        sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
+
+        // Correction polynomial: P(x) ≈ GELU(x)·exp(x²/2)
+        sfpi::vFloat correction = PolynomialEvaluator::eval(
+            x, GELU_EXP_CORR_C0, GELU_EXP_CORR_C1, GELU_EXP_CORR_C2, GELU_EXP_CORR_C3, GELU_EXP_CORR_C4);
+
+        result = exp_val * correction;
+
+        // Core CDF region [-3.125, 2.78125): GELU(x) = x * Phi_core(x)
+        // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ... + x^2*C15)))
+        // Factored via u=x^2 to eliminate zero even-power coefficients
+        v_and(x >= -3.125f);
+        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
+            x2,
+            GELU_CDF_CORE_C1,
+            GELU_CDF_CORE_C3,
+            GELU_CDF_CORE_C5,
+            GELU_CDF_CORE_C7,
+            GELU_CDF_CORE_C9,
+            GELU_CDF_CORE_C11,
+            GELU_CDF_CORE_C13,
+            GELU_CDF_CORE_C15);
+        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
+        result = x * phi;
+
+        // Identity region: x >= 2.78125
+        v_and(x >= 2.78125f);
+        result = x;
+    }
+    v_endif;
+
+    return result;
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
-    _init_gelu_<APPROXIMATION_MODE>();
+    if constexpr (APPROXIMATION_MODE) {
+        _init_gelu_<APPROXIMATION_MODE>();
+    }
+    // Accurate mode: no init needed (correction polynomial replaces reciprocal)
 }
 
 template <bool APPROXIMATION_MODE>
@@ -154,21 +274,21 @@ void gelu_derivative_init() {
     _init_gelu_derivative_<APPROXIMATION_MODE>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
     } else {
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = in;
-        v_if(in == 0.0f) { result = 0.0f; }
-        v_elseif(in < 3.0f) { result = calculate_gelu_chebyshev(in); }
-        v_endif;
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
-    }
+#pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat result = calculate_gelu_piecewise(in);
+            if constexpr (!is_fp32_dest_acc_en) {
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            }
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
     }
 }
 
@@ -178,49 +298,35 @@ inline void calculate_gelu_derivative() {
 }
 
 // =============================================================================
-// GELU Derivative - Polynomial Approximation (NEW)
+// GELU Derivative - Polynomial Approximation
 // =============================================================================
 // GELU'(x) = Φ(x) + x*φ(x) where Φ is CDF, φ is PDF of standard normal
-// Uses piecewise polynomials for high accuracy
+//
+// Uses the identity GELU'(x) + GELU'(-x) = 1 (provable from Φ(x) + Φ(-x) = 1
+// and φ(x) = φ(-x)), so GELU'(x) - 0.5 is an odd function of x, expressible as
+// x * h(x²) for some function h. This halves the polynomial degree.
+//
+// Three active regions (plus zero default):
+//   x >= 3.1719:          Saturation to 1
+//   -3 <= x < 3.1719:     Core: 0.5 + x * h(x²), degree-8 in u=x²
+//   -13.375 < x < -3:     Asymptotic: x * exp(-x²/2) with Mills ratio correction
+//   x <= -13.375:          Zero (BF16 natural saturation)
 // =============================================================================
 
-// Degree-16 polynomial for GELU'(x) over [-3, 3]
-// Coefficients from Sollya fpminimax
-constexpr float GELU_DERIV_CORE_C0 = 0.49999025f;
-constexpr float GELU_DERIV_CORE_C1 = 0.79791743f;
-constexpr float GELU_DERIV_CORE_C2 = 1.7774066e-4f;
-constexpr float GELU_DERIV_CORE_C3 = -0.26595619f;
-constexpr float GELU_DERIV_CORE_C4 = -4.5130015e-4f;
-constexpr float GELU_DERIV_CORE_C5 = 5.9655134e-2f;
-constexpr float GELU_DERIV_CORE_C6 = 4.1692785e-4f;
-constexpr float GELU_DERIV_CORE_C7 = -9.2725726e-3f;
-constexpr float GELU_DERIV_CORE_C8 = -1.8569338e-4f;
-constexpr float GELU_DERIV_CORE_C9 = 1.0372815e-3f;
-constexpr float GELU_DERIV_CORE_C10 = 4.4518791e-5f;
-constexpr float GELU_DERIV_CORE_C11 = -8.0475649e-5f;
-constexpr float GELU_DERIV_CORE_C12 = -5.8852397e-6f;
-constexpr float GELU_DERIV_CORE_C13 = 3.8346534e-6f;
-constexpr float GELU_DERIV_CORE_C14 = 4.0404797e-7f;
-constexpr float GELU_DERIV_CORE_C15 = -8.3111068e-8f;
-constexpr float GELU_DERIV_CORE_C16 = -1.1251415e-8f;
-
-// Degree-8 SHIFTED polynomial for GELU'(x) over [-5, -3]
-// SHIFTED: Evaluate p(t) where t = x + 4, so t ∈ [-1, 1] for x ∈ [-5, -3]
-// This avoids catastrophic cancellation in float32 Horner's method
-// Coefficients from Sollya fpminimax with shifted variable
-constexpr float GELU_DERIV_LEFT_C0 = -5.03619085066020488739013671875e-4f;
-constexpr float GELU_DERIV_LEFT_C1 = -1.872996450401842594146728515625e-3f;
-constexpr float GELU_DERIV_LEFT_C2 = -3.2110414467751979827880859375e-3f;
-constexpr float GELU_DERIV_LEFT_C3 = -3.30785498954355716705322265625e-3f;
-constexpr float GELU_DERIV_LEFT_C4 = -2.20105494372546672821044921875e-3f;
-constexpr float GELU_DERIV_LEFT_C5 = -8.814539178274571895599365234375e-4f;
-constexpr float GELU_DERIV_LEFT_C6 = -9.72292109508998692035675048828125e-5f;
-constexpr float GELU_DERIV_LEFT_C7 = 9.22545223147608339786529541015625e-5f;
-constexpr float GELU_DERIV_LEFT_C8 = 3.57478638761676847934722900390625e-5f;
-
-// Note: FL1 and FL2 polynomial coefficients removed - fused x*exp(t) method
-// achieves Max ULP ≤ 1 across the entire (-13.375, -5] range, outperforming
-// the Sollya polynomials which had Max ULP = 3 (FL1) and 42 (FL2).
+// Degree-8 polynomial h(u) for GELU'(x) = 0.5 + x * h(x²) over [-3, 3.1719]
+// Exploits odd-function decomposition: only 9 coefficients instead of 17.
+// Evaluation: 1 MUL (u=x²) + 9 MAD (Horner on u) + 1 MUL (x*h) + 1 ADD (+0.5)
+// = ~12 ops, vs ~32 ops for degree-16 in x.
+// Coefficients from Sollya fpminimax.
+constexpr float GELU_DERIV_H0 = 7.9788309336e-01f;
+constexpr float GELU_DERIV_H1 = -2.6593554020e-01f;
+constexpr float GELU_DERIV_H2 = 5.9766173363e-02f;
+constexpr float GELU_DERIV_H3 = -9.4142099842e-03f;
+constexpr float GELU_DERIV_H4 = 1.1061388068e-03f;
+constexpr float GELU_DERIV_H5 = -9.7448595625e-05f;
+constexpr float GELU_DERIV_H6 = 6.0921474869e-06f;
+constexpr float GELU_DERIV_H7 = -2.3764030743e-07f;
+constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 
 // GELU Derivative Evaluation with Polynomial Approximation
 // Saturation thresholds derived from exhaustive BF16 research (DAZ+FTZ model):
@@ -229,65 +335,36 @@ constexpr float GELU_DERIV_LEFT_C8 = 3.57478638761676847934722900390625e-5f;
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
-    sfpi::vFloat result = sfpi::vConst0;  // Default to 0 for x < -3
+    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.375
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
     v_if(x >= 3.1719f) { result = sfpi::vConst1; }
-    // Core region [-3, 3.1719], degree 16 polynomial
-    // Polynomial reproduces the "hump" where GELU'(x) > 1
+    // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
+    // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
+    // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
-        result = PolynomialEvaluator::eval(
-            x,
-            GELU_DERIV_CORE_C0,
-            GELU_DERIV_CORE_C1,
-            GELU_DERIV_CORE_C2,
-            GELU_DERIV_CORE_C3,
-            GELU_DERIV_CORE_C4,
-            GELU_DERIV_CORE_C5,
-            GELU_DERIV_CORE_C6,
-            GELU_DERIV_CORE_C7,
-            GELU_DERIV_CORE_C8,
-            GELU_DERIV_CORE_C9,
-            GELU_DERIV_CORE_C10,
-            GELU_DERIV_CORE_C11,
-            GELU_DERIV_CORE_C12,
-            GELU_DERIV_CORE_C13,
-            GELU_DERIV_CORE_C14,
-            GELU_DERIV_CORE_C15,
-            GELU_DERIV_CORE_C16);
+        sfpi::vFloat u = x * x;
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            u,
+            GELU_DERIV_H0,
+            GELU_DERIV_H1,
+            GELU_DERIV_H2,
+            GELU_DERIV_H3,
+            GELU_DERIV_H4,
+            GELU_DERIV_H5,
+            GELU_DERIV_H6,
+            GELU_DERIV_H7,
+            GELU_DERIV_H8);
+        result = 0.5f + x * h;
     }
-    // Left region [-5, -3], degree 8 SHIFTED polynomial
-    // SHIFTED: t = x + 4 maps x ∈ [-5, -3] to t ∈ [-1, 1]
-    // This avoids catastrophic cancellation in float32 Horner's method
-    v_elseif(x >= -5.0f) {
-        sfpi::vFloat t = x + 4.0f;  // Shift to [-1, 1] range
-        result = PolynomialEvaluator::eval(
-            t,
-            GELU_DERIV_LEFT_C0,
-            GELU_DERIV_LEFT_C1,
-            GELU_DERIV_LEFT_C2,
-            GELU_DERIV_LEFT_C3,
-            GELU_DERIV_LEFT_C4,
-            GELU_DERIV_LEFT_C5,
-            GELU_DERIV_LEFT_C6,
-            GELU_DERIV_LEFT_C7,
-            GELU_DERIV_LEFT_C8);
-    }
-    // Deep negative region (-13.375, -5]: use asymptotic formula with fused x*exp(t)
-    // The fused method achieves Max ULP ≤ 1 across this entire range, outperforming
-    // the Sollya polynomials (FL1, FL2) which had Max ULP = 3 and 42 respectively.
+    // Tail region (-13.375, -3): asymptotic formula with fused x*exp(t)
+    // LEFT polynomial eliminated — the asymptotic formula achieves Max ULP ≤ 1
+    // across the entire (-13.375, -3) range.
     // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) where φ(x) = exp(-x²/2) / sqrt(2π)
     //
-    // Uses exp_deep_negative_tail() - a specialized inline exp with direct exponent
-    // bit manipulation (exexp_nodebias + setexp) instead of general-purpose
-    // _sfpu_exp_f32_accurate_(). This follows consolidated research recommendations:
-    // - Cody-Waite range reduction with LN2_HI + LN2_LO for extended precision
-    // - Degree-5 Taylor polynomial for exp(r)
-    // - Direct exponent field manipulation for 2^k scaling (FREE bit ops!)
-    // - Explicit FTZ via exponent field check
-    //
-    // Performance: ~15-18 ops (inline) vs ~25-30 ops (external function)
-    // Accuracy: < 1 ULP for exp computation, sub-ULP for GELU'
+    // Uses x_times_exp_negative_tail() for fused x * exp(t) to avoid intermediate
+    // underflow. Cody-Waite range reduction + degree-5 Taylor + direct exponent
+    // bit manipulation.
     //
     // For APPROXIMATION_MODE=true: use simple x*φ(x) (~1% relative error)
     // For APPROXIMATION_MODE=false: use Mills ratio correction (<0.01% relative error)
@@ -297,19 +374,11 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         sfpi::vFloat x2 = x * x;
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
-        // Use FUSED x * exp(t) to avoid intermediate underflow!
-        // exp(t) alone can underflow (e.g., exp(-88.6) ≈ 3e-39 < BF16 min normal),
-        // but x * exp(t) stays representable (e.g., -13.3 * 3e-39 = -4e-38 > min normal).
-        // The fused function multiplies x by poly BEFORE the 2^k exponent shift.
         sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
 
         if constexpr (APPROXIMATION_MODE) {
-            // Fast mode: leading term only, ~1% relative error at x=-9
-            // result = x * φ(x) = x * exp(-x²/2) / sqrt(2π)
             result = x_exp * INV_SQRT_2PI;
         } else {
-            // Accurate mode: Mills ratio correction for <0.01% relative error
-            // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) = x * φ(x) * (1 - 1/x² + 1/x⁴)
             sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);  // 1/x²
             sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
@@ -317,7 +386,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         }
     }
     // For x <= -13.375, saturate to 0
-    // This is the BF16 natural saturation threshold where GELU'(x) rounds to 0.
     v_endif;
 
     return result;
@@ -330,7 +398,7 @@ inline void calculate_gelu_derivative_polynomial() {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE>(val);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -340,7 +408,11 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        _init_reciprocal_<false, false>();
+        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_<2>
+        // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
+        // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
+        // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
+        _init_sfpu_reciprocal_<false>();
     }
 }
 

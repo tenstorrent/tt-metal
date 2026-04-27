@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -881,11 +881,19 @@ void CmdlineParser::print_help() {
         "built_tests.yaml.");
     log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
     log_info(LogTest, "");
+    log_info(LogTest, "Display Options:");
+    log_info(
+        LogTest,
+        "  --show-workers                               Log active senders/receivers per device before each test.");
+    log_info(LogTest, "");
     log_info(LogTest, "Progress Monitoring Options:");
     log_info(LogTest, "  --show-progress                              Enable real-time progress monitoring.");
     log_info(LogTest, "  --progress-interval <seconds>                Poll interval (default: 2).");
     log_info(LogTest, "  --hung-threshold <seconds>                   Hung detection threshold (default: 30).");
 }
+
+// Display methods
+bool CmdlineParser::show_workers() { return test_args::has_command_option(input_args_, "--show-workers"); }
 
 // Progress monitoring methods
 bool CmdlineParser::show_progress() { return test_args::has_command_option(input_args_, "--show-progress"); }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -57,7 +57,7 @@ script_config = ScriptConfig(
     disabled=os.environ.get("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS") != "1",
 )
 
-BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 DEFAULT_MAX_LOCATIONS = 10
 
 
@@ -132,7 +132,7 @@ class AggregationBucket:
     def add_core(self, location: OnChipCoordinate, device_label: str):
         """Add a core to this aggregation bucket."""
 
-        coord_str = location.to_str("noc0")
+        coord_str = location.to_user_str()
         self.core_locations.add(f"{device_label}:{coord_str}")
         self.device_labels.add(device_label)
 
@@ -187,6 +187,8 @@ def _collect_aggregated(
 
     def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
         try:
+            if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
+                return None
             # Filter DONE cores, like dump_callstacks.py does
             if not show_all_cores:
                 d = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)

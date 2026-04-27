@@ -21,11 +21,14 @@ list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 
 # Generate Inspector Cap'n Proto headers and RPC server implementation
 set(INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc.capnp)
+set(JIT_COMPILE_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/rpc.capnp)
 set(CAPNPC_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/impl/)
 file(MAKE_DIRECTORY ${CAPNPC_OUTPUT_DIR})
 
 capnp_generate_cpp(INSPECTOR_RPC_CAPNP_SOURCES INSPECTOR_RPC_CAPNP_HEADER ${INSPECTOR_RPC_CAPNP})
 list(APPEND IMPL_SRC ${INSPECTOR_RPC_CAPNP_SOURCES})
+capnp_generate_cpp(JIT_COMPILE_RPC_CAPNP_SOURCES JIT_COMPILE_RPC_CAPNP_HEADER ${JIT_COMPILE_RPC_CAPNP})
+list(APPEND IMPL_SRC ${JIT_COMPILE_RPC_CAPNP_SOURCES})
 
 # Generate Inspector RPC callbacks server implementation
 set(INSPECTOR_RPC_GENERATED_HEADER ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/rpc_server_generated.hpp)
@@ -49,6 +52,7 @@ set_source_files_properties(
     ${INSPECTOR_RPC_GENERATED_SOURCE}
     ${INSPECTOR_RPC_GENERATED_HEADER}
     ${INSPECTOR_RPC_CAPNP_SOURCES}
+    ${JIT_COMPILE_RPC_CAPNP_SOURCES}
     PROPERTIES
         SKIP_LINTING
             TRUE
@@ -61,8 +65,21 @@ if(TARGET all_generated_files)
         DEPENDS
             ${INSPECTOR_RPC_CAPNP_HEADER}
             ${INSPECTOR_RPC_GENERATED_HEADER}
+            ${JIT_COMPILE_RPC_CAPNP_HEADER}
     )
     add_dependencies(all_generated_files capnp_generated_files)
+endif()
+
+# Generate protobuf files for KvChunkAddressTable serialization
+include(protobuf)
+GENERATE_PROTO_FILES(
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/protobuf/kv_chunk_address_table.proto
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/experimental/disaggregation
+)
+list(APPEND IMPL_SRC ${PROTO_SRCS})
+
+if(TT_METAL_USE_EMULE)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
 endif()
 
 add_library(impl OBJECT ${IMPL_SRC})
@@ -86,6 +103,9 @@ target_link_libraries(
         Metalium::Metal::LLRT
         capnp
         capnp-rpc
+        protobuf::libprotobuf
+        libdwarf::dwarf-static
+        Taskflow::Taskflow
 )
 
 target_include_directories(
@@ -99,9 +119,32 @@ target_include_directories(
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
+target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/experimental/disaggregation)
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
+if(TT_METAL_USE_EMULE)
+    get_target_property(_EMULE_JIT_DIR tt_emule_headers TT_EMULE_JIT_INCLUDE_DIR)
+    get_target_property(_EMULE_INC_DIR tt_emule_headers TT_EMULE_INCLUDE_DIR)
+
+    target_compile_definitions(
+        impl
+        PRIVATE
+            TT_METAL_USE_EMULE=1
+            TT_EMULE_JIT_INCLUDE_DIR="${_EMULE_JIT_DIR}"
+            TT_EMULE_INCLUDE_DIR="${_EMULE_INC_DIR}"
+            TT_EMULE_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            TT_EMULE_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+            TT_EMULE_CXX_STANDARD="${CMAKE_CXX_STANDARD}"
+    )
+    target_link_libraries(
+        impl
+        PRIVATE
+            tt-emule::headers
+            dl
+    )
+endif()
 
 # Generate Inspector RPC stub file
 set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)

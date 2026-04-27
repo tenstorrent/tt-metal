@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -62,7 +62,7 @@ class MoEGate(AbstractModule):
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    gate_weight.T.unsqueeze(0).unsqueeze(0),
+                    gate_weight.unsqueeze(0).unsqueeze(0).contiguous(),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -145,6 +145,7 @@ class MoEGate(AbstractModule):
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    transpose_b=True,
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
@@ -214,6 +215,7 @@ class MoEGate(AbstractModule):
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    transpose_b=True,
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
@@ -305,6 +307,8 @@ class MoEGate(AbstractModule):
         # Sigmoid activation
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
+        token_count = scores.shape[1] * scores.shape[2]
+        scores_flat = scores if scores.shape[1] == 1 else ttnn.reshape(scores, (1, 1, token_count, scores.shape[3]))
         # Add score correction bias
         # Expand bias to match scores shape(dynamic shape)
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
@@ -316,8 +320,13 @@ class MoEGate(AbstractModule):
             memory_config=cfg["add_score_correction_bias"]["memory_config"],
             dtype=cfg["add_score_correction_bias"]["dtype"],
         )
+        scores_with_bias_flat = (
+            scores_with_bias
+            if scores_with_bias.shape[1] == 1
+            else ttnn.reshape(scores_with_bias, (1, 1, token_count, scores_with_bias.shape[3]))
+        )
         # Reshape scores to expert groups
-        expert_scores_grouped = ttnn.reshape(scores_with_bias, **cfg["reshape_scores"])
+        expert_scores_grouped = ttnn.reshape(scores_with_bias_flat, **cfg["reshape_scores"])
         num_experts_per_group = expert_scores_grouped.shape[3]
 
         # calculate top-2 scores with expert groups
@@ -364,11 +373,11 @@ class MoEGate(AbstractModule):
 
         # create full expert_groups_mask(dynamic shape)
         input_mask = cfg["scatter_top_expert_groups"]["input"]
-        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, scores.shape[2], 1)))
+        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, token_count, 1)))
 
         # create full src tensor of ones
         src_tensor = cfg["scatter_top_expert_groups"]["src"]
-        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, scores.shape[2], 1)))
+        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, token_count, 1)))
 
         # scatter top-k expert groups indices to full expert_groups_mask
         active_groups_mask = ttnn.scatter(
@@ -385,7 +394,7 @@ class MoEGate(AbstractModule):
         active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
         ttnn.deallocate(active_groups_mask)
         active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
-        active_experts_scores = ttnn.mul(scores_with_bias, active_experts_mask, **cfg["mul_scores_with_mask"])
+        active_experts_scores = ttnn.mul(scores_with_bias_flat, active_experts_mask, **cfg["mul_scores_with_mask"])
         ttnn.deallocate(scores_with_bias)
         ttnn.deallocate(active_experts_mask)
 
@@ -402,7 +411,7 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(topk_experts_scores_with_bias)
 
         # gather original scores without bias
-        topk_experts_scores = ttnn.gather(scores, dim=3, index=topk_experts_indices)
+        topk_experts_scores = ttnn.gather(scores_flat, dim=3, index=topk_experts_indices)
         ttnn.deallocate(scores)
 
         # normalize scores
@@ -489,6 +498,7 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         dtype: ttnn.DataType,
         memory_config: ttnn.MemoryConfig,
+        transpose_b: bool = False,
         compute_kernel_config=None,
     ) -> ttnn.Tensor:
         """Linear fallback operation using torch.nn.functional.linear"""
@@ -506,7 +516,7 @@ class MoEGate(AbstractModule):
         )[0][0]
 
         torch_input_2d = torch_input.squeeze(0).squeeze(0)  # [seq_len, hidden_dim]
-        torch_weight_2d = torch_weight.T  # [output_dim, hidden_dim]
+        torch_weight_2d = torch_weight if transpose_b else torch_weight.T
 
         # use torch linear: input @ weight.T
         torch_output = torch.nn.functional.linear(torch_input_2d, torch_weight_2d)

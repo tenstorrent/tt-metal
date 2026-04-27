@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,8 @@ from models.common.utility_functions import torch_random
 
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize(
     "batch_size",
@@ -22,8 +24,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
         1,
     ],
 )
-@pytest.mark.parametrize("h", [2 * 32])
-@pytest.mark.parametrize("w", [32, 48, 64, 80, 96, 112, 128])
+@pytest.mark.parametrize("h", [2 * 32, 10])
+@pytest.mark.parametrize("w", [32, 48, 64, 80, 96, 112, 128, 18])
 @pytest.mark.parametrize("c", [9 * 64])
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("dim", [-2])
@@ -42,6 +44,7 @@ def test_3D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -76,9 +79,9 @@ def test_3D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         1,
     ],
 )
-@pytest.mark.parametrize("h", [2 * 32])
+@pytest.mark.parametrize("h", [2 * 32, 10])
 @pytest.mark.parametrize(
-    "w", [7 * 64 * 32, 7 * 64 * 48, 7 * 64 * 64, 7 * 64 * 80, 7 * 64 * 96, 7 * 64 * 112, 7 * 64 * 128]
+    "w", [7 * 64 * 32, 7 * 64 * 48, 7 * 64 * 64, 7 * 64 * 80, 7 * 64 * 96, 7 * 64 * 112, 7 * 64 * 128, 31]
 )
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("n", [1])
@@ -100,6 +103,7 @@ def test_2D_tensor_full_grid(
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -134,8 +138,8 @@ def test_2D_tensor_full_grid(
         1,
     ],
 )
-@pytest.mark.parametrize("h", [2 * 32])
-@pytest.mark.parametrize("w", [32, 64, 96, 128])
+@pytest.mark.parametrize("h", [2 * 32, 15])
+@pytest.mark.parametrize("w", [32, 64, 96, 128, 22])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("dim", [-2])
@@ -154,6 +158,7 @@ def test_2D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)

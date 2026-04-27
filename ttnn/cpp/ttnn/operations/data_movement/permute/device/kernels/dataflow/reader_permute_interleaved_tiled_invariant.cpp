@@ -1,9 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("rank");
@@ -20,7 +23,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    experimental::CircularBuffer cb(cb_id_in0);
+    experimental::Noc noc;
 
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
     uint32_t output_tiled_shape[N], inv_perm[N], src_strides[N];
@@ -30,7 +35,6 @@ void kernel_main() {
         src_strides[i - 3] = get_arg_val<uint32_t>(i + 2 * N);
     }
 
-    uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
     uint32_t curr_addr = src_addr;
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
         // Compute multi-dimensional index for the source tile
@@ -54,10 +58,9 @@ void kernel_main() {
             src_linear_idx += src_multi_idx[i] * src_strides[i];
         }
 
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(src_linear_idx, s, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb.reserve_back(onetile);
+        noc.async_read(s, cb, tile_bytes, {.page_id = src_linear_idx}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb.push_back(onetile);
     }
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -211,8 +211,7 @@ void read_events_from_completion_queue(
     SystemMemoryManager& sysmem_manager) {
     // For mock devices, the sysmem_manager is a stubbed singleton
     // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
-    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
         sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
         return;
     }

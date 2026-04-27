@@ -32,8 +32,14 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.models-changed }}
   build-workflows-changed:
     value: ${{ steps.find-changed-files.outputs.build-workflows-changed }}
-  llk-engine-changed:
-    value: ${{ steps.find-changed-files.outputs.llk-engine-changed }}
+  llk-wormhole-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-wormhole-changed }}
+  llk-blackhole-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-blackhole-changed }}
+  llk-common-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-common-changed }}
+  llk-sfpi-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-sfpi-changed }}
   llk-quasar-changed:
     value: ${{ steps.find-changed-files.outputs.llk-quasar-changed }}
   llk-tests-changed:

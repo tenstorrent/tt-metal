@@ -10,7 +10,9 @@ Any discrepancies, in the form of missing chips or connections are reported to t
 
 Additionally, the user can choose to send point to point traffic across all discovered connections, and validate the health of the links.
 
-For Multi-Node validation, this tool relies on MPI to be used as the distributed process launcher. In these cases, the user must wrap their validation call with mpirun, and pass in the appropriate hostfile or rankfile.
+For multi-node validation, this tool relies on **MPI** as the distributed process launcher. In these cases, wrap your validation call with **`mpirun`** and pass the appropriate **hostfile** (or equivalent host list). That pattern applies directly to `./build/tools/scaleout/run_cluster_validation`.
+
+For **TT-Metal / TTNN** workloads that need **rank bindings** and a **Mesh Graph Descriptor** (for example SuperPod fabric tests), use **`tt-run`** instead of hand-rolling `mpirun` arguments when possible. `tt-run` can **auto-generate** rank bindings and rankfiles from an MGD plus `--hosts` (see [tt-run README](../../../ttnn/ttnn/distributed/README_ttrun.md)); you can still use **legacy** mode with an explicit `--rank-binding` and rankfile when you need full control.
 
 ## Usage
 
@@ -54,23 +56,30 @@ Notes:
 
 
 ## Extending to Multi-Node Clusters
-As mentioned above, MPI can be used as a distributed process launcher for multi-node discovery and validation. This is fairly straightforward, once the user has an environment and MPI based networking setup on both hosts.
+As mentioned above, MPI is the distributed process launcher for multi-node discovery and validation. This is straightforward once you have MPI and cluster networking configured.
 
-Example MPI Command:
+### `run_cluster_validation` with `mpirun`
+
+For the Ethernet validation binary, call **`mpirun`** directly with a hostfile (or `--host`) and any site-specific MCA options:
 
 ```
 mpirun --hostfile path/to/hostfile --deployment-specific-mpi-args ./build/tools/scaleout/run_cluster_validation --additional-arguments-depending-on-use-case
 ```
 
-The user may need to pass in additional MPI arguments depending on their networking setup (example the NIC they want to bind traffic to, CPU binding policy, etc.).
+You may need extra MPI arguments for your environment (for example the NIC for TCP: `--mca btl self,tcp --mca btl_tcp_if_include <nic>`, CPU binding, etc.).
 
-The hostfile contains the list of hosts that the user wants to run validation on. An example hostfile is provided below (for a cluster of four hosts):
+The hostfile lists the hosts that participate in validation. Example (four hosts, one slot each):
+
 ```
 hostname0 slots=1
 hostname1 slots=1
 hostname2 slots=1
 hostname3 slots=1
 ```
+
+### `tt-run` for TT stack tests (fabric, multi-mesh, etc.)
+
+For binaries that consume **rank bindings** and an **MGD** (see [SuperPod and Multi-Mesh Fabric Testing](#superpod-and-multi-mesh-fabric-testing) below), prefer **`tt-run`**. See the full launcher guide: [ttnn/ttnn/distributed/README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) (**auto allocation** vs **legacy** mode, `generated/ttrun/` cache, `--force-rediscovery`, mock clusters).
 
 ## Generated Output Files
 
@@ -268,9 +277,13 @@ Descriptor files live under `tt_metal/fabric/mesh_graph_descriptors/`. Use the m
 
 ### Rank Files and Rank Binding Files
 
-Fabric tests use rank bindings to map MPI ranks to [mesh_id, mesh_host_rank]. These parameters specify where a Galaxy Node "lives" in the graph, and corresponds to the Mesh Graph Descriptor.
+Fabric tests use rank bindings to map MPI ranks to [mesh_id, mesh_host_rank]. These parameters specify where a Galaxy Node "lives" in the graph, and correspond to the Mesh Graph Descriptor.
 
-When building rank bindings, we effectively stamp out the config for a single pod multiple times.
+When building rank bindings manually, you effectively stamp out the config for a single pod multiple times.
+
+**Auto allocation (recommended for many deployments):** With **`tt-run --mesh-graph-descriptor <mgd> --hosts <comma-separated-hosts>`**, Phase 1 runs `generate_rank_bindings` (or uses a cache hit under `generated/ttrun/<cache_id>/`) and writes **`rank_bindings.yaml`**, **`rankfile`**, and **`hostfile`** there. You do not need to author a rankfile by hand unless you switch to **legacy** mode or edit the generated files. Host order for MPI ranks follows **lexicographic sort** of the host multiset (see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md)). If cached bindings are stale after a cluster change, use **`--force-rediscovery`**.
+
+**Legacy / hand-crafted files:**
 
 - **Rank bindings file** — YAML listing each rank’s `mesh_id`, `mesh_host_rank`, and optional `env_overrides`; plus top-level `mesh_graph_desc_path` pointing at your Mesh Graph Descriptor.
 - **Rankfile** — OpenMPI rankfile that maps each rank to a (hostname, slot). Create one per deployment (do not commit; deployment-specific). **How to create one:** one line per MPI rank in order (rank 0, 1, 2, …), form `rank <N>=<hostname> slot=0`. Line count must equal the number of ranks in your rank bindings; hostnames and order must match your `--host` list. Example:
@@ -334,9 +347,22 @@ In this example: rank 0 → (0,0), rank 1 → (0,1), rank 4 → (1,0), etc. The 
 
 ### Running Fabric Tests with tt-run
 
-Use `tt-run` with a **rank-binding** file and MPI arguments that include your **rankfile** and **host list**. The test binary is `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`; pass the fabric test config via `--test_config`.
+The test binary is `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`. Pass the fabric test config with **`--test_config`**.
 
-Example (use your own rankfile and host list; `--host` order must match the rankfile):
+**Preferred — auto allocation:** Provide the **Mesh Graph Descriptor** and **`--hosts`**; `tt-run` runs Phase 1 (or uses `generated/ttrun/…` cache), then launches with the generated rankfile and host binding. Set **`--tcp-interface`** to your MPI NIC (equivalent to wiring `btl_tcp_if_include`); `tt-run` also applies its usual multihost defaults, **`--bind-to none`**, and **`--tag-output`** unless you pass **`--bare`**.
+
+```bash
+tt-run \
+  --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto \
+  --hosts <host0>,<host1>,... \
+  --tcp-interface <nic> \
+  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+  --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
+```
+
+Fix the MGD path if your file lives under a different name; the mainlined SP4 descriptor is `tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto`.
+
+**Legacy mode — explicit rank binding:** Use a checked-in or hand-written **`--rank-binding`** and pass **`--map-by rankfile:file=…`** via **`--mpi-args`** together with **`--host`** and TCP MCA options if you are not relying on `tt-run`’s defaults:
 
 ```bash
 tt-run \
@@ -346,9 +372,11 @@ tt-run \
   --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
 ```
 
-Use the correct NIC for your environment (`btl_tcp_if_include`; e.g. `ens5f0np0` or `cnx1`).
+After a successful **auto allocation** run, `tt-run` logs a **Phase 2–only** command using paths under `generated/ttrun/<cache_id>/` so you can re-run without Phase 1 when the cache still matches.
 
-For more on rankfiles and generating cluster descriptors from multiple hosts, see [README_generate_cluster_descriptors.md](../../scripts/scaleout/README_generate_cluster_descriptors.md).
+For mock / single-machine 16-rank runs, use **`--mock-cluster-rank-binding`** with auto allocation (no `--hosts`); see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) and [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
+
+For rankfiles and generating cluster descriptors from multiple hosts, see [README_generate_cluster_descriptors.md](../../../scripts/scaleout/README_generate_cluster_descriptors.md).
 
 ### Validating the setup (without a SuperPod)
 
@@ -384,7 +412,7 @@ You can sanity-check the mainlined artifacts before running on real hardware. Al
    "
    ```
 
-**Full end-to-end** validation requires either a 16-host SuperPod (run the `tt-run` example above) or a mock cluster: create a 16-rank mock cluster descriptor mapping and use `tt-run --mock-cluster-rank-binding <mapping> --rank-binding ...` with `--mpi-args "--allow-run-as-root"` to run 16 processes on one machine (see [custom_mock_cluster_descriptors/README.md](../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md)).
+**Full end-to-end** validation requires either a 16-host SuperPod (run the **auto allocation** `tt-run` example above) or a mock cluster: use **`tt-run --mesh-graph-descriptor … --mock-cluster-rank-binding <mapping>`** so Phase 1 generates rank bindings and the rankfile (add **`--mpi-args "--allow-run-as-root"`** if your OpenMPI setup requires it), or use **legacy** mode with an explicit `--rank-binding` and rankfile. See [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
 
 ## Directed Link Retrains (Wormhole Only)
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,6 @@ ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void threshold_tile_init() { MATH((llk_math_eltwise_unary_sfpu_threshold_init<APPROX>())); }
+ALWI void threshold_tile_init() { MATH((llk_math_eltwise_unary_sfpu_threshold_init())); }
 
 }  // namespace ckernel

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
-from conftest import is_galaxy
-from models.demos.stable_diffusion_xl_base.conftest import get_device_name
+from models.demos.stable_diffusion_xl_base.conftest import get_device_name, is_galaxy
 from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
 
@@ -96,8 +95,8 @@ def _build_reference_weights(peft_sd):
     indirect=True,
 )
 @pytest.mark.skipif(
-    get_device_name() != "n150",
-    reason="test_lora_fusion runs only on n150",
+    get_device_name() not in ["n150", "p150"],
+    reason="test_lora_fusion runs only on n150 and p150",
 )
 @torch.no_grad()
 def test_lora_fusion_pcc(mesh_device, lora_path):

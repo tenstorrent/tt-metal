@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import ttnn
 
 if TYPE_CHECKING:
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+    from ttnn import OverlappedTensor
 
 
 class CircularBufferIdManager:

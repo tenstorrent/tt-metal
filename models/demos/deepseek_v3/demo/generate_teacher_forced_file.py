@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -34,7 +34,7 @@ from models.demos.deepseek_v3.utils.hf_model_utils import (
 MODEL_PATH = Path(
     os.getenv(
         "DEEPSEEK_V3_HF_MODEL",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
     )
 )
 

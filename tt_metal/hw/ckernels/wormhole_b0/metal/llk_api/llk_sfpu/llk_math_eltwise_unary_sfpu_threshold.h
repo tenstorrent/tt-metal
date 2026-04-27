@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,18 +6,18 @@
 
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "sfpu/ckernel_sfpu_threshold.h"
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_threshold_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::threshold, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::threshold>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_threshold(
     uint dst_index, uint32_t param0, uint32_t param1, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_(
         static_cast<void (*)(uint32_t, uint32_t)>(ckernel::sfpu::_calculate_threshold_<APPROXIMATE, ITERATIONS>),
         dst_index,
         vector_mode,

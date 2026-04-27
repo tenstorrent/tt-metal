@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation_types.hpp"
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>
@@ -39,5 +37,6 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology);
+    tt::tt_fabric::Topology topology,
+    bool use_l1_small_for_semaphores = false);
 }  // namespace ttnn::prim

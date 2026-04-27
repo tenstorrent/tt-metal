@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -146,6 +146,19 @@ public:
      * @throws TT_FATAL if page_size is not PCIe-aligned or exceeds FIFO size.
      */
     void set_page_size(uint32_t page_size);
+
+    /**
+     * @brief Non-blocking check for available data.
+     *
+     * Returns true if at least one page of data is available in the FIFO
+     * without blocking. Useful for poll-based readers that need to check
+     * a shutdown flag between iterations.
+     *
+     * @return true if at least one page can be read immediately.
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
+    bool has_data();
 
     /**
      * @brief Reads data pages from the socket FIFO.

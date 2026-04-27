@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,8 +51,9 @@ void kernel_main() {
     constexpr uint32_t k_mcast_semaphore_id = get_compile_time_arg_val(32);
     constexpr bool q_locally_available = get_compile_time_arg_val(33) == 1;
     constexpr bool use_k_mcast = get_compile_time_arg_val(34) == 1;
+    constexpr uint32_t Bmask = get_compile_time_arg_val(35);
 
-    constexpr auto q_args = TensorAccessorArgs<35>();
+    constexpr auto q_args = TensorAccessorArgs<36>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -86,6 +87,7 @@ void kernel_main() {
     if (q_addr == 0) {
         return;
     }
+
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
@@ -99,7 +101,7 @@ void kernel_main() {
             cb_reserve_back(cb_index_id, 1);
             uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
             if constexpr (!is_cur_pos_tensor_sharded) {
-                const auto addrg = TensorAccessor(pos_args, pos_addr, index_stick_size_B);
+                const auto addrg = TensorAccessor(pos_args, pos_addr);
                 // index_tensor has one page to read
                 uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
                 noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
@@ -187,22 +189,25 @@ void kernel_main() {
         q_page_size_bytes,
         q_batch_offset);
 
-    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
 
-    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
 
-    const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
+    const auto mask_reader = TensorAccessor(mask_args, mask_addr);
 
     // Read attention sink
     if constexpr (use_attention_sink) {
-        const auto attention_sink_reader =
-            TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+        const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
 
         cb_reserve_back(cb_attention_sink, PNHt);
         uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
 
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
-            noc_async_read_tile(tile, attention_sink_reader, attention_sink_write_ptr);
+            uint64_t sink_noc_addr = attention_sink_reader.get_noc_addr(tile);
+            // Use noc_async_read with explicit size instead of noc_async_read_tile because
+            // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
+            // noc_async_read_tile would read buffer->aligned_page_size() bytes, overflowing the CB.
+            noc_async_read(sink_noc_addr, attention_sink_write_ptr, attention_sink_tile_bytes);
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }
         noc_async_read_barrier();
@@ -238,7 +243,7 @@ void kernel_main() {
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
-        const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * PNHt * St;
+        const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bmask) * PNHt * St;
         const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic;
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
         // Setup multicast parameters for K streaming (vertical multicast)

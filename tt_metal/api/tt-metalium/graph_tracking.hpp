@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,6 +49,10 @@ public:
     };
 
     IGraphProcessor() = default;
+
+    // Returns false for background processors that are always
+    // registered but should not make GraphTracker::is_enabled() return true.
+    virtual bool is_capture_processor() const { return true; }
 
     virtual void track_allocate(const tt::tt_metal::Buffer* /*buffer*/) {};
 

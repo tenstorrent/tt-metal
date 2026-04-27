@@ -94,7 +94,7 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: wormhole_b0
         MESH_DEVICE: T3K
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
         - ${{ github.workspace }}/docker-job:/work
@@ -148,7 +148,7 @@ jobs:
       - arch-wormhole_b0
       - topology-6u
       - bare-metal
-      - pipeline-functional
+      - pipeline-perf
       - in-service
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -159,7 +159,7 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: wormhole_b0
         MESH_DEVICE: TG
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
         - ${{ github.workspace }}/docker-job:/work

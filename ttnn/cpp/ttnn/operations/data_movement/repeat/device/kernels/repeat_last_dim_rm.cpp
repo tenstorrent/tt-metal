@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,10 @@ Function reads from RM and writes to RM repeating the last dimension
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 using namespace tt::data_movement::common;
 
@@ -41,6 +45,8 @@ void kernel_main() {
                                        : ((original_page_size_bytes % 4) == 0) ? 2
                                        : ((original_page_size_bytes % 2) == 0) ? 3
                                                                                : 4;
+    // Max write size after doublings, used for template parameter to enable fast path
+    constexpr uint32_t max_write_size = original_page_size_bytes << num_doublings;
 
     // Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this
     // core
@@ -48,16 +54,20 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr, original_page_size_bytes);
-    const auto d = TensorAccessor(dst_args, dst_addr, dest_page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    const auto d = TensorAccessor(dst_args, dst_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
 
     // Get scratchpads guaranteed to be allocated until the function terminates
-    cb_reserve_back(cb_id_in0, 1);
-    cb_reserve_back(cb_id_in1, 1);
-    uint32_t input_buffer = get_write_ptr(cb_id_in0);
-    uint32_t alignment_buffer = get_write_ptr(cb_id_in1);
-    cb_push_back(cb_id_in1, 1);
-    cb_push_back(cb_id_in0, 1);
+    cb0.reserve_back(1);
+    cb1.reserve_back(1);
+    uint32_t input_buffer = cb0.get_write_ptr();
+    uint32_t alignment_buffer = cb1.get_write_ptr();
+    cb1.push_back(1);
+    cb0.push_back(1);
 
     constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;
     constexpr uint64_t r_offset_to_use = src_args.is_dram ? OFFSET_64 : OFFSET_16;
@@ -77,9 +87,14 @@ void kernel_main() {
         uint64_t dst_noc_addr = d.get_noc_addr(i, 0);
         uint32_t data_location =
             input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed to be aligned for our read
-        enhanced_noc_async_read<original_page_size_bytes, false>(src_noc_addr, data_location, original_page_size_bytes);
+
+        experimental::CoreLocalMem<uint32_t> dst_mem(data_location);
+        // Use TensorAccessor directly to avoid address truncation
+        // Template parameter preserves one-packet fast path for page-sized transfers
+        noc.async_read<experimental::Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+            s, dst_mem, original_page_size_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         cur_page_size = original_page_size_bytes;
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         if constexpr (num_doublings != 0) {
             // The if is not needed but it is just for performance as the vast majority of times num_doublings will be 0
             // and we don't want target offset to be allocated and the for loop bounds computed
@@ -107,10 +122,22 @@ void kernel_main() {
             uint32_t to_write = (dest_page_size_bytes - num_written) > cur_page_size
                                     ? cur_page_size
                                     : (dest_page_size_bytes - num_written);
-            enhanced_noc_async_write<dest_page_size_bytes, false>(data_location, dst_noc_addr + num_written, to_write);
+
+            experimental::CoreLocalMem<uint32_t> src_mem(data_location);
+            // Use TensorAccessor directly to avoid address truncation
+            // Template parameter preserves one-packet fast path for writes up to max_write_size
+            noc.async_write<
+                experimental::Noc::TxnIdMode::DISABLED,
+                experimental::Noc::ResponseMode::NON_POSTED,
+                max_write_size>(
+                src_mem,
+                d,
+                to_write,
+                {.offset_bytes = 0},
+                {.page_id = i, .offset_bytes = static_cast<uint32_t>(num_written)});
             num_written += to_write;
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
     return;
 }

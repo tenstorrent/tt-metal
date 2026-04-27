@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_number = get_arg_val<uint32_t>(1);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, unpadded_X_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     auto write_block = [&](uint32_t num_rows,
                            uint32_t mul,
@@ -34,7 +34,7 @@ void kernel_main() {
         uint32_t l1_read_addr = get_write_ptr(cb_id_out0);
 
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(size_2d + k, s);
+            uint64_t dst_noc_addr = s.get_noc_addr(size_2d + k);
 
             uint32_t total_size = mul * size_per_row_per_block + start_id + width_size;
             uint32_t padded_size = total_size - unpadded_X_size;

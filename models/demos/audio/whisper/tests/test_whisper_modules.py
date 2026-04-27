@@ -1,11 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
+import glob
+import os
 
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from loguru import logger
 from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -14,11 +17,30 @@ import ttnn
 from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.audio.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.demos.audio.whisper.tt.whisper_generator import EncoderTraceState, run_encoder_traced_or_eager
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
 MODEL_NAME = "distil-whisper/distil-large-v3"
+
+
+def whisper_config_for_tests(model_name: str) -> WhisperConfig:
+    """HF Whisper: attention forward indexes ``ALL_ATTENTION_FUNCTIONS[config._attn_implementation]``; it must not be None."""
+    c = WhisperConfig.from_pretrained(model_name)
+    # Setting only ``attn_implementation`` is not always enough; submodules read ``_attn_implementation`` directly.
+    object.__setattr__(c, "_attn_implementation", "eager")
+    if hasattr(c, "attn_implementation"):
+        c.attn_implementation = "eager"
+    return c
+
+
+def _ensure_hf_whisper_attn_eager(module: torch.nn.Module) -> None:
+    """Recursively set ``_attn_implementation`` on any Hugging Face ``config`` attached to submodules (handles copied configs)."""
+    for m in module.modules():
+        cfg = getattr(m, "config", None)
+        if cfg is not None and getattr(cfg, "_attn_implementation", None) is None:
+            object.__setattr__(cfg, "_attn_implementation", "eager")
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
@@ -53,7 +75,7 @@ def test_whisper_attention(
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
-    config = transformers.WhisperConfig.from_pretrained(model_name)
+    config = whisper_config_for_tests(model_name)
     is_decode = use_encoder_states or use_attn_mask or use_kv_cache
     model = transformers.models.whisper.modeling_whisper.WhisperAttention(
         embed_dim=config.d_model,
@@ -63,6 +85,7 @@ def test_whisper_attention(
         layer_idx=0,
         config=config,
     ).eval()
+    _ensure_hf_whisper_attn_eager(model)
 
     if use_encoder_states:
         torch_encoder_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
@@ -132,15 +155,29 @@ def test_whisper_attention(
             mesh_mapper=input_mesh_mapper,
         )
 
-        torch_output, _, present_key_values = model(
+        # WhisperAttention.forward returns (attn_output, attn_weights); KV is updated in-place on past_key_values.
+        hf_attn_out = model(
             torch_hidden_states,
             attention_mask=torch_attention_mask,
             key_value_states=torch_encoder_states,
             past_key_value=past_key_values,
         )
-        if is_decode and use_kv_cache:
-            past_keys = present_key_values.key_cache
-            past_values = present_key_values.value_cache
+        if isinstance(hf_attn_out, tuple):
+            if len(hf_attn_out) == 2:
+                torch_output, _hf_attn_w = hf_attn_out
+            elif len(hf_attn_out) == 3:
+                torch_output, _hf_attn_w, _unused_present = hf_attn_out
+            else:
+                raise ValueError(f"Unexpected WhisperAttention.forward return length {len(hf_attn_out)}")
+        else:
+            torch_output = hf_attn_out
+
+        if use_kv_cache:
+            layer_cache = past_key_values.self_attention_cache
+            past_k_hf = layer_cache.key_cache[0]
+            past_v_hf = layer_cache.value_cache[0]
+        else:
+            past_k_hf = past_v_hf = None
 
         output = ttnn_model.whisper_attention(
             config,
@@ -167,13 +204,13 @@ def test_whisper_attention(
             k_cache = ttnn.to_torch(kv_cache[0], mesh_composer=output_mesh_composer)[:, :, : (i + 1), :]
             v_cache = ttnn.to_torch(kv_cache[1], mesh_composer=output_mesh_composer)[:, :, : (i + 1), :]
 
-            pcc_passed, k_cache_pcc = comp_pcc(past_keys[0], k_cache, expec_k_cache_pcc)
+            pcc_passed, k_cache_pcc = comp_pcc(past_k_hf, k_cache, expec_k_cache_pcc)
             logger.info(f"[pos={i}] K Cache PCC: {k_cache_pcc}")
             if not pcc_passed:
                 does_pass = False
                 logger.warning(f"[pos={i}] K Cache PCC {k_cache_pcc} is lower than {expec_k_cache_pcc}")
 
-            pcc_passed, v_cache_pcc = comp_pcc(past_values[0], v_cache, expec_v_cache_pcc)
+            pcc_passed, v_cache_pcc = comp_pcc(past_v_hf, v_cache, expec_v_cache_pcc)
             logger.info(f"[pos={i}] V Cache PCC: {v_cache_pcc}")
             if not pcc_passed:
                 does_pass = False
@@ -197,8 +234,9 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
-    config = transformers.WhisperConfig.from_pretrained(model_name)
+    config = whisper_config_for_tests(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
+    _ensure_hf_whisper_attn_eager(model)
 
     embed_dim = config.d_model
     torch_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
@@ -240,8 +278,9 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
-    config = transformers.WhisperConfig.from_pretrained(model_name)
+    config = whisper_config_for_tests(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
+    _ensure_hf_whisper_attn_eager(model)
 
     feature_size = config.num_mel_bins
     torch_input_features = torch_random((batch_size, feature_size, sequence_length), -0.1, 0.1, dtype=torch.float32)
@@ -264,14 +303,47 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
         weights_mesh_mapper=weights_mesh_mapper,
         input_mesh_mapper=input_mesh_mapper,
     )
-    output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
-    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    trace_key = batch_size_per_device
 
-    # 4D to 3D and unpadding
-    if len(output.shape) == 4:
-        output = output.squeeze(1)
+    encoder_trace_state = EncoderTraceState()
+    try:
+        output = run_encoder_traced_or_eager(
+            mesh_device,
+            config,
+            ttnn_parameters,
+            trace_key,
+            input_embeds,
+            enable_encoder_trace=True,
+            trace_state=encoder_trace_state,
+        )
+        ttnn.synchronize_device(mesh_device)
+        # Pull capture result to host before replay: second call reuses the same device output buffer.
+        out_capture_torch = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+
+        output = run_encoder_traced_or_eager(
+            mesh_device,
+            config,
+            ttnn_parameters,
+            trace_key,
+            input_embeds,
+            enable_encoder_trace=True,
+            trace_state=encoder_trace_state,
+        )
+        ttnn.synchronize_device(mesh_device)
+        replay_torch = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    finally:
+        encoder_trace_state.release_all(mesh_device)
+
+    if len(out_capture_torch.shape) == 4:
+        out_capture_torch = out_capture_torch.squeeze(1)
+    if len(replay_torch.shape) == 4:
+        replay_torch = replay_torch.squeeze(1)
     sequence_size = torch_output.shape[-2]
-    output = output[:, :sequence_size, :]
+    out_capture_torch = out_capture_torch[:, :sequence_size, :]
+    replay_torch = replay_torch[:, :sequence_size, :]
+    _, pcc_replay = assert_with_pcc(out_capture_torch, replay_torch, 0.999)
+    logger.info(f"Encoder trace replay PCC (capture vs execute_trace): {pcc_replay}")
+    output = replay_torch
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.998)
     logger.info(f"Output PCC: {pcc_message}")
@@ -301,8 +373,9 @@ def test_decoder_layer(
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
-    config = transformers.WhisperConfig.from_pretrained(model_name)
+    config = whisper_config_for_tests(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).eval()
+    _ensure_hf_whisper_attn_eager(model)
 
     num_heads = config.encoder_attention_heads
     embed_dim = config.d_model
@@ -401,8 +474,9 @@ def test_decoder(
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
-    config = transformers.WhisperConfig.from_pretrained(model_name)
+    config = whisper_config_for_tests(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
+    _ensure_hf_whisper_attn_eager(model)
     embed_dim = config.d_model
 
     torch_encoder_hidden_states = torch_random(
@@ -493,15 +567,35 @@ def test_ttnn_whisper(
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
-    config = WhisperConfig.from_pretrained(model_name)
+    config = whisper_config_for_tests(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
-    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    # Use load_from_disk() when the Arrow cache exists under HF_HOME/datasets — pure
+    # read, no lock file. Falls back to load_dataset() which writes a lock to
+    # HF_DATASETS_CACHE (=/tmp in CI) if no Arrow cache is found.
+    _hf_datasets = os.path.join(os.environ.get("HF_HOME", ""), "datasets")
+    _arrow_dirs = (
+        [
+            os.path.dirname(p)
+            for p in glob.glob(
+                os.path.join(_hf_datasets, "hf-internal-testing___parquet", "clean-*", "**", "dataset_info.json"),
+                recursive=True,
+            )
+        ]
+        if os.path.isdir(_hf_datasets)
+        else []
+    )
+    ds = (
+        load_from_disk(sorted(_arrow_dirs)[-1])
+        if _arrow_dirs
+        else load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    )
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     input_features = input_features.repeat(batch_size, 1, 1)
     decoder_input_ids = torch.ones(batch_size, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
     attention_mask = None
-    model = WhisperModel.from_pretrained(model_name).eval()
+    model = WhisperModel.from_pretrained(model_name, attn_implementation="eager").eval()
+    _ensure_hf_whisper_attn_eager(model)
 
     expected_last_hidden_state = model(
         input_features,
@@ -593,7 +687,7 @@ def test_traced_decoder_executor(
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
-    config = transformers.WhisperConfig.from_pretrained(model_name)
+    config = whisper_config_for_tests(model_name)
     embed_dim = config.d_model
 
     # Create encoder hidden states (simulating encoder output)
@@ -608,6 +702,7 @@ def test_traced_decoder_executor(
 
     # Create HF reference model
     hf_model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
+    _ensure_hf_whisper_attn_eager(hf_model)
     hf_past_key_values = EncoderDecoderCache.from_legacy_cache(None)
 
     # Preprocess model parameters for TTNN

@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deepseek_grouped_gate_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
@@ -101,6 +102,4 @@ deepseek_grouped_gate(
 
 }  // namespace ttnn::prim
 
-namespace ttnn::operations::experimental::reduction {
-
-}  // namespace ttnn::operations::experimental::reduction
+namespace ttnn::operations::experimental::reduction {}  // namespace ttnn::operations::experimental::reduction

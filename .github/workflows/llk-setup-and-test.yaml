@@ -35,11 +35,6 @@ on:
         required: false
         default: false
         type: boolean
-      use_durations:
-        description: "Use previously collected test durations for balanced splitting"
-        required: false
-        default: false
-        type: boolean
       compile_time_args:
         description: "Convert every runtime argument into compile time argument and compile all variants like that"
         required: false
@@ -61,7 +56,7 @@ permissions:
   contents: read
 
 env:
-  LLK_PATH: tt_metal/third_party/tt_llk
+  LLK_PATH: tt_metal/tt-llk
 
 jobs:
   generate-matrix:
@@ -90,8 +85,6 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -101,22 +94,6 @@ jobs:
           cd tests
           ./setup_testing_env.sh
           cd ..
-
-      # Step 2.5: Download test duration data for balanced splitting
-      # Downloads the latest available artifact from main branch only
-      - name: Download test duration data
-        if: ${{ inputs.use_durations }}
-        uses: dawidd6/action-download-artifact@v12
-        continue-on-error: true
-        with:
-          workflow: llk-collect-test-durations.yaml
-          workflow_conclusion: success
-          branch: main
-          name: test-durations-${{ contains(inputs.runs_on, 'n150') && 'wormhole' || 'blackhole' }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/
-          if_no_artifact_found: warn
-          search_artifacts: true
-          check_artifacts: true
 
       # Step 3: Run the tests
       - name: Run tests
@@ -145,14 +122,6 @@ jobs:
           SPEED_OF_LIGHT_FLAG=""
           if [[ "${{ inputs.compile_time_args }}" == "true" ]]; then
             SPEED_OF_LIGHT_FLAG="--speed-of-light"
-          fi
-
-          DURATIONS_FLAG=""
-          if [[ "${{ inputs.use_durations }}" == "true" ]] && [[ -f ".test_durations" ]]; then
-            DURATIONS_FLAG="--durations-path=.test_durations"
-            echo "Using duration-based test splitting from .test_durations"
-          else
-            echo "Duration file not found or not enabled, using default splitting"
           fi
 
           echo "Compiling artefacts"
@@ -201,7 +170,7 @@ jobs:
 
       # Step 4.1: Upload generated info file per runner
       - name: Upload code coverage for this runner
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: ${{ inputs.coverage }}
         with:
           name: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
@@ -209,14 +178,14 @@ jobs:
 
       # Step 5: Upload performance data
       - name: Upload performance data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('{0}/tests/python_tests/perf_data-{1}-{2}.zip', env.LLK_PATH, env.CHIP_ARCH, matrix.test_group)) != ''
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
 
       - name: Upload test logs on failure
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure()
         with:
           name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
@@ -225,7 +194,7 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
 
       - name: Upload JUnit report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: >-
@@ -265,7 +234,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Download all coverage artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: code-coverage-${{ env.CHIP_ARCH }}*
           path: ./merged_coverage_files
@@ -287,7 +256,7 @@ jobs:
             -o ./code_coverage_for_${{ env.CHIP_ARCH }}.info
 
       - name: Upload merged coverage .info file
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: code_coverage_for_${{ env.CHIP_ARCH }}
           path: ./code_coverage_for_${{ env.CHIP_ARCH }}.info

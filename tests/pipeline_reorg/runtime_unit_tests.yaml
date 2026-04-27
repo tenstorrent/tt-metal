@@ -1,0 +1,357 @@
+# This file defines the test matrix for the Runtime unit tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# --- Dispatch Tests (Fast Dispatch) ---
+- name: runtime_fast_dispatch_on_eth
+  cmd: |
+    [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*'
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_fast_dispatch_multi_cq
+  cmd: TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshMultiCQ*Fixture.*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Core API Tests (includes kernel path validation) ---
+- name: runtime_api
+  cmd: |
+    ./build/test/tt_metal/unit_tests_api
+    rm -rf /tmp/kernels && mkdir -p /tmp/kernels
+    TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter='CompileProgramWithKernelPathEnvVarFixture.*'
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Data Movement Tests ---
+- name: runtime_data_movement
+  cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter='-*NIGHTLY_*:*NocEstimator*'
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Context, Device, Misc, NOC, JIT Build ---
+- name: runtime_core
+  cmd: |
+    ./build/test/tt_metal/unit_tests_context
+    ./build/test/tt_metal/unit_tests_device
+    ./build/test/tt_metal/unit_tests_misc
+    ./build/test/tt_metal/unit_tests_noc
+    ./build/test/tt_metal/unit_tests_jit_build
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Integration Tests ---
+- name: runtime_integration
+  cmd: ./build/test/tt_metal/unit_tests_integration
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- LLK + SFPI Tests ---
+- name: runtime_llk
+  cmd: |
+    ./build/test/tt_metal/unit_tests_llk
+    ./build/test/tt_metal/unit_tests_sfpi
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Debug Tools (DPrint, Watcher, Inspector, NOC Debugging, Clean Init) ---
+- name: runtime_debug_tools
+  cmd: |
+    ./tests/scripts/run_tools_tests.sh
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='*'
+    ./build/test/tt_metal/unit_tests_inspector --gtest_filter='*'
+    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1 ./build/test/tt_metal/unit_tests_noc_debugging --gtest_filter='*'
+  skus:
+    wh_n150_civ2:
+      timeout: 12
+    bh_p150b_civ2:
+      timeout: 12
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Ethernet Tests ---
+- name: runtime_eth
+  cmd: ./build/test/tt_metal/unit_tests_eth
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Legacy Tests ---
+- name: runtime_legacy
+  cmd: ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle --gtest_filter='-*NIGHTLY_*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Distributed / Multi-Device Tests ---
+- name: runtime_distributed
+  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- IOMMU PinnedMemory Tests (SD + FD) ---
+- name: runtime_iommu_pinned_memory
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter='*PinnedMemory*'
+    ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*PinnedMemory*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- FD2 Dispatch Tests (prefetcher + dispatcher) ---
+- name: runtime_fd2
+  cmd: |
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# =============================================================================
+# Slow Dispatch Tests (TT_METAL_SLOW_DISPATCH_MODE=1 set per-command)
+# =============================================================================
+
+# --- Core API + per-core allocation Tests (SD) ---
+- name: runtime_sd_api
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_per_core_allocation
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      TT_METAL_SLOW_DISPATCH_MODE=1 \
+        TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
+        ./build/test/tt_metal/unit_tests_api \
+        --gtest_filter='BlackholeSingleCardFixture.DramKernel*'
+    fi
+  skus:
+    wh_n150_civ2:
+      timeout: 20
+    wh_n300_civ2:
+      timeout: 20
+    bh_p150b_civ2:
+      timeout: 20
+    bh_p100a_civ2_viommu:
+      timeout: 20
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Data Movement Tests (SD) ---
+- name: runtime_sd_data_movement
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Debug Tools, Device, Dispatch (SD) ---
+- name: runtime_sd_debug_tools_device_dispatch
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      TT_METAL_SLOW_DISPATCH_MODE=1 \
+        TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
+        ./build/test/tt_metal/unit_tests_debug_tools \
+        --gtest_filter='*Drisc*:*Dram*Print*'
+    fi
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_inspector
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch
+  skus:
+    wh_n150_civ2:
+      timeout: 17
+    wh_n300_civ2:
+      timeout: 17
+    bh_p150b_civ2:
+      timeout: 17
+    bh_p100a_civ2_viommu:
+      timeout: 17
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- LLK Tests (SD) ---
+- name: runtime_sd_llk
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Legacy Tests (SD) ---
+- name: runtime_sd_legacy
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle --gtest_filter='-*NIGHTLY_*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+    bh_p100a_civ2_viommu:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Eager C++ Tests (SD) ---
+- name: runtime_sd_eager
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 python3 tests/scripts/run_tt_eager.py --dispatch-mode slow
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# =============================================================================
+# Multi-Card Unit Tests (BH + Galaxy)
+# =============================================================================
+
+# --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
+- name: bh_multicard_debug_tools
+  cmd: |
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DPrintMeshFixture.ActiveEthTestPrint'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TensixTestWatcherPause'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- BH Multi-Card: Dispatch (RandomProgram on multi-card) ---
+- name: bh_multicard_dispatch
+  cmd: |
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Galaxy: Dispatch (single-card + multi-CQ fixtures) ---
+- name: galaxy_dispatch
+  cmd: |
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCardFixture.*'
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCardProgramFixture.*'
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites'
+    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshMultiCQMultiDevice*Fixture.*'
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Galaxy: Device Tests (GalaxyFixture only, SD + FD) ---
+- name: galaxy_device
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device \
+      --gtest_filter='GalaxyFixture.*'
+    ./build/test/tt_metal/unit_tests_device \
+      --gtest_filter='GalaxyFixture.*'
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Galaxy: Distributed (DispatchContext SD + remote chip dispatch) ---
+- name: galaxy_distributed
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests \
+      --gtest_filter='*DispatchContext*'
+    TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='UnitMeshCQSingleCard*Fixture.*'
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime

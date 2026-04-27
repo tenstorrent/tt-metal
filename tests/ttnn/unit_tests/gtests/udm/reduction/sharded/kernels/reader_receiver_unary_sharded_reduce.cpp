@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
-#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 /**
  * @brief Receiver (non-coordinator) kernel for distributed SUM reduction
@@ -31,8 +31,7 @@ void kernel_main() {
     constexpr uint32_t block_ht = get_compile_time_arg_val(3);    // Height per core
     constexpr uint32_t num_rows_per_worker = get_compile_time_arg_val(4);
     constexpr uint32_t num_rows_per_worker_last = get_compile_time_arg_val(5);
-    constexpr uint32_t winv_packed = get_compile_time_arg_val(6);  // 1/W scaler
-    constexpr uint32_t coord_dims = get_compile_time_arg_val(7);   // Coordinate dimensions
+    constexpr uint32_t coord_dims = get_compile_time_arg_val(6);  // Coordinate dimensions
 
     static_assert(num_blocks > 1, "Need at least 2 cores for reduction");
 
@@ -71,9 +70,12 @@ void kernel_main() {
     // ============================================================================
     // Phase 1: Generate scaler tile for reduction
     // ============================================================================
-    cb_reserve_back(cb_scaler, 1);
-    generate_reduce_scaler(cb_scaler, winv_packed);
-    cb_push_back(cb_scaler, 1);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_scaler,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
 
     // ============================================================================
     // Determine number of rows this core is responsible for

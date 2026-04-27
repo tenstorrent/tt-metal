@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,15 +10,13 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardmish(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,9 +54,9 @@ void kernel_main() {
     experimental::CircularBuffer cb_true(true_cb);
 
     const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
     const uint32_t src1_tile_bytes = get_tile_size(true_cb);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;

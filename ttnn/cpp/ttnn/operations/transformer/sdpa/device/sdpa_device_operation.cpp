@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -380,6 +380,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
+    const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
@@ -389,6 +390,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
         attrs.is_causal,
         is_chunked_prefill,
         flexible_chunked,
+        chunk_start_idx_for_hash,
         attrs.compute_kernel_config,
         q,
         k,
@@ -460,7 +462,7 @@ SDPAOperation::create_op_performance_model(
     CoreCoord compute_grid_dims = args.program_config.has_value()
                                       ? args.program_config->compute_with_storage_grid_size
                                       : output_tensor.device()->compute_with_storage_grid_size();
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     int ideal_dev_clock_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
         batch_size,

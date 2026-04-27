@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -169,7 +169,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.hardtanh(input_tensor_a, min_val, max_val, memory_config=output_memory_config)
+    result = ttnn.hardtanh(input_tensor_a, min_val=min_val, max_val=max_val, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

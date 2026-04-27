@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -105,7 +105,7 @@ inline void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_in
  * and writes the result to tile idx_out0 in the Dst registers.
  */
 inline void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(my_add_tile_face, idx_dst0, idx_dst1, idx_out0));
+    MATH(_llk_math_eltwise_binary_sfpu_params_(my_add_tile_face, idx_dst0, idx_dst1, idx_out0));
 }
 
 void kernel_main() {

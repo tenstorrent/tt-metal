@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_pad.hpp"
 #include "device/fill_pad_device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"

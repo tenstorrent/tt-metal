@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,6 @@
 
 // used all over the place so just include it here to make the typecaster visible
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace decorators {

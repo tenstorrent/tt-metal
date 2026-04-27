@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr bool skip_negative_entries = get_compile_time_arg_val(5);
 
     constexpr auto s0_args = TensorAccessorArgs<6>();
-    const auto s0 = TensorAccessor(s0_args, src_addr, stick_size);
+    const auto s0 = TensorAccessor(s0_args, src_addr);
 
     // Use cb as L1 scratch memory
     uint32_t cb_addr = get_write_ptr(cb_id_in0);

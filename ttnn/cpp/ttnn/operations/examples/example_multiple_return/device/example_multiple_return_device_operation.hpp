@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::examples {
 
@@ -70,6 +69,7 @@ struct ExampleMultipleReturnDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

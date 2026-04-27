@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,7 +63,7 @@ void kernel_main() {
 
     sender.open<true>();
 
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
 
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);

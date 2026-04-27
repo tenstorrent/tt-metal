@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     tt::DataFormat in0_cb_data_format,
     tt::DataFormat in1_cb_data_format,
     tt::DataFormat out_cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     uint32_t num_cores_x,
     uint32_t B,
     uint32_t M,
@@ -280,7 +280,7 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();

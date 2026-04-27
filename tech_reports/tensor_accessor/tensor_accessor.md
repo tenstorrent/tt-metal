@@ -68,7 +68,7 @@ uint32_t new_base_idx_crta = args.next_common_runtime_args_offset();
 
 // Option 1 (preferred, less error-prone): Using default tensor buffer's aligned_page_size to create a TensorAccessor
 auto tensor_accessor = TensorAccessor(args, bank_base_address);
-// Option 2: Create a TensorAccessor with custom runtime page size passed in as the 3rd argument
+// Option 2: Create a TensorAccessor with custom runtime page size passed in as the 3rd argument. Used when we need to override the compile-time aligned_page_size if we have a program cache hit on a buffer with a different aligned_page_size.
 auto tensor_accessor = TensorAccessor(args, bank_base_address, page_size);
 ```
 

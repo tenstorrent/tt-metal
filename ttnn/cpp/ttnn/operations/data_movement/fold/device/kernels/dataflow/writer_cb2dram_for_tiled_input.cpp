@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-metalium/constants.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t input_width = get_compile_time_arg_val(0);            // Width of input tensor
@@ -30,7 +31,10 @@ void kernel_main() {
     constexpr uint32_t output_width = input_width / stride_width;  // Output tensor width
     constexpr uint32_t patch_size = stride_height * stride_width;  // Total elements per patch
     // Initialize DRAM address generator for interleaved memory access
-    const auto dst = TensorAccessor(dst_args, dst_addr, stick_nbytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
+
+    experimental::Noc noc;
+    experimental::CB input_cb(input_cb_id);
 
     // Processing loop bounds and state variables
     const uint32_t end_block_id = start_block_id + num_blocks;
@@ -46,18 +50,18 @@ void kernel_main() {
 
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
-            cb_wait_front(input_cb_id, tiles_per_channel_dim);
-            uint64_t l1_read_addr = get_write_ptr(input_cb_id);
+            input_cb.wait_front(tiles_per_channel_dim);
+            auto src = experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(input_cb);
+            uint32_t src_offset = 0;
 
             const uint32_t width_limit =
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
 
             for (uint32_t stick_idx = 0; stick_idx < width_limit; stick_idx++) {
-                const uint64_t dst_noc_addr = get_noc_addr(output_stick_idx, dst);
-                noc_async_write(l1_read_addr, dst_noc_addr, stick_nbytes);
+                noc.async_write(src, dst, stick_nbytes, {.offset_bytes = src_offset}, {.page_id = output_stick_idx});
 
                 // Update pointers and indices
-                l1_read_addr += aligned_stick_nbytes;
+                src_offset += aligned_stick_nbytes;
                 output_stick_idx++;
                 stride_width_idx++;
 
@@ -72,8 +76,8 @@ void kernel_main() {
             remaining_width -= tt::constants::TILE_HEIGHT;
 
             // Ensure all writes complete before moving to next set of tiles_per_channel_dim tiles
-            noc_async_write_barrier();
-            cb_pop_front(input_cb_id, tiles_per_channel_dim);
+            noc.async_write_barrier();
+            input_cb.pop_front(tiles_per_channel_dim);
         }
 
         // Update patch offset for next block

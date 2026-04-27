@@ -172,10 +172,10 @@ However note that ``v_if`` and alike works via predication. In other words, both
 .. code-block:: c++
 
     v_if (a < b) {
-        DPRINT << "a < b\n";
+        DEVICE_PRINT("a < b\n");
     } v_else {
         dst_reg[0] = b;
-        DPRINT << "a >= b\n";
+        DEVICE_PRINT("a >= b\n");
     }
     v_endif;
 

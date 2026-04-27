@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,8 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.utils_for_testing import assert_equal
+
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize(
@@ -22,6 +24,7 @@ from tests.ttnn.utils_for_testing import assert_equal
         ((32, 32, 32, 32), 0),
         ((32, 32, 32, 32), 2),
         ((32, 32, 32, 32), 3),
+        ((1, 2, 18, 20), 3),
     ),
 )
 @pytest.mark.parametrize(
@@ -61,6 +64,9 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         raise AttributeError()
 
     tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
+    if layout == ttnn.TILE_LAYOUT:
+        tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
+
     if kind == "max":
         tt_npu = ttnn.max(tt_input)
     elif kind == "min":

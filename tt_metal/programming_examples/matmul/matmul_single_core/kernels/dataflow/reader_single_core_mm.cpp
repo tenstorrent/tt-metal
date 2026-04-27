@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
@@ -21,9 +21,9 @@ void kernel_main() {
     // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
     // buffers in the host code, so we can use the same address for both DRAM and CBs.
     constexpr auto s0_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(s0_args, src0_addr, get_tile_size(cb_id_in0));
+    const auto s0 = TensorAccessor(s0_args, src0_addr);
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(s1_args, src1_addr, get_tile_size(cb_id_in1));
+    const auto s1 = TensorAccessor(s1_args, src1_addr);
 
     // Loop through the dimensions of the matrices. Read them and push to the circular buffers.
     // Dimension names are called M, N and K. `t` in `mt` means tile.
