@@ -1,0 +1,179 @@
+# Fractional allocation of each SKU pool per team — hybrid: YAML timeout × Snowflake runs/week.
+# Generated April 2026. Revised to correct team ownership using all current pipeline_reorg YAMLs.
+#
+# Coverage: pipeline_reorg jobs AND all legacy (bucket-2) workflows that run on
+# dedicated hardware. CPU-only runners (ubuntu-latest / large-stable) and release
+# pipelines (build-test-publish, in-release) are excluded.
+#
+# ─── Why this model exists ───────────────────────────────────────────────────
+#
+# The v2 actuals files use Snowflake wall-clock time — accurate but it reflects
+# how fast tests *happened* to run, not how bad things can get if they all hit
+# their configured timeouts.  The manual v1 file uses timeout × manual rpw
+# estimates which are conservative but the rpw values were guesses.
+#
+# This file combines:
+#   cost = (yaml_timeout_minutes / 60) × snowflake_runs_per_week
+#
+# Timeout is the worst-case ceiling from the YAML configuration; runs/week is
+# the actual observed frequency from Snowflake (both main-branch and PR-branch
+# runs included).  Result: a conservative worst-case projection anchored to
+# real pipeline cadence.
+#
+# ─── Snowflake runs/week query ───────────────────────────────────────────────
+#
+#   SELECT SPLIT_PART(j.NAME, ' / ', 1)    AS workflow_prefix,
+#          COUNT(DISTINCT p.CICD_PIPELINE_ID) / 28.0 * 7  AS runs_per_week
+#   FROM   TTDATASF.SW_TEST.CICD_JOB  j
+#   JOIN   TTDATASF.SW_TEST.CICD_PIPELINE p
+#          ON j.CICD_PIPELINE_ID = p.CICD_PIPELINE_ID
+#   WHERE  p.PROJECT = 'tt-metal'
+#     AND  p.PIPELINE_START_TS >= DATEADD('day', -28, CURRENT_TIMESTAMP())
+#     AND  j.JOB_LABEL NOT LIKE '%large-stable%'
+#     AND  j.JOB_LABEL NOT LIKE '%ubuntu-latest%'
+#   GROUP BY 1
+#   HAVING runs_per_week > 1
+#   ORDER BY runs_per_week DESC;
+#
+# The DISTINCT CICD_PIPELINE_ID count gives pipeline invocations (not individual
+# job runs), scaled from the 28-day window to a 7-day week.  Both main-branch
+# post-commit pipelines and PR-branch pipelines are included.
+#
+# ─── pipeline_reorg YAML parsing ─────────────────────────────────────────────
+#
+# Files: tests/pipeline_reorg/*.yaml (all files fetched from GitHub main branch,
+#        April 2026). Team ownership read directly from each YAML entry's `team:`
+#        field — NOT assumed from historical Snowflake job attribution.
+#
+# Format (new schema):
+#
+#   - name: some_test
+#     team: models
+#     skus:
+#       wh_n300:     {timeout: 120, tier: 1}
+#       bh_p150b_civ2: {timeout: 60, tier: 2}
+#
+# Each (team, sku_name) → pool entry contributes:
+#   timeout_minutes / 60 × rpw(yaml_stem, pool)
+#
+# SKU name → hardware pool mapping:
+#   wh_n150*, wh_n150             → N150
+#   wh_n300*, wh_n300             → N300
+#   wh_llmbox*, wh_t3k*           → LLMBOX
+#   wh_galaxy*                    → galaxy
+#   bh_p150*, bh_p100*, bh_loudbox, bh_deskbox, bh_quietbox (non-2), bh_llmbox,
+#   bh_sp1, bh_sp4                → p150b
+#   bh_p300*, bh_quietbox_2       → p300b
+#   bh_galaxy*                    → excluded (no Snowflake data for bh_galaxy)
+#
+# pipeline_reorg runs/week (yaml_stem → pool → actual Snowflake rpw):
+#   models_unit_tests.yaml         N150 → 80/wk    N300 → 817/wk  LLMBOX → 5.75/wk  galaxy → 5.5/wk   p150b (no p150b entry in yaml)
+#   models_e2e_tests.yaml          all pools → 7/wk
+#   models_sweep_tests.yaml        rpw = 0 (new file, not yet in Snowflake)
+#   models_device_perf_tests.yaml  rpw = 0 (new file)
+#   t3k_unit_tests.yaml            LLMBOX → 188.5/wk
+#   t3k_e2e_tests.yaml             LLMBOX → 51.5/wk
+#   t3k_integration_tests.yaml     LLMBOX → 41.5/wk
+#   t3k_perf_tests.yaml            LLMBOX → 41/wk
+#   t3k_demo_tests.yaml            LLMBOX → 43.25/wk
+#   blackhole_demo_tests.yaml      p150b per-sku: 21–25/wk; p300b per-sku: 22.25–28.25/wk
+#   galaxy_demo_tests.yaml         galaxy → 58/wk
+#   galaxy_e2e_tests.yaml          galaxy → 29.25/wk
+#   galaxy_health_tests.yaml       galaxy → 39/wk
+#   galaxy_integration_tests.yaml  galaxy → 17.5/wk
+#   galaxy_perf_tests.yaml         galaxy → 12.25/wk
+#   galaxy_sanity_tests.yaml       galaxy → 45.25/wk
+#   runtime_unit_tests.yaml        rpw = 0 (new file)
+#   runtime_integration_tests.yaml rpw = 0 (new file)
+#   runtime_perf_tests.yaml        rpw = 0 (new file)
+#   runtime_sanity_tests.yaml      rpw = 0 (new file)
+#   ttnn-tests.yaml                rpw = 0 (new file)
+#   demo_sp_multihost_tests.yaml   rpw = 0 (new file)
+#
+# Note on t3k_*.yaml team ownership: these files were historically attributed to
+# the `runtime` team in Snowflake job data, but the current YAML `team:` fields
+# assign them to models, scaleout, ttnn, and shield. This file uses the current
+# YAML ownership as the authoritative source.
+#
+# ─── Legacy bucket-2 timeout estimates ───────────────────────────────────────
+#
+# Legacy workflows have no pipeline_reorg YAML; timeout values come from
+# static analysis of their impl files in .github/workflows/:
+#
+#   fd-nightly (runtime team, ~90 min/run, N150+N300+p150b, 100.75/wk)
+#   ttnn-unit-tests  N300: 60 min × 828/wk   p150b: 120 min × 347.25/wk
+#   ttnn-smoke-tests N150: 30 min × 1145.5/wk
+#   ttnn-basic-tests N150: 60 min × 586.25/wk
+#   metalium-smoke-tests N150: 30 min × 1001.5/wk (runtime team)
+#   triage-tests N150: 15 min × 618.75/wk  p150b: 15 min × 430.5/wk (runtime team)
+#   llk-test-wormhole N150: 120 min × 317.75/wk
+#   llk-test-blackhole p150b: 120 min × 317.75/wk
+#   blackhole-multi-card-fast p150b: 100 min × 338.5/wk  p300b: 100 min × 338.5/wk
+#   blackhole-multi-card p150b: 300 min × 80/wk          p300b: 300 min × 84/wk
+#   tt-metal-l2-tests N150+N300: 180 min × 127/wk  p150b: 180 min × 126.75/wk
+#   t3000-apc-fast-tests N300: 2 min × 808.5/wk (runtime team; very short)
+#   single-card-demo-tests N150+N300: 60 min × 49.75/wk (models team)
+#   single-card-ttnn-models-frequent N300: 60 min × 31.5/wk (models team)
+#   vllm-tests N150+N300+p150b: 60 min × 35.5/wk (models team)
+#   galaxy-unit-tests galaxy: 60 min × 43.75/wk (ttnn team)
+#   galaxy-model-perf-tests galaxy: 60 min × 18.25/wk (models team)
+#   Galaxy-DeepSeek-tests galaxy: 60 min × 44.5/wk (scaleout team)
+#   multi-host-glx-2x+4x galaxy: 120 min × 82.5+25.5/wk (scaleout team)
+#   multi-host-t3k LLMBOX: 120 min × 73.5/wk (scaleout team)
+#   multi-host-bh-lb-2x+4x p150b: 120 min × 73+72.5/wk (scaleout team)
+#   ttnn-sweeps N300: 60 min × 32.5/wk  LLMBOX: 60 min × 31/wk  p150b: 30 min × 31.25/wk
+#
+# ─── Excluded workflows ───────────────────────────────────────────────────────
+#
+#   build-artifact, build, code-analysis, clang-tidy-light, llk-build-quasar
+#     → CPU-only (large-stable runner, no accelerator hardware)
+#   build-test-publish (in-release label) → release pipeline
+#   trigger-post-commit → GHA orchestration overhead
+#   test-wh-6u-image → infra smoke test
+#   bh_galaxy SKU entries in pipeline_reorg → excluded (no Snowflake data)
+#
+# ─── Fractions ───────────────────────────────────────────────────────────────
+# Values sum to ≤ 1.0 per pool. Remainder = untracked jobs / headroom.
+# New pipeline_reorg files with rpw=0 contribute 0 h/wk until they appear in Snowflake.
+
+N150:  # 3,214 h/wk projected (timeout × Snowflake rpw)
+  runtime     :  0.37  # 1,188 h/wk – metalium-smoke (501 h), triage-tests (155 h), tt-metal-l2 (381 h), fd-nightly (151 h)
+  ttnn        :  0.36  # 1,159 h/wk – ttnn-smoke (573 h), ttnn-basic (586 h)
+  llk         :  0.20  #   636 h/wk – llk-test-wormhole (635 h)
+  models      :  0.07  #   232 h/wk – models-unit-tests (140 h), single-card-demo (50 h), vllm-tests (36 h)
+
+N300:  # 1,605 h/wk projected
+  ttnn        :  0.54  #   861 h/wk – ttnn-unit-tests (828 h), ttnn-sweeps (33 h)
+  runtime     :  0.35  #   559 h/wk – t3000-apc-fast (27 h), tt-metal-l2 (381 h), fd-nightly (151 h)
+  models      :  0.11  #   185 h/wk – models-unit-tests (68 h), models-e2e (1 h), single-card-demo (50 h),
+                        #               single-card-ttnn-models (32 h), vllm-tests (36 h)
+
+p150b:  # 3,515 h/wk projected
+  runtime     :  0.46  # 1,603 h/wk – blackhole-multi-card-fast (565 h), blackhole-multi-card (400 h),
+                        #               tt-metal-l2 (380 h), triage-tests (108 h), fd-nightly (151 h)
+  ttnn        :  0.20  #   710 h/wk – ttnn-unit-tests (694 h), ttnn-sweeps (16 h)
+  llk         :  0.18  #   636 h/wk – llk-test-blackhole (635 h)
+  scaleout    :  0.08  #   291 h/wk – multi-host-bh-lb-2x (146 h), multi-host-bh-lb-4x (145 h)
+  models      :  0.08  #   275 h/wk – blackhole-demo-tests (184 h), vllm-tests (36 h), fd-nightly (50 h; fd-nightly is runtime team; models p150b = reorg-based)
+
+p300b:  # 1,116 h/wk projected
+  runtime     :  0.88  #   984 h/wk – blackhole-multi-card-fast (565 h), blackhole-multi-card (420 h)
+  models      :  0.12  #   132 h/wk – blackhole-demo-tests (p300b skus: bh_p300 + bh_quietbox_2)
+
+LLMBOX:  # 2,158 h/wk projected
+  models      :  0.64  # 1,381 h/wk – t3k-integration-tests (279 h), t3k-unit-tests (315 h),
+                        #               t3k-e2e-tests (169 h), t3k-perf-tests (469 h), t3k-demo-tests (101 h),
+                        #               models-unit/e2e (2 h)
+  scaleout    :  0.24  #   515 h/wk – multi-host-t3k (147 h), ttnn-sweeps-LLMBOX (31 h; wait — scaleout: multi-host-t3k only),
+                        #               t3k-unit-tests scaleout (188 h), t3k-e2e scaleout (159 h), t3k-integration scaleout (21 h)
+  ttnn        :  0.10  #   223 h/wk – t3k-unit-tests ttnn (94 h), t3k-e2e ttnn (77 h), t3k-integration ttnn (21 h),
+                        #               ttnn-sweeps-T3K (31 h)
+  shield      :  0.02  #    39 h/wk – t3k-e2e-tests shield (39 h)
+
+galaxy:  # 690 h/wk projected
+  scaleout    :  0.48  #   334 h/wk – multi-host-glx-2x (165 h), multi-host-glx-4x (51 h),
+                        #               Galaxy-DeepSeek-tests (45 h), galaxy-health (10 h), galaxy-e2e scaleout (49 h), galaxy-sanity scaleout (15 h)
+  models      :  0.26  #   178 h/wk – galaxy-demo-tests (111 h), galaxy-model-perf (18 h),
+                        #               galaxy-perf-tests (27 h), galaxy-sanity models (8 h), models-e2e (2 h)
+  ttnn        :  0.26  #   177 h/wk – galaxy-integration-tests (99 h), galaxy-e2e ttnn (34 h),
+                        #               galaxy-unit-tests (44 h)
