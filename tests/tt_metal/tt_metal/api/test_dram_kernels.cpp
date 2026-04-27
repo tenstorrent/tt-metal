@@ -437,3 +437,191 @@ INSTANTIATE_TEST_SUITE_P(
     DramKernelDRISCBWFixture,
     testing::Values(1u, 2u, 3u),
     [](const testing::TestParamInfo<uint32_t>& info) { return std::to_string(info.param) + "_endpoints"; });
+
+// Read from GDDR over DMA into DRISC L1
+// mcast data from DRISC L1 to Tensix L1
+// Host write to DRAM
+// Read from DRISC (single endpoint)
+// Mcast to Tensix L1 (need a grid here)
+// Read from Host and verify (read from the series of grid)
+TEST_F(BlackholeSingleCardFixture, DramKernelDRISCReadFromDRAMMcastToTensix) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord);
+
+    uint32_t dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t dram_unreserved_size = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base_drisc = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base_tensix = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    uint32_t size_to_xfer_16b = (64 * 1024) >> 4;
+    const uint32_t total_bytes = size_to_xfer_16b << 4;
+
+    TT_FATAL(
+        dram_unreserved_size >= total_bytes,
+        "Not enough DRAM: need {} bytes, have {}",
+        total_bytes,
+        dram_unreserved_size);
+
+    std::vector<uint32_t> data = create_random_vector_of_bfloat16(
+        total_bytes, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+
+    CoreCoord logical_core{0, 0};
+    uint32_t dram_channel = device->dram_channel_from_logical_core(logical_core);
+    uint32_t num_cols = 6;
+    uint32_t num_rows = 6;
+    uint32_t num_subordinates = num_cols * num_rows;
+    CoreCoord tensix_sub_logical_start_coord{0, 0};
+    CoreCoord tensix_sub_logical_end_coord{num_cols - 1, num_rows - 1};
+    CoreCoord sub_worker_start_coord =
+        device->virtual_core_from_logical_core(tensix_sub_logical_start_coord, CoreType::WORKER);
+    CoreCoord sub_worker_end_coord =
+        device->virtual_core_from_logical_core(tensix_sub_logical_end_coord, CoreType::WORKER);
+
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_unreserved_base, data);
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_mcast_writes_tensix.cpp",
+        logical_core,
+        DramConfig{
+            .noc = NOC::NOC_0,
+            .compile_args = {
+                dram_unreserved_base,
+                l1_unreserved_base_drisc,
+                l1_unreserved_base_tensix,
+                sub_worker_start_coord.x,
+                sub_worker_start_coord.y,
+                sub_worker_end_coord.x,
+                sub_worker_end_coord.y,
+                size_to_xfer_16b,
+                num_subordinates}});
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    for (uint32_t row = 0; row < num_rows; row++) {
+        for (uint32_t col = 0; col < num_cols; col++) {
+            CoreCoord virtual_core = device->virtual_core_from_logical_core({col, row}, CoreType::WORKER);
+            std::vector<uint32_t> result(data.size());
+            MetalContext::instance().get_cluster().read_core(
+                result.data(),
+                data.size() * sizeof(uint32_t),
+                tt_cxy_pair(mesh_device->build_id(), virtual_core),
+                l1_unreserved_base_tensix);
+            EXPECT_EQ(result, data) << "Data mismatch on core (" << col << ", " << row << ")";
+        }
+    }
+}
+
+// Read from GDDR over DMA into DRISC L1
+// and from Tensix's at the same time
+// Read from Host and verify
+TEST_F(BlackholeSingleCardFixture, DramKernelDRISCRTensixParallelDRAMReads) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord);
+
+    uint32_t dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t dram_unreserved_size = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base_drisc = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base_tensix = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint64_t l1_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+
+    uint32_t size_to_xfer_16b = (64 * 1024) >> 4;
+    const uint32_t total_bytes = size_to_xfer_16b << 4;
+
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->build_id());
+    auto dram_compute_grid = soc_desc.get_dram_compute_grid_size();
+    uint32_t num_endpoints = dram_compute_grid.y;
+
+    TT_FATAL(
+        dram_unreserved_size >= total_bytes,
+        "Not enough DRAM: need {} bytes, have {}",
+        total_bytes,
+        dram_unreserved_size);
+
+    std::vector<uint32_t> data = create_random_vector_of_bfloat16(
+        total_bytes, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+
+    CoreCoord logical_core{0, 0};
+    uint32_t dram_channel = device->dram_channel_from_logical_core(logical_core);
+    uint32_t num_cols = 6;
+    uint32_t num_rows = 6;
+    // uint32_t num_subordinates = num_cols * num_rows;
+    CoreCoord worker_start{0, 0};
+    CoreCoord worker_end{num_cols - 1, num_rows - 1};
+    uint32_t bank_id = 0;
+    CoreCoord drisc_endpoint_start{bank_id, 0};
+    CoreCoord drisc_endpoint_end{bank_id, num_endpoints - 1};
+    CoreRangeSet tensix_range({CoreRange(worker_start, worker_end)});
+    CoreRangeSet drisc_endpoint_range({CoreRange(drisc_endpoint_start, drisc_endpoint_end)});
+    // CoreCoord sub_worker_start_coord = device->virtual_core_from_logical_core(tensix_sub_logical_start_coord,
+    // CoreType::WORKER); CoreCoord sub_worker_end_coord = device->virtual_core_from_logical_core(drisc_endpoint_end,
+    // CoreType::WORKER);
+
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_unreserved_base, data);
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
+        drisc_endpoint_range,
+        DramConfig{
+            .noc = NOC::NOC_0, .compile_args = {dram_unreserved_base, l1_unreserved_base_drisc, size_to_xfer_16b, 1}});
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/tensix_dram_reads.cpp",
+        tensix_range,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_0,
+            .compile_args = {bank_id, dram_unreserved_base, l1_unreserved_base_tensix, total_bytes}});
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    for (uint32_t endpoint = 0; endpoint < num_endpoints; endpoint++) {
+        CoreCoord virtual_core = device->virtual_core_from_logical_core({bank_id, endpoint}, CoreType::DRAM);
+        std::vector<uint32_t> result(data.size());
+        MetalContext::instance().get_cluster().read_core(
+            result.data(),
+            data.size() * sizeof(uint32_t),
+            tt_cxy_pair(mesh_device->build_id(), virtual_core),
+            l1_noc_base);
+        EXPECT_EQ(result, data) << "Data mismatch on core (" << endpoint << ")";
+    }
+
+    for (uint32_t row = 0; row < num_rows; row++) {
+        for (uint32_t col = 0; col < num_cols; col++) {
+            CoreCoord virtual_core = device->virtual_core_from_logical_core({col, row}, CoreType::WORKER);
+            std::vector<uint32_t> result(data.size());
+            MetalContext::instance().get_cluster().read_core(
+                result.data(),
+                data.size() * sizeof(uint32_t),
+                tt_cxy_pair(mesh_device->build_id(), virtual_core),
+                l1_unreserved_base_tensix);
+            EXPECT_EQ(result, data) << "Data mismatch on core (" << col << ", " << row << ")";
+        }
+    }
+}
