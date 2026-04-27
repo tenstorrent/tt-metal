@@ -1087,7 +1087,7 @@ def create_dram_expert_tensors_multi_device(
 def encode_expert_indices(expert_ids, is_dram_flags):
     """Encode SRAM/DRAM routing into expert index values via bit 15.
 
-    SRAM experts get bit 15 set + compact slot index in bits 0-14: 0x8000 | slot_idx.
+    SRAM experts get bit 15 set + one-based compact slot index in bits 0-14: 0x8000 | (slot_idx + 1).
     DRAM experts keep their global expert ID unchanged (bit 15 = 0).
 
     Args:
@@ -1108,7 +1108,7 @@ def encode_expert_indices(expert_ids, is_dram_flags):
     for eid in expert_ids:
         eid = int(eid)
         if not is_dram_flags[eid]:
-            encoded.append(0x8000 | sram_slot_map[eid])
+            encoded.append(0x8000 | (sram_slot_map[eid] + 1))
         else:
             encoded.append(eid)
     return encoded

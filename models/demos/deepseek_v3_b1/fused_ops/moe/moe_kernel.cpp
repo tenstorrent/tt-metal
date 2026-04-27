@@ -1534,6 +1534,21 @@ void kernel_main() {
             gate();
         }
 
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t gate_indices_cb = get_named_compile_time_arg_val("gate_output_indices_cb");
+            cb_wait_front(gate_indices_cb, 1);
+
+            volatile tt_l1_ptr uint16_t* gate_indices =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(gate_indices_cb));
+
+            DPRINT << "GATE_TOP8_RAW " << HEX() << U32(gate_indices[0]) << " " << U32(gate_indices[1]) << " "
+                   << U32(gate_indices[2]) << " " << U32(gate_indices[3]) << " " << U32(gate_indices[4]) << " "
+                   << U32(gate_indices[5]) << " " << U32(gate_indices[6]) << " " << U32(gate_indices[7]) << DEC()
+                   << ENDL();
+        }
+#endif
+
         // 5. Mcast Index: Broadcast expert indices to gate_proj cores only
         // Uses dedicated mcast with IsReceiverCore=is_gate_proj_core so only gate_proj
         // cores push to CB 10. Other grid cores just drain the semaphore (no CB ops).
@@ -1856,6 +1871,7 @@ void kernel_main() {
                 add_has_third_input>  // Has3Inputs — 3-way add (DRAM down + shared + SRAM down)
                 add_op;
             add_op();
+            DPRINT << "13_DONE" << ENDL();
         }
 
         // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh

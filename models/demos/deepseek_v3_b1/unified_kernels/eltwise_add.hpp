@@ -17,6 +17,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/debug/dprint.h"
 using namespace ckernel;
 #endif
 
@@ -145,14 +146,26 @@ struct EltwiseAdd {
             pack_reconfig_data_format<true>(CTArgs::cb_out);
 
             // Wait for cb_in0 (down_proj output)
+            UNPACK(
+                (DPRINT << "ADD_WAIT_IN0 cb=" << U32(CTArgs::cb_in0_wait) << " tiles=" << U32(CTArgs::cb_in0_wait_tiles)
+                        << ENDL()));
             cb_wait_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
+            UNPACK((DPRINT << "ADD_GOT_IN0" << ENDL()));
 
             // Wait for cb_in1 (all tiles must be ready before we update read pointer)
+            UNPACK(
+                (DPRINT << "ADD_WAIT_IN1 cb=" << U32(CTArgs::cb_in1) << " tiles=" << U32(CTArgs::cb_in1_wait_tiles)
+                        << ENDL()));
             cb_wait_front(CTArgs::cb_in1, CTArgs::cb_in1_wait_tiles);
+            UNPACK((DPRINT << "ADD_GOT_IN1" << ENDL()));
 
             // Wait for cb_in2 (SRAM down output) when running the 3-way variant.
             if constexpr (Has3Inputs) {
+                UNPACK(
+                    (DPRINT << "ADD_WAIT_IN2 cb=" << U32(CTArgs::cb_in2_wait)
+                            << " tiles=" << U32(CTArgs::cb_in2_wait_tiles) << ENDL()));
                 cb_wait_front(CTArgs::cb_in2_wait, CTArgs::cb_in2_wait_tiles);
+                UNPACK((DPRINT << "ADD_GOT_IN2" << ENDL()));
             }
 
             // Update cb_in1 read pointer to indexed offset (must be in UNPACK context)

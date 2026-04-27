@@ -141,7 +141,7 @@ struct MatmulExpertCompressedSRAM {
             cb_wait_front(cb_index, 1);
 
             // Index tensor encodes SRAM/DRAM via bit 15: 1=SRAM, 0=DRAM.
-            // Lower 15 bits hold the compact SRAM slot index (direct fmt table index).
+            // Lower 15 bits hold a one-based compact SRAM slot index (direct fmt table index after -1).
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
 

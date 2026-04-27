@@ -896,7 +896,6 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         pytest.param(
             frozenset([1]),
             id="sram_expert_1",
-            marks=pytest.mark.xfail(reason="SRAM fused expert path is still under integration", strict=False),
         ),
     ],
 )
@@ -962,13 +961,13 @@ def test_moe_fused_with_reduce(
     if sram_expert_ids:
         # Mark SRAM experts in gate_indices tensor by setting bit 15 (0x8000).
         # The tensor is (16, 16) uint16 where element [k % 16, k // 16] normally stores
-        # k (global expert id). SRAM entries store compact slots, matching encode_expert_indices().
+        # k (global expert id). SRAM entries store one-based compact slots, matching encode_expert_indices().
         # The gate kernel reads from this tensor and writes the matching value to gate_output_indices,
         # so the SRAM flag propagates to the index used by the DRAM matmul reader.
         indices = torch.arange(256, dtype=torch.int32).reshape(16, 16)
         gate_indices_torch = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
         for slot, expert_id in enumerate(sorted(sram_expert_ids)):
-            gate_indices_torch[expert_id % 16, expert_id // 16] = 0x8000 | slot
+            gate_indices_torch[expert_id % 16, expert_id // 16] = 0x8000 | (slot + 1)
         r = r._replace(
             ttnn_gate_indices=ttnn.from_torch(
                 gate_indices_torch,
@@ -1149,9 +1148,10 @@ def test_moe_fused_with_reduce(
     sram_slot_to_expert = {slot: expert_id for slot, expert_id in enumerate(sorted(sram_expert_ids))}
     tt_top8_raw = device_gate_indices[0].flatten()[:8].to(torch.int64)
     tt_top8 = torch.tensor(
-        [sram_slot_to_expert[int(raw & 0x7FFF)] if int(raw) & 0x8000 else int(raw) for raw in tt_top8_raw],
+        [sram_slot_to_expert[int(raw & 0x7FFF) - 1] if int(raw) & 0x8000 else int(raw) for raw in tt_top8_raw],
         dtype=torch.int64,
     )
+    breakpoint()
     tt_top8_sorted = torch.sort(tt_top8).values
     expected_top8_sorted = torch.sort(torch.tensor(expected_expert_ids, dtype=torch.int64)).values
     assert torch.equal(tt_top8_sorted, expected_top8_sorted), (
