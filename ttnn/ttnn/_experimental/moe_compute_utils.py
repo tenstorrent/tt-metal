@@ -310,9 +310,20 @@ def add_shared_expert_weights(
     return output_w0, output_w1, output_w2
 
 
+####################################################################################################
+# model specific and global constants
 # must be consistent with moe_ring_common.h
 BLOCK_TILES_W = 4
 BLOCK_TILES_H = 7
+
+DS_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
+DS_W0_W1_SHARD_VALS = [6, 5]
+DS_W2_SHARD_VALS = {False: (2, 2), True: (3, 1)}  # mapped to pad core assignment
+
+GPT_PAD_CORES = {2, 3, 6, 7, 10, 11}
+GPT_W0_W1_SHARD_VALS = [8, 7]
+GPT_W2_SHARD_VALS = {False: (4, 0), True: (3, 1)}
+####################################################################################################
 
 
 def prepare_w0_w1_tensor_for_moe_compute(
@@ -341,7 +352,7 @@ def prepare_w0_w1_tensor_for_moe_compute(
     """
     import torch
 
-    Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
+    Nt = N // ttnn.TILE_SIZE
     # in general, pad K up to a factor of transaction size (32*7)
     Kp = math.ceil(K // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
     num_cores = len(shard_map)
@@ -362,7 +373,7 @@ def prepare_w0_w1_tensor_for_moe_compute(
     # This puts w0_chunk_i and w1_chunk_i adjacent to each other
     stacked = torch.stack([w0_chunks, w1_chunks], dim=4)
 
-    # Reshape to interleave: (L, E, K, Nt * 2 * ttnn.TILE_SIZE) = (L, E, K, 4096)
+    # Reshape to interleave: (L, E, K, Nt * 2 * ttnn.TILE_SIZE)
     # The order will be: w0_chunk_0, w1_chunk_0, w0_chunk_1, w1_chunk_1, ...
     torch_w0_w1_interleaved = stacked.view(L, E, Kp, Nt, 2 * ttnn.TILE_SIZE)
 
@@ -383,24 +394,15 @@ def prepare_w0_w1_tensor_for_moe_compute(
             each_shard.append(torch.zeros(L, E, 1, Kp, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
         start_tile += num_tiles
 
-    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)  # (L, E, 5 * 8 + 1 * 8 + 6 * 4, K, 64)
-    all_groups_per_bank = torch_w0_w1_reordered.view(
-        L, E, num_cores, -1, Kp, 2 * ttnn.TILE_SIZE
-    )  # (L, E, 12, 6, K, 64)
-    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)  # (12, L, E, 6, K, 64)
+    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)
+    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, num_cores, -1, Kp, 2 * ttnn.TILE_SIZE)
+    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)
 
     groups_per_core = max_shard_size // 2
 
-    # Let us further make the 6 as 3 and 64 as 128.
     torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(num_cores, L, E, groups_per_core, -1, Kp, 2 * ttnn.TILE_SIZE)
-    print(f"{torch_w0_w1_pair_2_tiles.shape=}")
-    # (12, L, E, 3, 2, K, 64) -> (12, L, E, 3, K, 2, 64)
     torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
-    print(f"{torch_w0_w1_pair_2_tiles.shape=}")
-
     torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(num_cores, L, E, groups_per_core, -1, 4 * ttnn.TILE_SIZE)
-
-    print(f"{torch_w0_w1_paired.shape=}")
 
     return torch_w0_w1_paired
 
@@ -435,10 +437,10 @@ def prepare_w2_tensor_for_moe_compute(
     num_cores = len(w2_shard_map)
     w2_groups_per_core = math.ceil(Kt / (num_cores * sum(w2_shard_map[0])))
 
-    # Separate the tensor into groups of 4 * 32 tiles and then 1 group of 2/3 * 32 tiles.
     each_shard = []
 
     start_col = 0
+    # groups are always 4 tiles wide in K, and full N
     for last_group_tiles, last_group_pad_tiles in w2_shard_map:
         # Get the first 4 groups of 4 * 32 tiles.
         each_shard.append(torch_w2[:, :, :, start_col : start_col + (w2_groups_per_core - 1) * 4 * ttnn.TILE_SIZE])
@@ -450,7 +452,7 @@ def prepare_w2_tensor_for_moe_compute(
         if last_group_pad_tiles > 0:
             each_shard.append(torch.zeros(L, E, N, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
 
-    torch_w2_reordered = torch.cat(each_shard, dim=-1)  # (L, E, N, 12 * (4 * 4 * 32 + 4 * 32))
+    torch_w2_reordered = torch.cat(each_shard, dim=-1)
     all_groups_per_bank = torch_w2_reordered.view(L, E, N, num_cores, -1, 4 * ttnn.TILE_SIZE)
 
     # (L, E, N, 12, 5, 128) -> (12, L, E, 5, N, 128)
@@ -459,19 +461,15 @@ def prepare_w2_tensor_for_moe_compute(
     # Group N in terms of tiles first
     N_grouped = all_groups_per_bank.view(
         num_cores, L, E, w2_groups_per_core, -1, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE
-    )  # (12, L, E, 5, 64, 32, 128)
+    )  # (12, L, E, num groups, 64, 32, 128)
 
     # Figure out the order of N tiles based on the ring position.
     core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
-
-    print(f"{core_chunk_order=}")
 
     # Figure out the starting position for each chunk
     chunk_start_positions = torch.cat(
         [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(w0_w1_shard_map, dtype=torch.int32), dim=0)]
     )
-
-    print(f"{chunk_start_positions=}")
 
     each_shard = []
     # Assemble the number of such N tiles based on the ring position.
@@ -492,7 +490,7 @@ def prepare_w2_tensor_for_moe_compute(
     Nt = N // ttnn.TILE_SIZE
     N_padding = math.ceil(Nt / 7) * 7 * ttnn.TILE_SIZE - N
     padding = torch.zeros(num_cores, L, E, w2_groups_per_core, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
-    all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 5, N + 192, 128)
+    all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)
     return all_groups_per_bank
 
 
@@ -695,15 +693,6 @@ def prepare_w2_tensor_with_bias(
     return N_with_bias
 
 
-DS_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
-DS_W0_W1_SHARD_VALS = [6, 5]
-DS_W2_SHARD_VALS = {False: (2, 2), True: (3, 1)}  # mapped to pad core assignment
-
-GPT_PAD_CORES = {2, 3, 6, 7, 10, 11}
-GPT_W0_W1_SHARD_VALS = [8, 7]
-GPT_W2_SHARD_VALS = {False: (4, 0), True: (3, 1)}
-
-
 def get_weight_core_shard_maps(mesh_device, pad_cores, w0_w1_shard_vals, w2_shard_vals):
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     core2dram = {}
@@ -744,10 +733,6 @@ def get_weight_mem_configs(
 
     w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
 
-    # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w2
-    # Tensor shape: (num_layers, experts_per_device, N, hidden_size) -> padded and reordered to (12, num_layers, experts_per_device, 5, N + 192, 128)
-    # ------------------------------------------------------------------------
     Nt = intermediate_size // ttnn.TILE_SIZE
     Ht = hidden_size // ttnn.TILE_SIZE
     w2_groups_per_core = math.ceil(Ht / (len(w2_shard_map) * sum(w2_shard_map[0])))

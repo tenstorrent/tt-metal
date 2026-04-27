@@ -12,7 +12,12 @@
 #include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::experimental::prim {
+namespace detail {
 
+constexpr auto TOKEN_SIZE = 32;  // This does not mean we only support 32 tokens, just hardcoding the shared buffer size
+constexpr auto DOUBLE_BUFFER_SIZE = 2;
+
+}  // namespace detail
 MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return MoEComputeMeshWorkloadFactory{};
@@ -65,6 +70,17 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             moe_ring::W2_TILES_PER_TXN,
             tile_h);
     }
+
+    // validate that 32 (token dim) * output_shard_width * output_shard_height >= total tokens
+    const auto& tilize_input_shape = tensor_args.tilize_input_tensor.logical_shape();
+    const auto total_tokens = tilize_input_shape[0] * tilize_input_shape[1];
+    const auto combine_token_parallel_cores = args.combine_params.num_token_parallel_cores;
+    const auto combine_data_parallel_cores = args.combine_params.num_data_parallel_cores;
+
+    // make sure the shared L1 buffer is sufficiently large enough to contain all output tokens
+    const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
+    TT_FATAL(
+        max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -85,7 +101,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t experts_per_device = tt::div_up(experts, num_devices);
     uint32_t total_tokens =
         tilize_input_shape[0] *
-        tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices (512)
+        tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices
 
     const uint32_t hidden_size = tilize_input_shape[-1];
 
@@ -157,12 +173,14 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     ttnn::MemoryConfig output_sharded_memory_config = ttnn::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
-        tt::tt_metal::ShardSpec(shard_cores, {2 * 32, hidden_size}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
+        tt::tt_metal::ShardSpec(
+            shard_cores,
+            {detail::DOUBLE_BUFFER_SIZE * detail::TOKEN_SIZE, hidden_size},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
-    // TOOD (AM) validate that 32 (token dim) * output_shard_width * output_shard_height >= total tokens
-
-    auto tilize_output_shape = ttnn::Shape({shard_cores.num_cores(), 2, 32, hidden_size});
+    auto tilize_output_shape =
+        ttnn::Shape({shard_cores.num_cores(), detail::DOUBLE_BUFFER_SIZE, detail::TOKEN_SIZE, hidden_size});
     auto tilize_output_spec = TensorSpec(
         Shape(tilize_output_shape),
         tt::tt_metal::TensorLayout(

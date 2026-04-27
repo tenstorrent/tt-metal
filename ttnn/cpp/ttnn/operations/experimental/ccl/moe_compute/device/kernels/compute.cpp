@@ -13,9 +13,6 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
-// DEBUG
-#include "api/compute/eltwise_unary/fill.h"
-
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -23,20 +20,6 @@
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_binary_sfpu_binop.h"
 #endif
-
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        DEVICE_PRINT("{}: ", start + page);
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-            DEVICE_PRINT("{} ", bf16_t(*ptr));
-        }
-        DPRINT << ENDL();
-        DEVICE_PRINT("\n");
-    }
-}
 
 namespace detail {
 
@@ -169,14 +152,11 @@ void kernel_main() {
     constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
 
     constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
-    // OG CODE
-    // moe_ring::W2_TILES_PER_A2A_ITER_W * w2_txns_h / w2_txns_per_block;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
 
     // The number of tiles to send in each step
-    // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
     constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
 
     //-------------------------------------------------------------------------
@@ -229,11 +209,8 @@ void kernel_main() {
 
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
-    // DEBUG
-    // uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
-        // NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
@@ -265,8 +242,6 @@ void kernel_main() {
             detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
-
-            // print_bf16_pages(get_tile_address(cb_s2c_in,0),config_t::NUM_W0_W1_TILES_H*32,NUM_TOKENS_PER_EXPERT[expert_id]);
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -409,14 +384,6 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_w2c_rdy, 1);
 
-                DPRINT << "COMPUTE: done with a2a \n";
-
-                //                 fill_tile_init();
-                //                 fill_tile(0, 1.0);
-                //                 fill_tile(1, 1.0);
-                //                 fill_tile(2, 1.0);
-                //                 fill_tile(3, 1.0);
-
                 tile_regs_commit();
 
                 tile_regs_wait();
@@ -431,7 +398,6 @@ void kernel_main() {
             }
 
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
-            DPRINT << "COMPUTE: done with cb_push_back(cb_c2s_out, num_w0_w1_tiles_h) \n";
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
