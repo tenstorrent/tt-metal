@@ -1,71 +1,94 @@
 # TurboQuant KV Cache Quantization
 
-## 🚨 Resume here (2026-04-27) — kernel is the bottleneck, Step 6 required
+## 🚨 Resume here (2026-04-27 evening) — perf bottleneck FIXED, output-quality bug remains
 
-**Where we are:** Full Dequant path is end-to-end functional (N150 + N150×4
-mesh, paged cache, page_table plumbing all done). Functional correctness
-validated at the kernel level (cos 0.998+ at all seqlens 128–131072). The
-remaining issue is purely **performance**: the fused-SDPA kernel costs
-~117 ms/layer × 32 layers ≈ 3.7 s/tok ≈ **100× the 37 ms baseline**.
+**Headline:** the fused-SDPA kernel was iterating ALL 256 padded k_chunks
+(1024 max_blocks / Sk_chunk_t=4) regardless of `cur_pos`. For seq=128 only
+1 chunk has real data — we were doing 256× more compute than needed. Fixed
+by plumbing `cur_pos` into the kernel and bounding the loop dynamically
+(commit `d7f7585a9da`).
 
-### Diagnosis summary (after 2026-04-27 probes)
+**Trace numbers (N150, --tq-full-dequant, 2026-04-27 evening):**
 
-We tested four hypotheses for the per-layer slowdown:
-
-| Hypothesis | Verdict | How tested |
-|--|--|--|
-| Program cache thrashing | **REJECTED** | Cache holds at 55 entries through decode, no growth |
-| Per-layer cache allocation | **REJECTED** | Sharing one TTNNTurboQuantCache (commit `ff548d2d19c`) didn't change perf |
-| Python dispatch overhead | **REJECTED** | Trace mode (which removes dispatch) gives same per-layer cost |
-| Mesh sync overhead | **REJECTED** | Single-device shows the same scaling |
-
-**Trace numbers (N150, --tq-full-dequant, 2026-04-27):**
-
-| Layers | No-trace ms/tok | Trace ms/tok | Per-layer (trace) |
+| Layers | Before (ms/tok) | After (ms/tok) | Speedup |
 |-:|-:|-:|-:|
-| 2 | 7 | **237** | 117 |
-| 3 | 120 | **354** | 117 |
+| 2 | 237 | **6.0** | 39× |
+| 32 | ~3700 | **58.1** | 64× |
 
-Important: the no-trace numbers were **misleading** — `eval_e2e.py`'s
-`elapsed = perf_counter() - t0` is taken right after `ttnn_decode_forward`
-returns, but TTNN dispatch is **async**. The 2L = 7 ms data point measured
-dispatch latency, not work done. Trace numbers (which use `blocking=True`)
-are the correct sync'd kernel cost.
+vs baseline BFP8 (37 ms/tok), Full Dequant is now **1.6× from baseline** at
+32L instead of 100×.
 
-**Conclusion:** the bottleneck is the fused-SDPA kernel arithmetic itself —
-specifically the centroid gather (~50 SFPU ops/tile) repeated for every K and
-V chunk, every layer. This is not a caching/dispatch/mesh problem; it's
-genuine compute. Step 6 (centroid gather optimization) is now **required**,
-not optional, for the Full Dequant path to be production-viable.
+### Open issue: e2e output quality is wrong
+
+The kernel itself is correct — `test_paged_fused.py` passes cos > 0.999
+against the torch reference at seqlens 128–2048. **But** end-to-end
+generation (eval_e2e.py 32L) produces garbage tokens regardless of whether
+the cap is applied:
+
+| Variant | 32L tokens generated for "What is the capital of France?" |
+|---|---|
+| With cap (HEAD) | "OOOOak\nOOak" — random |
+| Without cap (cur_pos plumbed but `valid_k_chunks = k_num_chunks`) | " ( the first, the" — degraded English |
+
+Both are wrong. The "without cap" variant is identical to the pre-fix
+behaviour (just iterating all chunks), so this is a **pre-existing** e2e
+correctness bug, not introduced by the cur_pos fix. The PLAN previously
+noted "Full 32-layer test deferred — only logic verified at 2 layers"
+(which was 6.9 ms/tok no-trace, not validated for output text).
+
+The cap variant is *differently* wrong than the no-cap variant, suggesting
+some interaction with partially-filled paged cache that doesn't show up in
+the unit test (which uses fully-filled small caches). Hypothesis: zero K/V
+in the unfilled positions of the iterated chunk dilutes the softmax in a
+way the existing kernel was implicitly tolerating across all 256 chunks.
+
+### Bottleneck diagnosis trail (for posterity)
+
+We initially suspected the centroid gather cascade (~50 SFPU ops/tile, 8
+levels × 6 ops × 7 levels). Op-count math estimated ~1ms/layer for the
+cascade, but trace measured 117 ms/layer — a 100× gap that pointed away
+from the cascade. Profiling with `DeviceZoneScopedN` showed:
+
+- `TQ_K_CHUNK_TOTAL` ≈ 442 us per chunk (cascade ~414 us of that)
+- `TQ_FULL_DEQUANT_HEAD` ≈ 113 ms — implies ~256 chunks/head, not the 9 we
+  expected. Confirmed via TQ_K_CHUNK_TOTAL count = 23,180 / 190 heads = 122
+  observed (with overflow drops; actual is 256).
+- 256 chunks × 442 us = 113 ms. Matches.
+
+The 256 figure pointed to padded-cache iteration: max_num_blocks=1024 in
+eval_e2e.py / Sk_chunk_t=4 = 256. Hypothesis test (hardcoding loop bound to
+1) gave 6.0 ms/tok at 2L — confirmed.
+
+The original Step 6 (centroid gather optimization, 6A/6B/6C alternatives)
+becomes a smaller secondary opt now that the cap bounds the work to one
+chunk for short seqs. Section 6 below still describes it for reference.
+
+### Next steps (priority order)
+
+1. **Diagnose output quality** — why does cap=1 give different output than
+   cap=k_num_chunks when V data is zero for unfilled positions? Check:
+   (a) does `paged_update_cache` for BFP4 actually write the right
+   positions? (b) is the softmax accumulation state initialization wrong
+   when only 1 chunk runs? (c) does `mm_init` need to be called more
+   times? Add DPRINT to the kernel to dump cur_pos and per-chunk K data.
+2. **Validate at long seq** — run with seq=2048 (16 chunks) and seq=8192
+   (64 chunks). If those work, the cap=1 case is a special edge case.
+3. **Step 5 accuracy benchmark** — once output is correct, re-run
+   WikiText-2 perplexity / needle-in-haystack to confirm 3-bit quality.
+4. **T3K validation** — should be a small lift now that perf is in range.
 
 ### Latest commits on `mtairum/kvcache_turboquant`
 
 | Commit | What |
 |--|--|
+| `d7f7585a9da` | TQ SDPA: thread cur_pos into kernel; bound k_chunk loop (THIS IS THE FIX) |
+| `7e6e166e715` | TQ SDPA: add DeviceZoneScopedN profiling zones to compute kernel |
+| `b2edb19f03b` | PLAN: kernel-bottleneck diagnosis + Step 6 sketches (now superseded by this section) |
 | `3da187312b0` | Step 1 (multi-chunk online softmax fix — cos 0.998+) |
 | `c833e062f15` | Step 2 core (paged TQ cache + page_table-aware reader) |
 | `39e590d6f03` | Step 2E (eval_e2e `--tq-full-dequant` flag + attention.py plumbing) |
 | `a5160d2fd60` | Step 3A (mesh_mapper=ReplicateTensorToMesh for paged cache) |
 | `ff548d2d19c` | Shared TQ cache across layers + `tq_layer_idx` attr |
-| `2a7fbbbb76b` | PLAN: scaling characterization + 8L data |
-| `0f9e1f17fa7` | PLAN: N150 perf benchmarks + non-linear scaling table |
-| `627b36cd5cc` | PLAN: session-pause marker (superseded by this section) |
-
-### Next: Step 6 (centroid gather optimization)
-
-See Section 6 → "Step 6: Centroid gather optimization" below for three
-candidate approaches. Recommended order:
-
-1. **6A — LUT matmul gather**: replace the 50-op cascade with a single matmul
-   against a one-hot expansion of the indices. Lowest implementation cost,
-   biggest expected win if FPU-bound.
-2. **6B — Post-softmax expansion**: never expand to BF16; do the centroid×
-   norm × softmax × V multiply inline. Largest theoretical win, hardest
-   refactor.
-3. **6C — Vectorize the cascade**: keep the structure but parallelize the
-   8 levels with SFPU batched ops. Smallest change but smallest win.
-
-Effort estimate: 6A is ~3 days for prototype + validate. 6B is 1 week.
 
 ### Useful repro commands
 
