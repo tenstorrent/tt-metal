@@ -35,7 +35,7 @@ def load_expert_weights(
     config,
     state_dict,
     mesh_config=None,
-    weight_dtype=ttnn.bfloat8_b,
+    weight_dtype=ttnn.bfloat4_b,
     tensor_cache_path=None,
 ) -> ExpertWeights:
     """
@@ -62,11 +62,12 @@ def load_expert_weights(
         up_proj = fused[:, intermediate_size:, :]  # [E, I, H]
 
         # Transpose for matmul: [E, I, H] -> [1, E, H, I]
-        gate_proj = gate_proj.transpose(-2, -1).unsqueeze(0)
-        up_proj = up_proj.transpose(-2, -1).unsqueeze(0)
+        # .contiguous() — bf16 path through ttnn.from_torch fails on non-contiguous views.
+        gate_proj = gate_proj.transpose(-2, -1).contiguous().unsqueeze(0)
+        up_proj = up_proj.transpose(-2, -1).contiguous().unsqueeze(0)
 
         # Down: [E, H, I] -> transpose -> [1, E, I, H]
-        down_proj = state_dict["down_proj"].transpose(-2, -1).unsqueeze(0)
+        down_proj = state_dict["down_proj"].transpose(-2, -1).contiguous().unsqueeze(0)
 
         # Pad intermediate dim to tile-aligned per-device size for sparse_matmul.
         # E.g. 704/8=88 is not tile-aligned; pad to 768 so each device gets 96 (=3*32).

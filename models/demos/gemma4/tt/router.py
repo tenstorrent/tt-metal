@@ -19,7 +19,7 @@ from models.demos.gemma4.utils.substate import substate
 
 
 class Gemma4Router:
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None):
+    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, weight_dtype=ttnn.bfloat16):
         self.mesh_device = mesh_device
         self.num_experts = hf_config.num_experts
         self.top_k = hf_config.top_k_experts
@@ -36,7 +36,10 @@ class Gemma4Router:
 
         if state_dict:
             scale_weight = state_dict["scale"].reshape(1, 1, 1, -1)
-            proj_weight = substate(state_dict, "proj")["weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            # .contiguous() — bf16 path through ttnn.from_torch fails on non-contiguous views.
+            proj_weight = (
+                substate(state_dict, "proj")["weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+            )
             per_expert_scale_raw = state_dict["per_expert_scale"]
         else:
             scale_weight = None
@@ -49,7 +52,7 @@ class Gemma4Router:
         self.scale = ttnn.as_tensor(
             scale_weight,
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "scale"),
@@ -59,7 +62,7 @@ class Gemma4Router:
         self.proj_weight = ttnn.as_tensor(
             proj_weight,
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "proj.weight"),
@@ -71,7 +74,7 @@ class Gemma4Router:
             self.per_expert_scale = ttnn.as_tensor(
                 per_expert_scale_raw.reshape(1, 1, 1, -1),
                 device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=replicate_mapper,
                 cache_file_name=get_cache_file_name(tensor_cache_path, "per_expert_scale"),

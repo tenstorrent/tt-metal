@@ -108,8 +108,9 @@ def load_attention_weights(
                 .unsqueeze(0)
             )
 
-        # Output projection
-        o_w = state_dict["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+        # Output projection. .contiguous() — ttnn.from_torch on bf16 fails on
+        # non-contiguous views via nanobind's ndarray_import.
+        o_w = state_dict["o_proj.weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
         if o_proj_pad_size > 0 and tp > 1:
             padded_hidden = padded_local_hidden * tp
             o_w = torch.nn.functional.pad(o_w, (0, padded_hidden - hidden_size), "constant", 0.0)

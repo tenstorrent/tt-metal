@@ -22,8 +22,6 @@ from loguru import logger
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM
 
-import ttnn
-
 
 @dataclass
 class Gemma4ModelArgs:
@@ -201,14 +199,19 @@ class Gemma4ModelArgs:
         """Sequence lengths to compile during prefill warmup."""
         return [32, 128, 512]
 
-    def weight_cache_path(self, model_path, dtype):
-        """Return weight cache path for the model."""
+    def weight_cache_path(self, model_path, dtype=None):
+        """Return weight cache path for the model.
+
+        Per-tensor cache filenames already encode dtype (`..._dtype_BFLOAT8_B_*`),
+        so a single root directory can hold tensors at different dtypes without
+        collision. The `dtype` parameter is accepted for backward compatibility
+        but ignored.
+        """
         cache_dir = os.getenv("TT_CACHE_PATH")
         if cache_dir:
             cache_dir = Path(cache_dir)
         else:
             cache_dir = Path(model_path)
-        dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        cache_path = cache_dir / f"tensor_cache_{dtype_str}"
+        cache_path = cache_dir / "tensor_cache"
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path

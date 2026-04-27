@@ -47,9 +47,10 @@ class SharedMLP:
             row_mapper = None
 
         if state_dict:
-            gate_proj_weight = state_dict["gate_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-            up_proj_weight = state_dict["up_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-            down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            # .contiguous() — bf16 path through ttnn.from_torch fails on non-contiguous views.
+            gate_proj_weight = state_dict["gate_proj.weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+            up_proj_weight = state_dict["up_proj.weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+            down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
         else:
             gate_proj_weight = None
             up_proj_weight = None

@@ -10,6 +10,7 @@
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.dtypes import Gemma4DTypes
 from models.demos.gemma4.tt.moe import MoEBlock
 
 from ...tests.test_factory import (
@@ -62,7 +63,7 @@ def test_moe(batch_size, seq_len, mesh_device, reset_seeds):
         state_dict=state_dict,
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
-        dtype=ttnn.bfloat16,
+        dtypes=Gemma4DTypes.uniform(ttnn.bfloat16),
     )
 
     x_torch = torch.randn(1, 1, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)

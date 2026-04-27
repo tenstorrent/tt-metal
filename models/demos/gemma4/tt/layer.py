@@ -43,6 +43,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.dtypes import Gemma4DTypes
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.rms_norm import RMSNorm
@@ -59,11 +60,11 @@ class Gemma4DecoderLayer:
         state_dict,
         layer_idx,
         ccl_manager,
-        dtype,
         tensor_cache_path,
         mesh_config,
         max_seq_len,
         max_local_batch_size,
+        dtypes=None,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
         self.mesh_device = mesh_device
@@ -72,6 +73,9 @@ class Gemma4DecoderLayer:
         self.layer_type = hf_config.layer_types[layer_idx]
         self.enable_moe_block = hf_config.enable_moe_block
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
+        if dtypes is None:
+            dtypes = Gemma4DTypes()
+        self.dtypes = dtypes
 
         # Try both key formats (HF uses "model.language_model.layers", tests use "model.layers")
         layer_state = {}
@@ -121,6 +125,7 @@ class Gemma4DecoderLayer:
             program_config=attn_program_config,
             layer_idx=layer_idx,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
+            weight_dtype=dtypes.attention,
         )
 
         # Shared/dense MLP (HF key: "mlp")
@@ -130,7 +135,7 @@ class Gemma4DecoderLayer:
             state_dict=substate(layer_state, "mlp") if layer_state else {},
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
-            dtype=dtype,
+            dtype=dtypes.shared_mlp,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
         )
 
@@ -142,7 +147,7 @@ class Gemma4DecoderLayer:
                 state_dict=layer_state,  # MoE expects "router.*" and "experts.*" keys
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
-                dtype=dtype,
+                dtypes=dtypes,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/moe" if tensor_cache_path else None,
             )
 
@@ -151,8 +156,13 @@ class Gemma4DecoderLayer:
             pli_prefix = f"{tensor_cache_path}/layer_{layer_idx}" if tensor_cache_path else None
 
             if layer_state and "per_layer_input_gate.weight" in layer_state:
-                gate_w = layer_state["per_layer_input_gate.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-                proj_w = layer_state["per_layer_projection.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+                # .contiguous() — bf16 path through ttnn.from_torch fails on non-contiguous views.
+                gate_w = (
+                    layer_state["per_layer_input_gate.weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+                )
+                proj_w = (
+                    layer_state["per_layer_projection.weight"].transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+                )
             else:
                 gate_w = None
                 proj_w = None
@@ -160,7 +170,7 @@ class Gemma4DecoderLayer:
             self.per_layer_input_gate = ttnn.as_tensor(
                 gate_w,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=dtypes.pli,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=get_cache_file_name(pli_prefix, "per_layer_input_gate"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -168,7 +178,7 @@ class Gemma4DecoderLayer:
             self.per_layer_projection = ttnn.as_tensor(
                 proj_w,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=dtypes.pli,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=get_cache_file_name(pli_prefix, "per_layer_projection"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

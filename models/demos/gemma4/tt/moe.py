@@ -9,7 +9,7 @@ Experts use sparse_matmul with that routing pattern.
 No CPU round-trip.
 """
 
-import ttnn
+from models.demos.gemma4.tt.dtypes import Gemma4DTypes
 from models.demos.gemma4.tt.experts import Gemma4ExpertConfig, Gemma4Experts
 from models.demos.gemma4.tt.router import Gemma4Router
 from models.demos.gemma4.utils.substate import substate
@@ -23,18 +23,21 @@ class MoEBlock:
         state_dict,
         ccl_manager,
         mesh_config,
-        dtype=ttnn.bfloat8_b,
+        dtypes=None,
         tensor_cache_path=None,
     ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
+        if dtypes is None:
+            dtypes = Gemma4DTypes()
 
         self.router = Gemma4Router(
             mesh_device=mesh_device,
             hf_config=hf_config,
             state_dict=substate(state_dict, "router") if state_dict else {},
             tensor_cache_path=f"{tensor_cache_path}/router" if tensor_cache_path else None,
+            weight_dtype=dtypes.router,
         )
 
         expert_config = Gemma4ExpertConfig(hf_config)
@@ -45,7 +48,7 @@ class MoEBlock:
             ccl_manager=ccl_manager,
             mesh_config=mesh_config,
             program_config=None,
-            weight_dtype=dtype,
+            weight_dtype=dtypes.experts,
             tensor_cache_path=f"{tensor_cache_path}/experts" if tensor_cache_path else None,
         )
 

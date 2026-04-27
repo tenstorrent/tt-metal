@@ -8,13 +8,17 @@ Usage:
     model_args, model, tt_kv_cache, state_dict = create_tt_model(
         mesh_device, max_batch_size=1, max_seq_len=8192,
     )
+
+For per-module dtype control, pass `dtypes=Gemma4DTypes(...)`. The legacy
+`dtype=` kwarg, if set, is broadcast to every module (preserves prior behavior
+for callers that haven't migrated).
 """
 
 import os
 
-import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.ccl import CCLManager
+from models.demos.gemma4.tt.dtypes import Gemma4DTypes, resolve_dtypes
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
@@ -23,13 +27,14 @@ def create_tt_model(
     mesh_device,
     max_batch_size=1,
     max_seq_len=8192,
-    dtype=ttnn.bfloat16,
+    dtypes: Gemma4DTypes = None,
     state_dict=None,
     num_layers=None,
     mesh_config=None,
     paged_attention_config=None,
     create_kv_cache=True,
     model_path=None,
+    dtype=None,  # Legacy: if set, broadcast to every module via Gemma4DTypes.uniform
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -70,14 +75,15 @@ def create_tt_model(
     if state_dict is None:
         state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
 
-    tensor_cache_path = str(model_args.weight_cache_path(model_path, dtype))
+    dtypes = resolve_dtypes(dtypes=dtypes, legacy_dtype=dtype)
+    tensor_cache_path = str(model_args.weight_cache_path(model_path))
 
     model = Gemma4Model(
         mesh_device=mesh_device,
         hf_config=model_args,
         state_dict=state_dict,
         ccl_manager=ccl_manager,
-        dtype=dtype,
+        dtypes=dtypes,
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_seq_len=max_seq_len,

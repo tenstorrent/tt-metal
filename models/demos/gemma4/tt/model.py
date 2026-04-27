@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+from models.demos.gemma4.tt.dtypes import Gemma4DTypes
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -103,7 +104,7 @@ class Gemma4Model:
         hf_config,
         state_dict,
         ccl_manager,
-        dtype=ttnn.bfloat16,
+        dtypes=None,
         tensor_cache_path=None,
         mesh_config=None,
         max_seq_len=131072,
@@ -124,6 +125,9 @@ class Gemma4Model:
         self.ccl_manager = ccl_manager
         self.max_seq_len = max_seq_len
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
+        if dtypes is None:
+            dtypes = Gemma4DTypes()
+        self.dtypes = dtypes
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
@@ -178,7 +182,7 @@ class Gemma4Model:
             self.embedding_weight = ttnn.as_tensor(
                 embed_weight.unsqueeze(0).unsqueeze(0),
                 device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=dtypes.embedding,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=embed_mapper,
                 cache_file_name=get_cache_file_name(tensor_cache_path, f"embed_tokens.weight{tp_suffix}"),
@@ -187,16 +191,18 @@ class Gemma4Model:
 
             # LM head (tied with embeddings): column-parallel (shard vocab dim)
             # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
-            lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
+            # .contiguous() — ttnn.from_torch needs a contiguous tensor; the transpose
+            # produces a view that fails ndarray_import on first conversion.
+            lm_head_weight = embed_weight.transpose(0, 1).contiguous().unsqueeze(0).unsqueeze(0)
             if tp > 1:
                 lm_mapper = mesh_config.column_parallel(mesh_device)
             else:
                 lm_mapper = replicate
-            # Always bfloat16 for LM head — bfloat8_b is too lossy for 262k-vocab argmax
+            # bfloat8_b is too lossy for 262k-vocab argmax — keep bfloat16 unless explicitly overridden.
             self.lm_head_weight = ttnn.as_tensor(
                 lm_head_weight,
                 device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=dtypes.lm_head,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=lm_mapper,
                 cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}"),
@@ -241,7 +247,7 @@ class Gemma4Model:
                 state_dict=state_dict,
                 layer_idx=i,
                 ccl_manager=ccl_manager,
-                dtype=dtype,
+                dtypes=dtypes,
                 tensor_cache_path=tensor_cache_path,
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,

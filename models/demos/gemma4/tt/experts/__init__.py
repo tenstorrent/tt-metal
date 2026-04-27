@@ -34,7 +34,7 @@ class Gemma4Experts:
         ccl_manager,
         mesh_config,
         program_config,
-        weight_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat4_b,
         tensor_cache_path=None,
     ):
         self.mesh_device = mesh_device

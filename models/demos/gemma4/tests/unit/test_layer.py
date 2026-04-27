@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.dtypes import Gemma4DTypes
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
@@ -158,7 +159,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds)
         state_dict=tt_state,
         layer_idx=layer_idx,
         ccl_manager=ccl_manager,
-        dtype=ttnn.bfloat16,
+        dtypes=Gemma4DTypes.uniform(ttnn.bfloat16),
         tensor_cache_path=None,
         mesh_config=mesh_config,
         max_seq_len=seq_len,
@@ -242,7 +243,7 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds):
         state_dict=tt_state,
         layer_idx=layer_idx,
         ccl_manager=ccl_manager,
-        dtype=ttnn.bfloat16,
+        dtypes=Gemma4DTypes.uniform(ttnn.bfloat16),
         tensor_cache_path=None,
         mesh_config=mesh_config,
         max_seq_len=cache_len + 32,

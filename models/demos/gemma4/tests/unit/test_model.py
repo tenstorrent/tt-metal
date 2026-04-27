@@ -11,6 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.dtypes import Gemma4DTypes
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
@@ -225,7 +226,7 @@ def test_single_layer_model(mesh_device, num_layers, reset_seeds):
         hf_config=model_args,
         state_dict=tt_state,
         ccl_manager=ccl_manager,
-        dtype=ttnn.bfloat16,
+        dtypes=Gemma4DTypes.uniform(ttnn.bfloat16),
         tensor_cache_path=None,
         mesh_config=mesh_config,
         max_seq_len=seq_len,
