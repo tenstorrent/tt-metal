@@ -1167,7 +1167,16 @@ void py_module(nb::module_& mod) {
             if (!DistributedContext::is_initialized()) {
                 throw std::runtime_error("Distributed context not initialized.");
             }
-            return DistributedContext::get_current_world()->subcontext_size(SubcontextId{subcontext_id});
+
+            auto* world = DistributedContext::get_current_world();
+            const auto subcontext_count = world->subcontext_count();
+            if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
+                throw std::out_of_range(
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
+                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+            }
+
+            return world->subcontext_size(SubcontextId{subcontext_id});
         },
         nb::arg("subcontext_id"),
         R"doc(
