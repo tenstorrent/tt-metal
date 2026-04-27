@@ -62,7 +62,6 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         "block_2x4_layer3_moe",
     ],
 )
-@pytest.mark.models_device_performance_bare_metal
 @pytest.mark.timeout(0)
 def test_deepseek_v3_prefill_block_perf(
     command,

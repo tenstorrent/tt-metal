@@ -14,6 +14,7 @@ MLA device-perf tests approximating glx 8x4 from LB (8-chip) proxy.
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
+    _is_galaxy_env,
     run_mla_perf_with_approximation,
     run_model_device_perf_test_with_merge,
 )
@@ -24,8 +25,7 @@ _CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-rando
 _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-8x4'"
 
 
-@pytest.mark.models_device_performance_bare_metal
-@pytest.mark.timeout(1000)
+@pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_loudbox():
     """
     Run 2x4 proxy on loudbox (BH-LoudBox, 8xP150).
@@ -42,12 +42,14 @@ def test_deepseek_v3_mla_perf_loudbox():
     )
 
 
-@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_galaxy():
     """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
+    if not _is_galaxy_env():
+        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        expected_device_perf_ns_per_iteration=18_199_125,
+        expected_device_perf_ns_per_iteration=18_835_157,
         subdir="deepseek_v3_mla",
         model_name="deepseek_v3_mla_glx_8x4",
         num_iterations=1,

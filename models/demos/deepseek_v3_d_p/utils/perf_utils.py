@@ -39,6 +39,28 @@ TP_OPS = {
     "InterleavedToShardedDeviceOperation",  # 2x4=8x4=0.002ms
 }
 
+# SDPA ops: scale by 4 when extrapolating from 2x4 to 8x4 (SP 2→8 = 4x, TP 4→4 = 1x)
+SDPA_OPS = {
+    "ScaledDotProductAttentionDecode",
+    "SDPAProgramConfig",
+    "ScaledDotProductAttention",
+    "RingJointSDPADeviceOperation",
+}
+
+
+def _is_galaxy_env() -> bool:
+    """Galaxy detection without opening the cluster.
+
+    `conftest.is_galaxy()` calls `ttnn.cluster.get_cluster_type()` which opens the chip
+    cluster as a side effect. When used in a `@skipif` marker (evaluated at collection)
+    or even in-test before `run_device_perf` spawns its tracy subprocess, the parent
+    holds chip locks and the subprocess deadlocks waiting for them.
+
+    CI sets `MESH_DEVICE=TG` for galaxy jobs (see galaxy_deepseek_prefill_tests.yaml
+    and demo_sp_release_tests.yaml).
+    """
+    return os.environ.get("MESH_DEVICE", "").upper() in ("TG", "GALAXY")
+
 
 def load_merged_durations(csv_path: str, use_avg: bool = False) -> pd.Series:
     df = pd.read_csv(csv_path)
@@ -103,15 +125,6 @@ def approximate_8x4_perf(csv_8x1: str, csv_2x4: str, csv_8x4: str = None, use_av
         print(f"{'Error:':25s} {err:+.1f}%")
 
     return df_result
-
-
-# SDPA ops: scale by 4 when extrapolating from 2x4 to 8x4 (SP 2→8 = 4x, TP 4→4 = 1x)
-# Everything else: no scaling, just add directly
-SDPA_OPS = {
-    "ScaledDotProductAttentionDecode",
-    "SDPAProgramConfig",
-    "ScaledDotProductAttention",
-}
 
 
 def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str = None, use_avg: bool = False) -> pd.DataFrame:
