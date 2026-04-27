@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <vector>
 
 #include "moreh_adam_device_operation.hpp"
@@ -119,7 +120,8 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
     });  // 1.0f
 
     // Intermediate CBs (c_24 through c_31)
-    for (uint32_t cb_idx = tt::CBIndex::c_24; cb_idx <= tt::CBIndex::c_31; ++cb_idx) {
+    for (uint8_t cb_idx = static_cast<uint8_t>(tt::CBIndex::c_24); cb_idx <= static_cast<uint8_t>(tt::CBIndex::c_31);
+         ++cb_idx) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = 1 * intermed_tile_size,
             .core_ranges = all_cores,
@@ -245,15 +247,11 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
     const auto exp_avg_sq_out_addr = exp_avg_sq_out.buffer()->address();
     const auto max_exp_avg_sq_out_addr = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer()->address() : 0;
 
-    union {
-        float f;
-        uint32_t u;
-    } f2u_lr{}, f2u_beta1{}, f2u_beta2{}, f2u_eps{}, f2u_weight_decay{};
-    f2u_lr.f = lr;
-    f2u_beta1.f = beta1;
-    f2u_beta2.f = beta2;
-    f2u_eps.f = eps;
-    f2u_weight_decay.f = weight_decay;
+    const uint32_t f2u_lr = std::bit_cast<uint32_t>(lr);
+    const uint32_t f2u_beta1 = std::bit_cast<uint32_t>(beta1);
+    const uint32_t f2u_beta2 = std::bit_cast<uint32_t>(beta2);
+    const uint32_t f2u_eps = std::bit_cast<uint32_t>(eps);
+    const uint32_t f2u_weight_decay = std::bit_cast<uint32_t>(weight_decay);
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -275,11 +273,11 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
                 exp_avg_in_addr,
                 exp_avg_sq_in_addr,
                 max_exp_avg_sq_in_addr,
-                f2u_lr.u,
-                f2u_beta1.u,
-                f2u_beta2.u,
-                f2u_eps.u,
-                f2u_weight_decay.u,
+                f2u_lr,
+                f2u_beta1,
+                f2u_beta2,
+                f2u_eps,
+                f2u_weight_decay,
                 step,
                 static_cast<uint32_t>(amsgrad),
                 num_tiles_per_core,
