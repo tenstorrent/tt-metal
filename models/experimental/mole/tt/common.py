@@ -3,6 +3,7 @@
 
 import contextlib
 from dataclasses import dataclass
+import math
 from typing import Any, Callable
 import weakref
 
@@ -64,6 +65,53 @@ class TtRuntimeOptions:
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG
     activation_memory_config: ttnn.MemoryConfig | None = None
     dtype: ttnn.DataType = DEFAULT_DTYPE
+    input_sharding_enabled: bool | None = None
+
+
+def _align_to_tile(value: int) -> int:
+    return ((value + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def timeseries_input_memory_config(torch_input: torch.Tensor) -> ttnn.MemoryConfig:
+    if torch_input.ndim != 3:
+        raise ValueError(f"expected [batch, seq_len, channels], got {tuple(torch_input.shape)}")
+    batch_size, seq_len, channels = (int(dim) for dim in torch_input.shape)
+    total_rows = batch_size * _align_to_tile(seq_len)
+    if total_rows >= 512:
+        num_cores = 8
+    elif total_rows >= 256:
+        num_cores = 4
+    elif total_rows >= 128:
+        num_cores = 2
+    else:
+        num_cores = 1
+    core_grid = ttnn.CoreGrid(y=1 if num_cores <= 4 else 2, x=num_cores if num_cores <= 4 else 4)
+    shard_shape = (
+        _align_to_tile(math.ceil(total_rows / num_cores)),
+        _align_to_tile(channels),
+    )
+    return ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def _cached_timeseries_input_memory_config(model: Any, torch_input: torch.Tensor) -> ttnn.MemoryConfig:
+    if not getattr(model, "input_sharding_enabled", False):
+        return model.memory_config
+    cache = getattr(model, "_timeseries_input_memory_config_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(model, "_timeseries_input_memory_config_cache", cache)
+    cache_key = tuple(torch_input.shape)
+    memory_config = cache.get(cache_key)
+    if memory_config is None:
+        memory_config = timeseries_input_memory_config(torch_input)
+        cache[cache_key] = memory_config
+    return memory_config
 
 
 def upload_timeseries_and_marks_to_device(
@@ -89,12 +137,16 @@ def upload_timeseries_and_marks_to_device(
         int(getattr(torch_input_mark, "_version", -1)),
     )
 
+    input_memory_config = _cached_timeseries_input_memory_config(model, torch_input)
+    marks_memory_config = memory_config
+
     cache_key = (
         id(device),
         tuple(torch_input.shape),
         tuple(torch_input_mark.shape),
         model.dtype,
-        id(memory_config),
+        id(input_memory_config),
+        id(marks_memory_config),
     )
     cache = getattr(model, "_input_buffer_cache", None)
     if cache is None:
@@ -113,13 +165,13 @@ def upload_timeseries_and_marks_to_device(
         torch_input.unsqueeze(0),
         dtype=model.dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=memory_config,
+        memory_config=input_memory_config,
     )
     host_marks = ttnn.from_torch(
         torch_input_mark.unsqueeze(0),
         dtype=model.dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=memory_config,
+        memory_config=marks_memory_config,
     )
 
     if cached is None:
@@ -141,14 +193,14 @@ def upload_timeseries_and_marks_to_device(
                     device=device,
                     dtype=model.dtype,
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=memory_config,
+                    memory_config=input_memory_config,
                 ),
                 ttnn.from_torch(
                     torch_input_mark.unsqueeze(0),
                     device=device,
                     dtype=model.dtype,
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=memory_config,
+                    memory_config=marks_memory_config,
                 ),
             )
 
@@ -415,23 +467,6 @@ def temporal_gating(
     return gating_flat, gating_weights
 
 
-def reduce_weighted_heads_batch_major(
-    projected: ttnn.Tensor,
-    gating_flat: ttnn.Tensor,
-    *,
-    batch_size: int,
-    channels: int,
-    pred_len: int,
-    num_predictions: int,
-    memory_config=ttnn.L1_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    projected = ttnn.reshape(projected, (1, batch_size * channels, pred_len, num_predictions))
-    gating_column = ttnn.permute(gating_flat, (0, 1, 3, 2))
-    reduced = ttnn.matmul(projected, gating_column, memory_config=memory_config)
-    reduced = ttnn.reshape(reduced, (1, batch_size, channels, pred_len))
-    return ttnn.permute(reduced, (0, 1, 3, 2))
-
-
 @dataclass
 class _ExpertPredictionTraceState:
     trace_id: int
@@ -457,6 +492,7 @@ class TtExpertBase:
         )
         self.memory_config = self.activation_memory_config
         self.dtype = options.dtype
+        self.input_sharding_enabled = bool(options.input_sharding_enabled)
         self._cached_device = None
         self._tt_parameters = None
         self._prediction_trace_state = None

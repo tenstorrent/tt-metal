@@ -21,7 +21,6 @@ from models.experimental.mole.tt.common import (
     permute_temporal_router_mlp_to_channel_major,
     router_time_major_to_channel_major_permutation,
     register_trace_release_hook,
-    reduce_weighted_heads_batch_major,
     temporal_gating,
     ttnn_revin_normalize,
     upload_linear,
@@ -50,12 +49,23 @@ class _PackedRLinearParams:
 @dataclass
 class _PackedRmlpParams:
     temporal_1: Any
-    temporal_2: Any
+    temporal_hidden_projection: Any
     projection: Any
     affine_weight: Any
     affine_bias: Any
     output_bias: Any
     output_denom: Any
+
+
+@dataclass
+class _SharedRmlpParams:
+    temporal_1: Any
+    temporal_2: Any
+    projection: Any
+    affine_weight: Any
+    affine_bias: Any
+    output_scale: Any
+    output_offset: Any
 
 
 @dataclass
@@ -91,15 +101,23 @@ class TtMoLE:
         )
         self.memory_config = self.activation_memory_config
         self.dtype = options.dtype
+        self.input_sharding_enabled = (
+            self.config.base_model_type == "dlinear"
+            if options.input_sharding_enabled is None
+            else options.input_sharding_enabled
+        )
         expert_runtime_options = TtRuntimeOptions(
             memory_config=self.parameter_memory_config,
             activation_memory_config=self.activation_memory_config,
             dtype=self.dtype,
+            input_sharding_enabled=self.input_sharding_enabled,
         )
         single_expert_config = replace_num_experts(config, num_experts=1)
         self._packed_dlinear_parameters = None
         self._packed_rlinear_parameters = None
         self._packed_rmlp_parameters = None
+        self._shared_rmlp_parameters = None
+        self._rmlp_shared_temporal_and_revin = None
         self._checkpoint_state_dict = checkpoint_state_dict
 
         if reference_model is None and checkpoint_state_dict is None:
@@ -125,6 +143,51 @@ class TtMoLE:
             or (c.base_model_type == "rlinear" and not c.individual)
             or (c.base_model_type == "rmlp" and not c.individual)
         )
+
+    def _rmlp_experts_share_temporal_and_revin(self) -> bool:
+        if self.config.base_model_type != "rmlp":
+            return False
+        if self._rmlp_shared_temporal_and_revin is not None:
+            return self._rmlp_shared_temporal_and_revin
+
+        keys = (
+            "temporal.0.weight",
+            "temporal.0.bias",
+            "temporal.2.weight",
+            "temporal.2.bias",
+            "rev.affine_weight",
+            "rev.affine_bias",
+        )
+        if self._checkpoint_state_dict is not None:
+            shared = True
+            for key in keys:
+                first = self._checkpoint_state_dict[f"experts.0.{key}"]
+                for expert_index in range(1, self.config.num_experts):
+                    if not torch.equal(first, self._checkpoint_state_dict[f"experts.{expert_index}.{key}"]):
+                        shared = False
+                        break
+                if not shared:
+                    break
+        else:
+            if self._reference_experts is None:
+                shared = False
+            else:
+                shared = True
+                first_expert = self._reference_experts[0]
+                for expert in self._reference_experts[1:]:
+                    if (
+                        not torch.equal(first_expert.temporal[0].weight, expert.temporal[0].weight)
+                        or not torch.equal(first_expert.temporal[0].bias, expert.temporal[0].bias)
+                        or not torch.equal(first_expert.temporal[2].weight, expert.temporal[2].weight)
+                        or not torch.equal(first_expert.temporal[2].bias, expert.temporal[2].bias)
+                        or not torch.equal(first_expert.rev.affine_weight, expert.rev.affine_weight)
+                        or not torch.equal(first_expert.rev.affine_bias, expert.rev.affine_bias)
+                    ):
+                        shared = False
+                        break
+
+        self._rmlp_shared_temporal_and_revin = shared
+        return shared
 
     def _build_individual_experts_if_needed(
         self,
@@ -288,15 +351,12 @@ class TtMoLE:
             ),
         )
 
-    def _compute_dlinear_expert_projection(
-        self,
-        input_tensor: ttnn.Tensor,
-    ) -> ttnn.Tensor:
+    def _dlinear_expert_predictions(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         self._ensure_packed_dlinear_parameters()
         mc = self.activation_memory_config
         batch_size = input_tensor.shape[1]
 
-        input_channels_first = ttnn.permute(input_tensor, (0, 1, 3, 2))
+        input_channels_first = ttnn.permute(input_tensor, (0, 1, 3, 2), memory_config=mc)
         p = self._packed_dlinear_parameters
         trend = apply_linear(input_channels_first, p.moving_average, memory_config=mc)
         seasonal = ttnn.subtract(input_channels_first, trend, memory_config=mc)
@@ -309,11 +369,27 @@ class TtMoLE:
             combined,
             (1, batch_size, self.config.input_dim, self.config.num_experts, self.config.pred_len),
         )
-        combined = ttnn.permute(combined, (0, 1, 2, 4, 3))
-        return ttnn.reshape(
-            combined,
-            (1, batch_size * self.config.input_dim, self.config.pred_len, self.config.num_experts),
-        )
+        return combined
+
+    def _reduce_experts(self, projected: ttnn.Tensor, gating_flat: ttnn.Tensor) -> ttnn.Tensor:
+        mc = self.activation_memory_config
+        batch_size = projected.shape[1]
+        reduce_mc = ttnn.DRAM_MEMORY_CONFIG if self.config.input_dim >= 256 and batch_size > 1 else mc
+        active_experts = int(projected.shape[3])
+        if active_experts != self.config.num_experts:
+            gating_flat = ttnn.slice(
+                gating_flat,
+                (0, 0, 0, 0),
+                (1, batch_size * self.config.input_dim, 1, active_experts),
+            )
+            gating_sum = ttnn.sum(gating_flat, dim=3, keepdim=True, memory_config=reduce_mc)
+            gating_flat = ttnn.div(
+                gating_flat, ttnn.add(gating_sum, 1e-6, memory_config=reduce_mc), memory_config=reduce_mc
+            )
+        gating = ttnn.reshape(gating_flat, (1, batch_size, self.config.input_dim, active_experts, 1))
+        weighted = ttnn.multiply(projected, gating, memory_config=reduce_mc)
+        reduced = ttnn.sum(weighted, dim=3, memory_config=reduce_mc)
+        return ttnn.permute(reduced, (0, 1, 3, 2), memory_config=reduce_mc)
 
     def _ensure_packed_rlinear_parameters(self) -> None:
         if self._packed_rlinear_parameters is not None:
@@ -390,7 +466,7 @@ class TtMoLE:
             ),
         )
 
-    def _compute_rlinear_expert_projection(
+    def _rlinear_expert_predictions(
         self,
         input_tensor: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor | None]:
@@ -407,7 +483,7 @@ class TtMoLE:
 
         pr = self._packed_rlinear_parameters
         projected = apply_linear(
-            ttnn.permute(normalized, (0, 1, 3, 2)),
+            ttnn.permute(normalized, (0, 1, 3, 2), memory_config=mc),
             pr.projection,
             memory_config=mc,
         )
@@ -421,13 +497,17 @@ class TtMoLE:
             projected,
             (1, batch_size * self.config.input_dim, self.config.num_experts, self.config.pred_len),
         )
-        projected = ttnn.permute(projected, (0, 1, 3, 2))
+        projected = ttnn.reshape(
+            projected,
+            (1, batch_size, self.config.input_dim, self.config.num_experts, self.config.pred_len),
+        )
         return projected, mean, stdev
 
     def _ensure_packed_rmlp_parameters(self) -> None:
         if self._packed_rmlp_parameters is not None:
             return
-        if self.config.base_model_type == "rmlp" and self.config.num_experts > 8:
+        active_experts = self.config.num_experts
+        if self.config.base_model_type == "rmlp" and active_experts > 8:
             packed_parameter_memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
             packed_parameter_memory_config = self.parameter_memory_config
@@ -442,53 +522,67 @@ class TtMoLE:
             temporal_1_weight = torch.block_diag(
                 *[
                     self._checkpoint_state_dict[f"experts.{expert_index}.temporal.0.weight"].detach()
-                    for expert_index in range(self.config.num_experts)
+                    for expert_index in range(active_experts)
                 ]
             )
             temporal_1_bias = torch.cat(
                 [
                     self._checkpoint_state_dict[f"experts.{expert_index}.temporal.0.bias"].detach()
-                    for expert_index in range(self.config.num_experts)
+                    for expert_index in range(active_experts)
                 ],
                 dim=0,
             )
-            temporal_2_weight = torch.block_diag(
+            temporal_hidden_projection_weight = torch.block_diag(
                 *[
-                    self._checkpoint_state_dict[f"experts.{expert_index}.temporal.2.weight"].detach()
-                    for expert_index in range(self.config.num_experts)
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear.weight"].detach()
+                    @ self._checkpoint_state_dict[f"experts.{expert_index}.temporal.2.weight"].detach()
+                    for expert_index in range(active_experts)
                 ]
             )
-            temporal_2_bias = torch.cat(
+            temporal_hidden_projection_bias = torch.cat(
                 [
                     self._checkpoint_state_dict[f"experts.{expert_index}.temporal.2.bias"].detach()
-                    for expert_index in range(self.config.num_experts)
+                    @ self._checkpoint_state_dict[f"experts.{expert_index}.Linear.weight"].detach().transpose(0, 1)
+                    for expert_index in range(active_experts)
                 ],
                 dim=0,
             )
             projection_weight = torch.block_diag(
                 *[
                     self._checkpoint_state_dict[f"experts.{expert_index}.Linear.weight"].detach()
-                    for expert_index in range(self.config.num_experts)
+                    for expert_index in range(active_experts)
                 ]
             )
             projection_bias = torch.cat(
                 [
                     self._checkpoint_state_dict[f"experts.{expert_index}.Linear.bias"].detach()
-                    for expert_index in range(self.config.num_experts)
+                    for expert_index in range(active_experts)
                 ],
                 dim=0,
             )
         else:
             if self._reference_experts is None:
                 raise RuntimeError("reference experts are unavailable")
-            temporal_1_modules = [expert.temporal[0] for expert in self._reference_experts]
-            temporal_2_modules = [expert.temporal[2] for expert in self._reference_experts]
-            projection_modules = [expert.projection for expert in self._reference_experts]
+            active_reference_experts = self._reference_experts[:active_experts]
+            temporal_1_modules = [expert.temporal[0] for expert in active_reference_experts]
+            temporal_2_modules = [expert.temporal[2] for expert in active_reference_experts]
+            projection_modules = [expert.projection for expert in active_reference_experts]
 
             temporal_1_weight = block_diagonal_weights(temporal_1_modules)
             temporal_1_bias = concatenated_biases(temporal_1_modules)
-            temporal_2_weight = block_diagonal_weights(temporal_2_modules)
-            temporal_2_bias = concatenated_biases(temporal_2_modules)
+            temporal_hidden_projection_weight = torch.block_diag(
+                *[
+                    projection.weight.detach() @ temporal_2.weight.detach()
+                    for projection, temporal_2 in zip(projection_modules, temporal_2_modules)
+                ]
+            )
+            temporal_hidden_projection_bias = torch.cat(
+                [
+                    temporal_2.bias.detach() @ projection.weight.detach().transpose(0, 1)
+                    for projection, temporal_2 in zip(projection_modules, temporal_2_modules)
+                ],
+                dim=0,
+            )
             projection_weight = block_diagonal_weights(projection_modules)
             projection_bias = concatenated_biases(projection_modules)
 
@@ -498,7 +592,7 @@ class TtMoLE:
         output_denom_blocks = []
         seq_len = self.config.seq_len
         pred_len = self.config.pred_len
-        for expert_index in range(self.config.num_experts):
+        for expert_index in range(active_experts):
             if self._checkpoint_state_dict is not None:
                 affine_weight = self._checkpoint_state_dict[f"experts.{expert_index}.rev.affine_weight"].detach()
                 affine_bias = self._checkpoint_state_dict[f"experts.{expert_index}.rev.affine_bias"].detach()
@@ -517,16 +611,16 @@ class TtMoLE:
             output_denom_blocks.append(output_denom.unsqueeze(1).repeat(1, pred_len))
 
         packed_affine_weight = torch.stack(affine_weight_blocks, dim=1).reshape(
-            1, 1, self.config.input_dim, self.config.num_experts * seq_len
+            1, 1, self.config.input_dim, active_experts * seq_len
         )
         packed_affine_bias = torch.stack(affine_bias_blocks, dim=1).reshape(
-            1, 1, self.config.input_dim, self.config.num_experts * seq_len
+            1, 1, self.config.input_dim, active_experts * seq_len
         )
         packed_output_bias = torch.stack(output_bias_blocks, dim=1).reshape(
-            1, 1, self.config.input_dim, self.config.num_experts * pred_len
+            1, 1, self.config.input_dim, active_experts * pred_len
         )
         packed_output_denom = torch.stack(output_denom_blocks, dim=1).reshape(
-            1, 1, self.config.input_dim, self.config.num_experts * pred_len
+            1, 1, self.config.input_dim, active_experts * pred_len
         )
 
         self._packed_rmlp_parameters = _PackedRmlpParams(
@@ -537,9 +631,9 @@ class TtMoLE:
                 dtype=self.dtype,
                 memory_config=packed_parameter_memory_config,
             ),
-            temporal_2=upload_linear(
-                temporal_2_weight,
-                temporal_2_bias,
+            temporal_hidden_projection=upload_linear(
+                temporal_hidden_projection_weight,
+                temporal_hidden_projection_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=packed_parameter_memory_config,
@@ -581,17 +675,122 @@ class TtMoLE:
             ),
         )
 
-    def _compute_rmlp_expert_projection(
+    def _ensure_shared_rmlp_parameters(self) -> None:
+        if self._shared_rmlp_parameters is not None:
+            return
+        if not self._rmlp_experts_share_temporal_and_revin():
+            raise RuntimeError("shared RMLP parameters requested for non-shared checkpoint")
+
+        if self._checkpoint_state_dict is not None:
+            temporal_1_weight = self._checkpoint_state_dict["experts.0.temporal.0.weight"].detach()
+            temporal_1_bias = self._checkpoint_state_dict["experts.0.temporal.0.bias"].detach()
+            temporal_2_weight = self._checkpoint_state_dict["experts.0.temporal.2.weight"].detach()
+            temporal_2_bias = self._checkpoint_state_dict["experts.0.temporal.2.bias"].detach()
+            projection_weight = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear.weight"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+            projection_bias = torch.cat(
+                [
+                    self._checkpoint_state_dict[f"experts.{expert_index}.Linear.bias"].detach()
+                    for expert_index in range(self.config.num_experts)
+                ],
+                dim=0,
+            )
+            affine_weight = self._checkpoint_state_dict["experts.0.rev.affine_weight"].detach()
+            affine_bias = self._checkpoint_state_dict["experts.0.rev.affine_bias"].detach()
+        else:
+            if self._reference_experts is None:
+                raise RuntimeError("reference experts are unavailable")
+            first_expert = self._reference_experts[0]
+            temporal_1_weight = first_expert.temporal[0].weight.detach()
+            temporal_1_bias = first_expert.temporal[0].bias.detach()
+            temporal_2_weight = first_expert.temporal[2].weight.detach()
+            temporal_2_bias = first_expert.temporal[2].bias.detach()
+            projection_weight = torch.cat(
+                [expert.projection.weight.detach() for expert in self._reference_experts],
+                dim=0,
+            )
+            projection_bias = torch.cat(
+                [expert.projection.bias.detach() for expert in self._reference_experts],
+                dim=0,
+            )
+            affine_weight = first_expert.rev.affine_weight.detach()
+            affine_bias = first_expert.rev.affine_bias.detach()
+
+        seq_len = self.config.seq_len
+        output_denom = affine_weight + (self.config.revin_eps**2)
+        output_scale = 1.0 / output_denom
+        output_offset = -affine_bias * output_scale
+        self._shared_rmlp_parameters = _SharedRmlpParams(
+            temporal_1=upload_linear(
+                temporal_1_weight,
+                temporal_1_bias,
+                device=self.device,
+                dtype=self.dtype,
+                memory_config=self.parameter_memory_config,
+            ),
+            temporal_2=upload_linear(
+                temporal_2_weight,
+                temporal_2_bias,
+                device=self.device,
+                dtype=self.dtype,
+                memory_config=self.parameter_memory_config,
+            ),
+            projection=upload_linear(
+                projection_weight,
+                projection_bias,
+                device=self.device,
+                dtype=self.dtype,
+                memory_config=self.parameter_memory_config,
+            ),
+            affine_weight=ttnn.from_torch(
+                affine_weight.reshape(1, 1, self.config.input_dim, 1).repeat(1, 1, 1, seq_len),
+                device=self.device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.parameter_memory_config,
+            ),
+            affine_bias=ttnn.from_torch(
+                affine_bias.reshape(1, 1, self.config.input_dim, 1).repeat(1, 1, 1, seq_len),
+                device=self.device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.parameter_memory_config,
+            ),
+            output_scale=ttnn.from_torch(
+                output_scale.reshape(1, 1, 1, self.config.input_dim),
+                device=self.device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.parameter_memory_config,
+            ),
+            output_offset=ttnn.from_torch(
+                output_offset.reshape(1, 1, 1, self.config.input_dim),
+                device=self.device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.parameter_memory_config,
+            ),
+        )
+
+    def _rmlp_expert_predictions(
         self,
         input_tensor: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor | None]:
+        if self._rmlp_experts_share_temporal_and_revin():
+            return self._shared_rmlp_expert_predictions(input_tensor)
         self._ensure_packed_rmlp_parameters()
         mc = self.activation_memory_config
         batch_size = input_tensor.shape[1]
 
         normalized, mean, stdev = self._compute_shared_normalized_input(input_tensor)
-        packed_input = ttnn.permute(normalized, (0, 1, 3, 2))
-        packed_input = ttnn.concat([packed_input] * self.config.num_experts, dim=3, memory_config=mc)
+        packed_input = ttnn.permute(normalized, (0, 1, 3, 2), memory_config=mc)
+        active_experts = self.config.num_experts
+        packed_input = ttnn.concat([packed_input] * active_experts, dim=3, memory_config=mc)
         pm = self._packed_rmlp_parameters
         packed_input = ttnn.multiply(packed_input, pm.affine_weight, memory_config=mc)
         packed_input = ttnn.add(packed_input, pm.affine_bias, memory_config=mc)
@@ -602,28 +801,49 @@ class TtMoLE:
             memory_config=mc,
         )
         temporal_hidden = ttnn.relu(temporal_hidden)
-        temporal_hidden = apply_linear(
-            temporal_hidden,
-            pm.temporal_2,
-            memory_config=mc,
-        )
-        temporal_hidden = ttnn.add(temporal_hidden, packed_input, memory_config=mc)
-
-        projected = apply_linear(
-            temporal_hidden,
-            pm.projection,
+        projected = ttnn.add(
+            apply_linear(
+                temporal_hidden,
+                pm.temporal_hidden_projection,
+                memory_config=mc,
+            ),
+            apply_linear(
+                packed_input,
+                pm.projection,
+                memory_config=mc,
+            ),
             memory_config=mc,
         )
         projected = ttnn.subtract(projected, pm.output_bias, memory_config=mc)
         projected = ttnn.div(projected, pm.output_denom, memory_config=mc)
         projected = ttnn.reshape(
             projected,
-            (1, batch_size, self.config.input_dim, self.config.num_experts, self.config.pred_len),
+            (1, batch_size, self.config.input_dim, active_experts, self.config.pred_len),
         )
-        projected = ttnn.permute(projected, (0, 1, 2, 4, 3))
+        return projected, mean, stdev
+
+    def _shared_rmlp_expert_predictions(
+        self,
+        input_tensor: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor | None]:
+        self._ensure_shared_rmlp_parameters()
+        mc = self.activation_memory_config
+        batch_size = input_tensor.shape[1]
+        normalized, mean, stdev = self._compute_shared_normalized_input(input_tensor)
+        shared_input = ttnn.permute(normalized, (0, 1, 3, 2), memory_config=mc)
+        ps = self._shared_rmlp_parameters
+        shared_input = ttnn.multiply(shared_input, ps.affine_weight, memory_config=mc)
+        shared_input = ttnn.add(shared_input, ps.affine_bias, memory_config=mc)
+
+        temporal_hidden = apply_linear(shared_input, ps.temporal_1, memory_config=mc)
+        temporal_hidden = ttnn.relu(temporal_hidden)
+        temporal_hidden = apply_linear(temporal_hidden, ps.temporal_2, memory_config=mc)
+        temporal_hidden = ttnn.add(temporal_hidden, shared_input, memory_config=mc)
+
+        projected = apply_linear(temporal_hidden, ps.projection, memory_config=mc)
         projected = ttnn.reshape(
             projected,
-            (1, batch_size * self.config.input_dim, self.config.pred_len, self.config.num_experts),
+            (1, batch_size, self.config.input_dim, self.config.num_experts, self.config.pred_len),
         )
         return projected, mean, stdev
 
@@ -639,19 +859,6 @@ class TtMoLE:
             memory_config=mc,
         )
 
-    def _reduce_prediction_heads(
-        self, projected: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int
-    ) -> ttnn.Tensor:
-        return reduce_weighted_heads_batch_major(
-            projected,
-            gating_flat,
-            batch_size=batch_size,
-            channels=self.config.input_dim,
-            pred_len=self.config.pred_len,
-            num_predictions=self.config.num_experts,
-            memory_config=self.activation_memory_config,
-        )
-
     def _denormalize_prediction_if_needed(
         self,
         prediction: ttnn.Tensor,
@@ -664,22 +871,21 @@ class TtMoLE:
         prediction = ttnn.multiply(prediction, stdev, memory_config=mc)
         return ttnn.add(prediction, mean, memory_config=mc)
 
-    def _predict_packed_dlinear(
-        self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int
-    ) -> ttnn.Tensor:
-        projected = self._compute_dlinear_expert_projection(input_tensor)
-        return self._reduce_prediction_heads(projected, gating_flat, batch_size)
+    def _predict_packed_dlinear(self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor) -> ttnn.Tensor:
+        return self._reduce_experts(self._dlinear_expert_predictions(input_tensor), gating_flat)
 
-    def _predict_packed_rlinear(
-        self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int
-    ) -> ttnn.Tensor:
-        projected, mean, stdev = self._compute_rlinear_expert_projection(input_tensor)
-        prediction = self._reduce_prediction_heads(projected, gating_flat, batch_size)
+    def _predict_packed_rlinear(self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor) -> ttnn.Tensor:
+        projected, mean, stdev = self._rlinear_expert_predictions(input_tensor)
+        prediction = self._reduce_experts(projected, gating_flat)
         return self._denormalize_prediction_if_needed(prediction, mean, stdev)
 
-    def _predict_packed_rmlp(self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
-        projected, mean, stdev = self._compute_rmlp_expert_projection(input_tensor)
-        prediction = self._reduce_prediction_heads(projected, gating_flat, batch_size)
+    def _predict_packed_rmlp(self, input_tensor: ttnn.Tensor, gating_flat: ttnn.Tensor) -> ttnn.Tensor:
+        projected, mean, stdev = self._rmlp_expert_predictions(input_tensor)
+        prediction = self._reduce_experts(projected, gating_flat)
+        if self._rmlp_experts_share_temporal_and_revin():
+            ps = self._shared_rmlp_parameters
+            prediction = ttnn.multiply(prediction, ps.output_scale, memory_config=self.activation_memory_config)
+            prediction = ttnn.add(prediction, ps.output_offset, memory_config=self.activation_memory_config)
         return self._denormalize_prediction_if_needed(prediction, mean, stdev)
 
     def _predict_individual_experts(
@@ -743,29 +949,40 @@ class TtMoLE:
         self._ensure_router_parameters()
 
         batch_size = input_tensor.shape[1]
-        gating_logits = apply_two_layer_mlp(
-            extract_initial_marks(input_marks),
-            self._tt_router_parameters,
-            memory_config=self.activation_memory_config,
-        )
-        gating_flat, gating_weights = temporal_gating(
-            gating_logits,
-            batch_size=batch_size,
-            channels=self.config.input_dim,
-            num_predictions=self.config.num_experts,
-            return_channelwise_weights=return_channelwise_weights,
-        )
+        router_cache_key = (getattr(self, "_upload_generation", None), return_channelwise_weights)
+        router_cache = getattr(self, "_router_cache", None)
+        if router_cache is None or router_cache.get("key") != router_cache_key:
+            gating_logits = apply_two_layer_mlp(
+                extract_initial_marks(input_marks),
+                self._tt_router_parameters,
+                memory_config=self.activation_memory_config,
+            )
+            gating_flat, gating_weights = temporal_gating(
+                gating_logits,
+                batch_size=batch_size,
+                channels=self.config.input_dim,
+                num_predictions=self.config.num_experts,
+                return_channelwise_weights=return_channelwise_weights,
+            )
+            self._router_cache = {
+                "key": router_cache_key,
+                "gating_flat": gating_flat,
+                "gating_weights": gating_weights,
+            }
+        else:
+            gating_flat = router_cache["gating_flat"]
+            gating_weights = router_cache["gating_weights"]
         if gating_weights is None and self.experts is not None:
             gating_weights = ttnn.reshape(gating_flat, (1, batch_size, self.config.input_dim, self.config.num_experts))
             gating_weights = ttnn.permute(gating_weights, (0, 1, 3, 2))
 
         c = self.config
         if c.base_model_type == "dlinear":
-            prediction = self._predict_packed_dlinear(input_tensor, gating_flat, batch_size)
+            prediction = self._predict_packed_dlinear(input_tensor, gating_flat)
         elif c.base_model_type == "rlinear" and not c.individual:
-            prediction = self._predict_packed_rlinear(input_tensor, gating_flat, batch_size)
+            prediction = self._predict_packed_rlinear(input_tensor, gating_flat)
         elif c.base_model_type == "rmlp" and not c.individual:
-            prediction = self._predict_packed_rmlp(input_tensor, gating_flat, batch_size)
+            prediction = self._predict_packed_rmlp(input_tensor, gating_flat)
         else:
             if gating_weights is None:
                 raise RuntimeError("individual expert path requires channel-wise gating weights")

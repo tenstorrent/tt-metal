@@ -6,75 +6,52 @@
 from __future__ import annotations
 
 import argparse
-import os
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import ttnn
 
 from models.experimental.mole.demo.run import (
-    ALLOWED_CHECKPOINT_FILES,
     CheckpointEndpointOptions,
     CheckpointInferenceEndpoint,
     add_dataset_arguments,
     add_model_arguments,
     close_ttnn_device,
-    model_config_from_args,
+    config_from_checkpoint_resolution,
     open_ttnn_device,
+    resolve_mole_checkpoint,
     set_random_seed,
     unpack_batch,
     upload_mole_inputs,
 )
-from models.experimental.mole.reference.config import MoLEConfig, replace_num_experts
+from models.experimental.mole.reference.config import MoLEConfig
 
 
 MILLISECONDS_PER_SECOND = 1000.0
 TEST_SPLIT = "test"
-CHECKPOINT_BASE_DIR = "/demo_checkpoints"
 
 
 @dataclass(frozen=True)
 class BenchmarkOptions:
-    checkpoint_path: str | None = None
-    checkpoint_debug_keys: int = 0
+    checkpoint_path: str = ""
+    dataset_csv_path: str = ""
+    assets_root: str = ""
+    dataset: str = ""
     batch_size: int = 8
     warmup_iterations: int = 2
     measure_iterations: int = 20
     seed: int = 0
-    dataset_dir: str | None = None
-    dataset_file: str | None = None
-
-
-def _resolve_checkpoint_path(checkpoint_file: str) -> str:
-    if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
-        raise ValueError("checkpoint_file is not in the predefined safelist")
-
-    BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
-    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, checkpoint_file))
-    if not my_path.startswith(BASE_DIRECTORY):
-        raise ValueError("checkpoint path escapes checkpoint_dir")
-    if not os.path.isfile(my_path):
-        raise FileNotFoundError(f"checkpoint not found: {my_path}")
-    return my_path
 
 
 def _validate_benchmark_options(options: BenchmarkOptions) -> None:
     if not options.checkpoint_path:
         raise ValueError("checkpoint_path is required")
-    if not options.dataset_dir:
-        raise ValueError("dataset_dir is required")
     if options.measure_iterations <= 0:
         raise ValueError("measure_iterations must be > 0")
 
 
-def _measure_loop(
-    infer_once: Callable[[], object],
-    *,
-    batch_size: int,
-    iterations: int,
-    device: Any,
-) -> dict[str, float]:
+def _measure_loop(infer_once, *, batch_size: int, iterations: int, device: Any) -> dict[str, float]:
     start = time.perf_counter()
     for _ in range(iterations):
         infer_once()
@@ -86,12 +63,6 @@ def _measure_loop(
         "latency_ms": (elapsed_s / iterations) * MILLISECONDS_PER_SECOND,
         "sequences_per_second": (batch_size * iterations) / elapsed_s,
     }
-
-
-def _forward_prediction_only(model, tt_input, tt_marks):
-    if hasattr(model, "forward_prediction_no_trace"):
-        return model.forward_prediction_no_trace(tt_input, tt_marks)
-    return model.forward_prediction(tt_input, tt_marks)
 
 
 def _benchmark_single_model(
@@ -112,7 +83,7 @@ def _benchmark_single_model(
     )
 
     def infer_once() -> object:
-        return _forward_prediction_only(model, tt_input, tt_marks)
+        return model.forward_prediction(tt_input, tt_marks)
 
     for _ in range(warmup_iterations):
         infer_once()
@@ -131,7 +102,7 @@ def run_benchmark(
     config: MoLEConfig,
     *,
     options: BenchmarkOptions | None = None,
-) -> dict[str, float]:
+) -> dict[str, object]:
     benchmark_options = options or BenchmarkOptions()
     _validate_benchmark_options(benchmark_options)
 
@@ -141,13 +112,13 @@ def run_benchmark(
         device=device,
         options=CheckpointEndpointOptions(
             checkpoint_path=benchmark_options.checkpoint_path,
-            checkpoint_debug_keys=benchmark_options.checkpoint_debug_keys,
+            dataset_csv_path=benchmark_options.dataset_csv_path,
+            assets_root=benchmark_options.assets_root,
+            dataset=benchmark_options.dataset,
         ),
     )
     loaders, config = endpoint.resolve_dataset(
         config,
-        dataset_dir=benchmark_options.dataset_dir,
-        dataset_file=benchmark_options.dataset_file,
         eval_batch_size=benchmark_options.batch_size,
     )
 
@@ -169,35 +140,14 @@ def run_benchmark(
         measure_iterations=benchmark_options.measure_iterations,
     )
 
-    baseline_latency_ms = 0.0
-    baseline_sequences_per_second = 0.0
-    expert_overhead_x = 0.0
-
-    if config.num_experts > 1:
-        baseline_config = replace_num_experts(config, num_experts=1)
-        baseline_model = endpoint.build_mole_ttnn(baseline_config)
-        baseline_metrics = _benchmark_single_model(
-            model=baseline_model,
-            device=device,
-            torch_input=torch_input,
-            torch_input_mark=torch_input_mark,
-            batch_size=batch_size,
-            warmup_iterations=benchmark_options.warmup_iterations,
-            measure_iterations=benchmark_options.measure_iterations,
-        )
-        baseline_latency_ms = baseline_metrics["latency_ms"]
-        baseline_sequences_per_second = baseline_metrics["sequences_per_second"]
-        if baseline_latency_ms > 0.0:
-            expert_overhead_x = primary_metrics["latency_ms"] / baseline_latency_ms
-
     return {
         "batch_size": float(batch_size),
         "total_calls": primary_metrics["total_calls"],
+        "checkpoint_path": endpoint.options.checkpoint_path,
+        "dataset_csv_path": endpoint.options.dataset_csv_path,
+        "num_experts": float(config.num_experts),
         "ttnn_latency_ms": primary_metrics["latency_ms"],
         "ttnn_sequences_per_second": primary_metrics["sequences_per_second"],
-        "baseline_ttnn_latency_ms": baseline_latency_ms,
-        "baseline_ttnn_sequences_per_second": baseline_sequences_per_second,
-        "expert_overhead_x": expert_overhead_x,
     }
 
 
@@ -208,18 +158,6 @@ def main() -> None:
     )
     add_dataset_arguments(parser)
     add_model_arguments(parser)
-    parser.add_argument(
-        "--checkpoint-file",
-        type=str,
-        default="checkpoint.pth",
-        help="Checkpoint file path relative to /demo_checkpoints",
-    )
-    parser.add_argument(
-        "--checkpoint-debug-keys",
-        type=int,
-        default=0,
-        help="If > 0, print a checkpoint key/shape sample before load for mismatch debugging",
-    )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument(
         "--warmup-iterations",
@@ -231,39 +169,42 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    config = model_config_from_args(args)
-    checkpoint_path = _resolve_checkpoint_path(args.checkpoint_file)
+    resolution = resolve_mole_checkpoint(
+        dataset=args.dataset,
+        base_model_type=args.base_model_type,
+        num_experts=args.num_experts,
+        assets_root=args.dataset_dir,
+    )
+    config = config_from_checkpoint_resolution(
+        resolution,
+        base_model_type=args.base_model_type,
+        num_experts=args.num_experts,
+    )
 
     device = open_ttnn_device()
     try:
         options = BenchmarkOptions(
-            checkpoint_path=checkpoint_path,
-            checkpoint_debug_keys=args.checkpoint_debug_keys,
+            checkpoint_path=resolution.checkpoint_path,
+            dataset_csv_path=resolution.dataset_csv_path,
+            assets_root=args.dataset_dir,
+            dataset=args.dataset,
             batch_size=args.batch_size,
             warmup_iterations=args.warmup_iterations,
             measure_iterations=args.measure_iterations,
             seed=args.seed,
-            dataset_dir=args.dataset_dir,
-            dataset_file=args.dataset_file,
         )
         metrics = run_benchmark(device, config, options=options)
     finally:
         close_ttnn_device(device)
 
     print("MoLE inference benchmark")
+    print(f"- checkpoint_path: {metrics['checkpoint_path']}")
+    print(f"- dataset_csv_path: {metrics['dataset_csv_path']}")
+    print(f"- num_experts: {metrics['num_experts']:.0f}")
     print(f"- batch_size: {metrics['batch_size']:.0f}")
     print(f"- total_calls: {metrics['total_calls']:.0f}")
     print(f"- ttnn_latency_ms: {metrics['ttnn_latency_ms']:.3f}")
     print(f"- ttnn_sequences_per_second: {metrics['ttnn_sequences_per_second']:.3f}")
-    print(f"- baseline_ttnn_latency_ms: {metrics['baseline_ttnn_latency_ms']:.3f}")
-    print(f"- baseline_ttnn_sequences_per_second: {metrics['baseline_ttnn_sequences_per_second']:.3f}")
-    if metrics["expert_overhead_x"] > 0.0:
-        overhead_note = (
-            ""
-            if metrics["expert_overhead_x"] >= 1.0
-            else " (values <1.0 indicate measurement variance, not real speedup)"
-        )
-        print(f"- expert_overhead_x: {metrics['expert_overhead_x']:.3f}{overhead_note}")
 
 
 if __name__ == "__main__":

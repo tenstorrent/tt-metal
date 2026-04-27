@@ -6,11 +6,15 @@ from __future__ import annotations
 import argparse
 from argparse import ArgumentParser, Namespace
 import csv
+import json
 import random
+import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 import re
+from urllib.parse import quote
+import urllib.request
 import warnings
 from typing import Any
 
@@ -45,22 +49,207 @@ ROUTER_KEY_ALIASES = {
     "router.2.weight": ("Linear_Temporal.2.weight", "router.2.weight"),
     "router.2.bias": ("Linear_Temporal.2.bias", "router.2.bias"),
 }
-CHECKPOINT_BASE_DIR = "/demo_checkpoints"
-ALLOWED_CHECKPOINT_FILES = {
-    "etth1_DLinear_mole_sl336_pl96_td4_lr0.01_hd0.2_sd2021_MoLE_DLinear_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_4_f_mask_0.5_0.01_sd2021_hd0.2/checkpoint.pth",
-    "etth1_DLinear_linear_sl336_pl96_td1_lr0.01_hd0.0_sd2021_MoLE_DLinear_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_1_f_mask_0.5_0.01_sd2021_hd0.0/checkpoint.pth",
-    "etth1_RLinear_mole_sl336_pl96_td4_lr0.005_hd0.2_sd2021_MoLE_RLinear_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_4_f_mask_0.5_0.005_sd2021_hd0.2/checkpoint.pth",
-    "etth1_RMLP_mole_sl336_pl96_td4_lr0.005_hd0.2_sd2021_MoLE_RMLP_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_4_f_mask_0.5_0.005_sd2021_hd0.2/checkpoint.pth",
+MOLE_DIR = Path(__file__).resolve().parents[1]
+CHECKPOINT_BASE_DIR = str(MOLE_DIR / "mole_checkpoints")
+CHECKPOINT_DOWNLOAD_BASE_URL = "https://huggingface.co/hybelj/mole/resolve/main/mole_checkpoints"
+CHECKPOINT_INDEX_FILENAME = "index.json"
+CHECKPOINT_FILE = "checkpoint.pth"
+DATASET_DOWNLOAD_URLS = {
+    "ETTh1.csv": "https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/ETT-small/ETTh1.csv?download=true",
+    "ETTh2.csv": "https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/ETT-small/ETTh2.csv?download=true",
+    "ETTm1.csv": "https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/ETT-small/ETTm1.csv?download=true",
+    "ETTm2.csv": "https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/ETT-small/ETTm2.csv?download=true",
+    "ECL.csv": "https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/electricity/electricity.csv?download=true",
+    "traffic.csv": "https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/traffic/traffic.csv?download=true",
+    "weather.csv": "https://huggingface.co/datasets/thuml/Time-Series-Library/resolve/main/weather/weather.csv?download=true",
 }
-ALLOWED_DATASET_FILES = {"ETTh1.csv"}
-DATASET_FILE = "ETTh1.csv"
-DATASET_PATH = "/demo_checkpoints/ETTh1.csv"
 
 
 @dataclass(frozen=True)
 class CheckpointEndpointOptions:
+    checkpoint_path: str = ""
+    dataset_csv_path: str = ""
+    assets_root: str = CHECKPOINT_BASE_DIR
+    dataset: str = "ETTh1"
+
+
+@dataclass(frozen=True)
+class MoleCheckpointEntry:
+    dataset: str
+    data_path: str
+    base_model: str
+    experts: int
+    seq_len: int
+    pred_len: int
+    enc_in: int
+
+
+@dataclass(frozen=True)
+class MoleCheckpointResolution:
+    entry: MoleCheckpointEntry
     checkpoint_path: str
-    checkpoint_debug_keys: int = 0
+    dataset_csv_path: str
+    freq: str
+
+
+def _safe_resolve_under(base_directory: Path, relative_path: str) -> Path:
+    resolved = (base_directory / relative_path).resolve(strict=False)
+    try:
+        resolved.relative_to(base_directory)
+    except ValueError as error:
+        raise ValueError(f"path escapes base directory: {relative_path}") from error
+    return resolved
+
+
+def _base_model_to_cli_name(base_model: str) -> str:
+    normalized = base_model.strip().lower()
+    if normalized not in BASE_MODEL_TYPES:
+        raise ValueError(f"unsupported base model from metadata: {base_model!r}")
+    return normalized
+
+
+def _base_model_to_folder_name(base_model_type: str) -> str:
+    folder_map = {
+        "dlinear": "DLinear",
+        "rlinear": "RLinear",
+        "rmlp": "RMLP",
+    }
+    try:
+        return folder_map[base_model_type.lower()]
+    except KeyError as error:
+        raise ValueError(f"unsupported base_model_type: {base_model_type}") from error
+
+
+def _download_file_if_needed(path: Path, url: str) -> None:
+    if path.is_file():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {url} -> {path}", file=sys.stderr)
+    urllib.request.urlretrieve(url, str(path))
+
+
+def load_checkpoint_index(*, assets_root: str) -> list[MoleCheckpointEntry]:
+    base_directory = Path(assets_root).resolve(strict=False)
+    index_path = _safe_resolve_under(base_directory, CHECKPOINT_INDEX_FILENAME)
+    _download_file_if_needed(
+        index_path,
+        f"{CHECKPOINT_DOWNLOAD_BASE_URL}/{CHECKPOINT_INDEX_FILENAME}?download=true",
+    )
+
+    with index_path.open() as index_file:
+        raw_entries = json.load(index_file)
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"invalid checkpoint index format: expected list, got {type(raw_entries)!r}")
+
+    entries: list[MoleCheckpointEntry] = []
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        entries.append(
+            MoleCheckpointEntry(
+                dataset=str(raw_entry["dataset"]),
+                data_path=str(raw_entry["data_path"]),
+                base_model=_base_model_to_cli_name(str(raw_entry["base_model"])),
+                experts=int(raw_entry["experts"]),
+                seq_len=int(raw_entry["seq_len"]),
+                pred_len=int(raw_entry["pred_len"]),
+                enc_in=int(raw_entry["enc_in"]),
+            )
+        )
+    return entries
+
+
+def _download_dataset_if_needed(dataset_csv_path: Path) -> None:
+    dataset_name = dataset_csv_path.name
+    dataset_url = DATASET_DOWNLOAD_URLS.get(dataset_name)
+    if dataset_url is None:
+        raise FileNotFoundError(
+            f"dataset CSV not found: {dataset_csv_path}. Unknown dataset file for auto-download: {dataset_name}"
+        )
+    _download_file_if_needed(dataset_csv_path, dataset_url)
+
+
+def _download_checkpoint_if_needed(checkpoint_path: Path, relative_path: str) -> None:
+    quoted_path = quote(relative_path, safe="/")
+    _download_file_if_needed(
+        checkpoint_path,
+        f"{CHECKPOINT_DOWNLOAD_BASE_URL}/{quoted_path}?download=true",
+    )
+
+
+def _resolve_dataset_csv_path(entry: MoleCheckpointEntry, *, assets_root: str) -> Path:
+    base_directory = Path(assets_root).resolve(strict=False)
+    filename = Path(entry.data_path).name
+    candidate_paths = [
+        _safe_resolve_under(base_directory, f"datasets/{filename}"),
+        _safe_resolve_under(base_directory, filename),
+    ]
+    for candidate in candidate_paths:
+        if candidate.is_file():
+            return candidate
+    canonical = candidate_paths[0]
+    _download_dataset_if_needed(canonical)
+    if canonical.is_file():
+        return canonical
+    raise FileNotFoundError(f"dataset CSV not found and could not be downloaded: {canonical}")
+
+
+def _load_checkpoint_payload(checkpoint_path: Path) -> object:
+    try:
+        return torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    except Exception:
+        return torch.load(checkpoint_path, map_location="cpu")
+
+
+def _infer_checkpoint_freq(checkpoint_path: Path, *, fallback_dataset: str) -> str:
+    try:
+        checkpoint_payload = _load_checkpoint_payload(checkpoint_path)
+    except Exception:
+        return "h" if fallback_dataset.lower().startswith("etth") else "t"
+    source_state_dict = _extract_state_dict_payload(checkpoint_payload)
+    router_weight = source_state_dict.get("Linear_Temporal.0.weight")
+    if isinstance(router_weight, torch.Tensor) and router_weight.ndim == 2:
+        return "h" if router_weight.shape[1] == 4 else "t"
+    return "h" if fallback_dataset.lower().startswith("etth") else "t"
+
+
+def resolve_mole_checkpoint(
+    *,
+    dataset: str,
+    base_model_type: str,
+    num_experts: int,
+    assets_root: str,
+) -> MoleCheckpointResolution:
+    entries = load_checkpoint_index(assets_root=assets_root)
+    matches = [
+        entry
+        for entry in entries
+        if entry.dataset.lower() == dataset.lower()
+        and entry.base_model == base_model_type.lower()
+        and entry.experts == num_experts
+    ]
+    if not matches:
+        raise ValueError(
+            f"no checkpoint entry found for dataset={dataset}, base_model_type={base_model_type}, num_experts={num_experts}"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"ambiguous checkpoint selection for dataset={dataset}, base_model_type={base_model_type}, num_experts={num_experts}"
+        )
+    entry = matches[0]
+    model_folder = _base_model_to_folder_name(entry.base_model)
+    checkpoint_relative = f"{entry.dataset}/{model_folder}/experts_{entry.experts}/{CHECKPOINT_FILE}"
+    base_directory = Path(assets_root).resolve(strict=False)
+    checkpoint_path = _safe_resolve_under(base_directory, checkpoint_relative)
+    _download_checkpoint_if_needed(checkpoint_path, checkpoint_relative)
+    dataset_csv_path = _resolve_dataset_csv_path(entry, assets_root=assets_root)
+    freq = _infer_checkpoint_freq(checkpoint_path, fallback_dataset=entry.dataset)
+    return MoleCheckpointResolution(
+        entry=entry,
+        checkpoint_path=str(checkpoint_path),
+        dataset_csv_path=str(dataset_csv_path),
+        freq=freq,
+    )
 
 
 class TimeSeriesWindowDataset(Dataset):
@@ -100,13 +289,13 @@ def add_dataset_arguments(
         "--dataset-dir",
         type=str,
         default=CHECKPOINT_BASE_DIR,
-        help="Dataset directory (must be /demo_checkpoints)",
+        help="MoLE assets root directory containing index.json and checkpoint folders",
     )
     parser.add_argument(
-        "--dataset-file",
+        "--dataset",
         type=str,
-        default=None,
-        help="Optional dataset CSV file name inside --dataset-dir; if omitted, auto-detect a single CSV",
+        default="ETTh1",
+        help="Dataset name from checkpoint index (e.g. ETTh1, ETTh2, ECL, traffic, weather)",
     )
 
 
@@ -131,16 +320,14 @@ def add_model_arguments(
 
 def model_config_from_args(args: Namespace) -> MoLEConfig:
     """Build a MoLEConfig from parsed CLI arguments."""
-    model_kwargs = {
-        "seq_len": args.seq_len,
-        "pred_len": args.pred_len,
-        "base_model_type": args.base_model_type,
-        "num_experts": args.num_experts,
-        "freq": args.freq,
-    }
-    if hasattr(args, "input_dim"):
-        model_kwargs["input_dim"] = args.input_dim
-    return MoLEConfig(**model_kwargs)
+    return MoLEConfig(
+        seq_len=args.seq_len,
+        pred_len=args.pred_len,
+        input_dim=args.input_dim if hasattr(args, "input_dim") else 7,
+        base_model_type=args.base_model_type,
+        num_experts=args.num_experts,
+        freq=args.freq,
+    )
 
 
 def set_random_seed(seed: int) -> None:
@@ -157,44 +344,10 @@ def select_ttnn_memory_config(config: MoLEConfig) -> Any:
     return ttnn.L1_MEMORY_CONFIG
 
 
-def resolve_checkpoint_path(checkpoint_file: str) -> str:
-    if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
-        raise ValueError("checkpoint_file is not in the predefined safelist")
-
-    base_directory = Path(CHECKPOINT_BASE_DIR).resolve(strict=False)
-    my_path = (base_directory / checkpoint_file).resolve(strict=False)
-    try:
-        my_path.relative_to(base_directory)
-    except ValueError:
-        raise ValueError("checkpoint path escapes checkpoint base directory")
-
-    if not my_path.is_file():
-        raise FileNotFoundError(f"checkpoint not found: {my_path}")
-    return str(my_path)
-
-
-def _resolve_checkpoint_path(checkpoint_file: str) -> str:
-    return resolve_checkpoint_path(checkpoint_file)
-
-
-def _resolve_dataset_csv_path() -> Path:
-    base_directory = Path(CHECKPOINT_BASE_DIR).resolve(strict=False)
-    if not base_directory.is_dir():
-        raise FileNotFoundError(f"dataset directory not found: {base_directory}")
-
-    if DATASET_FILE not in ALLOWED_DATASET_FILES:
-        raise ValueError("dataset_file is not in the predefined safelist")
-
-    my_path = Path(DATASET_PATH).resolve(strict=False)
-    try:
-        my_path.relative_to(base_directory)
-    except ValueError:
-        raise ValueError("dataset path escapes dataset base directory")
-
-    csv_path = my_path
-    if csv_path.exists():
-        return csv_path
-    raise FileNotFoundError(f"dataset CSV not found: {csv_path}")
+def select_ttnn_activation_memory_config(config: MoLEConfig) -> Any:
+    if config.input_dim >= (512 if config.base_model_type == "dlinear" else 256):
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
 
 
 def _parse_timestamp(raw_value: str) -> datetime:
@@ -272,8 +425,7 @@ def _normalize_values(values: torch.Tensor, normalization_end: int) -> torch.Ten
 
 
 def create_local_dataset_loaders(
-    dataset_dir: str,
-    dataset_file: str | None,
+    dataset_csv_path: str,
     *,
     seq_len: int,
     pred_len: int,
@@ -281,9 +433,7 @@ def create_local_dataset_loaders(
     freq: str,
 ) -> tuple[dict[str, DataLoader], int, str]:
     """Load a local CSV dataset and create evaluation dataloaders."""
-    _ = dataset_dir, dataset_file
-    dataset_csv_path = _resolve_dataset_csv_path()
-    values, marks = _load_local_csv(dataset_csv_path, freq)
+    values, marks = _load_local_csv(Path(dataset_csv_path), freq)
 
     row_count = values.shape[0]
     normalization_end, context_end, evaluation_end = _compute_split_indices(row_count)
@@ -316,53 +466,6 @@ def _extract_state_dict_payload(raw_checkpoint: object) -> dict[str, torch.Tenso
                 return {str(name): value for name, value in candidate.items() if isinstance(value, torch.Tensor)}
         return {str(name): value for name, value in raw_checkpoint.items() if isinstance(value, torch.Tensor)}
     raise TypeError(f"unsupported checkpoint payload type: {type(raw_checkpoint)!r}")
-
-
-def inspect_checkpoint_state_dict(
-    checkpoint_path: str | Path,
-    *,
-    max_keys: int = 64,
-) -> dict[str, object]:
-    """Return a lightweight checkpoint schema summary for debugging load issues."""
-    resolved_path = Path(checkpoint_path)
-    if not resolved_path.exists():
-        raise FileNotFoundError(f"checkpoint not found: {resolved_path}")
-
-    try:
-        checkpoint_payload = torch.load(resolved_path, map_location="cpu", weights_only=True)
-    except Exception:
-        checkpoint_payload = torch.load(resolved_path, map_location="cpu")
-    source_state_dict = _extract_state_dict_payload(checkpoint_payload)
-    sorted_keys = sorted(source_state_dict.keys())
-    limited_keys = sorted_keys[: max(0, max_keys)]
-    sample_shapes: dict[str, tuple[int, ...]] = {}
-    for key in limited_keys:
-        value = source_state_dict[key]
-        sample_shapes[key] = tuple(value.shape)
-
-    return {
-        "checkpoint_path": str(resolved_path),
-        "key_count": len(sorted_keys),
-        "sample_keys": limited_keys,
-        "sample_key_shapes": sample_shapes,
-    }
-
-
-def format_checkpoint_summary(summary: dict[str, object]) -> str:
-    sample_keys = summary.get("sample_keys", [])
-    sample_shapes = summary.get("sample_key_shapes", {})
-    lines = [
-        f"checkpoint={summary.get('checkpoint_path')} key_count={summary.get('key_count')}",
-    ]
-    if not sample_keys:
-        lines.append("sample_keys=<none>")
-        return "\n".join(lines)
-
-    lines.append("sample_keys:")
-    for key in sample_keys:
-        shape = sample_shapes.get(key)
-        lines.append(f"  - {key}: {shape}")
-    return "\n".join(lines)
 
 
 def _build_source_key_lookup(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -556,11 +659,7 @@ def load_reference_checkpoint(model: torch.nn.Module, checkpoint_path: str | Pat
     if not resolved_path.exists():
         raise FileNotFoundError(f"checkpoint not found: {resolved_path}")
 
-    try:
-        checkpoint_payload = torch.load(resolved_path, map_location="cpu", weights_only=True)
-    except Exception:
-        checkpoint_payload = torch.load(resolved_path, map_location="cpu")
-    source_state_dict = _extract_state_dict_payload(checkpoint_payload)
+    source_state_dict = _extract_state_dict_payload(_load_checkpoint_payload(resolved_path))
     source_lookup = _build_source_key_lookup(source_state_dict)
 
     target_state_dict = model.state_dict()
@@ -593,9 +692,7 @@ def load_reference_checkpoint(model: torch.nn.Module, checkpoint_path: str | Pat
             f"loaded_key_count={len(converted)} "
             f"source_key_count={len(source_state_dict)}\n"
             f"missing_keys_sample={missing_sample}\n"
-            f"source_keys_sample={source_sample}\n"
-            "Tip: call inspect_checkpoint_state_dict()/format_checkpoint_summary() in the demo script "
-            "to print checkpoint schema and patch key mapping in demo/run.py if needed."
+            f"source_keys_sample={source_sample}"
         )
 
     return {
@@ -607,7 +704,28 @@ def load_reference_checkpoint(model: torch.nn.Module, checkpoint_path: str | Pat
 
 def _runtime_options(config: MoLEConfig) -> TtRuntimeOptions:
     memory_config = select_ttnn_memory_config(config)
-    return TtRuntimeOptions(memory_config=memory_config, dtype=ttnn.bfloat16)
+    activation_memory_config = select_ttnn_activation_memory_config(config)
+    return TtRuntimeOptions(
+        memory_config=memory_config,
+        activation_memory_config=activation_memory_config,
+        dtype=ttnn.bfloat16,
+    )
+
+
+def config_from_checkpoint_resolution(
+    resolution: MoleCheckpointResolution,
+    *,
+    base_model_type: str,
+    num_experts: int,
+) -> MoLEConfig:
+    return MoLEConfig(
+        seq_len=resolution.entry.seq_len,
+        pred_len=resolution.entry.pred_len,
+        input_dim=resolution.entry.enc_in,
+        base_model_type=base_model_type,
+        num_experts=num_experts,
+        freq=resolution.freq,
+    )
 
 
 def build_ttnn_mole_from_checkpoint(
@@ -777,41 +895,44 @@ class CheckpointInferenceEndpoint:
         self.device = device
         self.options = options
 
-    def _maybe_print_checkpoint_summary(self, *, label: str, checkpoint_path: str) -> None:
-        if self.options.checkpoint_debug_keys <= 0:
-            return
-        print(
-            f"[{label}] checkpoint schema:\n"
-            + format_checkpoint_summary(
-                inspect_checkpoint_state_dict(
-                    checkpoint_path,
-                    max_keys=self.options.checkpoint_debug_keys,
-                )
-            ),
-            flush=True,
-        )
-
     def resolve_dataset(
         self,
         model_config: MoLEConfig,
         *,
-        dataset_dir: str,
-        dataset_file: str | None,
         eval_batch_size: int,
     ) -> tuple[dict[str, object], MoLEConfig]:
-        loaders, input_dim, resolved_freq = create_local_dataset_loaders(
-            dataset_dir,
-            dataset_file,
-            seq_len=model_config.seq_len,
-            pred_len=model_config.pred_len,
-            eval_batch_size=eval_batch_size,
-            freq=model_config.freq,
+        resolved = resolve_mole_checkpoint(
+            dataset=self.options.dataset,
+            base_model_type=model_config.base_model_type,
+            num_experts=model_config.num_experts or 0,
+            assets_root=self.options.assets_root,
         )
-        next_config = replace(model_config, input_dim=input_dim, freq=resolved_freq)
+        loaders, input_dim, resolved_freq = create_local_dataset_loaders(
+            resolved.dataset_csv_path,
+            seq_len=resolved.entry.seq_len,
+            pred_len=resolved.entry.pred_len,
+            eval_batch_size=eval_batch_size,
+            freq=resolved.freq,
+        )
+        next_config = replace(
+            model_config,
+            input_dim=input_dim,
+            freq=resolved_freq,
+            seq_len=resolved.entry.seq_len,
+            pred_len=resolved.entry.pred_len,
+        )
+        self.options = replace(
+            self.options,
+            checkpoint_path=resolved.checkpoint_path,
+            dataset_csv_path=resolved.dataset_csv_path,
+        )
+        if resolved.entry.enc_in != input_dim:
+            raise ValueError(
+                f"dataset feature count mismatch for {resolved.entry.dataset}: metadata enc_in={resolved.entry.enc_in}, csv_features={input_dim}"
+            )
         return loaders, next_config
 
     def build_mole_ttnn(self, model_config: MoLEConfig) -> TtMoLE:
-        self._maybe_print_checkpoint_summary(label="run:mole", checkpoint_path=self.options.checkpoint_path)
         return build_ttnn_mole_from_checkpoint(self.device, model_config, self.options.checkpoint_path)
 
     def predict_from_torch(
@@ -838,18 +959,6 @@ def main() -> None:
     )
     add_dataset_arguments(parser)
     add_model_arguments(parser)
-    parser.add_argument(
-        "--checkpoint-file",
-        type=str,
-        default="checkpoint.pth",
-        help="Checkpoint file path relative to /demo_checkpoints",
-    )
-    parser.add_argument(
-        "--checkpoint-debug-keys",
-        type=int,
-        default=0,
-        help="If > 0, print a checkpoint key/shape sample before load",
-    )
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -860,22 +969,31 @@ def main() -> None:
     args = parser.parse_args()
 
     set_random_seed(args.seed)
-    config = model_config_from_args(args)
-    checkpoint_path = _resolve_checkpoint_path(args.checkpoint_file)
+    resolution = resolve_mole_checkpoint(
+        dataset=args.dataset,
+        base_model_type=args.base_model_type,
+        num_experts=args.num_experts,
+        assets_root=args.dataset_dir,
+    )
+    config = config_from_checkpoint_resolution(
+        resolution,
+        base_model_type=args.base_model_type,
+        num_experts=args.num_experts,
+    )
 
     device = open_ttnn_device()
     try:
         endpoint = CheckpointInferenceEndpoint(
             device=device,
             options=CheckpointEndpointOptions(
-                checkpoint_path=checkpoint_path,
-                checkpoint_debug_keys=args.checkpoint_debug_keys,
+                checkpoint_path=resolution.checkpoint_path,
+                dataset_csv_path=resolution.dataset_csv_path,
+                assets_root=args.dataset_dir,
+                dataset=args.dataset,
             ),
         )
         loaders, config = endpoint.resolve_dataset(
             config,
-            dataset_dir=args.dataset_dir,
-            dataset_file=args.dataset_file,
             eval_batch_size=args.batch_size,
         )
         model = endpoint.build_mole_ttnn(config)
@@ -897,6 +1015,8 @@ def main() -> None:
                 print(f"prediction_shape={prediction_shape}")
         if target_shape is not None:
             print(f"target_shape={target_shape}")
+        print(f"checkpoint_path={endpoint.options.checkpoint_path}")
+        print(f"dataset_csv_path={endpoint.options.dataset_csv_path}")
         print(f"mse={metrics['mse']:.6f} mae={metrics['mae']:.6f} num_points={metrics['num_points']}")
     finally:
         close_ttnn_device(device)

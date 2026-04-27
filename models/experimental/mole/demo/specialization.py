@@ -3,7 +3,6 @@
 
 import argparse
 from dataclasses import dataclass
-import os
 from pathlib import Path
 
 import matplotlib
@@ -15,14 +14,15 @@ from matplotlib.patches import Patch
 import torch
 
 from models.experimental.mole.demo.run import (
-    ALLOWED_CHECKPOINT_FILES,
     add_dataset_arguments,
     add_model_arguments,
+    CHECKPOINT_BASE_DIR,
     CheckpointEndpointOptions,
     CheckpointInferenceEndpoint,
     close_ttnn_device,
-    model_config_from_args,
+    config_from_checkpoint_resolution,
     open_ttnn_device,
+    resolve_mole_checkpoint,
     set_random_seed,
     unpack_batch,
 )
@@ -30,33 +30,19 @@ from models.experimental.mole.reference.config import MoLEConfig
 
 COLORS = ("#0B6E4F", "#C84C09", "#2F5DBE", "#B02E63", "#0E7490", "#8A6F00", "#6D28D9", "#4B5563")
 DEFAULT_ROUTER_IMAGE_PATH = str(Path.home() / ".cache" / "tt-metal" / "mole" / "router_weights.png")
-CHECKPOINT_BASE_DIR = "/demo_checkpoints"
+EVAL_BATCH_SIZE = 32
 
 
 @dataclass(frozen=True)
 class VisualizationOptions:
     checkpoint_path: str
-    checkpoint_debug_keys: int = 0
+    dataset_csv_path: str
+    dataset: str
     image_path: str = DEFAULT_ROUTER_IMAGE_PATH
-    eval_batch_size: int = 32
     max_eval_batches: int | None = None
     plot_max_samples: int = 1200
     seed: int = 2021
     dataset_dir: str | None = None
-    dataset_file: str | None = None
-
-
-def _resolve_checkpoint_path(checkpoint_file: str) -> str:
-    if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
-        raise ValueError("checkpoint_file is not in the predefined safelist")
-
-    BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
-    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, checkpoint_file))
-    if not my_path.startswith(BASE_DIRECTORY):
-        raise ValueError("checkpoint path escapes checkpoint_dir")
-    if not os.path.isfile(my_path):
-        raise FileNotFoundError(f"checkpoint not found: {my_path}")
-    return my_path
 
 
 def _save_png(path: Path, router_weights: torch.Tensor, *, plot_max_samples: int) -> None:
@@ -157,20 +143,21 @@ def visualize_router_weights(
 
     set_random_seed(visualization_options.seed)
 
+    collected_samples = 0
     device = open_ttnn_device()
     try:
         endpoint = CheckpointInferenceEndpoint(
             device=device,
             options=CheckpointEndpointOptions(
                 checkpoint_path=visualization_options.checkpoint_path,
-                checkpoint_debug_keys=visualization_options.checkpoint_debug_keys,
+                dataset_csv_path=visualization_options.dataset_csv_path,
+                assets_root=visualization_options.dataset_dir or CHECKPOINT_BASE_DIR,
+                dataset=visualization_options.dataset,
             ),
         )
         loaders, model_config = endpoint.resolve_dataset(
             model_config,
-            dataset_dir=visualization_options.dataset_dir or "",
-            dataset_file=visualization_options.dataset_file,
-            eval_batch_size=visualization_options.eval_batch_size,
+            eval_batch_size=EVAL_BATCH_SIZE,
         )
         model = endpoint.build_mole_ttnn(model_config)
 
@@ -191,7 +178,11 @@ def visualize_router_weights(
                     torch_input_mark=input_marks,
                     return_router_output=True,
                 )
-                router_weights_list.append(gating_weights.mean(dim=2))
+                router_weights = gating_weights.mean(dim=2)
+                router_weights_list.append(router_weights)
+                collected_samples += int(router_weights.shape[0])
+                if collected_samples >= visualization_options.plot_max_samples:
+                    break
     finally:
         close_ttnn_device(device)
 
@@ -204,6 +195,8 @@ def visualize_router_weights(
         router_weights,
         plot_max_samples=visualization_options.plot_max_samples,
     )
+    print(f"checkpoint_path={endpoint.options.checkpoint_path}")
+    print(f"dataset_csv_path={endpoint.options.dataset_csv_path}")
     print(f"Saved {visualization_options.image_path}")
 
 
@@ -211,19 +204,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize MoLE router weights as a PNG image.")
     add_dataset_arguments(parser)
     add_model_arguments(parser)
-    parser.add_argument(
-        "--checkpoint-file",
-        type=str,
-        default="checkpoint.pth",
-        help="Checkpoint file path relative to /demo_checkpoints",
-    )
-    parser.add_argument(
-        "--checkpoint-debug-keys",
-        type=int,
-        default=0,
-        help="If > 0, print a checkpoint key/shape sample before load for mismatch debugging",
-    )
-    parser.add_argument("--eval-batch-size", type=int, default=32)
     parser.add_argument("--seed", type=int, default=2021)
     parser.add_argument("--image-path", type=str, default=DEFAULT_ROUTER_IMAGE_PATH, help="Output PNG path")
     parser.add_argument("--max-eval-batches", type=int, default=None)
@@ -234,20 +214,28 @@ if __name__ == "__main__":
         help="Maximum number of contiguous test samples to visualize",
     )
     args = parser.parse_args()
-    checkpoint_path = _resolve_checkpoint_path(args.checkpoint_file)
+    resolution = resolve_mole_checkpoint(
+        dataset=args.dataset,
+        base_model_type=args.base_model_type,
+        num_experts=args.num_experts,
+        assets_root=args.dataset_dir,
+    )
     options = VisualizationOptions(
-        checkpoint_path=checkpoint_path,
-        checkpoint_debug_keys=args.checkpoint_debug_keys,
+        checkpoint_path=resolution.checkpoint_path,
+        dataset_csv_path=resolution.dataset_csv_path,
+        dataset=args.dataset,
         image_path=args.image_path,
-        eval_batch_size=args.eval_batch_size,
         max_eval_batches=args.max_eval_batches,
         plot_max_samples=args.plot_max_samples,
         seed=args.seed,
         dataset_dir=args.dataset_dir,
-        dataset_file=args.dataset_file,
     )
 
     visualize_router_weights(
-        model_config=model_config_from_args(args),
+        model_config=config_from_checkpoint_resolution(
+            resolution,
+            base_model_type=args.base_model_type,
+            num_experts=args.num_experts,
+        ),
         options=options,
     )
