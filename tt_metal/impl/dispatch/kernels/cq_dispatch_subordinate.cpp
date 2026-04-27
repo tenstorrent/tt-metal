@@ -331,7 +331,11 @@ void set_go_signal_noc_data() {
 // normal counter slots, then merge any non-zero deltas into our local counters before the barrier.
 FORCE_INLINE
 void merge_dispatch_d_noc_counter_deltas() {
-    static_assert(!distributed_dispatcher, "merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core");
+    if constexpr (distributed_dispatcher) {
+        DEVICE_PRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core");
+        ASSERT(0);
+        return;
+    }
 
     constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
 
