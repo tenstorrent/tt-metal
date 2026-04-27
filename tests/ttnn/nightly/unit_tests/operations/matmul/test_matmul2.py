@@ -1048,7 +1048,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 
     tt_out = tt2torch_tensor(output_matmul_t)
 
-    pt_out = (in0 + in1) @ weight
+    pt_out = (in0 + in1) @ weight + bias
 
     assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
