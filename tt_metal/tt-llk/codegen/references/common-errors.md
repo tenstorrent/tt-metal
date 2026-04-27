@@ -383,6 +383,65 @@ In Python test: `unpack_to_dest = (formats.input_format.is_32_bit() == (dest_acc
 
 ---
 
+### Quasar SFPU: Chained `SFPGT → SFPMOV` clamp pairs leak CC predication
+
+**Symptom**: A kernel that does multiple consecutive predicated clamps inside a single `SFPENCC(1,2) … SFPENCC(0,2)` bracket — e.g.
+
+```cpp
+TTI_SFPENCC(1, 2);
+TTI_SFPGT(0, lim, gate, 0x1); TTI_SFPMOV(lim,  gate, 0);   // clamp1
+TTI_SFPGT(0, lim, up,   0x1); TTI_SFPMOV(lim,  up,   0);   // clamp2
+TTI_SFPGT(0, up,  -lim, 0x1); TTI_SFPMOV(-lim, up,   0);   // clamp3
+TTI_SFPENCC(0, 0);
+TTI_SFPENCC(0, 2);
+```
+
+passes most lanes but produces specific-lane outliers consistent with "the second/third clamp didn't fire on lanes the first clamp did not affect". Visible as e.g. golden `(-7+1)*7*1 = -42` vs result `(-7+1)*9*1 = -53.67` — the original `gate=9` was never clamped to `+7`.
+
+**Root cause** (Confluence "Tensix SFPU Instruction Set Architecture", page 1170505767):
+
+```c
+// SFPGT functional model (page 1612382847)
+lanewise {
+  bool IsVcSmaller = SignMagIsSmaller(LReg[VC].u32, LReg[VB].u32);
+  if (LaneEnabled) {                       // <-- write is gated
+    if (Mod1 & SFPGT_MOD1_SET_CC) { LaneFlags = IsVcSmaller; }
+  }
+}
+```
+
+`SFPGT mod1=0x1` writes `CC.Res` ONLY for lanes where `LaneEnabled = (CC.En AND CC.Res)` is currently true. Once the first SFPGT disables a subset of lanes, the second SFPGT cannot re-enable them — its `CC.Res` write is itself predicated. `SFPSETCC` has the same predication-gated behavior.
+
+**Why the textbook fix doesn't work**: The same Confluence page documents `SFPENCC` pseudocode that suggests `SFPENCC(0,0)` (or `SFPENCC(1,2)`) between clamp pairs should set `CC.Res=1` and re-enable all lanes without disabling predication:
+
+```c
+if (InstrMod[3]) { CC.Res = Imm12[1]; } else { CC.Res = 1; }
+if (InstrMod[1:0] == 1)      { CC.En = !CC.En; }
+else if (InstrMod[1:0] == 2) { CC.En = Imm12[0]; }
+```
+
+But empirically, on the Quasar simulator, inserting either form between clamps **drops PCC from ~0.999 to ~0.64** with mass-saturated outputs (e.g. all-`-41.84` lanes) — strongly indicating subsequent SFPMOVs run unmasked, copying the clamp constant to every lane. Both `SFPENCC(0,0)` and `SFPENCC(1,2)` produce byte-identical wrong output. Either the documented pseudocode does not match silicon/simulator behavior, or there is a `SFPMOV → SFPENCC → SFPGT` pipeline hazard not described in the ISA pages. **This conflict is unresolved as of 2026-04 — escalate to the HW team if you need authoritative semantics.**
+
+**Workaround — predication-free arithmetic clamps via `SFPNONLINEAR RELU`**:
+
+```
+min(x, +L) = +L − relu(+L − x)         // 3 ops, no CC
+max(x, −L) = −L + relu(x + L)          // 3 ops, no CC
+```
+
+Concretely (using `LCONST_1=1.0`, `mod1=0x1` is `NEGATE_VB` in SFPMAD):
+
+```cpp
+// gate = min(gate, +L)
+TTI_SFPMAD(LCONST_1, gate, +L_lreg, tmp,  0x1 /*NEGATE_VB*/);  // tmp = +L − gate
+TTI_SFPNONLINEAR(tmp, tmp, p_sfpnonlinear::RELU_MODE);         // tmp = relu(tmp)
+TTI_SFPMAD(LCONST_1, tmp,  +L_lreg, gate, 0x1 /*NEGATE_VB*/);  // gate = +L − tmp
+```
+
+9 SFPU ops total for a full 3-clamp chain (gate-max + up-min + up-max) — same instruction count as the broken predicated version, but provably correct. See `tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_swiglu.h` for a working example.
+
+---
+
 ## General Debugging Tips
 
 1. **Start with the compiler suggestion** — "did you mean X?" is usually correct
