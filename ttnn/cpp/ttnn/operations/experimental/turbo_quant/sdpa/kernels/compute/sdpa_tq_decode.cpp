@@ -33,6 +33,7 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/bcast.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // Include existing SDPA compute building blocks (matmul_blocks, softmax helpers, etc.)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
@@ -156,71 +157,80 @@ inline void dequant_k_chunk(
     constexpr uint32_t chunk_tiles = Sk_chunk_t * DHt;
 
     // Pass 1: typecast BFP4→BF16 into cb_dq_temp (row-major layout).
-    init_sfpu(cb_k_idx, cb_dq_temp);
-    cb_reserve_back(cb_dq_temp, chunk_tiles);
-    for (uint32_t t = 0; t < chunk_tiles; t++) {
-        tile_regs_acquire();
-        cb_wait_front(cb_k_idx, 1);
-        copy_tile(cb_k_idx, 0, 0);
-        typecast_tile_init<TQ_DF_BFP4, TQ_DF_BF16>();
-        typecast_tile<TQ_DF_BFP4, TQ_DF_BF16>(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_dq_temp);
-        cb_pop_front(cb_k_idx, 1);
-        tile_regs_release();
-    }
-    cb_push_back(cb_dq_temp, chunk_tiles);
-
-    // Pass 2a: Centroid gather, in-place in cb_dq_temp.
-    mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
-    cb_wait_front(cb_dq_temp, chunk_tiles);
-    cb_wait_front(cb_k_norms, Sk_chunk_t);
-    for (uint32_t t = 0; t < chunk_tiles; t++) {
-        tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_dq_temp);
-        copy_tile(cb_dq_temp, t, 0);
-        fill_tile_init();
-        fill_tile(1, centroids[0]);
-        for (uint32_t lev = 1; lev < NumLevels; lev++) {
-            copy_tile_to_dst_init_short(cb_dq_temp);
-            copy_tile(cb_dq_temp, t, 2);
-            unary_ge_tile_init();
-            unary_ge_tile(2, level_bits[lev]);
-            fill_tile_init();
-            fill_tile(3, centroids[lev]);
-            sub_binary_tile_init();
-            sub_binary_tile(3, 1, 3);
-            mul_binary_tile_init();
-            mul_binary_tile(2, 3, 3);
-            add_binary_tile_init();
-            add_binary_tile(1, 3, 1);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_dq_temp);
-        pack_tile<true>(1, cb_dq_temp, t);
-        tile_regs_release();
-    }
-
-    // Pass 2b: Norm bcast multiply + tile-grid transpose into cb_k_in.
-    cb_reserve_back(cb_k_in, chunk_tiles);
-    for (uint32_t row = 0; row < Sk_chunk_t; row++) {
-        for (uint32_t col = 0; col < DHt; col++) {
-            uint32_t src_tile = row * DHt + col;
+    {
+        DeviceZoneScopedN("TQ_K_TYPECAST");
+        init_sfpu(cb_k_idx, cb_dq_temp);
+        cb_reserve_back(cb_dq_temp, chunk_tiles);
+        for (uint32_t t = 0; t < chunk_tiles; t++) {
             tile_regs_acquire();
-            mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
-            mul_tiles_bcast_cols(cb_dq_temp, cb_k_norms, src_tile, row, 0);
+            cb_wait_front(cb_k_idx, 1);
+            copy_tile(cb_k_idx, 0, 0);
+            typecast_tile_init<TQ_DF_BFP4, TQ_DF_BF16>();
+            typecast_tile<TQ_DF_BFP4, TQ_DF_BF16>(0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_data_format(cb_k_in);
-            pack_tile<true>(0, cb_k_in, col * Sk_chunk_t + row);
+            pack_tile(0, cb_dq_temp);
+            cb_pop_front(cb_k_idx, 1);
+            tile_regs_release();
+        }
+        cb_push_back(cb_dq_temp, chunk_tiles);
+    }
+
+    // Pass 2a: Centroid gather, in-place in cb_dq_temp.
+    {
+        DeviceZoneScopedN("TQ_K_GATHER");
+        mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
+        cb_wait_front(cb_dq_temp, chunk_tiles);
+        cb_wait_front(cb_k_norms, Sk_chunk_t);
+        for (uint32_t t = 0; t < chunk_tiles; t++) {
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short(cb_dq_temp);
+            copy_tile(cb_dq_temp, t, 0);
+            fill_tile_init();
+            fill_tile(1, centroids[0]);
+            for (uint32_t lev = 1; lev < NumLevels; lev++) {
+                copy_tile_to_dst_init_short(cb_dq_temp);
+                copy_tile(cb_dq_temp, t, 2);
+                unary_ge_tile_init();
+                unary_ge_tile(2, level_bits[lev]);
+                fill_tile_init();
+                fill_tile(3, centroids[lev]);
+                sub_binary_tile_init();
+                sub_binary_tile(3, 1, 3);
+                mul_binary_tile_init();
+                mul_binary_tile(2, 3, 3);
+                add_binary_tile_init();
+                add_binary_tile(1, 3, 1);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_dq_temp);
+            pack_tile<true>(1, cb_dq_temp, t);
             tile_regs_release();
         }
     }
-    cb_pop_front(cb_dq_temp, chunk_tiles);
-    cb_pop_front(cb_k_norms, Sk_chunk_t);
-    cb_push_back(cb_k_in, chunk_tiles);
+
+    // Pass 2b: Norm bcast multiply + tile-grid transpose into cb_k_in.
+    {
+        DeviceZoneScopedN("TQ_K_NORM_TRANSPOSE");
+        cb_reserve_back(cb_k_in, chunk_tiles);
+        for (uint32_t row = 0; row < Sk_chunk_t; row++) {
+            for (uint32_t col = 0; col < DHt; col++) {
+                uint32_t src_tile = row * DHt + col;
+                tile_regs_acquire();
+                mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
+                mul_tiles_bcast_cols(cb_dq_temp, cb_k_norms, src_tile, row, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_k_in);
+                pack_tile<true>(0, cb_k_in, col * Sk_chunk_t + row);
+                tile_regs_release();
+            }
+        }
+        cb_pop_front(cb_dq_temp, chunk_tiles);
+        cb_pop_front(cb_k_norms, Sk_chunk_t);
+        cb_push_back(cb_k_in, chunk_tiles);
+    }
 }
 
 template <uint32_t Sk_chunk_t, uint32_t vDHt, uint32_t NumLevels>
@@ -234,72 +244,81 @@ inline void dequant_v_chunk(
     constexpr uint32_t chunk_tiles = Sk_chunk_t * vDHt;
 
     // Pass 1: Typecast BFP4→BF16 into cb_dq_temp.
-    init_sfpu(cb_v_idx, cb_dq_temp);
-    cb_reserve_back(cb_dq_temp, chunk_tiles);
-    for (uint32_t t = 0; t < chunk_tiles; t++) {
-        tile_regs_acquire();
-        cb_wait_front(cb_v_idx, 1);
-        copy_tile(cb_v_idx, 0, 0);
-        typecast_tile_init<TQ_DF_BFP4, TQ_DF_BF16>();
-        typecast_tile<TQ_DF_BFP4, TQ_DF_BF16>(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_dq_temp);
-        cb_pop_front(cb_v_idx, 1);
-        tile_regs_release();
+    {
+        DeviceZoneScopedN("TQ_V_TYPECAST");
+        init_sfpu(cb_v_idx, cb_dq_temp);
+        cb_reserve_back(cb_dq_temp, chunk_tiles);
+        for (uint32_t t = 0; t < chunk_tiles; t++) {
+            tile_regs_acquire();
+            cb_wait_front(cb_v_idx, 1);
+            copy_tile(cb_v_idx, 0, 0);
+            typecast_tile_init<TQ_DF_BFP4, TQ_DF_BF16>();
+            typecast_tile<TQ_DF_BFP4, TQ_DF_BF16>(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_dq_temp);
+            cb_pop_front(cb_v_idx, 1);
+            tile_regs_release();
+        }
+        cb_push_back(cb_dq_temp, chunk_tiles);
     }
-    cb_push_back(cb_dq_temp, chunk_tiles);
 
     // Pass 2a: Centroid gather, in-place in cb_dq_temp.
-    mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
-    cb_wait_front(cb_dq_temp, chunk_tiles);
-    cb_wait_front(cb_v_norms, Sk_chunk_t);
-    for (uint32_t t = 0; t < chunk_tiles; t++) {
-        tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_dq_temp);
-        copy_tile(cb_dq_temp, t, 0);
-        fill_tile_init();
-        fill_tile(1, centroids[0]);
-        for (uint32_t lev = 1; lev < NumLevels; lev++) {
+    {
+        DeviceZoneScopedN("TQ_V_GATHER");
+        mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
+        cb_wait_front(cb_dq_temp, chunk_tiles);
+        cb_wait_front(cb_v_norms, Sk_chunk_t);
+        for (uint32_t t = 0; t < chunk_tiles; t++) {
+            tile_regs_acquire();
             copy_tile_to_dst_init_short(cb_dq_temp);
-            copy_tile(cb_dq_temp, t, 2);
-            unary_ge_tile_init();
-            unary_ge_tile(2, level_bits[lev]);
+            copy_tile(cb_dq_temp, t, 0);
             fill_tile_init();
-            fill_tile(3, centroids[lev]);
-            sub_binary_tile_init();
-            sub_binary_tile(3, 1, 3);
-            mul_binary_tile_init();
-            mul_binary_tile(2, 3, 3);
-            add_binary_tile_init();
-            add_binary_tile(1, 3, 1);
+            fill_tile(1, centroids[0]);
+            for (uint32_t lev = 1; lev < NumLevels; lev++) {
+                copy_tile_to_dst_init_short(cb_dq_temp);
+                copy_tile(cb_dq_temp, t, 2);
+                unary_ge_tile_init();
+                unary_ge_tile(2, level_bits[lev]);
+                fill_tile_init();
+                fill_tile(3, centroids[lev]);
+                sub_binary_tile_init();
+                sub_binary_tile(3, 1, 3);
+                mul_binary_tile_init();
+                mul_binary_tile(2, 3, 3);
+                add_binary_tile_init();
+                add_binary_tile(1, 3, 1);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_dq_temp);
+            pack_tile<true>(1, cb_dq_temp, t);
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_dq_temp);
-        pack_tile<true>(1, cb_dq_temp, t);
-        tile_regs_release();
     }
 
     // Pass 2b: Norm bcast multiply into cb_v_in (no output transpose — natural [Sk × vDHt]).
     // Sequential pack matches the row-major src layout.
-    cb_reserve_back(cb_v_in, chunk_tiles);
-    for (uint32_t row = 0; row < Sk_chunk_t; row++) {
-        for (uint32_t col = 0; col < vDHt; col++) {
-            uint32_t src_tile = row * vDHt + col;
-            tile_regs_acquire();
-            mul_bcast_cols_init_short(cb_dq_temp, cb_v_norms);
-            mul_tiles_bcast_cols(cb_dq_temp, cb_v_norms, src_tile, row, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_v_in);
-            pack_tile(0, cb_v_in);
-            tile_regs_release();
+    {
+        DeviceZoneScopedN("TQ_V_NORM");
+        cb_reserve_back(cb_v_in, chunk_tiles);
+        for (uint32_t row = 0; row < Sk_chunk_t; row++) {
+            for (uint32_t col = 0; col < vDHt; col++) {
+                uint32_t src_tile = row * vDHt + col;
+                tile_regs_acquire();
+                mul_bcast_cols_init_short(cb_dq_temp, cb_v_norms);
+                mul_tiles_bcast_cols(cb_dq_temp, cb_v_norms, src_tile, row, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_v_in);
+                pack_tile(0, cb_v_in);
+                tile_regs_release();
+            }
         }
+        cb_pop_front(cb_dq_temp, chunk_tiles);
+        cb_pop_front(cb_v_norms, Sk_chunk_t);
+        cb_push_back(cb_v_in, chunk_tiles);
     }
-    cb_pop_front(cb_dq_temp, chunk_tiles);
-    cb_pop_front(cb_v_norms, Sk_chunk_t);
-    cb_push_back(cb_v_in, chunk_tiles);
 }
 
 // Template helper to load centroid compile-time args (must be at namespace scope).
@@ -471,6 +490,7 @@ void kernel_main() {
                     cb_exp_max_diff,
                     cb_out);
             } else {
+                DeviceZoneScopedN("TQ_FULL_DEQUANT_HEAD");
                 // ══════════════════════════════════════════════════════════
                 // Full dequant path: interleaved dequant + Flash Attention.
                 //
@@ -499,70 +519,87 @@ void kernel_main() {
                 mm_init(cb_q_in, cb_k_in, cb_out);
 
                 for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+                    DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
                     // ── Step 1: Dequantize K chunk → cb_k_in (transposed layout) ──
-                    dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
-                        cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
+                    {
+                        DeviceZoneScopedN("TQ_DEQUANT_K");
+                        dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
+                            cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
+                    }
 
                     // ── Step 2: QK = Q × K^T ──
-                    reconfig_data_format(cb_k_in, cb_q_in);
-                    pack_reconfig_data_format(cb_qk_im);
-                    matmul_blocks(
-                        cb_q_in,
-                        cb_k_in,
-                        cb_qk_im,
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        DHt,
-                        qk_num_blocks,
-                        qk_in0_num_subblocks,
-                        qk_in1_num_subblocks,
-                        qk_in0_block_w,
-                        qk_subblock_h,
-                        qk_subblock_w,
-                        true /*transpose K*/);
+                    {
+                        DeviceZoneScopedN("TQ_QK_MATMUL");
+                        reconfig_data_format(cb_k_in, cb_q_in);
+                        pack_reconfig_data_format(cb_qk_im);
+                        matmul_blocks(
+                            cb_q_in,
+                            cb_k_in,
+                            cb_qk_im,
+                            Sq_chunk_t,
+                            Sk_chunk_t,
+                            DHt,
+                            qk_num_blocks,
+                            qk_in0_num_subblocks,
+                            qk_in1_num_subblocks,
+                            qk_in0_block_w,
+                            qk_subblock_h,
+                            qk_subblock_w,
+                            true /*transpose K*/);
+                    }
 
                     // ── Step 3: Online softmax ──
-                    // cur_max = max(QK, dim=-1) (with eltwise max vs prev on chunk>0)
-                    reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                    reduce_c<
-                        PoolType::MAX,
-                        ReduceDim::REDUCE_ROW,
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        Sq_chunk_t,
-                        Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
+                    {
+                        DeviceZoneScopedN("TQ_SOFTMAX");
+                        // cur_max = max(QK, dim=-1) (with eltwise max vs prev on chunk>0)
+                        reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                        reduce_c<
+                            PoolType::MAX,
+                            ReduceDim::REDUCE_ROW,
+                            cb_qk_im,
+                            cb_identity_scale_in,
+                            Sq_chunk_t,
+                            Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
 
-                    // QK = exp((QK - cur_max) * scale); partial reduce_sum into cur_sum
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                        alias_cur_max, alias_cur_sum, Sk_chunk_t);
+                        // QK = exp((QK - cur_max) * scale); partial reduce_sum into cur_sum
+                        sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                            alias_cur_max, alias_cur_sum, Sk_chunk_t);
+                    }
 
                     // ── Step 4: Dequantize V chunk → cb_v_in (natural layout) ──
-                    dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
-                        cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
+                    {
+                        DeviceZoneScopedN("TQ_DEQUANT_V");
+                        dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
+                            cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
+                    }
 
                     // ── Step 5: OUT_IM = softmax × V ──
-                    reconfig_data_format(cb_v_in, cb_qk_im);
-                    pack_reconfig_data_format(alias_mm2_cur_out);
-                    matmul_blocks(
-                        cb_qk_im,
-                        cb_v_in,
-                        alias_mm2_cur_out,
-                        Sq_chunk_t,
-                        vDHt,
-                        Sk_chunk_t,
-                        out_num_blocks,
-                        out_in0_num_subblocks,
-                        out_in1_num_subblocks,
-                        out_in0_block_w,
-                        out_subblock_h,
-                        out_subblock_w,
-                        false /*no transpose*/);
+                    {
+                        DeviceZoneScopedN("TQ_OUT_MATMUL");
+                        reconfig_data_format(cb_v_in, cb_qk_im);
+                        pack_reconfig_data_format(alias_mm2_cur_out);
+                        matmul_blocks(
+                            cb_qk_im,
+                            cb_v_in,
+                            alias_mm2_cur_out,
+                            Sq_chunk_t,
+                            vDHt,
+                            Sk_chunk_t,
+                            out_num_blocks,
+                            out_in0_num_subblocks,
+                            out_in1_num_subblocks,
+                            out_in0_block_w,
+                            out_subblock_h,
+                            out_subblock_w,
+                            false /*no transpose*/);
 
-                    cb_pop_front(cb_qk_im, qk_chunk_tiles);
-                    reconfig_data_format(alias_prev_max, alias_cur_max);
+                        cb_pop_front(cb_qk_im, qk_chunk_tiles);
+                        reconfig_data_format(alias_prev_max, alias_cur_max);
+                    }
 
                     // ── Step 6: Lazy softmax correction (from chunk 2 onward) ──
                     if (k_chunk > 0) {
+                        DeviceZoneScopedN("TQ_SOFTMAX_CORRECTION");
                         // exp_max_diff = exp((prev_max - cur_max) * scale)
                         sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
@@ -576,7 +613,10 @@ void kernel_main() {
                     }
 
                     // Empirical fix: multiple volatile L1 reads via the CB tile pointer on UNPACK.
-                    UNPACK(sync_unpack_cb_read(alias_cur_max););
+                    {
+                        DeviceZoneScopedN("TQ_SYNC_UNPACK");
+                        UNPACK(sync_unpack_cb_read(alias_cur_max););
+                    }
 
                     // ── Step 7: Swap aliases for next iteration ──
                     uint32_t tmp;
@@ -592,12 +632,15 @@ void kernel_main() {
                 }  // end k_chunk loop
 
                 // ── Final: row-reduce partial sum, recip, normalize output ──
-                matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
-                recip_block_inplace(alias_prev_sum, Sq_chunk_t);
-                pack_reconfig_data_format(cb_out);
-                mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
-                cb_pop_front(alias_prev_max, Sq_chunk_t);
-                cb_pop_front(cb_q_in, q_chunk_tiles);
+                {
+                    DeviceZoneScopedN("TQ_FINAL_NORMALIZE");
+                    matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+                    recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+                    pack_reconfig_data_format(cb_out);
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
+                    cb_pop_front(alias_prev_max, Sq_chunk_t);
+                    cb_pop_front(cb_q_in, q_chunk_tiles);
+                }
             }  // end !pre_rescaled branch
         }
     }
