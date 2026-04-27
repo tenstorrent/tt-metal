@@ -712,9 +712,13 @@ def assert_numeric_metrics(
     actual_result = _normalize_tensor(actual_result)
 
     # Validate shapes
-    assert list(expected_result.shape) == list(
-        actual_result.shape
-    ), f"Shape mismatch: expected {list(expected_result.shape)} vs actual {list(actual_result.shape)}"
+    expected_shape = list(expected_result.shape)
+    actual_shape = list(actual_result.shape)
+    if expected_shape != actual_shape:
+        message = f"Shape mismatch: expected {expected_shape} vs actual {actual_shape}"
+        if assert_on_fail:
+            raise AssertionError(message)
+        return False, message
 
     # Align dtypes first so all downstream numeric checks compare values in the same precision.
     if expected_result.dtype != actual_result.dtype:
