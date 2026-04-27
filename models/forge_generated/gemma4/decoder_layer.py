@@ -155,7 +155,9 @@ class SlidingDecoderLayer:
         ttnn_multiply_18 = hidden_state
 
         ttnn_multiply_21 = self.input_layernorm(ttnn_multiply_18)
-        ttnn_reshape_46, ttnn_add_15, ttnn_where_8, ttnn_where_10 = self.attention(
+        # The trailing 3 elements (pos-id increment, KV cache writes) are
+        # side-effect ops; their tensor values are never read.
+        ttnn_reshape_46, _, _, _ = self.attention(
             ttnn_multiply_21,
             is_decode=True,
             k_cache=k_cache,
@@ -203,7 +205,7 @@ class SlidingDecoderLayer:
         )
         ttnn.deallocate(ttnn_add_22, False)
 
-        return (ttnn_multiply_36, ttnn_add_15, ttnn_where_8, ttnn_where_10)
+        return ttnn_multiply_36
 
     def _prefill_body(
         self,
@@ -224,7 +226,9 @@ class SlidingDecoderLayer:
         ttnn_multiply_18 = hidden_state
 
         ttnn_multiply_21 = self.input_layernorm(ttnn_multiply_18)
-        ttnn_reshape_44, ttnn_add_16, ttnn_where_8, ttnn_where_10 = self.attention(
+        # Trailing 3 elements are side-effect-only (pos-id increment + KV
+        # cache writes); never read by callers.
+        ttnn_reshape_44, _, _, _ = self.attention(
             ttnn_multiply_21,
             is_decode=False,
             k_cache=k_cache,
@@ -272,7 +276,7 @@ class SlidingDecoderLayer:
         )
         ttnn.deallocate(ttnn_add_23, False)
 
-        return (ttnn_multiply_36, ttnn_add_16, ttnn_where_8, ttnn_where_10)
+        return ttnn_multiply_36
 
 
 class FullDecoderLayer:
@@ -371,7 +375,9 @@ class FullDecoderLayer:
         ttnn_multiply_198 = hidden_state
 
         ttnn_multiply_201 = self.input_layernorm(ttnn_multiply_198)
-        ttnn_reshape_226, ttnn_add_115 = self.attention(
+        # The pos-id increment (ttnn_add_115) is a side-effect-only op for
+        # non-terminal layers; None when is_terminal.
+        ttnn_reshape_226, _ = self.attention(
             ttnn_multiply_201,
             is_decode=True,
             k_cache=runtime_a,
@@ -418,7 +424,7 @@ class FullDecoderLayer:
         )
         ttnn.deallocate(ttnn_add_122, False)
 
-        return (ttnn_multiply_216, ttnn_add_115)
+        return ttnn_multiply_216
 
     def _prefill_body(self, hidden_state, *, kv, shared, full_cos_cache, full_sin_cache, full_pos_mask):
         k_cache, v_cache, pos_ids = kv
@@ -426,7 +432,9 @@ class FullDecoderLayer:
         ttnn_multiply_198 = hidden_state
 
         ttnn_multiply_201 = self.input_layernorm(ttnn_multiply_198)
-        ttnn_reshape_209, ttnn_add_116 = self.attention(
+        # ttnn_add_116 is a pos-id increment side-effect op; None for
+        # is_terminal.
+        ttnn_reshape_209, _ = self.attention(
             ttnn_multiply_201,
             is_decode=False,
             k_cache=k_cache,
@@ -470,4 +478,4 @@ class FullDecoderLayer:
         )
         ttnn.deallocate(ttnn_add_123, False)
 
-        return (ttnn_multiply_216, ttnn_add_116)
+        return ttnn_multiply_216

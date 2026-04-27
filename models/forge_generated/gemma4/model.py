@@ -304,7 +304,7 @@ class Gemma4ForCausalLM:
                 full_state=full_state,
                 input=input,
                 shared=self.shared,
-            )[0]
+            )
 
         ttnn_add_601 = self.l59(
             hidden,
@@ -428,7 +428,7 @@ class Gemma4ForCausalLM:
                 full_state=full_state,
                 input=input,
                 shared=self.shared,
-            )[0]
+            )
 
         # L58 (sliding) — also flows through SlidingDecoderLayer. The codegen's
         # extra prestage concat ops are dropped (their outputs were consumed
@@ -439,7 +439,7 @@ class Gemma4ForCausalLM:
             full_state=full_state,
             input=input,
             shared=self.shared,
-        )[0]
+        )
         # L59 in prefill consumes sliding_state's prelude outputs unchanged
         # via __call__, but the full_state for L59 prefill uses the
         # ttnn_reshape_104/105 (post-prelude) that the regular full layers

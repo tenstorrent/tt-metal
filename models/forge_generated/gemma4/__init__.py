@@ -1,15 +1,11 @@
-"""Gemma4 — shared module library for prefill and decode.
+"""Gemma4-31B-it forward implementation for tt-metal (1×4 mesh).
 
-This package mirrors the tt-metal `tt_transformers` pattern: per-module
-classes that own their weight ttnn.Tensors and emit the same TTNN op
-sequence as the legacy `gemma4_{prefill,decode}/model.py` helpers.
-
-During the migration (Phase 1), classes are bootstrapped from the
-existing consteval cache via `<Class>.from_consteval(...)`. Phase 2
-adds `<Class>.from_state_dict(...)` for HF-driven loading. Phase 3
-deletes the codegen-derived `gemma4_{prefill,decode}/` files entirely.
-
-See docs/superpowers/specs/2026-04-25-gemma4-metal-alignment-design.md.
+Per-module classes own their ttnn.Tensor weights and emit the
+codegen-derived ttnn op sequences. Construction is HF-state_dict
+driven via `Gemma4ForCausalLM.from_state_dict(hf, mesh_device,
+is_decode=...)`; the runtime call path (`model(input_list)` →
+logits tensor) takes only the runtime input list (KV caches,
+position IDs, token IDs).
 """
 from gemma4.rms_norm import RMSNorm
 from gemma4.feed_forward import FeedForward
