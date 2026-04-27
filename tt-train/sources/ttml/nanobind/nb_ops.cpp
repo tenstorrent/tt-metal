@@ -9,6 +9,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <span>
+#include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
@@ -370,7 +371,19 @@ void py_module(nb::module_& m) {
 
     m.def(
         "rand",
-        &ttml::ops::rand,
+        [](const ttnn::Shape& shape,
+           float a,
+           float b,
+           std::optional<uint32_t> seed,
+           tt::tt_metal::DataType dtype,
+           tt::tt_metal::Layout layout,
+           ttnn::distributed::TensorToMesh* mesh_mapper) {
+            std::optional<tt::tt_metal::distributed::MeshMapperConfig> cfg;
+            if (mesh_mapper != nullptr) {
+                cfg = mesh_mapper->config();
+            }
+            return ttml::ops::rand(shape, a, b, seed, dtype, layout, cfg);
+        },
         nb::arg("shape"),
         nb::arg("a") = 0.0f,
         nb::arg("b") = 1.0f,
@@ -378,11 +391,23 @@ void py_module(nb::module_& m) {
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("layout") = tt::tt_metal::Layout::TILE,
-        nb::arg("mesh_mapper") = std::nullopt);
+        nb::arg("mesh_mapper") = nullptr);
 
     m.def(
         "randn",
-        &ttml::ops::randn,
+        [](const ttnn::Shape& shape,
+           float mean,
+           float std,
+           std::optional<uint32_t> seed,
+           tt::tt_metal::DataType dtype,
+           tt::tt_metal::Layout layout,
+           ttnn::distributed::TensorToMesh* mesh_mapper) {
+            std::optional<tt::tt_metal::distributed::MeshMapperConfig> cfg;
+            if (mesh_mapper != nullptr) {
+                cfg = mesh_mapper->config();
+            }
+            return ttml::ops::randn(shape, mean, std, seed, dtype, layout, cfg);
+        },
         nb::arg("shape"),
         nb::arg("mean") = 0.0f,
         nb::arg("std") = 1.0f,
@@ -390,7 +415,7 @@ void py_module(nb::module_& m) {
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("layout") = tt::tt_metal::Layout::TILE,
-        nb::arg("mesh_mapper") = std::nullopt);
+        nb::arg("mesh_mapper") = nullptr);
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));

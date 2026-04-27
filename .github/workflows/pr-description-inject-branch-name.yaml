@@ -35,6 +35,7 @@ jobs:
             // optional: false → required, "no run" is a signal something's missing
             const pipelines = [
               { name: "Sanity tests",                  workflow: "sanity-tests.yaml",               optional: false },
+              { name: "(Runtime) Sanity tests",         workflow: "runtime-sanity-tests.yaml",     optional: false },
               { name: "Blackhole post-commit",          workflow: "blackhole-post-commit.yaml",      optional: false },
               { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
               { name: "All Model Tests",               workflow: "all-model-tests.yaml",            optional: true  },
