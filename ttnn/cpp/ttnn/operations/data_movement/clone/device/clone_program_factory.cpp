@@ -94,7 +94,7 @@ ProgramDescriptor CloneOperation::create_descriptor(
 
     auto alignment = input.buffer()->alignment();
 
-    uint32_t src_cb_id = tt::CBIndex::c_4;
+    uint8_t src_cb_id = static_cast<uint8_t>(tt::CBIndex::c_4);
     uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
 
     ProgramDescriptor desc;
@@ -110,9 +110,9 @@ ProgramDescriptor CloneOperation::create_descriptor(
         }}},
     });
 
-    uint32_t dst_cb_id = src_cb_id;
+    uint8_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
-        dst_cb_id = tt::CBIndex::c_20;
+        dst_cb_id = static_cast<uint8_t>(tt::CBIndex::c_20);
         uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
         desc.cbs.push_back(CBDescriptor{
             .total_size = 2 * aligned_output_unit_size,
