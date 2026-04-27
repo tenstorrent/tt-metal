@@ -8,8 +8,9 @@ Retrieval-based Voice Conversion (RVC) is a technique for converting voice chara
 
 ## Files
 
-- `main.py`: Main RVC demo script with model implementation
+- `main.py`: Main RVC demo script with model implementation using TTNN operations
 - `README.md`: This file
+- `test_rvc_demo.py`: Test script to validate the implementation
 
 ## Usage
 
@@ -22,8 +23,8 @@ python main.py --help
 
 The RVC implementation includes:
 
-1. **Encoder**: Extracts features from input voice
-2. **Decoder**: Converts the encoded features to target voice
+1. **Encoder**: Extracts features from input voice using TTNN operations
+2. **Decoder**: Converts the encoded features to target voice using TTNN operations
 3. **TTNN Integration**: Uses TTNN operators for neural network operations
 
 ## TTNN Operators Used
@@ -31,8 +32,15 @@ The RVC implementation includes:
 - `matmul`: Matrix multiplication operations
 - `add`: Element-wise addition
 - `relu`: ReLU activation function
-- Various tensor manipulation operations
+- Various tensor manipulation operations using TTNN API
 
 ## Hardware Requirements
 
 This implementation requires Tenstorrent hardware with TTNN support.
+
+## How to Run Tests
+
+```bash
+cd models/demos/rvc
+python test_rvc_demo.py
+```

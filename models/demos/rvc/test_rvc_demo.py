@@ -10,18 +10,18 @@ import os
 # Add the project root to the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from models.demos.rvc.main import create_rvc_model
+# Import the module directly
+import models.demos.rvc.main
 
 if __name__ == "__main__":
     print("Testing RVC implementation...")
     
     # Test model creation
-    model = create_rvc_model(input_dim=128, hidden_dim=256, output_dim=128)
+    model = models.demos.rvc.main.create_rvc_model_tt(input_dim=128, hidden_dim=256, output_dim=128)
     print("✓ Model created successfully")
     
     # Test basic functionality
     import torch
-    import torch.nn as nn
     
     # Create dummy input
     batch_size = 1
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     
     # Forward pass
     with torch.no_grad():
-        output = model(dummy_input)
+        output = model.forward(dummy_input)
     
     # Check output shape
     assert output.shape == (batch_size, 128)

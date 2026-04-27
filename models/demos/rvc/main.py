@@ -36,71 +36,63 @@ from ttnn import (
     full,
     zeros,
     ones,
+    relu,
+    transpose,
 )
 
 # Import device management
 from ttnn.distributed import DeviceGrid
 
-# RVC Model Implementation
-class RVCEncoder(nn.Module):
-    """RVC encoder model with TTNN-compatible operations"""
-    
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super().__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-        
-        # Simple encoder layers
-        self.l1 = nn.Linear(input_dim, hidden_dim)
-        self.l2 = nn.Linear(hidden_dim, output_dim)
-        self.relu = nn.ReLU()
-        
-    def forward(self, x):
-        # Convert to torch tensor for now (will be replaced with TTNN ops)
-        x = self.relu(self.l1(x))
-        x = self.l2(x)
-        return x
+def create_tt_tensor(tensor_data, device=None):
+    """Create a TTNN tensor from PyTorch tensor"""
+    tt_tensor = from_torch(tensor_data, layout=ttnn.RowMajorLayout())
+    if device:
+        tt_tensor = ttnn.to_device(tt_tensor, device)
+    return tt_tensor
 
-class RVCDecoder(nn.Module):
-    """RVC decoder model with TTNN-compatible operations"""
+def create_rvc_model_tt(input_dim=128, hidden_dim=256, output_dim=128, device=None):
+    """Create RVC model using TTNN operations"""
+    # For this example, we'll create a simplified RVC model that uses TTNN operations
+    class RVCModelTT:
+        def __init__(self, input_dim, hidden_dim, output_dim, device):
+            self.input_dim = input_dim
+            self.hidden_dim = hidden_dim
+            self.output_dim = output_dim
+            self.device = device
+            
+            # We'll use TTNN tensor operations directly instead of PyTorch
+            # Create weight tensors
+            self.w1 = torch.randn(input_dim, hidden_dim) * 0.1
+            self.b1 = torch.zeros(hidden_dim)
+            self.w2 = torch.randn(hidden_dim, output_dim) * 0.1
+            self.b2 = torch.zeros(output_dim)
+            
+            # Convert to TTNN tensors
+            self.w1_tt = create_tt_tensor(self.w1, device)
+            self.b1_tt = create_tt_tensor(self.b1, device)
+            self.w2_tt = create_tt_tensor(self.w2, device)
+            self.b2_tt = create_tt_tensor(self.b2, device)
+            
+        def forward(self, x):
+            # Convert input to TTNN tensor
+            x_tt = create_tt_tensor(x, self.device)
+            
+            # First layer: matmul + bias + relu
+            x1 = matmul(x_tt, self.w1_tt)
+            x1 = add(x1, self.b1_tt)
+            x1 = relu(x1)
+            
+            # Second layer: matmul + bias
+            x2 = matmul(x1, self.w2_tt)
+            x2 = add(x2, self.b2_tt)
+            
+            # Convert back to PyTorch for output
+            return to_torch(x2)
     
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super().__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-        
-        # Simple decoder layers
-        self.l1 = nn.Linear(input_dim, hidden_dim)
-        self.l2 = nn.Linear(hidden_dim, output_dim)
-        self.relu = nn.ReLU()
-        
-    def forward(self, x):
-        # Convert to torch tensor for now (will be replaced with TTNN ops)
-        x = self.relu(self.l1(x))
-        x = self.l2(x)
-        return x
-
-class RVCModel(nn.Module):
-    """Full RVC model combining encoder and decoder"""
-    
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super().__init__()
-        self.encoder = RVCEncoder(input_dim, hidden_dim, hidden_dim)
-        self.decoder = RVCDecoder(hidden_dim, hidden_dim, output_dim)
-        
-    def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
-
-def create_rvc_model(input_dim=128, hidden_dim=256, output_dim=128):
-    """Create and return RVC model"""
-    return RVCModel(input_dim, hidden_dim, output_dim)
+    return RVCModelTT(input_dim, hidden_dim, output_dim, device)
 
 def main():
-    """Main function to demonstrate RVC model"""
+    """Main function to demonstrate RVC model using TTNN"""
     parser = argparse.ArgumentParser(description="RVC Model using TTNN")
     parser.add_argument("--device", type=str, default="cpu", help="Device to run on")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size")
@@ -112,8 +104,15 @@ def main():
     
     print(f"Creating RVC model with input_dim={args.input_dim}, hidden_dim={args.hidden_dim}, output_dim={args.output_dim}")
     
-    # Create model
-    model = create_rvc_model(args.input_dim, args.hidden_dim, args.output_dim)
+    # Initialize device
+    device = None
+    if args.device == "gpu":
+        device = ttnn.open_device(DeviceGrid(8, 4))
+    elif args.device == "cpu":
+        pass  # Use CPU
+    
+    # Create model using TTNN
+    model = create_rvc_model_tt(args.input_dim, args.hidden_dim, args.output_dim, device)
     
     # Create dummy input
     batch_size = args.batch_size
@@ -121,13 +120,16 @@ def main():
     
     print(f"Input shape: {dummy_input.shape}")
     
-    # Forward pass
+    # Forward pass using TTNN operations
     with torch.no_grad():
-        output = model(dummy_input)
+        output = model.forward(dummy_input)
     
     print(f"Output shape: {output.shape}")
     
-    print("RVC model example completed")
+    if device:
+        ttnn.close_device(device)
+    
+    print("RVC model example completed using TTNN operations")
 
 if __name__ == "__main__":
     main()
