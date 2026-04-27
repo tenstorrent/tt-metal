@@ -3029,7 +3029,7 @@ void kernel_main() {
         constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
         constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
         volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
-        unified_kernels::semaphore_inc(sync_sem_ptr, num_fabric_cores);
+        noc_semaphore_set(sync_sem_ptr, num_fabric_cores);
     }
 #endif
 #endif
