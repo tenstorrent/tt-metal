@@ -11,8 +11,9 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.demos.wormhole.bge_m3.tt.device_kernels import (
+    bge_m3_attention_output_compute_kernel_config,
+    bge_m3_attention_qkv_compute_kernel_config,
     bge_m3_linear_activation_memory_config,
-    bge_m3_matmul_compute_kernel_config,
     bge_m3_matmul_core_grid,
     bge_m3_sdpa_compute_kernel_config,
     bge_m3_weight_dram_memory_config,
@@ -31,11 +32,14 @@ _SDPA_Q_CHUNK_MAIN = 128
 _SDPA_K_CANDIDATES_MAIN = (256, 128)
 _SDPA_Q_CHUNKS_FLEX = (256, 128, 64, 32)
 _SDPA_K_CHUNKS_FLEX = (256, 128, 64, 32)
+_SDPA_B1S512_K_CHUNK = 128
 
 
-def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
+def _sdpa_chunks_for_seq_len(seq_len: int, batch_size: int | None = None) -> tuple[int, int]:
     """Q/K chunk sizes for SDPA. ``main`` uses fixed Q=128 for all 128-token-aligned lengths."""
     if seq_len % 128 == 0:
+        if seq_len == 512 and batch_size == 1:
+            return _SDPA_Q_CHUNK_MAIN, _SDPA_B1S512_K_CHUNK
         for k_chunk in _SDPA_K_CANDIDATES_MAIN:
             if k_chunk <= seq_len and seq_len % k_chunk == 0:
                 return _SDPA_Q_CHUNK_MAIN, k_chunk
@@ -49,7 +53,10 @@ def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
     return q_chunk, k_chunk
 
 
-def _sdpa_exp_approx_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice | None = None) -> bool:
+def _sdpa_exp_approx_for_seq_len(
+    seq_len: int,
+    mesh_device: ttnn.MeshDevice | None = None,
+) -> bool:
     """Wormhole: ``exp_approx_mode=True`` when ``seq_len`` is 128-aligned (incl. S8192). Short S32/S64: False.
 
     Blackhole: always False (exact softmax path) so S4096+ PCC stays above 0.94 on P150.
@@ -79,8 +86,12 @@ def _sdpa_compute_grid_for_seq_len(_seq_len: int, mesh_device: ttnn.MeshDevice |
     return _sdpa_storage_grid(mesh_device)
 
 
-def _sdpa_program_config_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice | None) -> ttnn.SDPAProgramConfig:
-    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len)
+def _sdpa_program_config_for_seq_len(
+    seq_len: int,
+    mesh_device: ttnn.MeshDevice | None,
+    batch_size: int | None = None,
+) -> ttnn.SDPAProgramConfig:
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(seq_len, mesh_device),
         q_chunk_size=q_chunk,
@@ -290,18 +301,17 @@ class BgeM3Attention(LightweightModule):
         sdpa_mask = attention_mask
         if sdpa_mask is not None:
             if len(sdpa_mask.shape) != 4:
-                raise ValueError(f"attention_mask must have rank 4 [B, 1, 1, S], got shape={sdpa_mask.shape}")
+                raise ValueError(f"attention_mask must have rank 4 [B, 1, S, S], got shape={sdpa_mask.shape}")
             if (
                 sdpa_mask.shape[0] != batch_size
                 or sdpa_mask.shape[1] != 1
-                or sdpa_mask.shape[2] != 1
+                or sdpa_mask.shape[2] != seq_len
                 or sdpa_mask.shape[3] != seq_len
             ):
                 raise ValueError(
-                    f"attention_mask must have shape [B, 1, 1, S]=[{batch_size}, 1, 1, {seq_len}], "
+                    f"attention_mask must have shape [B, 1, S, S]=[{batch_size}, 1, {seq_len}, {seq_len}], "
                     f"got shape={sdpa_mask.shape}"
                 )
-            sdpa_mask = ttnn.expand(sdpa_mask, [-1, -1, seq_len, -1])
 
             if cfg.score_dtype is not None and sdpa_mask.dtype != cfg.score_dtype:
                 sdpa_mask = ttnn.typecast(sdpa_mask, dtype=cfg.score_dtype)
@@ -311,7 +321,7 @@ class BgeM3Attention(LightweightModule):
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
 
         # Stage 4: encoder SDPA (chunk sizes must divide the actual sequence length, including S<128).
-        sdpa_program_config = _sdpa_program_config_for_seq_len(seq_len, cfg.mesh_device)
+        sdpa_program_config = _sdpa_program_config_for_seq_len(seq_len, cfg.mesh_device, batch_size=batch_size)
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -425,11 +435,11 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         )
 
     if config.qkv_compute_kernel_cfg is None:
-        to_set["qkv_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+        to_set["qkv_compute_kernel_cfg"] = bge_m3_attention_qkv_compute_kernel_config(
             mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
         )
     if config.output_compute_kernel_cfg is None:
-        to_set["output_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+        to_set["output_compute_kernel_cfg"] = bge_m3_attention_output_compute_kernel_config(
             mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
         )
     if config.score_compute_kernel_cfg is None:

@@ -26,7 +26,13 @@ class BgeM3Model(LightweightModule):
 
     def __init__(self, args, mesh_device, dtype, state_dict):
         super().__init__()
+        self.mesh_device = mesh_device
         self.pad_token_id = int(args.pad_token_id)
+        self._mask_dtype = _attention_mask_dtype(dtype, args.max_seq_len, args.max_batch_size)
+        self._trace_id = None
+        self._trace_device = None
+        self._trace_cq_id = 0
+        self._trace_output = None
 
         embedding_weights = build_embedding_weights(state_dict, ttnn.bfloat16)
         self.embeddings = BgeM3Embedding.from_config(
@@ -120,7 +126,7 @@ class BgeM3Model(LightweightModule):
         attention_mask: ttnn.Tensor | None,
     ) -> ttnn.Tensor | None:
         """
-        Return additive [B, 1, 1, S] with ``{0.0, -100000.0}`` (all-zero additive mask is a
+        Return additive [B, 1, S, S] with ``{0.0, -100000.0}`` (all-zero additive mask is a
         no-op for SDPA). We avoid a host sync / ``.item()`` early return so the path stays
         trace-safe (``ttnn.begin_trace_capture``) with unchanged numerics.
         """
@@ -137,9 +143,14 @@ class BgeM3Model(LightweightModule):
                 # HF convention: 1=keep, 0=pad.
                 pad_mask = ttnn.eq(attention_mask, 0)
             elif rank == 4:
-                if attention_mask.shape[1] != 1 or attention_mask.shape[2] != 1 or attention_mask.shape[3] != seq_len:
+                if (
+                    attention_mask.shape[1] != 1
+                    or attention_mask.shape[2] not in (1, seq_len)
+                    or attention_mask.shape[3] != seq_len
+                ):
                     raise ValueError(
-                        f"attention_mask rank-4 shape must be [B, 1, 1, S] with S={seq_len}, got {attention_mask.shape}"
+                        f"attention_mask rank-4 shape must be [B, 1, 1, S] or [B, 1, S, S] with S={seq_len}, "
+                        f"got {attention_mask.shape}"
                     )
                 additive_mask = attention_mask
             else:
@@ -155,8 +166,11 @@ class BgeM3Model(LightweightModule):
         else:
             return None
 
-        if additive_mask.dtype != self._MASK_DTYPE:
-            additive_mask = ttnn.typecast(additive_mask, self._MASK_DTYPE)
+        if additive_mask.shape[2] == 1:
+            additive_mask = ttnn.expand(additive_mask, [-1, -1, seq_len, -1])
+
+        if additive_mask.dtype != self._mask_dtype:
+            additive_mask = ttnn.typecast(additive_mask, self._mask_dtype)
 
         memory_config_fn = getattr(additive_mask, "memory_config", None)
         if callable(memory_config_fn) and memory_config_fn() != ttnn.DRAM_MEMORY_CONFIG:
@@ -209,6 +223,59 @@ class BgeM3Model(LightweightModule):
 
         return hidden_states
 
+    def capture_trace(
+        self,
+        input_ids: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+        token_type_ids: ttnn.Tensor | None = None,
+        position_ids: ttnn.Tensor | None = None,
+        *,
+        mesh_device=None,
+        cq_id: int = 0,
+    ) -> ttnn.Tensor:
+        """
+        Capture a fixed-shape encoder forward trace owned by this model instance.
+
+        Inputs must be long-lived device tensors whose shapes/layouts match future replay calls.
+        """
+        self.release_trace()
+
+        trace_device = mesh_device if mesh_device is not None else self.mesh_device
+        trace_id = ttnn.begin_trace_capture(trace_device, cq_id=cq_id)
+        trace_output = self.forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+        )
+        ttnn.end_trace_capture(trace_device, trace_id, cq_id=cq_id)
+        ttnn.synchronize_device(trace_device)
+
+        self._trace_id = trace_id
+        self._trace_device = trace_device
+        self._trace_cq_id = cq_id
+        self._trace_output = trace_output
+        return trace_output
+
+    def execute_trace(self, *, blocking: bool = False, synchronize: bool = True) -> ttnn.Tensor:
+        if self._trace_id is None or self._trace_device is None or self._trace_output is None:
+            raise RuntimeError("No BGE-M3 trace has been captured for this model instance")
+
+        ttnn.execute_trace(self._trace_device, self._trace_id, cq_id=self._trace_cq_id, blocking=blocking)
+        if synchronize:
+            ttnn.synchronize_device(self._trace_device)
+        return self._trace_output
+
+    def release_trace(self) -> None:
+        if self._trace_id is None:
+            return
+
+        ttnn.release_trace(self._trace_device, self._trace_id)
+        self._trace_id = None
+        self._trace_device = None
+        self._trace_cq_id = 0
+        self._trace_output = None
+
     @staticmethod
     def _require_rank2(tensor: ttnn.Tensor, name: str) -> None:
         if len(tensor.shape) != 2:
@@ -238,3 +305,14 @@ def _build_optional_layer_norm(
 
 
 BGEModel = BgeM3Model
+
+
+def _attention_mask_dtype(
+    dtype: ttnn.DataType,
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+) -> ttnn.DataType:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch == 1:
+        return dtype
+    return BgeM3Model._MASK_DTYPE
