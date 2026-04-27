@@ -324,9 +324,6 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 //
 // Proves: kernel_bindings_generated.h emits the sem:: namespace correctly, both
 // kernels' views agree on the sem ID, Metal 2.0 allocates the sem (on Gen1).
-//
-// A failure will (unfortunately) manifest as a hang.
-// Any outcome other than "test completes" indicates the name resolution is wrong:
 
 TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     auto mesh_device = devices_.at(0);
