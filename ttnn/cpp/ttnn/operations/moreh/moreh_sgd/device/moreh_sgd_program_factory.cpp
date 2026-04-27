@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <vector>
 
 #include "moreh_sgd_device_operation.hpp"
@@ -210,6 +211,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
     ComputeConfigDescriptor compute_config{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
@@ -237,15 +239,11 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    union {
-        float f;
-        uint32_t u;
-    } u_lr{}, u_momentum{}, u_dampening{}, u_weight_decay{}, u_one{};
-    u_lr.f = lr;
-    u_momentum.f = momentum;
-    u_dampening.f = dampening;
-    u_weight_decay.f = weight_decay;
-    u_one.f = 1.0f;
+    const uint32_t u_lr = std::bit_cast<uint32_t>(lr);
+    const uint32_t u_momentum = std::bit_cast<uint32_t>(momentum);
+    const uint32_t u_dampening = std::bit_cast<uint32_t>(dampening);
+    const uint32_t u_weight_decay = std::bit_cast<uint32_t>(weight_decay);
+    const uint32_t u_one = std::bit_cast<uint32_t>(1.0f);
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
@@ -266,11 +264,11 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
                 momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0u,
                 num_tiles_per_core,
                 tile_offset,
-                u_lr.u,
-                u_momentum.u,
-                u_dampening.u,
-                u_weight_decay.u,
-                u_one.u});
+                u_lr,
+                u_momentum,
+                u_dampening,
+                u_weight_decay,
+                u_one});
 
         writer_desc.runtime_args.emplace_back(
             core,
