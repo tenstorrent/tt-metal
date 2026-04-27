@@ -288,6 +288,7 @@ struct TilePaddedAlignmentTestParams {
     Shape shape;
     Shape padded_shape;
     DataType dtype;
+    tt::tt_metal::Alignment expected_alignment;
     tt::tt_metal::Shape2D expected_physical_shape;
 };
 
@@ -297,6 +298,8 @@ TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegressio
     const auto& params = GetParam();
     TensorLayout layout = TensorLayout::fromPaddedShape(
         params.dtype, Layout::TILE, DefaultMemoryConfig, params.shape, params.padded_shape);
+
+    EXPECT_EQ(layout.get_alignment(), params.expected_alignment);
 
     // The physical shape must match the expected value: it reflects the outer
     // dimension cumulative alignment correctly carrying the original padded
@@ -328,28 +331,32 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // Minimal reproducer: outer dim N padded from 1 -> 2, padded[-2]=64 > tile_h=32.
         TilePaddedAlignmentTestParams{
-            .shape = Shape{1, 2, 64, 32},
+            .shape = Shape{1, 2, 60, 30},
             .padded_shape = Shape{2, 2, 64, 32},
             .dtype = DataType::BFLOAT16,
+            .expected_alignment = tt::tt_metal::Alignment({256, 128, 32, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{256, 32}},
         // Overpadding on H/W.
         TilePaddedAlignmentTestParams{
-            .shape = Shape{1, 2, 16, 16},
+            .shape = Shape{1, 2, 18, 15},
             .padded_shape = Shape{2, 2, 64, 32},
             .dtype = DataType::BFLOAT16,
+            .expected_alignment = tt::tt_metal::Alignment({256, 128, 64, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{256, 32}},
         // Padding on C (dim -3) while N stays equal; padded[-2]=64 > 32.
         TilePaddedAlignmentTestParams{
-            .shape = Shape{3, 1, 64, 32},
+            .shape = Shape{3, 1, 60, 30},
             .padded_shape = Shape{3, 2, 64, 32},
             .dtype = DataType::BFLOAT16,
+            .expected_alignment = tt::tt_metal::Alignment({384, 128, 32, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{384, 32}},
 
         // padded[-2]=96 > 32 and outer-dim padding on N.
         TilePaddedAlignmentTestParams{
-            .shape = Shape{1, 3, 96, 32},
+            .shape = Shape{1, 3, 90, 30},
             .padded_shape = Shape{2, 3, 96, 32},
             .dtype = DataType::BFLOAT16,
+            .expected_alignment = tt::tt_metal::Alignment({576, 288, 32, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{576, 32}}));
 
 // `alignment_can_be_2D` branch for TILE: when legacy H/W padding is no larger than the minimum required for
