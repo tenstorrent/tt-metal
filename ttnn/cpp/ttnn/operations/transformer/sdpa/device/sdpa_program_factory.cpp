@@ -649,7 +649,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -1261,7 +1262,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             }
         }
 
-        log_info(
+        log_debug(
             tt::LogOp,
             "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
             mcast_chains,

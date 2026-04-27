@@ -24,19 +24,20 @@ Examples (Standalone Python):
     python generic_ops_tracer.py /path/to/script.py --output-dir ./my_traces
 """
 
-import sys
-import os
-import subprocess
-import json
+import argparse
 import copy
 import hashlib
+import json
+import logging
+import os
 import re
+import subprocess
+import sys
 import uuid
-from tqdm import tqdm
-import argparse
 from datetime import datetime
 from pathlib import Path
-import logging
+
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -814,7 +815,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
 
-        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params"] + extra_args
+        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--timeout=0", "--trace-params"] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
         cmd = [python_cmd, test_path, "--trace-params"] + extra_args
@@ -830,8 +831,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
 
     # Run the command with custom environment (always show live output now)
     # Use a custom command wrapper with tee to capture output while showing it live
-    import tempfile
     import re
+    import tempfile
 
     # Create a temp file to capture output
     tmp_output_fd, tmp_output_path = tempfile.mkstemp(suffix=".log", text=True)
@@ -841,10 +842,11 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         # Build command with tee to show output live AND save to file
         # Convert cmd list to properly quoted string for shell
         cmd_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
-        tee_cmd = f"{cmd_str} 2>&1 | tee {tmp_output_path}"
+        tee_cmd = f"set -o pipefail; {cmd_str} 2>&1 | tee {tmp_output_path}"
 
-        # Run with shell=True to use tee
-        result = subprocess.run(tee_cmd, shell=True, cwd=BASE_DIR, text=True, env=env)
+        # Run with shell=True to use tee; use bash for pipefail support so we
+        # get the pytest exit code instead of tee's (always-zero) exit code.
+        result = subprocess.run(tee_cmd, shell=True, executable="/bin/bash", cwd=BASE_DIR, text=True, env=env)
 
         # Read the captured output to parse test statistics
         with open(tmp_output_path, "r") as f:
@@ -906,6 +908,28 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     metadata_file = os.path.join(trace_dir, "_trace_metadata.json")
     with open(metadata_file, "w") as f:
         json.dump(metadata, f, indent=2)
+
+    # Persist test results as a sidecar JSON so CI can surface them in
+    # the GitHub job summary even when the trace step itself fails.
+    test_results_dir = os.path.dirname(output_dir) if output_dir.endswith(".json") else output_dir
+    test_results_dir = test_results_dir or "."
+    test_results_file = os.path.join(test_results_dir, "_test_results.json")
+    os.makedirs(test_results_dir, exist_ok=True)
+    try:
+        with open(test_results_file, "w") as f:
+            json.dump(
+                {
+                    "test_path": test_path,
+                    "exit_code": result.returncode,
+                    "passed": test_stats["passed"],
+                    "failed": test_stats["failed"],
+                    "total": test_stats["total"],
+                },
+                f,
+                indent=2,
+            )
+    except Exception as exc:
+        logger.warning("Failed to write test results sidecar: %s", exc, exc_info=True)
 
     return {
         "success": result.returncode == 0,
@@ -1459,8 +1483,17 @@ Examples (Import existing traces):
             # Fix memory config shard_spec entries in the master JSON
             fix_memory_config_in_json(master_file)
 
-        # Always return 0 (success) as long as we processed traces
-        # Test failures don't affect tracer success
+        # Fail the pipeline if the underlying test run had any failures.
+        # This ensures CI catches pytest failures instead of silently
+        # succeeding just because traces were collected.
+        if not args.load and not result.get("success", True):
+            stats = result.get("test_stats", {})
+            if stats.get("failed", 0) > 0:
+                print(f"\n❌ Failing because {stats['failed']} test(s) failed")
+            else:
+                print(f"\n❌ Failing because test process exited with code {result.get('exit_code', 1)}")
+            return 1
+
         return 0
 
     except Exception as e:

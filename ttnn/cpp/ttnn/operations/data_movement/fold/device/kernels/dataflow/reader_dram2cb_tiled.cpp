@@ -5,10 +5,8 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t tiles_per_channel_dim = get_compile_time_arg_val(0);
@@ -21,12 +19,12 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::Noc noc;
-
     // Initialize interleaved address generator for DRAM access
     constexpr auto src_args = TensorAccessorArgs<3>();
     const auto s = TensorAccessor(src_args, src_addr);
+
+    experimental::Noc noc;
+    experimental::CB cb_in0(cb_id_in0);
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;
@@ -34,13 +32,14 @@ void kernel_main() {
         // Reserve space in the circular buffer for a row of tiles
         for (uint32_t j = 0; j < tiles_per_width_dim; ++j) {
             cb_in0.reserve_back(tiles_per_channel_dim);
+            uint32_t l1_offset = 0;
 
             // Read each tile in the current row
             for (uint32_t k = 0; k < tiles_per_channel_dim; ++k) {
                 // Calculate tile index and read from DRAM to L1
                 uint32_t tile_index = tiles_per_width_dim * tiles_per_channel_dim * i + tiles_per_channel_dim * j + k;
-                noc.async_read<experimental::Noc::TxnIdMode::DISABLED, tile_bytes>(
-                    s, cb_in0, tile_bytes, {.page_id = tile_index}, {.offset_bytes = k * tile_bytes});
+                noc.async_read(s, cb_in0, tile_bytes, {.page_id = tile_index}, {.offset_bytes = l1_offset});
+                l1_offset += tile_bytes;
             }
 
             noc.async_read_barrier();

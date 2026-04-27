@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -19,6 +22,7 @@ void kernel_main() {
     uint32_t n = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t read_size = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
 
@@ -27,18 +31,20 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_id_in0);
+
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t page_idx = start_id;
     for (uint32_t i = 0; i < num_pages; ++i) {
-        cb_reserve_back(cb_id_in0, onepage);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb.reserve_back(onepage);
 #ifdef CN_RM
-        tt::data_movement::common::noc_async_read_sharded(l1_write_addr, s, page_idx, 0, read_size);
+        noc.async_read(s, cb, read_size, {.page_id = page_idx, .offset_bytes = 0}, {.offset_bytes = 0});
 #else
-        noc_async_read_page(page_idx, s, l1_write_addr);
+        noc.async_read(s, cb, page_size, {.page_id = page_idx}, {.offset_bytes = 0});
 #endif
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onepage);
+        noc.async_read_barrier();
+        cb.push_back(onepage);
         page_idx++;
         hw++;
         if (hw == HtWt) {

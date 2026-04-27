@@ -111,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, params.NUM_TILES_IN_BLOCK);
         for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
         {
-            _llk_math_eltwise_binary_(dest_idx);
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, ckernel::DEFAULT_TENSOR_SHAPE);
         }
         ++dest_idx;
     }
