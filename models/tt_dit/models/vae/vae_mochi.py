@@ -425,23 +425,23 @@ class ResBlock(Module):
 
         The GroupNorm kernel requires Ht % num_out_blocks == 0.  When
         batch_size varies (e.g. from T-chunking), a tuned num_out_blocks
-        value may no longer divide Ht.  Find the nearest divisor of Ht,
-        preferring slightly larger values (more blocks = smaller CBs per
-        iteration = less L1 pressure).
+        value may no longer divide Ht.  Search upward first (more blocks
+        = smaller CBs per iteration = less L1 pressure), then downward.
         """
         if num_out_blocks <= 0:
             return 1
         if Ht % num_out_blocks == 0:
             return num_out_blocks
-        # Search alternately up and down from the target to find the
-        # nearest divisor of Ht.
-        for delta in range(1, Ht):
-            up = num_out_blocks + delta
-            down = num_out_blocks - delta
-            if up <= Ht and Ht % up == 0:
-                return up
-            if down > 0 and Ht % down == 0:
-                return down
+        # Prefer more blocks to reduce per-iteration CB size and avoid
+        # L1 overflow.  Ht values with large prime factors (e.g.
+        # 4*199=796) have no divisors between 4 and 199; searching
+        # downward would pick 4 which overflows L1.
+        for candidate in range(num_out_blocks + 1, Ht + 1):
+            if Ht % candidate == 0:
+                return candidate
+        for candidate in range(num_out_blocks - 1, 0, -1):
+            if Ht % candidate == 0:
+                return candidate
         return 1
 
     def _run_norm(self, norm, x_tiled, batch_size, HW, num_out_blocks, compute_kernel_config=None):
