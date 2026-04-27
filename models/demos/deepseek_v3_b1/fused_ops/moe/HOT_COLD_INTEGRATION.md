@@ -4,29 +4,59 @@ Integrates the `matmul_expert` (hybrid SRAM + DRAM, compressed weights) kernels
 into the fused MoE kernel (`moe_kernel.cpp`). Requires a TP8 Megatron refactor
 of the routed-expert path.
 
-## 0. Status (2026-04-25)
+## 0. Status (2026-04-27)
 
 **Phase 1A — TP8 plumbing: ✅ COMPLETE**
 **Phase 1B — matmul_expert DRAM swap: ✅ COMPLETE (all 8 experts, DRAM-only)**
 **Phase 1C — rebase on pr42896 (new DRAM API): ✅ COMPLETE (anchor at PCC 0.9915)**
-**Phase 2A — op.py hot-expert infrastructure: 🔧 IN PROGRESS (stashed — see `stash@{1}`)**
-**Phase 2B — kernel SRAM dispatch wiring: 🔧 IN PROGRESS (stashed — see `stash@{0}`)**
-**Phase 2C — full SRAM pipeline integration (gather/reduce/mcast/down/add): 📋 PLANNED (see §9)**
+**Phase 2A — op.py hot-expert infrastructure: ✅ COMPLETE**
+**Phase 2B — kernel SRAM dispatch wiring: ✅ COMPLETE**
+**Phase 2C chunk 1 — SRAM gate/up + multi-expert gather: ✅ COMPLETE**
+**Phase 2C chunk 2 — multi-expert GatedReduce + SRAM down mcast: ✅ COMPLETE (no-hang, drained)**
+**Phase 2C chunk 3 — DRAM down updates + SRAM down_proj op: ✅ COMPLETE (no-hang, output produced)**
+**Phase 2C chunk 4 — 3-way EltwiseAdd: ✅ COMPLETE (no-hang)**
+**Phase 2C exit criteria — `sram_expert_1` PCC ≥ 0.9915: ❌ FAILING (current PCC ≈ 0.57)**
 
-Anchor variant `test_moe_fused_with_reduce[sram_expert_1]` reaches XFAIL
-("`mul_num_experts hardcoded to 8`") rather than hanging — the
-`cb_index` mcast race in DRAM `matmul_expert` is fixed (NCRISC `cb_wait_front` +
-TRISC mailbox forwarding for MATH/PACK; commit `9887b23dc28` rebased onto
-`origin/bliu/deepseek` as `da074120040`).
+### Current Status (2026-04-27)
+
+The end-to-end SRAM pipeline runs to completion: no hangs, no NaN explosions,
+3-way EltwiseAdd produces a finite output that propagates through ReduceToOne
+to ROOT1. **The remaining gap is correctness — `test_moe_fused_with_reduce
+[fabric_2d-no_hot-sram_expert_1-DM_DYNAMIC_NOC]` returns at PCC ≈ 0.57**
+(target ≥ 0.97). The test is still marked `xfail(strict=False)`.
+
+Companion variants:
+| Variant | PCC | Notes |
+|---------|-----|-------|
+| `no_hot, no_sram` (Phase 1B baseline, all DRAM) | **0.9915** ✅ | Validates DRAM cold path is intact under chunk-3+4 changes |
+| `no_hot, sram_expert_1` (rigged: 1 SRAM expert, 7 DRAM) | **0.5676** ❌ | Anchor failing — investigation underway |
+
+Three companion findings de-risk the gate kernel:
+- **Gate kernel preserves all 16 index bits** (corrected 2026-04-27 — see
+  `project_hot_cold_moe_gate_bit15_lost.md`). Standalone marker test confirms
+  bits 0..15 round-trip cleanly through DST/SFPU sort. The earlier "bit 14/15
+  lost" finding was a misread of test_moe_mlp.py output where unmarked
+  positions appeared identical to "marker zeroed."
+- **SRAM expert path runs to KERNEL END on every device** (DPRINT
+  instrumentation via `/run-test`). No deadlocks at gather, reduce, mcast,
+  or down_proj.
+- **Cold-only baseline (`no_hot, no_sram`) still passes at 0.9915**, so the
+  DRAM cold path is intact under chunks 3 and 4.
+
+The PCC≈0.57 failure is therefore a **data-flow / score-alignment issue
+in the routed math**, not a synchronization, hang, or gate-bit bug.
+Detailed analysis is in **§12** below; explicit next steps are in **§13**.
+
+### Phase 1B baseline (still healthy at top-of-tree)
 
 Anchor-test results on `test_moe_fused_with_reduce[blackhole-True-
-NOC_MODE.DM_DYNAMIC_NOC-True-fabric_2d]` (100 iterations, 8 devices):
+NOC_MODE.DM_DYNAMIC_NOC-True-fabric_2d]` (100 iterations, 8 devices) —
+the **DRAM-only** variant remains at:
 
-| Check                 | Baseline (pre-TP8) | After Phase 1B   |
-|-----------------------|--------------------|------------------|
-| Reduce output PCC     | 0.9911             | **0.9915**       |
-| Reference MoE PCC     | 0.9911             | **0.9915**       |
-| Uniform-scale robust? | n/a                | 0.9911 (varied)  |
+| Check                 | Baseline (pre-TP8) | After Phase 1B   | After Phase 2C   |
+|-----------------------|--------------------|------------------|------------------|
+| Reduce output PCC     | 0.9911             | **0.9915**       | **0.9915** ✅    |
+| Reference MoE PCC     | 0.9911             | **0.9915**       | **0.9915** ✅    |
 
 Pre-reduce per-device check (`test_moe_fused_no_reduce`): all 8 devices
 ≥ **0.9988 PCC** (was d2=0.9627, d5=0.9679 failing the 0.97 threshold
@@ -874,32 +904,31 @@ Kernel delta from Phase 1B to end-of-2C (cumulative across `stash@{1}`,
 
 ## 10. Open questions
 
-**Open (Phase 2C blockers)**
-- **Step 11a label**: §1.3 lists 11a as "DRAM down_proj gather (previously
-  step 10's role)" but the original step 10 was the down_proj **mcast**,
-  not gather. Original step 9 was gather. The user's directive ordered
-  11a before 11b mcast which suggests the gather meaning, but the
-  "previously 10" parenthetical could alternatively mean the gather is
-  being re-platformed via the same op that did mcast. Resolve in
-  chunk 3 (§2C.4) by reading the existing 9/10 wiring: if 11a is
-  **gather** then chunk 3 is a relabel-only on the cold path; if it's
-  **mcast** then 11b becomes a no-op duplicate. Update §1.3 and
-  §2C.3 once confirmed.
-- **GatedReduce vs new sibling op for routed (10a)**: extend the
-  existing `gated_reduce` with a `num_experts` loop (option a, §2C.1)
-  vs introducing `routed_gated_reduce` (option b). Decision tilts toward
-  (a) for CB topology reuse but the per-expert scalar feed needs
-  validation that it doesn't conflict with the shared-expert single-
-  expert default. Verify in chunk 2.
-- **SRAM down_proj core grid (12a)**: same 64-core grid as 6a/7a (reuse,
-  but each core needs ~129 KB for one hot down expert vs ~8 KB for
-  gate/up — only 1-2 hot experts fit alongside gate/up weights), or a
-  dedicated SRAM-down grid? Decide in chunk 3 once chunk 1's L1
-  measurement is in.
-- **3-input EltwiseAdd vs chained adds (13a/13b)**: extend
-  `eltwise_add.hpp` with `add_third_input` compile-time flag (preferred
-  for tile-regs efficiency) vs two sequential `EltwiseAdd` ops
-  (simpler, no SFPU/FPU constraint surprise). Decide in chunk 4.
+**Open (Phase 2C exit blockers — see §12 for details)**
+- **PCC ≈ 0.57 on `sram_expert_1`**. End-to-end SRAM pipeline runs but
+  produces wrong values. Four candidate root causes identified — see §12.
+  Concrete next steps in §13.
+- **DRAM activation indexing convention** (`matmul_expert_compressed_dram.hpp:586`):
+  `act_rd_ptr = in0_base + exp_i * num_tiles_k * in0_page_size` uses
+  `exp_i` (slot-aligned), but the upstream EltwiseMul produces a
+  **compacted** output where DRAM experts are packed at the front and
+  SRAM-skipped slots collapse. Memory `project_hot_cold_moe_chunk1a_compacted`
+  notes the same code was previously fixed to use `dram_idx`; either the
+  fix regressed or the memory is stale. Both possibilities tracked in §13.
+- **SRAM matmul `pack_tile` slot-alignment is dead code**
+  (`matmul_expert_compressed_sram.hpp:277`): code reads
+  `pack_tile(w, cb_out, exp_i * out_w + w)` clearly intending slot-aligned
+  writes, but `out_of_order_output=false` (default) makes `pack.h` ignore
+  the third arg and write sequentially. Result: SRAM gate/up output is
+  also compacted (valid at slot 0, stale tail) — not slot-aligned as the
+  variable names suggest. Need to either pass `<true>` template arg or
+  rename / comment the dead code.
+- **SRAM expert score scaling**: gated_reduce.hpp does `silu(g)*up` only;
+  no scalar multiply. Step 8 EltwiseMul (`is_gate_proj_core`) is
+  DRAM-only. SRAM down_proj is pure matmul. So the SRAM expert lands at
+  the 3-way add **unscaled**, while DRAM siblings carry their
+  `expert_scale`. With the rigged gate distributing scores ≈ 0.31 each,
+  SRAM contribution is ~3× too large.
 
 **Closed / resolved**
 - ✅ Cross-device ReduceToOne: `reduce_to_one_b1` shipped in Phase 1A
@@ -918,6 +947,21 @@ Kernel delta from Phase 1B to end-of-2C (cumulative across `stash@{1}`,
   `stash@{1}` mechanism uses `hot_expert_0..3` CTArgs to skip hot IDs
   on the DRAM path without needing the bit-15 encoding from upstream.
   Bit-15 path is still planned long-term but not blocking 2C.
+- ✅ Step 11a label: confirmed during chunk 3 — 11a is the cold-path
+  **gather** (existing op, retained), 11b is the cold-path mcast.
+  Section §1.3 labeling is correct as-shipped.
+- ✅ GatedReduce vs new sibling op (10a): chose option (a) — extended
+  `gated_reduce.hpp` with `NumExperts` template (`unified_kernels/
+  gated_reduce.hpp:46`). `num_experts=1` preserves shared-expert
+  semantics. **Note**: scalar multiply was NOT folded in; gated_reduce
+  still produces `silu(g)*up` with no scoring. See §12 for the
+  consequence.
+- ✅ SRAM down_proj core grid (12a): chose a dedicated `is_sram_down_compute_core`
+  set (separate from sram-gate/up). Avoids per-core L1 contention from
+  ~129 KB/expert down weights stacked alongside gate/up.
+- ✅ 3-input EltwiseAdd: implemented as a single fused op with a
+  3-input variant (chunk 4). No NaN propagation observed — finite
+  output reaches ReduceToOne.
 
 **Out of scope for Phase 2**
 - **Hot-expert selection policy**: chunks 1-4 hard-code `hot_expert_ids`
@@ -1010,3 +1054,341 @@ this updated as a reference so the next person doesn't re-hit them.
 - **Pipeline semaphore**: `cores_per_bank=1` (one streamer per bank
   for MoE) is the degenerate self-signal case — sem still compile-
   time-referenced but inactive.
+
+## 12. Current PCC failure analysis (2026-04-27)
+
+### 12.1 Failure summary
+| Variant | PCC | Result |
+|---------|-----|--------|
+| `no_hot, no_sram` (DRAM-only baseline) | 0.9915 | ✅ PASS — DRAM cold path intact |
+| `no_hot, sram_expert_1` (1 SRAM + 7 DRAM) | **0.5676** | ❌ FAIL — anchor target |
+
+The pipeline does not hang, no NaN explosions, finite output reaches
+ROOT1 ReduceToOne. The remaining gap is a math/data-flow bug, not a
+synchronization or memory-corruption bug. Gate kernel is verified
+correct (preserves all 16 bits — see `project_hot_cold_moe_gate_bit15_lost.md`).
+
+### 12.2 Test setup recap (`test_moe_fused_with_reduce[sram_expert_1]`)
+- `winning_experts_by_group = {0: [1, 4, 7, 11, 15, 19, 23, 28]}`
+- `sram_expert_ids = frozenset([1])` → expert **1** is the SRAM hot expert
+  (slot 0). Experts 4, 7, 11, 15, 19, 23, 28 stream from DRAM.
+- Rigged gate: zero gate weights, `bias[winning] = +10`, `bias[other] = -10`
+  → top-8 deterministically picks the 8 winners.
+- After `sigmoid → topk → normalize → × 2.5`, each winner's expert_scale
+  is roughly `2.5 / 8 ≈ 0.31` (clustered, not peaked).
+- `gate_indices_torch[expert_id % 16, expert_id // 16] = 0x8000 | slot`
+  encodes the SRAM flag for expert 1.
+
+### 12.3 Pipeline that runs end-to-end
+Steps that execute (no-hang, KERNEL END seen on every active core type):
+- **Step 6/6a, 7/7a**: DRAM gate/up matmul (compacted output) + SRAM gate/up
+  matmul (compacted-front output via sequential pack_tile).
+- **Step 6c/7c**: SRAM gate/up multi-expert gather → `sram_ag_dst_cb` /
+  `sram_bg_dst_cb` (face-view aligned to 8 slots).
+- **Step 8**: DRAM EltwiseMul (gate × up × scalar, num_experts=8 loop).
+- **Step 9-9e**: Shared expert path (down_mcast → matmul → residual → gather → mcast).
+- **Step 10a**: SRAM Routed GatedReduce (8 slots, `silu(g)*up`, no scaling).
+- **Step 10b**: SRAM Routed Down Mcast (sender → SRAM down compute cores).
+- **Step 11a/11b**: DRAM down_proj gather + mcast (cold-path gate/up output).
+- **Step 12a**: SRAM down_proj (`accum_experts=true`, reads SRAM-flagged slots).
+- **Step 12b**: DRAM down_proj (`accum_experts=true`, reads non-SRAM slots).
+- **Step 13**: 3-way EltwiseAdd (DRAM_down + shared + SRAM_down) — finite output.
+
+### 12.4 Four candidate root causes for PCC ≈ 0.57
+
+These are independent — any one would tank PCC. They were identified by
+walking the kernel data flow tile-by-tile for the `sram_expert_1` case
+(SRAM at top-8 position 0, DRAM at positions 1..7).
+
+#### Bug A — Score CB ↔ compacted DRAM data misalignment
+
+**Code**: `eltwise_mul.hpp:188-216` (TRISC) reads `cb_in0[e*tiles..]` and
+multiplies by `scalar[e]` for `e ∈ [0..7]`. `cb_in0` is the DRAM gate-proj
+output. DRAM gate output is **compacted** (see
+`matmul_expert_compressed_dram.hpp:884-905`): for `sram_expert_1`,
+slot 0 = DRAM expert at exp_i=1 (because exp_i=0 was SRAM and skipped),
+slot 1 = exp_i=2, …, slot 6 = exp_i=7, slot 7 = padding tile.
+
+**Score CB** (`mul_cb_scalar`) is populated by the gate kernel writing
+top-8 scores in `exp_i` order: scalar[0] = score(exp_i=0) =
+score(SRAM expert 1), scalar[1] = score(exp_i=1), etc.
+
+**Effect**: EltwiseMul applies scalar[0] (the SRAM expert's score) to
+DRAM data at slot 0 (the *first DRAM* expert, not the SRAM one). All 8
+products are off by one in the score dimension; the SRAM expert's
+score is wasted and the DRAM expert at exp_i=7 gets no score (its data
+sits in the unused tail).
+
+#### Bug B — DRAM down_proj reads activations slot-aligned, but Mul produces compacted output
+
+**Code**: `matmul_expert_compressed_dram.hpp:586`
+`act_rd_ptr = in0_base + exp_i * num_tiles_k * in0_page_size` — uses
+**`exp_i`** (slot-aligned), NOT `dram_idx` (compacted).
+
+**Effect**: For `sram_expert_1`, DRAM down_proj iterates `exp_i ∈ [0..7]`,
+skips `exp_i=0` (SRAM), then reads activations at `exp_i*offset` for
+exp_i=1..7. But the Mul output is compacted at slots 0..6 + padding.
+So at exp_i=1 it reads compacted slot 1 = expert at exp_i=2, etc. —
+weights and activations come from different experts.
+
+**Note**: memory `project_hot_cold_moe_chunk1a_compacted` claims this
+was previously fixed to `dram_idx`-based indexing. Either the fix
+regressed or the memory is stale. **Verify against `git log` for
+`matmul_expert_compressed_dram.hpp`.**
+
+#### Bug C — SRAM expert path applies NO score scaling
+
+**Code paths checked**:
+- `gated_reduce.hpp:42-150` — `ComputeArgs` has `group1_cb`, `group2_cb`,
+  `intermed_cb`, `out_cb`. **No scalar/score CB.** Body computes
+  `silu(sum(gate)) * sum(up)` per expert — no multiply by score.
+- `matmul_expert_compressed_sram.hpp:156-244` (accum_experts branch
+  used by SRAM down_proj) — pure matmul accumulating across SRAM experts.
+  No score field.
+- `moe_kernel.cpp:1664-1669` — step 8 EltwiseMul runs only on
+  `Core::Routed::is_gate_proj_core` (DRAM cores).
+- `grep "scale\|score"` in `unified_kernels/matmul_expert_compressed_sram.hpp`
+  → **no matches**.
+
+**Effect**: At step 13's 3-way EltwiseAdd, the SRAM expert lands as
+`silu(g)·up·W_down` (factor 1) while DRAM siblings arrive as
+`silu(g)·up·**score**·W_down` (factor ≈ 0.31). Golden expects all
+experts scaled equally. The SRAM expert is ~3× too large in the final sum.
+
+#### Bug D — SRAM matmul `pack_tile` slot-alignment is dead code
+
+**Code**: `matmul_expert_compressed_sram.hpp:277` calls
+`pack_tile(w, cb_out, exp_i * out_w + w)`. Variable names suggest
+the intent is to write each SRAM expert's output into `cb_out` at slot
+`exp_i * out_w` (slot-aligned). But `pack.h:38-42` documents:
+*"If `out_of_order_output` is false (the default), `pack_tile` always
+operates sequentially: it writes to the next tile index starting from
+index 0, and the `output_tile_index` parameter is ignored."*
+
+`grep "out_of_order_output\|pack_tile<true>"` in `deepseek_v3_b1/`
+returns **no matches**. So the third arg is silently ignored everywhere.
+
+**Effect**: SRAM gate/up output is **also compacted at the front**
+(slot 0 valid, slots 1..7 contain stale L1 data from previous
+allocations / prior iterations). Downstream consumers (`sram_ag_dst_cb`
+gather, then `gated_reduce` with `num_experts=8`) read the stale tail
+slots. `gated_reduce` at `e ≥ 1` computes `silu(stale)*stale` — these
+are nonsense values that are then discarded by SRAM down_proj's index
+filter, but they DO occupy `cb_out` slots (8 slots pushed per call).
+**For 1 SRAM expert this is benign** (down_proj only reads slot 0),
+but the slot-misalignment is a latent bug that breaks ≥2 SRAM experts.
+
+### 12.5 Why each bug matters for `sram_expert_1`
+
+| Bug | Affects 1-SRAM case? | Magnitude |
+|-----|-----------------------|-----------|
+| A — score/data off-by-one | YES | All 8 DRAM contributions misscaled; one score wasted on padding |
+| B — slot vs compacted | YES | DRAM down reads wrong-expert activations at every exp_i |
+| C — SRAM unscaled | YES | SRAM contribution ~3× too large at final add |
+| D — pack_tile sequential | Latent for n=1 | Becomes a correctness bug at ≥2 SRAM experts |
+
+Bugs A + B + C compound multiplicatively in the final reduce.
+PCC ≈ 0.57 is consistent with "right magnitude, wrong shape" —
+the kernel is computing expert outputs but assigning them to the
+wrong slots and weights.
+
+### 12.6 What we know works (do not re-investigate)
+- Gate kernel: bits 0..15 preserved (per `project_hot_cold_moe_gate_bit15_lost.md`).
+- DRAM-only path: PCC 0.9915 unchanged on `no_hot, no_sram` after all
+  of chunks 1-4 land. Chunks did not regress the cold path.
+- SRAM path runs to completion: KERNEL END seen on all active cores.
+- ReduceToOne and 3-way EltwiseAdd produce finite outputs.
+- Shared expert path: PCC 0.998+ per-device (chunk 11.3 fix held).
+
+## 13. 🚨 NEXT STEPS — PCC INVESTIGATION (resume here) 🚨
+
+**Status**: `test_moe_fused_with_reduce[fabric_2d-no_hot-sram_expert_1-DM_DYNAMIC_NOC]`
+returns **PCC ≈ 0.57** (target ≥ 0.97). Pipeline runs to completion;
+issue is in routed math / data-flow alignment.
+
+> **Investigation order is intentional**: each step both *fixes* a
+> candidate bug and *measures* the remaining gap, so by the end you know
+> exactly which bugs were load-bearing vs cosmetic. Do not skip the
+> bisection — it's how we'll know we're not chasing the wrong fix.
+
+### 13.1 Step 1 — Bisect: zero out the SRAM contribution and re-measure PCC
+
+**Goal**: separate "DRAM path is broken under SRAM split" (Bugs A+B)
+from "SRAM contribution is mis-applied" (Bugs C+D).
+
+**Action**: in `moe_kernel.cpp` step 13 (3-way EltwiseAdd), temporarily
+gate the `cb_in2` (SRAM down_proj) input to zero — either via a
+compile-time flag, or by writing zeros into `sram_down_proj_cb_out`
+just before the add.
+
+**Expected outcomes & interpretation**:
+- **PCC jumps to ≈ 0.94** (close to baseline minus 1/8 of the routed
+  math): SRAM contribution was the dominant error. Focus on Bug C
+  (score scaling) + Bug D (slot alignment).
+- **PCC stays near 0.57**: DRAM path is broken under the 1-SRAM split.
+  Focus on Bug A (score CB misalignment) + Bug B (slot vs compacted
+  activation indexing). SRAM correctness becomes secondary.
+- **PCC drops further** (e.g. 0.40): both paths contribute error in
+  the same direction; current SRAM contribution is partially canceling.
+  All four bugs in play.
+
+### 13.2 Step 2 — Verify the slot-vs-compacted DRAM activation indexing (Bug B)
+
+**Goal**: settle the contradiction between current code
+(`exp_i`-indexed at `matmul_expert_compressed_dram.hpp:586`) and memory
+`project_hot_cold_moe_chunk1a_compacted` (claims `dram_idx`).
+
+**Action**:
+1. `git log -p -- models/demos/deepseek_v3_b1/unified_kernels/matmul_expert_compressed_dram.hpp`
+   and search for `act_rd_ptr` / `dram_idx`. Find the commit that set
+   the current `exp_i` form. Determine if a `dram_idx` form ever
+   existed and was reverted, or if the memory was misfiled.
+2. If memory is stale: update `project_hot_cold_moe_chunk1a_compacted.md`
+   to note that the actual fix uses `exp_i` and explain why this works
+   in the chunk-1A context but NOT in the SRAM-routed context.
+3. **The bug is real either way** for `sram_expert_1`: confirm by adding
+   a DPRINT at `matmul_expert_compressed_dram.hpp:586` that prints
+   `(exp_i, raw_idx, act_rd_ptr - in0_base)` for a non-SRAM expert.
+   For sram_expert_1, expect to see exp_i=1..7 with offsets =
+   exp_i*num_tiles_k*page_size — confirming the slot-aligned read.
+4. **Fix candidate**: switch to `dram_idx`-tracked offset:
+   ```cpp
+   uint32_t dram_idx_for_act = 0;  // counts non-SRAM experts so far
+   for (exp_i...) {
+       if (is_sram_expert(...)) continue;
+       uint32_t act_rd_ptr = in0_base + dram_idx_for_act * num_tiles_k * in0_page_size;
+       // ... matmul ...
+       dram_idx_for_act++;
+   }
+   ```
+   This makes `act_rd_ptr` follow the **compacted** Mul output layout.
+
+### 13.3 Step 3 — Fix score-CB ↔ DRAM-data alignment (Bug A)
+
+**Goal**: scalar[g] in EltwiseMul must apply to the same expert whose
+`silu(g)*up` data is at `cb_in0[g*tiles..]`.
+
+Two equivalent fixes — **pick one**:
+
+**Option A1 — compact the score CB** (preferred, less kernel surgery):
+- In the gate kernel where it writes top-8 scores to the score CB,
+  skip slots whose `index[e]` has bit-15 set. Score writes become
+  scan-order over DRAM-only experts.
+- Set `mul_num_experts = num_dram_active = 8 - num_sram_active`.
+- DRAM EltwiseMul iterates `e ∈ [0..num_dram_active)` and reads
+  scalar[e] aligned with compacted data slot e.
+- Padding tile in DRAM Mul output goes away (only push num_dram_active
+  groups instead of 8).
+
+**Option A2 — slot-align the DRAM gate/up output**:
+- Switch DRAM matmul to `pack_tile<true>(...)` and write each expert's
+  tiles at `exp_i * per_core_n + sn` (instead of sequential).
+- SRAM-skipped slots become uninitialized — must be explicitly zeroed
+  by an empty `pack_tile` or a `cb_reserve_back+cb_push_back` of zeros.
+- EltwiseMul keeps `num_experts=8`, scalar[e] aligns with slot e.
+- More invasive but symmetric with Bug D's intended fix.
+
+**Recommend A1**: smaller diff, no zero-fill needed, also resolves
+the padding-tile concern (Bug A's secondary).
+
+### 13.4 Step 4 — Apply expert score to SRAM path (Bug C)
+
+**Goal**: SRAM expert lands at the 3-way add scaled by its
+`expert_scale`, matching DRAM siblings.
+
+**Action**: extend the routed `gated_reduce` (step 10a) to multiply by
+a per-expert score. The op already has `NumExperts` template plumbing
+(`gated_reduce.hpp:46`) — add a `scalar_cb` ComputeArg that's read once
+per expert iteration and folded into the existing `mul_tiles` step:
+
+```cpp
+// inside the e-loop after silu(g)*up:
+mul_tiles_init(args.intermed_cb, args.scalar_cb);
+cb_wait_front(args.scalar_cb, 1);
+mul_tiles(args.intermed_cb, args.scalar_cb, 0, 0, 0);
+cb_pop_front(args.scalar_cb, 1);
+```
+
+Plumb through `op.py`:
+- Add `cb_scalar` field to `setup_gated_reduce` for the routed variant
+  only (shared variant keeps no-scalar default via `num_experts=1`).
+- Source the scalar from the same expert_scale_mcast path the DRAM
+  side already uses — both sides read from the same score CB layout.
+- For sram_expert_1 (1 SRAM expert at exp_i=0), the scalar_cb is
+  read at slot 0 → correct score for expert 1.
+
+**Alternative**: do a separate EltwiseMul-style pass between gated_reduce
+and SRAM down_mcast. Adds an extra step but keeps gated_reduce simpler.
+Defer unless folded approach hits SFPU/FPU constraints.
+
+### 13.5 Step 5 — Decide on Bug D (slot-aligned SRAM pack)
+
+**Goal**: SRAM gate/up output should be either truly slot-aligned
+(via `pack_tile<true>`) OR the misleading code should be cleaned up
+to compact-only.
+
+**Action**: this is **latent for sram_expert_1** (only 1 SRAM expert →
+slot 0 = compacted slot 0 are the same). Two options:
+
+- **Defer**: add a `static_assert(num_sram_active <= 1)` somewhere
+  reachable from the SRAM path until ≥2 SRAM experts are tested.
+  Document the limitation in §0 and §10.
+- **Fix now**: switch SRAM matmul to `pack_tile<true>(w, cb_out, exp_i * out_w + w)`
+  and zero the unwritten slots before the matmul (single
+  `cb_reserve_back(cb_out, max_output_tiles)` followed by a fill_tile
+  loop, OR rely on the producer to clear cb_out up front).
+
+**Recommend defer until Steps 1-4 land**: with only 1 SRAM expert,
+this bug is invisible to the anchor test. Tackle when adding a
+2-SRAM-expert variant.
+
+### 13.6 Validation cadence
+After each step (1, 2, 3, 4):
+1. Run `no_hot, no_sram` (DRAM-only) — must stay at PCC 0.9915. If it
+   regresses, revert and root-cause the regression before continuing.
+2. Run `no_hot, sram_expert_1` — record new PCC.
+3. Update §0 status table with the new PCC and which bug was fixed.
+4. Update the relevant memory file (`project_hot_cold_moe_*`).
+
+**Target progression (rough estimate)**:
+| After step | Fix(es) applied | Expected PCC for sram_expert_1 |
+|------------|-----------------|--------------------------------|
+| Step 1 (bisect, SRAM zeroed) | (diagnostic only) | DRAM-only: see §13.1 |
+| Step 2 (Bug B fix) | DRAM activation compaction | ~0.75–0.85 (only DRAM-side error remains) |
+| Step 3 (Bug A fix) | Score-CB compaction | ~0.92–0.96 (DRAM math correct) |
+| Step 4 (Bug C fix) | SRAM gated_reduce scoring | **≥ 0.99** (target) |
+
+### 13.7 Files to touch (concrete reference)
+| Bug | Primary file | Lines |
+|-----|--------------|-------|
+| A | `unified_kernels/eltwise_mul.hpp` + gate score-CB writer | 188-216 + gate kernel |
+| A | `fused_ops/moe/op.py` (mul_num_experts, expert_scale_mcast_data_size_bytes) | 2682, 1668 |
+| B | `unified_kernels/matmul_expert_compressed_dram.hpp` | 586 |
+| C | `unified_kernels/gated_reduce.hpp` | 42-150 (extend ComputeArgs + e-loop) |
+| C | `fused_ops/moe/op.py` (setup_gated_reduce SRAM variant) | 1839-1853 |
+| D | `unified_kernels/matmul_expert_compressed_sram.hpp` | 277 |
+| validation | `tests/unit_tests/test_moe_mlp.py::test_moe_fused_with_reduce` | 905+ |
+
+### 13.8 Useful diagnostics already proven
+- `/run-test --no-instrument` with manual DPRINT in the kernel — the
+  KERNEL START / KERNEL END markers fire, so DPRINT in the data path
+  works.
+- Add per-tile DPRINT at the suspect site, e.g. inside DRAM down_proj:
+  ```cpp
+  DPRINT << "exp_i=" << exp_i
+         << " raw_idx=" << HEX() << raw_idx << DEC()
+         << " act_off=" << (act_rd_ptr - in0_base) / in0_page_size
+         << ENDL();
+  ```
+  Filter to one core (e.g. `12,9`) via `TT_METAL_DPRINT_CORES="(12,9)"`.
+- The **gate bit-marker test** (`test_deepseek_moe_gate_bit_marker`) is
+  the gold-standard pattern for proving a kernel preserves data. Apply
+  the same idea to other suspects: feed a known marker pattern in,
+  print what comes out at each step.
+
+### 13.9 Out of scope for now (defer until anchor passes)
+- Multi-SRAM-expert variants (`sram_expert_ids = [1, 5]`, etc.).
+- Hot-expert selection policy (currently hard-coded by test parametrize).
+- `table_idx_arr` simplification cleanup.
+- Phase 2D (upstream bit-15 producer between TopK and mcast_index).
+- Performance / latency measurement of the SRAM path.
