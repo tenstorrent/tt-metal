@@ -18,8 +18,9 @@ namespace ckernel::sfpu {
 // ======================================================================
 // LUT-based i1 via piecewise rational P(x)/Q(x)
 //
-// BF16: n5/d4, 1 segment(s), range [-10.0, 10.0]
-// FP32: n14/d14, 1 segment(s), range [-10.0, 10.0]
+// BF16: n7/d6, 1 segment(s), range [-10.0, 10.0], max 0.02 BF16 ULP
+// FP32: n14/d14, 1 segment(s), range [-10.0, 10.0], max 0.001 FP32 ULP
+// Both use parity (odd num / even den): P(x)=x*p(x²), Q(x)=q(x²)
 // ======================================================================
 
 #ifdef INP_FLOAT32
@@ -38,24 +39,31 @@ constexpr std::array<float, 32> I1_LUT = {
 
 #else
 
-constexpr uint32_t I1_NUM_DEGREE = 5;
-constexpr uint32_t I1_DEN_DEGREE = 4;
+// BF16: n7/d6 minimax-fitted via Chebyshev-node differential evolution.
+// Upgraded from n5/d4 (2.03 BF16 ULP) to n7/d6 (0.019 BF16 ULP).
+// Only +1 term each vs n5/d4; performance-neutral on memory-bound kernels.
+constexpr uint32_t I1_NUM_DEGREE = 7;
+constexpr uint32_t I1_DEN_DEGREE = 6;
 constexpr uint32_t I1_NUM_SEGMENTS = 1;
-constexpr uint32_t I1_LUT_SIZE = 13;
-constexpr std::array<float, 13> I1_LUT = {
+constexpr uint32_t I1_LUT_SIZE = 17;
+constexpr std::array<float, 17> I1_LUT = {
     {-1.0000000000e+01f,
      1.0000000000e+01f,
      0.0000000000e+00f,
-     5.0793987513e-01f,
+     4.9992737740e-01f,
      0.0000000000e+00f,
-     4.6934813261e-02f,
+     5.4503594600e-02f,
      0.0000000000e+00f,
-     2.4524198379e-03f,
+     1.6126291630e-03f,
+     0.0000000000e+00f,
+     2.0223499130e-05f,
      1.0000000000e+00f,
      0.0000000000e+00f,
-     -1.5700012445e-02f,
+     -1.6242591070e-02f,
      0.0000000000e+00f,
-     6.8308552727e-05f}};
+     1.0333660750e-04f,
+     0.0000000000e+00f,
+     -2.5076132990e-07f}};
 
 #endif
 
