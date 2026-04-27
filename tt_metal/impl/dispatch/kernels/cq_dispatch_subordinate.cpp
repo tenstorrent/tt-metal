@@ -56,8 +56,12 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uint32_t cb_end = cb_base + cb_size;
 
+// Dispatch-core-local L1 region assigned by DispatchMemMap via
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
+// REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
+// description; this kernel is the consumer side of the embedded program_id_fifo.
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static bool rt_profiler_enabled = false;
 

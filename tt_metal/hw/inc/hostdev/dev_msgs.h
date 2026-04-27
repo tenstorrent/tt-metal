@@ -100,8 +100,21 @@ struct realtime_profiler_timestamp_t {
     uint32_t header;   // Event header/metadata
 };
 
-// Real-time profiler message for D2H socket streaming (ping-pong buffering)
-// Placed after profiler_msg_t in mailboxes_t to allow for expansion
+// Real-time profiler message.
+//
+// Lives in a dedicated L1 region on the dispatch cores and the reserved RT-profiler tensix
+// core, carved by DispatchMemMap via CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG.
+// The base address is propagated to the relevant kernels through the REALTIME_PROFILER_MSG_ADDR
+// compile-time define.
+//
+// The struct holds everything the RT profiler subsystem needs — ping-pong timestamp buffers,
+// state, host<->device sync, and the program-id handoff FIFO between cq_dispatch BRISC
+// (producer) and cq_dispatch_subordinate NCRISC (consumer).
+//
+// The program_id_fifo is sized 32 entries because the dispatcher BRISC pushes to it
+// asynchronously from dispatch_s NCRISC, and BRISC may push up to ~32 kernels before
+// NCRISC drains the first one. Do NOT shrink this without confirming the producer/
+// consumer asynchrony bound.
 struct realtime_profiler_msg_t {
     volatile uint32_t config_buffer_addr;       // Address of D2H socket config buffer in L1
     volatile uint32_t realtime_profiler_state;  // Current state (RealtimeProfilerState enum)
@@ -113,13 +126,14 @@ struct realtime_profiler_msg_t {
     // Ping-pong buffer B
     struct realtime_profiler_timestamp_t kernel_start_b;  // Device kernel start time (buffer B)
     struct realtime_profiler_timestamp_t kernel_end_b;    // Device kernel stop time (buffer B)
-    // Program ID circular buffer
-    volatile uint32_t program_id_fifo[32];    // Circular buffer to hold program IDs
-    volatile uint32_t program_id_fifo_start;  // Read index (consumer)
-    volatile uint32_t program_id_fifo_end;    // Write index (producer)
     // Sync mechanism - host writes timestamp, device captures and responds
     volatile uint32_t sync_request;         // 1 = enter sync mode, 0 = exit
     volatile uint32_t sync_host_timestamp;  // Host writes timestamp here for sync
+    // Program-id handoff from cq_dispatch BRISC (producer) to cq_dispatch_subordinate NCRISC
+    // (consumer), both running on the same dispatch core. See struct-level comment above.
+    volatile uint32_t program_id_fifo[32];    // Circular buffer to hold program IDs
+    volatile uint32_t program_id_fifo_start;  // Read index (consumer)
+    volatile uint32_t program_id_fifo_end;    // Write index (producer)
 };
 
 // Messages for host to tell brisc to go
@@ -458,7 +472,9 @@ struct mailboxes_t {
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
-    struct realtime_profiler_msg_t realtime_profiler;  // Placed after profiler to allow for expansion
+    // realtime_profiler_msg_t is not stored in mailboxes_t. It lives in a dispatch-core-local
+    // L1 region carved by CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG and is addressed
+    // through the REALTIME_PROFILER_MSG_ADDR compile-time define (see dev_msgs.h struct def).
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().

@@ -19,8 +19,10 @@ constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 // Program ID FIFO size
 constexpr uint32_t PROGRAM_ID_FIFO_SIZE = 32;
 
-// Append a program ID to the circular buffer.
+// Append a program ID to the circular buffer embedded in realtime_profiler_msg_t.
 // Returns true if successful, false if the buffer is full.
+// The mailbox (including this FIFO) lives in dispatch-core-local L1, assigned by
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG.
 FORCE_INLINE
 bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox, uint32_t program_id) {
     uint32_t end = mailbox->program_id_fifo_end;
@@ -36,7 +38,7 @@ bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox,
     return true;
 }
 
-// Pop a program ID from the circular buffer.
+// Pop a program ID from the circular buffer embedded in realtime_profiler_msg_t.
 // Returns true if successful (and stores the value in *program_id), false if the buffer is empty.
 FORCE_INLINE
 bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox, uint32_t* program_id) {
