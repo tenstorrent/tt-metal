@@ -970,19 +970,34 @@ async function startVideo() {
   // range-cache keyed on the bare URL.
   mainEl.src = `${location.origin}/source.mp4?t=${Date.now()}`;
   mainSrc = mainEl;
-  const ready = new Promise((resolve) => {
+
+  // Open the SSE FIRST so dets start landing in the buffer before the
+  // video starts playing. Without this, the video plays for ~1 s before
+  // the first SSE message arrives, and the overlay is blank during that
+  // window — visible as "boxes pop in late" at the start of the demo.
+  openDetsStream();
+  const firstDets = new Promise((resolve) => {
+    const startT = performance.now();
+    const i = setInterval(() => {
+      // _markDetsArrival sets _detsLastT to performance.now() each msg.
+      // Resolve as soon as we see ANY dets land, or after 5 s as a backstop.
+      if (_detsLastT && _detsLastT > startT) { clearInterval(i); resolve(); }
+      else if (performance.now() - startT > 5000) { clearInterval(i); resolve(); }
+    }, 50);
+  });
+
+  const videoReady = new Promise((resolve) => {
     const done = () => { mainEl.removeEventListener("loadeddata", done); mainEl.removeEventListener("playing", done); resolve(); };
     mainEl.addEventListener("loadeddata", done, { once: true });
     mainEl.addEventListener("playing", done, { once: true });
     setTimeout(resolve, 8000);
   });
+  // Wait for both: first dets in the buffer AND the video element ready to
+  // play. Then start playback. This eliminates the visible "video plays
+  // without boxes" gap at the start of the demo.
+  showSwitch("Waiting for first detection…");
+  await Promise.all([firstDets, videoReady]);
   try { await mainEl.play(); } catch (_e) { /* autoplay quirks */ }
-  await ready;
-
-  // Start SSE + per-frame overlay lookup AFTER the <video> is wired up so
-  // the very first presented frame can already pick up a det (pipeline
-  // begins inferring as soon as the supervisor restart returned 200).
-  openDetsStream();
   if (typeof mainEl.requestVideoFrameCallback === "function") {
     videoRvfcHandle = mainEl.requestVideoFrameCallback(onVideoFrameTick);
   } else {

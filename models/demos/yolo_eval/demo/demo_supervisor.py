@@ -172,27 +172,39 @@ async def _await_pipeline_ready(
     budget_s: float = 90.0,
     proc: Optional[subprocess.Popen] = None,
 ) -> tuple[bool, Optional[int]]:
-    """Poll the pipeline's HTTP root until it answers 200.
+    """Poll the pipeline's HTTP root until it answers 200 AND the pipeline
+    has signalled stage="ready" via its stage file.
+
+    Why both: the HTTP server binds right after the runner is built, but the
+    prep worker still needs to pre-decode the source video (~8 s for the 4 K
+    file). If we returned ready on HTTP probe alone, the browser would load
+    `/source.mp4` and start playing while no dets are flowing yet — the
+    visible "video plays without boxes" gap. The "ready" stage marker is
+    written by the main loop after the first prep frame lands, which is when
+    dets are about to start flowing within milliseconds.
 
     Returns ``(ready, exit_code)``. If ``proc`` is provided and the child
     exits during the wait, we return ``(False, exit_code)`` immediately
-    instead of waiting the full ``budget_s`` — this drops failure detection
-    from ~90 s to ~0.5 s for segfault-on-init crashes.
+    instead of waiting the full ``budget_s``.
     """
     url = f"http://{_connect_host(host)}:{port}/"
     t0 = time.time()
+    http_ok = False
     async with ClientSession(timeout=ClientTimeout(total=2.0)) as sess:
         while time.time() - t0 < budget_s:
             if proc is not None:
                 rc = proc.poll()
                 if rc is not None:
                     return False, rc
-            try:
-                async with sess.get(url) as r:
-                    if r.status == 200:
-                        return True, None
-            except Exception:
-                pass
+            if not http_ok:
+                try:
+                    async with sess.get(url) as r:
+                        if r.status == 200:
+                            http_ok = True
+                except Exception:
+                    pass
+            if http_ok and _read_stage(port) == "ready":
+                return True, None
             await asyncio.sleep(0.5)
     return False, (proc.poll() if proc is not None else None)
 

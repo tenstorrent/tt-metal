@@ -1790,6 +1790,12 @@ def run_sahi_640_pipelined(args):
             f"{TAG} WebRTC ingress: http://{args.host}:{args.port}/offer  " f"ingress={frame_w}x{frame_h}",
             flush=True,
         )
+        # Camera mode: no source-driven first frame — readiness IS the bridge
+        # being up and ready to accept browser offers. Without this, the
+        # supervisor's stage="ready" gate would time out (browser can't stream
+        # camera before the user clicks Live Camera, but supervisor needs to
+        # flip ready before the user even sees the page is loaded).
+        _write_init_stage(int(args.port), "ready")
     elif args.serve and getattr(args, "serve_split", False) and not is_image:
         # Split delivery: browser plays the raw source file natively (no
         # server-side re-encode), detections stream over /dets SSE.
@@ -1998,6 +2004,11 @@ def run_sahi_640_pipelined(args):
             f"pp={shm_timings[3].item():.1f})]",
             flush=True,
         )
+        # Signal full readiness — first prep frame is in shm and we're about
+        # to enter the pipelined main loop. Supervisor's _await_pipeline_ready
+        # waits for this stage so the browser doesn't get state="ready" while
+        # the prep worker is still pre-decoding the source video (~8 s gap).
+        _write_init_stage(int(args.port), "ready")
 
         # --- Pipelined execution (D2H/compute overlap via pre-allocated staging) ---
         print(f"{TAG} Using pipelined execution (D2H/compute overlap)", flush=True)

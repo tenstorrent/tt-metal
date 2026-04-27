@@ -836,6 +836,9 @@ def run_sahi_5frame_pipelined(args):
             f"(read={shm_timings[1].item():.1f} sp={shm_timings[4].item():.1f})",
             flush=True,
         )
+        # Signal full readiness so the supervisor doesn't flip state="ready"
+        # while the prep worker is still pre-decoding 8 sources concurrently.
+        _write_init_stage(int(args.port), "ready")
 
         while not stop:
             t_batch_start = time.perf_counter()
