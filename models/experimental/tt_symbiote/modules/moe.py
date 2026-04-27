@@ -29,6 +29,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
+from models.experimental.tt_symbiote.core import run_config as _run_config
 from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled, trace_disabled
 import math
 
@@ -1840,8 +1841,31 @@ class TTNNDeepseekV2MoE(TTNNModule):
                 return self._fallback_torch_layer(inp)
 
 
+@trace_enabled
 class TTNNDeepseekV2MoETraced(TTNNDeepseekV2MoE):
     _bypass_tensor_wrapping = True
+
+    @staticmethod
+    def _get_seq_len(hidden_states):
+        hidden_states = _unwrap_ttnn(hidden_states)
+        shape = list(hidden_states.shape)
+        if len(shape) == 3:
+            return shape[1]
+        if len(shape) == 4:
+            return shape[2]
+        return None
+
+    def call(self, *args, **kwds):
+        hidden_states = args[0] if len(args) > 0 else kwds.get("hidden_states", None)
+        seq_len = self._get_seq_len(hidden_states) if hidden_states is not None else None
+        if seq_len is not None and seq_len > 1:
+            was_tracing = _run_config._TRACE_RUNNING
+            _run_config._TRACE_RUNNING = True
+            try:
+                return super().call(*args, **kwds)
+            finally:
+                _run_config._TRACE_RUNNING = was_tracing
+        return super().call(*args, **kwds)
 
     def forward(self, hidden_states):
         return TTNNDeepseekV2MoE.forward(self, hidden_states)
@@ -1860,12 +1884,8 @@ class TTNNDeepseekV2MoETraced(TTNNDeepseekV2MoE):
         topk_idx, topk_weight, _ = self.gate(hidden_states)
         topk_idx = _unwrap_ttnn(topk_idx)
         topk_weight = _unwrap_ttnn(topk_weight)
-        topk_idx = topk_idx[:, :, : self.num_experts_per_tok]
-        topk_weight = topk_weight[:, :, : self.num_experts_per_tok]
-        if len(topk_idx.shape) == 3:
-            topk_idx = ttnn.reshape(topk_idx, (batch * seq, self.num_experts_per_tok))
-        if len(topk_weight.shape) == 3:
-            topk_weight = ttnn.reshape(topk_weight, (batch * seq, self.num_experts_per_tok))
+        topk_idx = ttnn.reshape(topk_idx, (batch * seq, self.num_experts_per_tok))
+        topk_weight = ttnn.reshape(topk_weight, (batch * seq, self.num_experts_per_tok))
 
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
         routed_output = _unwrap_ttnn(routed_output)
