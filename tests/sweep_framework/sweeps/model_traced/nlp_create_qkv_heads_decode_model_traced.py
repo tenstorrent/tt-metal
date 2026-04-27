@@ -10,7 +10,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
+    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -18,7 +18,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
@@ -43,11 +43,25 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
 
 
 def run(
@@ -69,12 +83,14 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # build_op_kwargs filters memory_config by default. If the master trace had it,
-    # add it back so the sweep call matches.
-    if "memory_config" in kwargs and kwargs["memory_config"] is not None and kwargs["memory_config"] != "__ABSENT__":
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
-
-        op_kwargs["memory_config"] = parse_dict_value("memory_config", kwargs["memory_config"])
+    # Re-inject memory_config from kwargs (build_op_kwargs strips it by default)
+    mc_raw = kwargs.get("memory_config")
+    if mc_raw is not None and "memory_config" not in op_kwargs:
+        parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+    elif output_memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = output_memory_config
 
     if isinstance(input_a_shape, (tuple, list)):
         shape = tuple(input_a_shape)
