@@ -1111,7 +1111,8 @@ void py_module(nb::module_& mod) {
             Raises:
                 RuntimeError: If the distributed context has not been initialized.
         )doc");
-    // Sub-context API (split MPI world). See Subcontext.md.
+    // Sub-context API for split MPI worlds. Returns the sub-context identifier
+    // assigned by tt-run when rank bindings compose multiple overlays.
     mod.def(
         "subcontext_id",
         []() -> std::optional<int> {
