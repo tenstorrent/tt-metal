@@ -484,11 +484,11 @@ TEST_F(ParallelHeartbeatPollFixture, ParallelBulkHeartbeatPollBeatsSequential) {
             const float expected_val = static_cast<float>(slice_idx);
             for (size_t elem_idx = 0; elem_idx < slice_size; elem_idx++) {
                 const size_t flat_idx = static_cast<size_t>(slice_idx) * slice_size + elem_idx;
-                ASSERT_EQ(data[flat_idx].to_float(), expected_val)
+                ASSERT_EQ(static_cast<float>(data[flat_idx]), expected_val)
                     << "[GAP-9] AllGather data corruption at col=" << col
                     << " flat_idx=" << flat_idx
                     << " expected=" << expected_val
-                    << " actual=" << data[flat_idx].to_float()
+                    << " actual=" << static_cast<float>(data[flat_idx])
                     << " — stale ERISC NOC write after SIGKILL + FIX AR parallel poll restore";
             }
         }

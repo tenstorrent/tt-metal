@@ -320,7 +320,6 @@ TEST_F(ChannelsNotReadyLifecycleFixture, FlagIsSetAfterPartialMeshQuiesceThenCle
     log_info(tt::LogTest, "[GAP-10] Phase 7: AllGather on full mesh — verifying no spurious GTEST_SKIP");
 
     const int num_full_devices = static_cast<int>(mesh_device_->get_devices().size());
-    const int full_cols = static_cast<int>(system_mesh_shape.mesh_size());
     // system_mesh_shape may be NxM; the total device count equals mesh_size().
     // For the AllGather we use a 1xN view of the flattened device list, placing
     // each device in its own 1x1 submesh by linear index within the full mesh.
