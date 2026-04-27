@@ -20,10 +20,16 @@ def _safe_audio_path(path: str, *, must_exist: bool) -> Path:
     p = Path(path).expanduser()
     if ".." in p.parts:
         raise ValueError(f"Path must not contain '..': {path!r}")
-    p = p.resolve()
-    if must_exist and not p.is_file():
+    resolved = p.resolve()
+
+    allowed_roots = (Path.cwd().resolve(), Path.home().resolve(), Path("/tmp").resolve())
+    if not any(root == resolved or root in resolved.parents for root in allowed_roots):
+        roots = ", ".join(str(root) for root in allowed_roots)
+        raise ValueError(f"Path must resolve under one of: {roots}")
+
+    if must_exist and not resolved.is_file():
         raise FileNotFoundError(path)
-    return p
+    return resolved
 
 
 def detect_bleed(

@@ -141,8 +141,6 @@ def main():
     # Hook to capture generated tokens (all 16 codebooks)
     official_all_codes = []
 
-    original_generate_loop = tts_model.talker.generate
-
     # Capture the final talker result which contains all codec_ids
     def capture_results(module, args, kwargs, output):
         if hasattr(output, "hidden_states") and output.hidden_states is not None:
