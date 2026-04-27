@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass [0-9]|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|teardown:.*relay|canary|force.reset)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -110,22 +110,24 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]' "$CLEAN" | \
-grep -iE '(info|warning|error).*(Metal|Test)' | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|pre-launch|deferred|degraded' "$CLEAN" | \
+grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re
 seen = set()
 for line in sys.stdin:
     line = line.rstrip()
-    msg = re.sub(r'^.*\|\s*(Metal|Test)\s*\|\s*', '', line)
+    msg = re.sub(r'^.*\|\s*(Metal|Test|Always)\s*\|\s*', '', line)
     msg = msg.replace('quiesce_and_restart_fabric_workers: ', '')
     msg = msg.replace('wait_for_fabric_workers_ready: ', '')
+    msg = msg.replace('launch_eth_cores_for_quiesce: ', 'launch_eth: ')
     # Dedup
     key = re.sub(r'Device \d+', 'Dev N', msg)
     key = re.sub(r'eth_chan \d+', 'eth_chan N', key)
     key = re.sub(r'chan \d+', 'chan N', key)
     key = re.sub(r'logical \([^)]+\)', 'logical (N,N)', key)
-    is_important = bool(re.search(r'(complete|entering|skip|failed|timeout|deadbeef|summary)', msg, re.I))
+    key = re.sub(r'0x[0-9a-fA-F]+', '0xNN', key)
+    is_important = bool(re.search(r'(complete|entering|skip|failed|timeout|deadbeef|SUMMARY|Pass-0.*complete|deferred|degraded|FIX AC)', msg, re.I))
     if not is_important and key in seen:
         continue
     seen.add(key)
@@ -708,6 +710,13 @@ FIX_W=$(grep -cE 'FIX W|Phase 5b.*all.*truly.*unhealthy.*stuck at 0x0|all.*dead.
 FIX_AA=$(grep -ciE 'FIX AA|relay path broken.*skipping AllGather|skipping AllGather' "$CLEAN" 2>/dev/null || echo 0)
 FIX_V=$(grep -cE 'FIX V|Setting fabric_relay_path_broken_=true to skip relay ops in subsequent quiesce|Phase 5.*timeout.*0x0.*non-MMIO|status still 0x0 on non-MMIO device' "$CLEAN" 2>/dev/null || echo 0)
 RELAY_RESTORED=$(grep -c 'relay-broken flag reset by configure_fabric' "$CLEAN" 2>/dev/null || echo 0)
+# FIX-1: MMIO device Phase 5 timeout now also sets fabric_relay_path_broken_ (removed !is_mmio_capable() guard)
+FIX_1_MMIO=$(grep -cE 'Setting fabric_relay_path_broken_=true|Phase 5.*timeout.*0x0.*MMIO|fabric_relay_path_broken_.*MMIO' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AS: Pass-0 canary poll events (per-channel polling before write_launch_msg)
+FIX_AS_PASS0=$(grep -cE 'Pass-0 \(FIX AS\)|Pass-0 \(FIX AR\+AS\) complete' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AS_TIMEOUT=$(grep -cE 'Pass-0.*timed out|canary not seen|newly.dead.*FIX AS' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AC: teardown MMIO ETH reset events
+FIX_AC_FIRES=$(grep -cE 'FIX AC' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -764,6 +773,18 @@ if [ "${FIX_V:-0}" -gt 0 ]; then
 fi
 if [ "${RELAY_RESTORED:-0}" -gt 0 ]; then
     echo "  => [RELAY RESTORED] relay-broken flag cleared by configure_fabric — UMD relay path restored (${RELAY_RESTORED} event(s))"
+fi
+if [ "${FIX_1_MMIO:-0}" -gt 0 ]; then
+    echo "  => [FIX-1] MMIO device Phase 5 timeout set fabric_relay_path_broken_ (${FIX_1_MMIO} event(s)) — FIX AC teardown path should have fired"
+fi
+if [ "${FIX_AS_PASS0:-0}" -gt 0 ]; then
+    echo "  => [FIX AS] Pass-0 canary poll fired (${FIX_AS_PASS0} event(s)) — force-reset channels polling for UMD canary before write_launch_msg"
+fi
+if [ "${FIX_AS_TIMEOUT:-0}" -gt 0 ]; then
+    echo "  => [FIX AS TIMEOUT] Pass-0 canary poll timed out on ${FIX_AS_TIMEOUT} channel(s) — channels marked newly-dead; degraded mesh"
+fi
+if [ "${FIX_AC_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AC] teardown ETH reset path fired (${FIX_AC_FIRES} event(s)) — MMIO ETH cores PCIe-reset at process teardown"
 fi
 echo ""
 echo "========================================================================"

@@ -215,6 +215,10 @@ run_t3000_ttnn_tests() {
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
   # GAP-25: Back-to-back AllGather without explicit sync (FIX AE/AF)
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
+  # GAP-26: FIX AS canary poll timeout → newly-dead graceful degradation (FIX AS sad-path)
+  timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
+  # GAP-27: FIX AV — non-MMIO sysmem_manager reset prevents stale in-flight counter
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap27_fixav_nonmmio_sysmem_reset.py::test_gap27_fixav_nonmmio_sysmem_reset ; record_test
 
   # Record the end time
   end_time=$(date +%s)
