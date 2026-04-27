@@ -479,10 +479,16 @@ struct SDPATestConfig {
 void run_sdpa_test(const SDPATestConfig& config) {
     using namespace ttml;
 
+    ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
+    ASSERT_GT(config.num_key_heads, 0U) << "num_key_heads must be greater than zero";
+    const uint32_t effective_value_dim = config.value_dim > 0 ? config.value_dim : config.key_value_dim;
+    ASSERT_EQ(config.query_dim % config.num_query_heads, 0U) << "query_dim must be divisible by num_query_heads";
+    ASSERT_EQ(config.key_value_dim % config.num_key_heads, 0U) << "key_value_dim must be divisible by num_key_heads";
+    ASSERT_EQ(effective_value_dim % config.num_key_heads, 0U) << "value_dim must be divisible by num_key_heads";
+
     // Generate already split-by-heads tensors directly
     const uint32_t head_dim_q = config.query_dim / config.num_query_heads;
     const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
-    const uint32_t effective_value_dim = config.value_dim > 0 ? config.value_dim : config.key_value_dim;
     const uint32_t head_dim_v = effective_value_dim / config.num_key_heads;
 
     auto& rng = ttml::autograd::ctx().get_generator();

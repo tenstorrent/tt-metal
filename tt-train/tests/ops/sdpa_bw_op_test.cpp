@@ -498,14 +498,22 @@ struct SDPABackwardTestConfig {
 void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     using namespace ttml;
 
+    ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
+    ASSERT_GT(config.num_kv_heads, 0U) << "num_kv_heads must be greater than zero";
+    // In the BW test config, query_dim and key_value_dim are already per-head dims.
+    // value_dim (when > 0) is a TOTAL dim that gets divided by num_kv_heads.
+    // When value_dim == 0, V uses the same per-head dim as K.
+    if (config.value_dim > 0) {
+        ASSERT_EQ(config.value_dim % config.num_kv_heads, 0U) << "value_dim must be divisible by num_kv_heads";
+    }
+
     const uint32_t B = config.batch_size;
     const uint32_t qNH = config.num_query_heads;
     const uint32_t kvNH = config.num_kv_heads;
     const uint32_t S = config.sequence_length;
     const uint32_t qD = config.query_dim;
     const uint32_t kvD = config.key_value_dim;
-    const uint32_t effective_value_dim = config.value_dim > 0 ? config.value_dim : config.key_value_dim;
-    const uint32_t vD = effective_value_dim / config.num_kv_heads;
+    const uint32_t vD = config.value_dim > 0 ? config.value_dim / config.num_kv_heads : config.key_value_dim;
     const float dropout_probability = config.dropout_prob;
     const float atol = config.atol;
     const float rtol = config.rtol;
@@ -910,6 +918,37 @@ TEST_F(SDPABackwardTest, DiffVDim_MultiBatch) {
         .test_name = "DiffVDim_MultiBatch (B=4, qD=32, vD=16)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
+}
+
+// ========== Negative Shape-Mismatch Tests ==========
+
+TEST_F(SDPABackwardTest, ShapeMismatch_GradOutputLastDim) {
+    using namespace ttml;
+
+    constexpr std::size_t B = 1U, H = 2U, S = 64U, D_qk = 64U, D_v = 32U;
+    auto* device = &autograd::ctx().get_device();
+    auto& rng = autograd::ctx().get_generator();
+    uint32_t seed = rng();
+
+    const std::array<std::size_t, 4> qk_shape{B, H, S, D_qk};
+    const std::array<std::size_t, 4> v_shape{B, H, S, D_v};
+
+    auto query = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(qk_shape, -1.0F, 1.0F, seed), device);
+    auto key = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(qk_shape, -1.0F, 1.0F, seed), device);
+    auto value = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(v_shape, -1.0F, 1.0F, seed), device);
+
+    auto fw_result = metal::sdpa_fw(
+        query, key, value, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, /*return_intermediates=*/true);
+    auto attn_output = fw_result[0].value();
+    auto intermediates = fw_result[1].value();
+
+    // grad_output with WRONG last dim (D_qk instead of D_v)
+    auto bad_grad_output =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(qk_shape, -1.0F, 1.0F, seed), device);
+
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        bad_grad_output, attn_output, query, key, value, intermediates, metal::AttentionMaskType::Causal))
+        << "sdpa_bw should reject grad_output whose last dim doesn't match value's last dim";
 }
 
 // ========== Ring Attention Simulation on Single Device ==========

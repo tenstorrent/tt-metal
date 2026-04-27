@@ -79,6 +79,17 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(qE == kE, "Query and Key must have the same embedding dimension. Got qEmbd={}, kEmbd={}", qE, kE);
 
+    // Validate attn_output shape: must match grad_output (B, H, S, vE)
+    const auto attn_output_shape = tensor_args.attn_output.logical_shape();
+    TT_FATAL(
+        attn_output_shape[0] == grad_output_shape[0] && attn_output_shape[1] == grad_output_shape[1] &&
+            attn_output_shape[2] == grad_output_shape[2] && attn_output_shape[3] == vE,
+        "attn_output must match grad_output shape (B, H, S) and value in D. "
+        "Got attn_output={}, grad_output={}, value={}",
+        attn_output_shape,
+        grad_output_shape,
+        value_shape);
+
     // Validate tensors have tile layout
     TT_FATAL(
         grad_output.layout() == tt::tt_metal::Layout::TILE && query.layout() == tt::tt_metal::Layout::TILE &&
