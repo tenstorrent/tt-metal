@@ -72,6 +72,7 @@ class Attention:
         k_norm_w,
         o_proj_w,
         seq_len=19,
+        sliding_prefill_kv_zero_pad=None,
     ):
         assert layer_type in ("sliding", "full"), layer_type
         if layer_type == "sliding":
@@ -90,6 +91,13 @@ class Attention:
         # Prefill sequence length. Decode bodies are seq_len=1 (not parameterized).
         # Default 19 matches the codegen-baked artifact.
         self.seq_len = seq_len
+        # Pre-allocated [1, 4, 256-seq_len, 256] zero tensor used by the
+        # sliding-prefill body to front-pad the prefill K / V before
+        # writing them into the cache (so the L prefill rows land at
+        # rows 256-L..255 of the cache, matching decode's circular-shift
+        # geometry). Only built for sliding layers; full layers use a
+        # different cache mechanism.
+        self.sliding_prefill_kv_zero_pad = sliding_prefill_kv_zero_pad
 
     def __call__(self, x, *, is_decode, **kwargs):
         if self.layer_type == "sliding":
@@ -169,6 +177,21 @@ class Attention:
             dtype=proj_dtype,
         )
 
+        # Pre-build the zero front-pad used by _sliding_prefill to align
+        # cache writes to rows 256-seq_len..255. Allocated once per layer.
+        pad_rows = 256 - seq_len
+        if pad_rows > 0:
+            sliding_prefill_kv_zero_pad = ttnn.as_tensor(
+                torch.zeros((1, 4, pad_rows, 256), dtype=torch.bfloat16),
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.Layout.TILE,
+                device=mesh_device,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        else:
+            sliding_prefill_kv_zero_pad = None
+
         return cls(
             layer_type="sliding",
             fused_qkv_w=fused_qkv_w,
@@ -176,6 +199,7 @@ class Attention:
             k_norm_w=k_norm_w,
             o_proj_w=o_proj_w,
             seq_len=seq_len,
+            sliding_prefill_kv_zero_pad=sliding_prefill_kv_zero_pad,
         )
 
     @classmethod
@@ -1036,6 +1060,19 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             pad_value=0.0,
         )
+        # Persist prefill K into the sliding cache. The decode body uses an
+        # embedding-based circular shift (var_190 = [1, 2, …, 255, 0]) +
+        # masked write at row 255 — meaning row 255 is "newest" and row 0 is
+        # "oldest". So the L prefill K rows land at cache rows 256-L..255 in
+        # original order; rows 0..255-L stay zero. ttnn.pad doesn't support
+        # front-padding, so we concat with a pre-allocated zero pad.
+        if self.sliding_prefill_kv_zero_pad is not None:
+            _padded_k = ttnn.concat([self.sliding_prefill_kv_zero_pad, ttnn_permute_11], dim=2)
+        else:
+            _padded_k = ttnn_permute_11
+        ttnn.fill_cache(k_cache, _padded_k, 0)
+        if self.sliding_prefill_kv_zero_pad is not None:
+            ttnn.deallocate(_padded_k, False)
         ttnn_reshape_32 = ttnn.reshape(
             ttnn_add_15,
             [self.seq_len, 1024],
@@ -1145,6 +1182,14 @@ class Attention:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
             pad_value=0.0,
         )
+        # Persist prefill V at cache rows 256-L..255 (see K-cache fill above).
+        if self.sliding_prefill_kv_zero_pad is not None:
+            _padded_v = ttnn.concat([self.sliding_prefill_kv_zero_pad, ttnn_permute_15], dim=2)
+        else:
+            _padded_v = ttnn_permute_15
+        ttnn.fill_cache(v_cache, _padded_v, 0)
+        if self.sliding_prefill_kv_zero_pad is not None:
+            ttnn.deallocate(_padded_v, False)
         ttnn_reshape_37 = ttnn.reshape(
             ttnn_rms_norm_4,
             [self.seq_len, 1024],

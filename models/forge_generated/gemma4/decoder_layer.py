@@ -173,9 +173,11 @@ class SlidingDecoderLayer:
         ttnn_multiply_18 = hidden_state
 
         ttnn_multiply_21 = self.input_layernorm(ttnn_multiply_18)
-        # The trailing 3 elements (pos-id increment, KV cache writes) are
-        # side-effect ops; their tensor values are never read.
-        ttnn_reshape_46, _, _, _ = self.attention(
+        # ttnn_where_8 / ttnn_where_10 are the post-shift, post-write K/V cache
+        # state: cache circular-shifted up by 1 (via the var_190 embedding
+        # lookup) and the new token's K/V written at row 255. Reattaching them
+        # to self.k_cache / self.v_cache makes the write durable across calls.
+        ttnn_reshape_46, _, new_k_cache, new_v_cache = self.attention(
             ttnn_multiply_21,
             is_decode=True,
             k_cache=k_cache,
@@ -193,6 +195,8 @@ class SlidingDecoderLayer:
             var_192=shared["var_192"],
             var_193=shared["var_193"],
         )
+        self.k_cache = new_k_cache
+        self.v_cache = new_v_cache
         ttnn_multiply_28 = self.post_attention_layernorm(ttnn_reshape_46)
         ttnn.deallocate(ttnn_reshape_46, False)
         ttnn_add_19 = ttnn.add(
