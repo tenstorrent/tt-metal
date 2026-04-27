@@ -8,12 +8,31 @@ instance attribute; the runtime call path takes only the runtime input
 list (KV caches, position IDs, token IDs).
 """
 import gemma4
+import torch
 from gemma4 import utils
 from gemma4 import weights as gw
 from gemma4.caches import Gemma4Caches
 from gemma4.layer_table import LAYER_TABLE_DECODE, LAYER_TABLE_PREFILL
 
 import ttnn
+
+_DRAM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
+
+
+def _build_pos_tensor(current_pos, mesh_device):
+    """Build the int32 [1] ROW_MAJOR tensor used everywhere a position
+    scalar is read from the input list — slot 0 (global current_pos)
+    plus the 59 per-layer pos_ids slots. Replicated across the (1,4)
+    mesh.
+    """
+    return ttnn.as_tensor(
+        torch.tensor([int(current_pos)], dtype=torch.int32),
+        dtype=ttnn.DataType.INT32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        device=mesh_device,
+        memory_config=_DRAM,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 class Gemma4ForCausalLM:
@@ -40,6 +59,8 @@ class Gemma4ForCausalLM:
         l58,
         l59,
         caches,
+        mesh_device,
+        pos_slots,
     ):
         self._is_decode = is_decode
         self.scaled_embedding = scaled_embedding
@@ -59,6 +80,12 @@ class Gemma4ForCausalLM:
         # to its slice (set in from_state_dict); reset_kv_caches keeps
         # both views in sync.
         self.caches = caches
+        # Mesh device + the input slots that consume the per-call
+        # position scalar (slot 0 + every layer's pos_ids slot, except
+        # L59 which has no pos slot). Set by __call__'s pos_tensor
+        # injection — see Phase 3 commit.
+        self.mesh_device = mesh_device
+        self._pos_slots = pos_slots
 
     def reset_kv_caches(self):
         """Re-zero every per-layer K/V buffer. Call between independent
@@ -78,15 +105,27 @@ class Gemma4ForCausalLM:
         self.l59.k_cache = self.caches.k_caches[self.l59.layer_idx]
         self.l59.v_cache = self.caches.v_caches[self.l59.layer_idx]
 
-    def __call__(self, input):
+    def __call__(self, input, *, current_pos=0):
         # Phase 2 temporary: reset on every call so single-shot PCC tests
         # see the same zero initial state as the legacy input-slot path.
         # Phase 5 will move this responsibility to the Generator.
         self.reset_kv_caches()
+        # Phase 3: build the per-call position scalar internally and inject
+        # it at every input slot that historically held an int32 [1] zero
+        # (slot 0 + per-layer pos_ids slots). The runtime_inputs synthesizer
+        # no longer allocates these slots, so eff_input may need to grow
+        # to fit the highest referenced pos slot.
+        pos_tensor = _build_pos_tensor(current_pos, self.mesh_device)
+        eff_input = list(input)
+        max_slot = max(self._pos_slots)
+        if len(eff_input) <= max_slot:
+            eff_input.extend([None] * (max_slot + 1 - len(eff_input)))
+        for slot in self._pos_slots:
+            eff_input[slot] = pos_tensor
         if self._is_decode:
-            return self._call_decode(input)
+            return self._call_decode(eff_input)
         else:
-            return self._call_prefill(input)
+            return self._call_prefill(eff_input)
 
     @classmethod
     def from_state_dict(cls, hf, mesh_device, *, is_decode, seq_len=19, caches=None):
@@ -256,6 +295,12 @@ class Gemma4ForCausalLM:
             softcap=softcap,
         )
 
+        # Position-scalar injection slots (Phase 3): slot 0 (the global
+        # `var_0`) plus every L0..L58 layer's pos_ids slot. L59 has no
+        # pos slot of its own; its update_idxs (decode mode) re-reads
+        # L58's pos slot, which is already covered.
+        pos_slots = [0] + [layer_table[i]["runtime_inputs"][2] for i in range(59)]
+
         return cls(
             is_decode=is_decode,
             scaled_embedding=scaled_embedding,
@@ -268,6 +313,8 @@ class Gemma4ForCausalLM:
             l58=l58,
             l59=l59,
             caches=caches,
+            mesh_device=mesh_device,
+            pos_slots=pos_slots,
         )
 
     def _call_decode(self, input):
@@ -281,7 +328,8 @@ class Gemma4ForCausalLM:
         var_185 = self.shared["var_185"]
         utils_DeviceGetter_get_device_0 = utils.DeviceGetter.get_device((1, 4))
         ttnn_to_layout_0 = ttnn.to_layout(var_0, ttnn.Layout.TILE, None, memory_config=None)
-        ttnn.deallocate(var_0, False)
+        # Phase 3: var_0 is the shared pos_tensor reused by every layer's pos
+        # slot — keep it alive (was: ttnn.deallocate(var_0, False)).
         ttnn_add_0 = ttnn.add(
             ttnn_to_layout_0,
             var_185,
@@ -392,7 +440,8 @@ class Gemma4ForCausalLM:
         # Do NOT remove despite "unused variable" warnings.
         utils_DeviceGetter_get_device_0 = utils.DeviceGetter.get_device((1, 4))  # noqa: F841
         ttnn_to_layout_0 = ttnn.to_layout(var_0, ttnn.Layout.TILE, None, memory_config=None)
-        ttnn.deallocate(var_0, False)
+        # Phase 3: var_0 is the shared pos_tensor reused by every layer's pos
+        # slot — keep it alive (was: ttnn.deallocate(var_0, False)).
         ttnn_add_0 = ttnn.add(
             ttnn_to_layout_0,
             var_185,

@@ -257,17 +257,20 @@ _COMMON_ZEROS_RM_INT32_1 = [
 
 
 def _expand_common_recipes():
-    """Per-side runtime slots, *minus* the K/V cache slots.
+    """Per-side runtime slots, minus the K/V cache slots and the
+    position-scalar slots.
 
     K and V buffers now live on `Gemma4Caches` (Phase 2) — layers read
     them via `self.k_cache`/`self.v_cache` rather than from input slots.
-    The lists `_COMMON_ZEROS_TILE_BF16_*` are kept intact for now as a
-    historical inventory of where the caches used to live, but they no
-    longer feed `_expand_common_recipes`.
+    Position scalars (slot 0 + every layer's pos_ids slot, listed in
+    `_COMMON_ZEROS_RM_INT32_1`) are now built by the model from a
+    `current_pos` kwarg at __call__ time (Phase 3). Both lists are
+    kept as a historical inventory but no longer feed this function.
+
+    Only the int32 (1, 256) ones helper at slot 26 (consumed by the
+    sliding prelude) is still produced here.
     """
     rows = []
-    for s in _COMMON_ZEROS_RM_INT32_1:
-        rows.append((s, (1,), "INT32", "ROW_MAJOR", 0))
     rows.append((26, (1, 256), "INT32", "ROW_MAJOR", 1))
     return rows
 
