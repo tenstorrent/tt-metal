@@ -23,8 +23,21 @@ from tracy.common import (
     PROFILER_WASM_TRACES_DIR,
 )
 
-# Must match --port default in __main__ (subprocess omits --port when None).
+# Default HTTP port for the WASM static server. Override with:
+#   - CLI:  python .../serve_wasm.py --port <n>
+#   - env:  TRACY_WASM_HTTP_PORT=<n>  (used by launch_server_subprocess when port= is omitted)
+# WebSocket port is always HTTP+1 (see run_server).
 DEFAULT_HTTP_PORT = 8080
+
+
+def _resolve_wasm_http_port(explicit_port=None):
+    if explicit_port is not None:
+        return int(explicit_port)
+    env_port = os.environ.get("TRACY_WASM_HTTP_PORT")
+    if env_port:
+        return int(env_port)
+    return DEFAULT_HTTP_PORT
+
 
 clients = set()
 
@@ -44,7 +57,7 @@ def _kill_previous_server_process():
 
 def launch_server_subprocess(directory=None, port=None, daemon=True):
     logger.info("Launching tracy web app GUI server subprocess...")
-    http_port = DEFAULT_HTTP_PORT if port is None else port
+    http_port = _resolve_wasm_http_port(port)
     ws_port = http_port + 1
     logger.info(
         f"Tracy WASM web UI (open in browser): http://localhost:{http_port}/ "
@@ -52,11 +65,9 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
     )
     _kill_previous_server_process()
     log_path = PROFILER_ARTIFACTS_DIR / "tracy_wasm_gui_server.log"
-    cmd = [sys.executable, __file__]
+    cmd = [sys.executable, __file__, "--port", str(http_port)]
     if directory is not None:
         cmd += ["--dir", directory]
-    if port is not None:
-        cmd += ["--port", str(port)]
     logger.info(f"Running command: {' '.join(cmd)}")
     log_file = open(log_path, "a", buffering=1)  # line-buffered
     env = os.environ.copy()

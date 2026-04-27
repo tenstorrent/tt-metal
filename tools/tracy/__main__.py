@@ -40,6 +40,14 @@ def main():
         "-t", "--port", action="store", help="Internal port used by the script", type="string", dest="port"
     )
     parser.add_option(
+        "--web-app-port",
+        action="store",
+        type="int",
+        dest="web_app_port",
+        default=None,
+        help="HTTP port for the Tracy WASM web UI after capture (default: 8080, or TRACY_WASM_HTTP_PORT if set). WebSocket uses this port + 1.",
+    )
+    parser.add_option(
         "--no-op-info-cache",
         dest="opInfoCache",
         action="store_false",
@@ -462,7 +470,7 @@ def main():
                         logger.info(f"Copied {tracy_dst} to {embed_path}")
                 except Exception as e:
                     logger.warning(f"Could not update embed.tracy: {e}")
-                launch_server_subprocess()
+                launch_server_subprocess(port=options.web_app_port)
                 # Start the WASM server as a daemon with defaults
                 if options.report:
                     generate_report(
