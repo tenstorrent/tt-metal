@@ -103,14 +103,25 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     // these slots. TODO: sweepline algorithm, so the best position can be calculated in linear
     // time relative to the number of regions.
     if (top_down) {
+        auto first_top_down_scan_begin = [&](std::map<uint32_t, MemoryUsage>::const_reverse_iterator reverse_begin,
+                                             std::map<uint32_t, MemoryUsage>::const_iterator default_begin,
+                                             uint32_t addr) {
+            auto scan_begin = default_begin;
+            for (auto scan = reverse_begin; scan != regions_.crend(); ++scan) {
+                if (scan->first + scan->second.size <= addr) {
+                    break;
+                }
+                scan_begin = std::prev(scan.base());
+            }
+            return scan_begin;
+        };
+
         // Top-down walk: try the slot ending exactly at ringbuffer_size_, then the slots ending
-        // just before each existing region, in descending order of address. The inner scan can
-        // no longer rely on a forward-walking cursor, so we always start from regions_.begin()
-        // and let intersects() filter out non-overlapping regions.
+        // just before each existing region, in descending order of address.
         uint32_t top_addr = ringbuffer_size_ - size;
-        bool stop = evaluate(top_addr, regions_.begin());
+        bool stop = evaluate(top_addr, first_top_down_scan_begin(regions_.crbegin(), regions_.cend(), top_addr));
         if (!stop) {
-            for (auto rit = regions_.rbegin(); rit != regions_.rend(); ++rit) {
+            for (auto rit = regions_.crbegin(); rit != regions_.crend(); ++rit) {
                 if (rit->first < size) {
                     // Slot would extend below the start of the buffer.
                     break;
@@ -119,7 +130,9 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 if (addr == top_addr) {
                     continue;
                 }
-                if (evaluate(addr, regions_.begin())) {
+                auto after_candidate = std::prev(rit.base());
+                auto scan_begin = first_top_down_scan_begin(std::next(rit), after_candidate, addr);
+                if (evaluate(addr, scan_begin)) {
                     break;
                 }
             }
