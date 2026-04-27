@@ -25,6 +25,7 @@ target_sources(
         test_gap5_relay_broken_teardown.cpp
         test_gap6_phase25_relay_broken_cascade.cpp
         test_gap8_init_router_sync_dead_relay.cpp
+        test_gap9_parallel_heartbeat_poll.cpp
         test_gap7_mmio_phase5_relay_broken.cpp
         test_gap10_channels_not_ready_lifecycle.cpp
         test_dispatch_context.cpp
