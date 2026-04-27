@@ -363,9 +363,8 @@ uint32_t D2HSocket::discard_pending_pages() {
     if (pages == 0) {
         return 0;
     }
-    // Rebase: ack everything currently visible without touching the data
-    // region.  Advance read_ptr_ to mirror what a real read() would do, so
-    // subsequent reads/page_size changes stay consistent.
+    // Rebase: ack everything currently visible without touching the data region; advance
+    // read_ptr_ as a real read() would so subsequent reads stay consistent.
     uint32_t bytes_to_discard = pages * page_size_;
     uint32_t cursor = read_ptr_ + bytes_to_discard;
     if (fifo_curr_size_ > 0) {

@@ -153,11 +153,8 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
         return;
     }
 
-    // Use same core as program zones but a different RiscType (SYNC) so the
-    // sync check zone lives on its own Tracy lane. Program and sync zones on
-    // the same lane would have to be strictly nested/non-overlapping, and any
-    // edge case (zone straddling sync, rounding at LOD boundaries) caused
-    // program zones to visually disappear or duplicate.
+    // Sync-check zones go on a dedicated Tracy lane (RiscType::SYNC) so they don't have to
+    // strictly nest with program zones — overlap there caused zones to disappear or duplicate.
     constexpr uint32_t kRealtimeProfilerCore_X = 100;
     constexpr uint32_t kRealtimeProfilerCore_Y = 100;
 

@@ -68,14 +68,9 @@ public:
     // Invoke all registered callbacks with the given record.
     void InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record);
 
-    // Real-time profiler liveness tracking.
-    // MeshDevice calls NotifyRealtimeProfilerActivated(chip_id) after it successfully
-    // finishes the init+sync handshake for a device, and NotifyRealtimeProfilerDeactivated
-    // at close. IsRealtimeProfilerActive() returns true while at least one chip is
-    // active, letting callers (e.g. tests) tell the difference between "RT profiler
-    // produced no records yet" and "RT profiler isn't running on this configuration at
-    // all" (the latter happens under ETH dispatch, where the profiler is tensix-only
-    // and silently bows out).
+    // Real-time profiler liveness tracking. MeshDevice notifies activation after a
+    // successful init+sync handshake and deactivation at close; IsRealtimeProfilerActive()
+    // returns true while at least one chip is active.
     void NotifyRealtimeProfilerActivated(uint32_t chip_id);
     void NotifyRealtimeProfilerDeactivated(uint32_t chip_id);
     bool IsRealtimeProfilerActive() const;
@@ -94,23 +89,17 @@ private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
-    // runtime_id -> list of kernel source paths for that program.
-    // Guarded by runtime_id_to_kernel_sources_mutex_ because RecordKernelSourceMap is
-    // called from the main (dispatch) thread while GetKernelSources*ForRuntimeId is
-    // called from the RealtimeProfiler receiver thread.
+    // runtime_id -> list of kernel source paths. Guarded because the dispatch thread writes
+    // and the RealtimeProfiler receiver thread reads.
     std::map<uint64_t, std::vector<std::string>> runtime_id_to_kernel_sources;
     mutable std::mutex runtime_id_to_kernel_sources_mutex_;
-    // Registered real-time profiler callbacks (called from receiver thread).
-    // mutable because IsRealtimeProfilerActive() is a logically-const query that still
-    // needs to lock the mutex to safely read realtime_profiler_active_chips_.
+    // Registered real-time profiler callbacks (invoked from the receiver thread).
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
     std::vector<std::pair<tt::ProgramRealtimeProfilerCallbackHandle, tt::ProgramRealtimeProfilerCallback>>
         program_realtime_profiler_callbacks_;
     tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
 
-    // Set of chip_ids whose RT profiler is currently live. Guarded by the same mutex as
-    // the callback list because both are accessed from the receiver thread and the
-    // open/close paths.
+    // Chip ids whose RT profiler is currently live; shares the callback-list mutex.
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;
 };
 
