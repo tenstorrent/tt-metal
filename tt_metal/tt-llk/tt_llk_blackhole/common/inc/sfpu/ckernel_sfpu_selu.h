@@ -20,6 +20,8 @@ inline void _calculate_selu_(std::uint32_t scale, std::uint32_t alpha)
 {
     const sfpi::vFloat scale_val   = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
+// unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
+// partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {

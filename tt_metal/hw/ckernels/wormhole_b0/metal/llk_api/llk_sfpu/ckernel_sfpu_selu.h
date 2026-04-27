@@ -10,7 +10,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_selu(uint scale, uint alpha) {
+inline void calculate_selu(uint32_t scale, uint32_t alpha) {
     _calculate_selu_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(scale, alpha);
 }
 

@@ -19,6 +19,8 @@ inline void _calculate_celu_(std::uint32_t param0, std::uint32_t param1)
 {
     sfpi::vFloat alpha       = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
+// unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
+// partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {
