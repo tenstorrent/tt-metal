@@ -49,6 +49,9 @@ def _log_memory(label: str):
 
 PROMPTS_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
 ABC_1K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json")
+ABC_SHORT_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.json")
+P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
+P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
 
 # Subset name -> JSONL filename on HuggingFace
 INFINITEBENCH_SUBSETS = {
@@ -268,10 +271,10 @@ def create_hf_model_with_weights(config, num_layers, hf_sd):
     return result
 
 
-def get_4d_causal_mask(attention_mask, ignore_padding=False):
-    "Get 4D causal attention mask for prefill. If ignore_padding=True, returns a purely causal mask that does not account for padding tokens."
+def get_4d_causal_mask(attention_mask, causal_only=False):
+    "Get 4D causal attention mask for prefill. If causal_only=True, returns a purely causal mask without any padding mask (equivalent to is_causal=True in ttnn)."
 
-    if ignore_padding:
+    if causal_only:
         # torch.where(torch.tril(torch.ones(5,5)) == 1, 0, -1e38)
         # tensor([[ 0.0000e+00, -1.0000e+38, -1.0000e+38, -1.0000e+38, -1.0000e+38],
         #         [ 0.0000e+00,  0.0000e+00, -1.0000e+38, -1.0000e+38, -1.0000e+38],
@@ -316,7 +319,7 @@ def load_and_compute_layer_by_layer(
     routed_expert_weights_dtype=ttnn.bfloat4_b,
     shared_expert_activations_dtype=ttnn.bfloat16,
     shared_expert_weights_dtype=ttnn.bfloat8_b,
-    ignore_padding=True,
+    causal_only=True,
 ) -> LayerByLayerResult:
     """
     Process layers one-at-a-time: load → compute reference → build cache → clear → next.
@@ -406,7 +409,7 @@ def load_and_compute_layer_by_layer(
         hf_model.embed_tokens.weight.data = torch.empty(0)
         del embed_with_prefix
 
-    attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=ignore_padding)
+    attention_mask = get_4d_causal_mask(attention_mask, causal_only=causal_only)
 
     if build_ttnn_cache:
         # Build embedding cache (device=None, no accumulation!)

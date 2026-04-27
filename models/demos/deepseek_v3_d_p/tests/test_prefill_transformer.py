@@ -44,6 +44,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
+    ABC_SHORT_PATH,
+    P64TOK_PATH,
+    P960TOK_PATH,
     PROMPTS_PATH,
     ReferenceCacheKey,
     check_reference_cache_exists,
@@ -68,13 +71,24 @@ SEQ_LEN_25K = 25 * 1024
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
-@pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
     "input_source",
-    ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
+    [
+        "json_prompts",
+        "abc_1k",
+        "abc_short",
+        "p64tok",
+        "p960tok",
+        "random",
+        "passkey",
+        "kv_retrieval",
+        "longdialogue_qa_eng",
+        "longbook_qa_eng",
+    ],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
@@ -250,6 +264,18 @@ def test_prefill_transformer(
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
             prompt_text = load_prompts_from_json(str(ABC_1K_PATH))
+        elif input_source == "abc_short":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(ABC_SHORT_PATH))
+        elif input_source == "p64tok":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(P64TOK_PATH))
+        elif input_source == "p960tok":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(P960TOK_PATH))
         elif input_source in INFINITEBENCH_SUBSET_NAMES:
             cached_path = download_infinitebench_subset(input_source)
             with open(cached_path) as f:
