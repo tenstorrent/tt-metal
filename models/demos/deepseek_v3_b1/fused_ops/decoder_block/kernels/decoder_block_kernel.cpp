@@ -1514,16 +1514,16 @@ void kernel_main() {
 
             // PipelineStageSync
             // using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::ReaderCTArgs<
-            //     get_named_compile_time_arg_val("run_stalling_logic_on_ncrisc"),
-            //     get_named_compile_time_arg_val("run_signalling_logic_on_ncrisc"),
-            //     get_named_compile_time_arg_val("is_intermediate_signaller"),
-            //     get_named_compile_time_arg_val("is_signalling_to_intermediate_signaller"),
-            //     get_named_compile_time_arg_val("signalling_core_noc_x_addr"),
-            //     get_named_compile_time_arg_val("signalling_core_noc_y_addr"),
-            //     get_named_compile_time_arg_val("stalling_core_noc_x_addr"),
-            //     get_named_compile_time_arg_val("stalling_core_noc_y_addr"),
-            //     get_named_compile_time_arg_val("semaphore_l1_addr"),
-            //     get_named_compile_time_arg_val("fabric_arg_base")>;
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_run_stalling_logic_on_ncrisc"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_run_signalling_logic_on_ncrisc"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_is_intermediate_signaller"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_is_signalling_to_intermediate_signaller"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_signalling_core_noc_x_addr"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_signalling_core_noc_y_addr"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_x_addr"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_y_addr"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_semaphore_l1_addr"),
+            //     get_named_compile_time_arg_val("pipeline_stage_sync_rt_arg_base")>;
 #endif
         } routed;
 

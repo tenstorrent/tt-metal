@@ -4427,8 +4427,8 @@ class MoeOp:
         """Setup fabric connections for reduce, broadcast, and D2D0 fabric cores."""
         ctx = self.ctx
 
-        # Reduce fabric connections
         if ctx.enable_reduce_to_one:
+            # == Reduce fabric connections ==
             use_torus = self.is_torus and reduce_root_coord[0] in [0, 3]
             device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
 
@@ -4469,6 +4469,36 @@ class MoeOp:
                     )
 
                 fabric_rt_args_ref.extend(fabric_conn_args)
+
+            # == PipelineStageSync fabric connections ==
+            pipeline_stage_sync_params = ctx.pipeline_stage_sync_params
+            signalling_core = pipeline_stage_sync_params["signalling_core"]
+
+            if coord in pipeline_stage_sync_params["signalling_devices"]:
+                if pipeline_stage_sync_params["run_signalling_kernel_on_ncrisc"]:
+                    kernel_idx = kernel_result.get_group_by_arg(
+                        "pipeline_stage_sync_run_signalling_logic_on_ncrisc", 1
+                    ).ncrisc_kernel_index
+                else:
+                    kernel_idx = kernel_result.get_group_by_arg(
+                        "pipeline_stage_sync_run_signalling_logic_on_brisc", 1
+                    ).brisc_kernel_index
+                per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][signalling_core.y]
+
+                target_device = pipeline_stage_sync_params["signaller_device_mapping"].get(coord, None)
+                fabric_src_node_id = mesh_device.get_fabric_node_id(coord)
+                fabric_dst_node_id = mesh_device.get_fabric_node_id(target_device)
+
+                link_index = 0
+                fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_src_node_id,
+                    [fabric_dst_node_id],
+                    [link_index],
+                    program,
+                    kernel_idx,
+                    signalling_core,
+                )
+                per_core_rt_args_ref.extend(fabric_args)
 
         # Broadcast fabric connections
         if ctx.enable_bcast and len(self.bcast_dst_nodes) > 0:
