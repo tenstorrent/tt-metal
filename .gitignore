@@ -159,3 +159,7 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# OpenClaw generated files
+sonar-metrics.json
+sonar-report.json
