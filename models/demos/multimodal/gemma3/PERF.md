@@ -13,6 +13,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 |-------------------|-------------|-----------|-----------|---------------|-----------|
 | gemma-3-4b-it     | N150        | 85        | 96        | 34            | 64        |
 | gemma-3-4b-it     | N300        | 85        | 96        | 36.02         | 89.95     |
+| gemma-3-4b-it     | P150        | 86        | 97.6      | N/A           | N/A       |
 | gemma-3-27b-it    | T3K         | 91        | 99        | 16.91         | 466.7     |
 
 ## Vision Performance
@@ -36,6 +37,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 |-------------------|-------------|-----------|-----------|---------------|-----------|
 | gemma-3-4b-it     | N150        | 91        | 99        | 30            | 76        |
 | gemma-3-4b-it     | N300        | 90        | 99        | 33.5          | 110.75    |
+| gemma-3-4b-it     | P150        | 90.8      | 99.8      | N/A           | N/A       |
 | gemma-3-27b-it    | T3K         | 94        | 99        | 15.88         | 493.36    |
 
 ## Vision Accuracy

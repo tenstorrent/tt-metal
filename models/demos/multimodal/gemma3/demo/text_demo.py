@@ -119,7 +119,7 @@ def create_tt_model(
                         OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
                         OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
                         OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
-                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
                         OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                         OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
                         OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
