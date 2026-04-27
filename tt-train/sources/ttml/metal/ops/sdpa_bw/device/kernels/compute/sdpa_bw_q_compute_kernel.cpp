@@ -102,22 +102,13 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_query, tiles_per_row);
 
     compute_u_scalar_row(
-        cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
-
-    // Duplicate u_scaler to output CB for writer to flush to DRAM (for KV kernel reuse).
-    // Does NOT pop cb_u_scalar_row - compute_grad_scores still needs it.
-    cb_wait_front(cb_u_scalar_row, onetile);
-    cb_reserve_back(cb_u_scaler_output, onetile);
-    pack_reconfig_data_format(cb_u_scaler_output);
-    reconfig_data_format(cb_u_scalar_row, cb_u_scalar_row);
-    copy_tile_init(cb_u_scalar_row);
-    tile_regs_acquire();
-    copy_tile(cb_u_scalar_row, /* tile_idx */ 0, /* register idx */ 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(/* register idx */ 0, cb_u_scaler_output);
-    tile_regs_release();
-    cb_push_back(cb_u_scaler_output, onetile);
+        cb_grad_output,
+        cb_attn_output,
+        cb_u_scalar_row,
+        cb_mat_mul_reduction,
+        tiles_per_row,
+        scaler_bits,
+        cb_u_scaler_output);
 
     const uint32_t q_row_tile = global_row_idx % Ht;
 

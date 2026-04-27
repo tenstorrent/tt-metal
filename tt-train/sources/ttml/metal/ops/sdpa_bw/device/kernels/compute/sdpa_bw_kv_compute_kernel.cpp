@@ -86,7 +86,7 @@ constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed atte
 constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
 constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
 constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of attention weights
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row (precomputed or computed in-kernel)
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row (precomputed by Q kernel)
 constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;           // Output: grad_K
 constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
 

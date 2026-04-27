@@ -53,9 +53,25 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(tensor_args.u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
     TT_FATAL(tensor_args.u_scaler.layout() == tt::tt_metal::Layout::TILE, "u_scaler must have TILE layout");
+    TT_FATAL(
+        tensor_args.u_scaler.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "u_scaler must be FLOAT32, got {}",
+        tensor_args.u_scaler.dtype());
+
+    const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
+
+    {
+        const auto u_shape = tensor_args.u_scaler.padded_shape();
+        const auto expected_rows = qB * qH * qS;
+        TT_FATAL(
+            u_shape[-2] == expected_rows && u_shape[-1] == tt::constants::TILE_WIDTH,
+            "u_scaler shape mismatch: expected (*, {}, {}), got {}",
+            expected_rows,
+            tt::constants::TILE_WIDTH,
+            u_shape);
+    }
 
     // Extract and validate heads from tensor shapes
-    const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
     const auto [kB, kH, kS, kE] = key_shape.to_array_4D();
     const auto [vB, vH, vS, vE] = value_shape.to_array_4D();
 
