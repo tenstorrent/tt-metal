@@ -188,6 +188,10 @@ class _MoeRoutedExpertContext:
     down_proj_cb_in1: int
     down_proj_cb_out: int
     down_proj_cb_fmt: int
+    # down_proj internal accumulation CB (aliases down_proj_cb_out's L1 region).
+    # Per-expert push/pop bookkeeping routes through this so cb_out's metadata
+    # only updates once at end. Used only by down_proj (the accum-experts proj).
+    down_proj_cb_internal_acc: int
     add_cb_in0: int
     add_cb_in1: int
     add_cb_out: int
@@ -466,11 +470,12 @@ class MoeRoutedExpertOp:
     def setup_matmul_expert_dram(
         mesh_device,
         cts_list,
-        num_subblocks_k=4,
-        num_subblocks_n=1,
+        num_subblocks_k,
+        subblock_n,
+        cores_per_dram_bank,
+        gather_to_next,
         num_active_experts=8,
         num_total_experts=None,
-        cores_per_dram_bank=1,
         accum_experts=0,
         primary_worker_cores=None,
     ):
@@ -535,10 +540,7 @@ class MoeRoutedExpertOp:
         ), f"per_device_tiles_w ({ct0._per_device_tiles_w}) must divide num_banks*cores_per_bank ({num_banks * cores_per_dram_bank})"
         assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks_k ({num_subblocks_k})"
         subblock_k = Kt // num_subblocks_k
-        assert (
-            per_core_n % num_subblocks_n == 0
-        ), f"per_core_n ({per_core_n}) must be divisible by num_subblocks_n ({num_subblocks_n})"
-        subblock_n = per_core_n // num_subblocks_n
+        assert per_core_n % subblock_n == 0, f"per_core_n ({per_core_n}) must be divisible by subblock_n ({subblock_n})"
 
         is_dram_flags = [1] * num_total_experts
 
@@ -553,13 +555,15 @@ class MoeRoutedExpertOp:
             is_dram_flags=is_dram_flags,
             subblock_n=subblock_n,
             primary_worker_cores=primary_worker_cores,
+            gather_to_next=gather_to_next,
+            subblock_n=subblock_n,
         )
 
-        # dram_results layout (one entry per mesh coordinate) is pr42896's 15-element tuple:
+        # dram_results layout (one entry per mesh coordinate) — 17-element tuple:
         #   (dram_backing_tensor, meta_tensors, fmt_dram_info, l1_addrs, per_core_values,
         #    num_in1_buffers, fmt_cb_l1_addr, fmt_sem_addr_0, fmt_sem_addr_1,
         #    fmt_sem_0, fmt_sem_1, partial_sem_addr, pipeline_sem_addr,
-        #    partial_sem, pipeline_sem)
+        #    partial_sem, pipeline_sem, gather_sync_sem_addr, gather_sync_sem)
         # dram_backing_tensor holds in1 + fmt regions fused; buffer_address() seeds cb_in1.
         # l1_addrs per coord = (expert_offsets_l1_addr_core_values, block_sizes_l1_addr_core_values).
         # Cross-device constants (fmt_cb_l1_addr, sem addrs) match across coords by construction.
@@ -580,6 +584,8 @@ class MoeRoutedExpertOp:
             pipeline_sem_addr,
             partial_sem,
             pipeline_sem,
+            gather_sync_sem_addr,
+            gather_sync_sem,
         ) = dram_results[first_coord]
         fmt_dram_tensor = fmt_dram_info["fmt_dram_tensor"]
 
@@ -593,8 +599,8 @@ class MoeRoutedExpertOp:
         compute_cores_list = [c for (c, _) in per_core_values_per_device[first_coord_for_cores]["bank_id"]]
 
         # Fmt DRAM sizing: recompute here (matches helper's internals).
-        # k_parallel_per_bank=1; subblock_n is derived from num_subblocks_n above so
-        # num_subblocks_k_local == num_subblocks_k and fmt describes full K × N.
+        # Phase 1C: k_parallel_per_bank=1, so num_subblocks_k_local ==
+        # num_subblocks_k and fmt describes full K × N.
         k_parallel_per_bank = 1
         num_subblocks_k_local = num_subblocks_k // k_parallel_per_bank
         _DRAM_ALIGNMENT = ttnn._ttnn.bfp_utils.get_dram_alignment()
@@ -669,6 +675,10 @@ class MoeRoutedExpertOp:
             "fmt_sem_addr_1": fmt_sem_addr_1,
             "partial_sem_addr": partial_sem_addr,
             "pipeline_sem_addr": pipeline_sem_addr,
+            # down_proj uses gather_to_next=1 (2-core bank → primary receives the
+            # full bank N); gate/up keep 0 and the kernel skips all gather logic.
+            "gather_to_next": 1 if gather_to_next else 0,
+            "gather_sync_sem_addr": gather_sync_sem_addr,
             "dram_meta_words_per_block": dram_meta_words_per_block,
             "in0_page_size": in0_page_size,
             # Keep sem objects alive so their L1 allocations aren't reclaimed before
@@ -677,6 +687,7 @@ class MoeRoutedExpertOp:
             "_fmt_sem_1": fmt_sem_1,
             "_partial_sem": partial_sem,
             "_pipeline_sem": pipeline_sem,
+            "_gather_sync_sem": gather_sync_sem,
             "meta_tensors_per_device": meta_tensors_per_device,
             "expert_offsets_l1_addr_per_device": expert_offsets_l1_addr_per_device,
             "block_sizes_l1_addr_per_device": block_sizes_l1_addr_per_device,
@@ -1150,6 +1161,13 @@ class MoeRoutedExpertOp:
         down_proj_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         down_proj_cb_out = cb_id_context.get_cb_id(data_format, TD_1x32)
         residual_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # down_proj internal accumulation CB. Aliases down_proj_cb_out's L1 region;
+        # the kernel routes per-expert push/pop through it so cb_out's metadata only
+        # updates once at the end (after the gather sync). Eltwise_add waits on
+        # cb_out → cannot observe transient per-expert state. Gate/up don't accum so
+        # they reuse their cb_out for the kernel template's cb_internal_acc CT arg
+        # slot (constexpr-eliminated, never accessed).
+        down_proj_cb_internal_acc = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # EltwiseMul uses 1x32 CBs directly (no 16x16 alias needed).
         # mul_cb_in0/in1 reuse the existing up_proj/gate_proj output CBs so their
@@ -1418,8 +1436,10 @@ class MoeRoutedExpertOp:
             gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=gate_proj_weights_tensor,
-                num_subblocks_k=4,
-                num_subblocks_n=1,
+                num_subblocks_k=8,
+                subblock_n=1,
+                cores_per_dram_bank=1,
+                gather_to_next=False,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )
@@ -1441,8 +1461,10 @@ class MoeRoutedExpertOp:
             up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=up_proj_weights_tensor,
-                num_subblocks_k=4,
-                num_subblocks_n=1,
+                num_subblocks_k=8,
+                subblock_n=1,
+                cores_per_dram_bank=1,
+                gather_to_next=False,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )
@@ -1528,8 +1550,14 @@ class MoeRoutedExpertOp:
             down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=down_proj_weights_tensor,
+                # 16 streamer cores (2 per bank): each bank's two cores split N
+                # (per_core_n=14 halves to 7 per core), then sender NOC-writes
+                # its accum onto the primary so downstream sees the same per-bank
+                # N output as the 1-core layout — invisible to gate/up.
                 num_subblocks_k=1,
-                num_subblocks_n=4,
+                subblock_n=7,
+                cores_per_dram_bank=2,
+                gather_to_next=True,
                 num_active_experts=8,
                 accum_experts=1,
                 primary_worker_cores=gate_proj_worker_cores,
@@ -1593,7 +1621,11 @@ class MoeRoutedExpertOp:
         # Dimensions derived from down_proj params — no separate tensors needed.
         # per_core width = down_proj per_core_n tiles * 32 elements, total = per_core * num_cores
         # ==================================================================
-        down_proj_width_per_core = down_proj_params["per_core_n"] * 32
+        # Full per-primary N width after gather: per_core_n × cores_per_bank tiles.
+        # In gather mode the receiver's L1 holds the bank's full N (sender's slice
+        # via NOC + receiver's slice via PACK). cores_per_bank=1 for gate/up keeps
+        # this equal to per_core_n × 32 (no behavior change).
+        down_proj_width_per_core = down_proj_params["per_core_n"] * down_proj_params["cores_per_bank"] * 32
         down_proj_total_width = down_proj_width_per_core * num_gate_proj_cores
         # When reduce is enabled, CB 24 is a working buffer (backed by SDPA overlap).
         # When reduce is disabled, CB 24 is the final output (backed by final_output_tensor).
@@ -1827,6 +1859,7 @@ class MoeRoutedExpertOp:
             down_proj_mcast_dst_cb=down_proj_mcast_dst_cb,
             down_proj_cb_in1=down_proj_cb_in1,
             down_proj_cb_out=down_proj_cb_out,
+            down_proj_cb_internal_acc=down_proj_cb_internal_acc,
             add_cb_in0=add_cb_in0,
             add_cb_in1=add_cb_in1,
             add_cb_out=add_cb_out,
@@ -2019,6 +2052,11 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_subblocks_k_local", ctx.gate_proj_params["num_subblocks_k_local"]),
             ("gate_proj_accum_experts", ctx.gate_proj_params["accum_experts"]),
             ("gate_proj_index_offset", 0),
+            ("gate_proj_gather_to_next", ctx.gate_proj_params["gather_to_next"]),
+            ("gate_proj_gather_sync_sem_addr", ctx.gate_proj_params["gather_sync_sem_addr"]),
+            # gate_proj is non-accum — kernel constexpr-eliminates the cb_internal_acc
+            # access, so we just pass cb_out's id to satisfy the template.
+            ("gate_proj_cb_internal_acc", ctx.gate_proj_cb_out),
             # Physical CB base address — used as CBIn1ResetAddr template param so the
             # kernel's software write-pointer wrap aligns with the HW CB's physical
             # wrap boundary across sequential matmuls sharing cb_in1 (GP → UP).
@@ -2053,6 +2091,10 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k_local", ctx.up_proj_params["num_subblocks_k_local"]),
             ("up_proj_accum_experts", ctx.up_proj_params["accum_experts"]),
             ("up_proj_index_offset", 0),
+            ("up_proj_gather_to_next", ctx.up_proj_params["gather_to_next"]),
+            ("up_proj_gather_sync_sem_addr", ctx.up_proj_params["gather_sync_sem_addr"]),
+            # up_proj is non-accum — same as gate_proj, pass cb_out as a placeholder.
+            ("up_proj_cb_internal_acc", ctx.up_proj_cb_mm_out),
             # down_proj MatmulExpertCompressedDRAM reader
             ("down_proj_cb_in0", ctx.down_proj_cb_in0),
             ("down_proj_cb_in1", ctx.down_proj_cb_in1),
@@ -2082,6 +2124,9 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k_local", ctx.down_proj_params["num_subblocks_k_local"]),
             ("down_proj_accum_experts", ctx.down_proj_params["accum_experts"]),
             ("down_proj_index_offset", 0),
+            ("down_proj_gather_to_next", ctx.down_proj_params["gather_to_next"]),
+            ("down_proj_gather_sync_sem_addr", ctx.down_proj_params["gather_sync_sem_addr"]),
+            ("down_proj_cb_internal_acc", ctx.down_proj_cb_internal_acc),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -2260,6 +2305,10 @@ class MoeRoutedExpertOp:
             # Silu fast-path — only used when fuse_silu=1. gate_proj has it; up/down pass 0.
             ("gate_proj_cb_out_silu", ctx.gate_proj_cb_out_silu),
             ("gate_proj_silu_tile_h", ctx.gate_proj_silu_tile_h),
+            ("gate_proj_cores_per_bank", ctx.gate_proj_params["cores_per_bank"]),
+            ("gate_proj_gather_to_next", ctx.gate_proj_params["gather_to_next"]),
+            ("gate_proj_gather_sync_sem_addr", ctx.gate_proj_params["gather_sync_sem_addr"]),
+            ("gate_proj_cb_internal_acc", ctx.gate_proj_cb_out),
             # Required for MatmulExpertCompressedDRAM ResetCBIn1 template param (referenced in moe_kernel.cpp outer scope)
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             # up_proj MatmulExpertCompressedDRAM compute — shares weight CB with gate_proj
@@ -2291,6 +2340,10 @@ class MoeRoutedExpertOp:
             ("up_proj_fuse_silu", 0),
             ("up_proj_cb_out_silu", 0),
             ("up_proj_silu_tile_h", 0),
+            ("up_proj_cores_per_bank", ctx.up_proj_params["cores_per_bank"]),
+            ("up_proj_gather_to_next", ctx.up_proj_params["gather_to_next"]),
+            ("up_proj_gather_sync_sem_addr", ctx.up_proj_params["gather_sync_sem_addr"]),
+            ("up_proj_cb_internal_acc", ctx.up_proj_cb_mm_out),
             # Mul compute
             ("mul_cb_in0", ctx.mul_cb_in0),
             ("mul_cb_in1", ctx.mul_cb_in1),
@@ -2328,6 +2381,10 @@ class MoeRoutedExpertOp:
             ("down_proj_fuse_silu", 0),
             ("down_proj_cb_out_silu", 0),
             ("down_proj_silu_tile_h", 0),
+            ("down_proj_cores_per_bank", ctx.down_proj_params["cores_per_bank"]),
+            ("down_proj_gather_to_next", ctx.down_proj_params["gather_to_next"]),
+            ("down_proj_gather_sync_sem_addr", ctx.down_proj_params["gather_sync_sem_addr"]),
+            ("down_proj_cb_internal_acc", ctx.down_proj_cb_internal_acc),
             # Required by decoder_block_kernel.cpp's DRAMStreamingMatmul CBIn1ResetAddr template param
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Shared matmul-expert compute args (index_offset: 0 for TP8 all-device broadcast)
@@ -2406,6 +2463,7 @@ class MoeRoutedExpertOp:
             ctx.down_proj_mcast_params["dst_cb_descriptor"],
             ctx.down_proj_params["cb_in1_descriptor"],
             ctx.down_proj_params["cb_out_descriptor"],
+            ctx.down_proj_params["cb_internal_acc_descriptor"],
             ctx.add_params["cb_in0_descriptor"],
             ctx.add_params["cb_in1_descriptor"],
             ctx.add_params["cb_out_descriptor"],
@@ -2454,6 +2512,18 @@ class MoeRoutedExpertOp:
                 value=1,
                 other_value=0,
             ),
+            # down_proj streamer cores: 16 cores when gather_to_next=True (8 primary
+            # + 8 secondary, each bank's 2 cores split N), otherwise 8 (= primaries).
+            # Senders (post-swap = secondaries) MUST be active so they NOC-write their
+            # accum onto the receiver/primary; otherwise the receiver waits forever.
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_down_proj_streamer_core",
+                core_range=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(c, c) for c in ctx.down_proj_params["compute_cores_list"]]
+                ),
+                value=1,
+                other_value=0,
+            ),
             # ReduceToOne core descriptors — will be updated per-device if enabled
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_reduce_worker_core",
@@ -2493,16 +2563,6 @@ class MoeRoutedExpertOp:
             ),
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="up_proj_vc",
-                core_values=ctx.vc_core_values,
-                other_value=0,
-            ),
-            PerCoreCompileTimeDescriptor(
-                named_compile_time_arg="down_proj_bank_id",
-                core_values=ctx.bank_id_core_values,
-                other_value=0,
-            ),
-            PerCoreCompileTimeDescriptor(
-                named_compile_time_arg="down_proj_vc",
                 core_values=ctx.vc_core_values,
                 other_value=0,
             ),
@@ -2549,6 +2609,21 @@ class MoeRoutedExpertOp:
                     PerCoreCompileTimeDescriptor(
                         named_compile_time_arg=f"{proj}_core_in_bank_idx",
                         core_values=pcv["core_in_bank_idx"],
+                        other_value=0,
+                    ),
+                    # bank_id / vc per-proj — for down_proj (cores_per_bank=2 in
+                    # gather mode) this is 16 entries; for gate/up (cores_per_bank=1)
+                    # it is 8 entries. Overrides the static ctx.bank_id_core_values
+                    # entries above which only had 8 entries (gate's primaries) and
+                    # caused down_proj's secondaries to fall back to other_value=0.
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=f"{proj}_bank_id",
+                        core_values=pcv["bank_id"],
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=f"{proj}_vc",
+                        core_values=pcv["vc"],
                         other_value=0,
                     ),
                     PerCoreCompileTimeDescriptor(
@@ -4108,6 +4183,25 @@ class MoeOp:
         cb19_desc.format_descriptors = [cb19_fmt]
         routed_ctx.down_proj_params["cb_out_descriptor"] = cb19_desc
         kv_offset += cb19_total_size
+
+        # down_proj_cb_internal_acc: aliases CB 19's L1 region (no offset advance —
+        # same physical L1 as down_proj_cb_out). The kernel routes per-expert
+        # push/pop bookkeeping through this CB so cb_out's metadata only updates
+        # once at the end (after the gather sync), eliminating the eltwise_add race.
+        cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            routed_ctx.down_proj_cb_internal_acc,
+            kv_buf,
+            address_offset=cb19_offset,
+            total_size=cb19_total_size,
+        )
+        cb_internal_acc_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=routed_ctx.down_proj_cb_internal_acc,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb_internal_acc_desc.format_descriptors = [cb_internal_acc_fmt]
+        routed_ctx.down_proj_params["cb_internal_acc_descriptor"] = cb_internal_acc_desc
 
         # Routing-only CBs (expert_scale, scalar working buffer)
         if routed_ctx.enable_routing:

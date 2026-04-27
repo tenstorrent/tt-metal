@@ -109,7 +109,23 @@ struct MatmulExpertCompressedDRAM {
         uint32_t num_subblocks_k_local_,
         // Dedicated global sem for K-reduction (passed as address). PACK on the reducer
         // polls it; NCRISC on senders increments. Separate from pipeline_sem (ring protocol).
-        uint32_t partial_sem_addr_>
+        uint32_t partial_sem_addr_,
+        // gather_to_next (accum_experts only): after all experts, sender NOC-writes its
+        // own per_core_n slot of cb_out to the receiver (next core in bank), so receiver
+        // ends up with [sender_n_slice | receiver_n_slice] = the bank's full N output.
+        // No reduction.
+        uint32_t gather_to_next_,
+        // Global L1 sem for sender TRISC → NCRISC sync (gather mode only). TRISC
+        // sem_atomic_inc(1) once after the per-expert accum loop completes; NCRISC
+        // spins on sem_atomic_load >= 1 then sem_atomic_dec(1) — back to 0 for the
+        // next loop iter.
+        uint32_t gather_sync_sem_addr_,
+        // Internal accumulation CB: aliases cb_out's L1 region but has independent
+        // CB metadata (fifo_wr_ptr / pages_received). Per-expert push/pop happens on
+        // this CB so consumers waiting on cb_out don't observe transient state.
+        // cb_out gets a single cb_push_back at the very end, AFTER the gather sync,
+        // which is the only consumer-visible "data ready" signal.
+        uint32_t cb_internal_acc_>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -158,6 +174,14 @@ struct MatmulExpertCompressedDRAM {
         // Only meaningful inside `if constexpr (inner_dim_reduction)` scope.
         static constexpr bool is_sender = !is_reducer;
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
+        // Gather (accum_experts only): receiver = last core in bank, sender = others.
+        // Mirrors inner_dim_reduce's is_reducer/is_sender derivation.
+        // Only meaningful inside `if constexpr (gather_to_next)` scope.
+        static constexpr bool gather_to_next = gather_to_next_ != 0;
+        static constexpr bool is_gather_receiver = (core_in_bank_idx + 1 == cores_per_bank);
+        static constexpr bool is_gather_sender = !is_gather_receiver;
+        static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
+        static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
     };
 
     template <
@@ -192,7 +216,15 @@ struct MatmulExpertCompressedDRAM {
         // the post-reduction silu fast-path (tile shape = [silu_tile_h, tile_w]).
         // silu_tile_h is pre-padded by op.py to a valid face_r_dim ∈ {2,4,8,16}.
         uint32_t cb_out_silu_,
-        uint32_t silu_tile_h_>
+        uint32_t silu_tile_h_,
+        // gather_to_next mirror — see ReaderCTArgs for semantics.
+        uint32_t cores_per_bank_,
+        uint32_t core_in_bank_idx_,
+        uint32_t next_core_noc_x_,
+        uint32_t next_core_noc_y_,
+        uint32_t gather_to_next_,
+        uint32_t gather_sync_sem_addr_,
+        uint32_t cb_internal_acc_>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -230,6 +262,16 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
         static constexpr uint32_t cb_out_silu = cb_out_silu_;
         static constexpr uint32_t silu_tile_h = silu_tile_h_;
+        // Gather (accum_experts only) — mirror of ReaderCTArgs derivation.
+        static constexpr uint32_t cores_per_bank = cores_per_bank_;
+        static constexpr uint32_t core_in_bank_idx = core_in_bank_idx_;
+        static constexpr uint32_t next_core_noc_x = next_core_noc_x_;
+        static constexpr uint32_t next_core_noc_y = next_core_noc_y_;
+        static constexpr bool gather_to_next = gather_to_next_ != 0;
+        static constexpr bool is_gather_receiver = (core_in_bank_idx + 1 == cores_per_bank);
+        static constexpr bool is_gather_sender = !is_gather_receiver;
+        static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
+        static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
     };
 
     struct WriterCTArgs {};
@@ -501,6 +543,35 @@ struct MatmulExpertCompressedDRAM {
                 }
             }
 
+            // Gather (accum_experts only). Sender NOC-writes its slot-0 accum result
+            // to the receiver's same numeric L1 address (= receiver's slot 0, which
+            // is in cb_out's region but where receiver's pack does NOT land —
+            // receiver's PACK is overridden once at start to slot 1, so slot 0 is
+            // free for sender's NOC). Sync via gather_sync_sem (TRISC inc once
+            // after all experts) so NCRISC doesn't unblock mid per-expert cycle.
+            // No reduction. Receiver's L1 ends up [sender_n_slice | receiver_n_slice].
+            if constexpr (CTArgs::accum_experts && CTArgs::gather_to_next) {
+                if constexpr (CTArgs::is_gather_sender) {
+                    if (num_dram_active > 0) {
+                        uint32_t output_tiles = CTArgs::per_core_n;
+                        uint32_t output_bytes = output_tiles * get_tile_size(CTArgs::cb_out);
+
+                        // Spin on the local L1 sem until TRISC inc'd it (= all packs done).
+                        // Wait for TRISC's all-experts-done signal via the L1 sem.
+                        while (unified_kernels::sem_atomic_load(CTArgs::gather_sync_sem_addr) < 1) {
+                        }
+                        uint32_t src_addr = get_read_ptr(CTArgs::cb_out);
+                        uint64_t dst_noc = get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, src_addr);
+                        noc_async_write_one_packet(src_addr, dst_noc, output_bytes);
+                        uint64_t sem_noc =
+                            get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, CTArgs::partial_sem_addr);
+                        noc_semaphore_inc(sem_noc, 1);
+                        // Reset to 0 so the next loop iter starts fresh.
+                        unified_kernels::sem_atomic_dec(CTArgs::gather_sync_sem_addr, 1);
+                    }
+                }
+            }
+
 #elif defined(COMPILE_FOR_TRISC)
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
             constexpr uint32_t tiles_per_expert = CTArgs::subblock_k * CTArgs::num_subblocks_k * CTArgs::per_core_n;
@@ -538,6 +609,16 @@ struct MatmulExpertCompressedDRAM {
             cb_wait_front(CTArgs::cb_index, 1);
 
             if constexpr (CTArgs::accum_experts) {
+                // Per-expert push/pop = full cb_out size, so wr/rd wrap back to base
+                // each cycle. cb_out is per_core_n in non-gather, cores_per_bank *
+                // per_core_n in gather (output tensor shard is widened so receiver
+                // has L1 space for sender's NOC alongside its own pack). Full-cap
+                // wraparound keeps PACK's local fifo_wr_ptr pinned at its override
+                // target (slot 1 for receiver) across all per-expert cycles, and
+                // makes NCRISC's get_read_ptr return base = slot 0 = sender's pack.
+                constexpr uint32_t cb_out_num_pages =
+                    CTArgs::gather_to_next ? CTArgs::cores_per_bank * CTArgs::per_core_n : CTArgs::per_core_n;
+
                 uint32_t num_dram_experts = 0;
                 for (uint32_t i = 0; i < num_active_experts; i++) {
                     // cb_wait_front on TRISC is UNPACK-only; MATH/PACK never waited
@@ -556,6 +637,22 @@ struct MatmulExpertCompressedDRAM {
                     }
                 }
 
+                // Gather receiver: pin PACK's local wr_ptr (on cb_internal_acc — the
+                // per-expert accumulation CB that aliases cb_out's L1 region) to slot 1.
+                // After each per-expert cb_push_back of the full cb size
+                // (cb_out_num_pages = cores_per_bank * per_core_n), fifo_wr_ptr wraps
+                // back to base + per_core_n_bytes (= slot 1). Sender's NOC lands at
+                // receiver's slot 0, giving [sender_n | receiver_n] order on cb_out's
+                // shared L1.
+                if constexpr (CTArgs::gather_to_next && CTArgs::is_gather_receiver) {
+                    PACK(({
+                        uint32_t base = unified_kernels::get_cb_buf_addr(CTArgs::cb_internal_acc);
+                        uint32_t page_size = unified_kernels::get_cb_page_size(CTArgs::cb_internal_acc);
+                        unified_kernels::override_cb_wr_ptr(
+                            CTArgs::cb_internal_acc, base + CTArgs::per_core_n * page_size);
+                    }));
+                }
+
                 uint32_t fmt_slot = 0;
                 uint32_t dram_idx = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
@@ -571,7 +668,7 @@ struct MatmulExpertCompressedDRAM {
                         continue;
                     }
 
-                    cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
+                    cb_reserve_back(CTArgs::cb_internal_acc, cb_out_num_pages);
 
                     if (dram_idx == 0) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -624,7 +721,7 @@ struct MatmulExpertCompressedDRAM {
                         tile_regs_commit();
                         tile_regs_wait();
                         for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                            pack_tile(sn, CTArgs::cb_out);
+                            pack_tile(sn, CTArgs::cb_internal_acc);
                         }
                         tile_regs_release();
                     }
@@ -632,22 +729,58 @@ struct MatmulExpertCompressedDRAM {
                     UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
                     MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
                     fmt_slot ^= 1;
-                    cb_push_back(CTArgs::cb_out, CTArgs::per_core_n);
 
-                    if (++dram_idx < num_dram_experts) {
-                        cb_wait_front(CTArgs::cb_out, CTArgs::per_core_n);
-                        cb_pop_front(CTArgs::cb_out, CTArgs::per_core_n);
-                    }
+                    // Push/pop on cb_internal_acc — keeps PACK's wr_ptr pinned via the
+                    // wraparound trick AND keeps the per-expert bookkeeping invisible to
+                    // cb_out's consumers (eltwise_add). Push and pop EVERY expert (even
+                    // the last) so cb_internal_acc ends balanced; the consumer-facing
+                    // signal is the single cb_push_back(cb_out, …) after the gather sync.
+                    cb_push_back(CTArgs::cb_internal_acc, cb_out_num_pages);
+                    cb_wait_front(CTArgs::cb_internal_acc, cb_out_num_pages);
+                    cb_pop_front(CTArgs::cb_internal_acc, cb_out_num_pages);
+                    ++dram_idx;
                 }
 
                 PACK((llk_pack_reconfig_l1_acc(0)));
 
-                // pop_out: drain the final accumulated per_core_n that was
-                // pushed above. Skip if no DRAM experts pushed anything.
+                if constexpr (CTArgs::gather_to_next) {
+                    // After all per-expert work is done, sender TRISC sem_atomic_inc's
+                    // gather_sync_sem so NCRISC can unblock and issue the NOC write.
+                    // We can't reuse cb_out's wait_front from NCRISC because cb_out's
+                    // per-expert push/pop cycles its metadata mid-loop. The sem is set
+                    // exactly once per iter, after all packs have landed.
+                    if constexpr (CTArgs::is_gather_sender) {
+                        if (num_dram_experts > 0) {
+                            PACK((unified_kernels::sem_atomic_inc(CTArgs::gather_sync_sem_addr, 1)));
+                        }
+                    } else {
+                        // Receiver: PACK polls partial_sem (sender NCRISC increments
+                        // after issuing the NOC write) then atomic_dec back to 0 so
+                        // the next loop iteration starts fresh.
+                        if (num_dram_experts > 0) {
+                            PACK(({
+                                while (unified_kernels::sem_atomic_load(CTArgs::partial_sem_addr) < 1) {
+                                }
+                                unified_kernels::sem_atomic_dec(CTArgs::partial_sem_addr, 1);
+                            }));
+                        }
+                    }
+                }
+
+                // Single consumer-facing push on cb_out. For gather receivers this lands
+                // AFTER PACK's partial_sem dec above, so cb_wait_front(cb_out) on the
+                // consumer side (eltwise_add) only unblocks once both slot 1 (receiver's
+                // PACK accum on cb_internal_acc) AND slot 0 (sender's NOC write) have
+                // landed in cb_out's shared L1.
+                if (num_dram_experts > 0) {
+                    cb_push_back(CTArgs::cb_out, cb_out_num_pages);
+                }
+
+                // pop_out: drain the final cb_out push (looping mode).
                 if constexpr (pop_out) {
                     if (num_dram_experts > 0) {
-                        cb_wait_front(CTArgs::cb_out, CTArgs::per_core_n);
-                        cb_pop_front(CTArgs::cb_out, CTArgs::per_core_n);
+                        cb_wait_front(CTArgs::cb_out, cb_out_num_pages);
+                        cb_pop_front(CTArgs::cb_out, cb_out_num_pages);
                     }
                 }
             } else if constexpr (CTArgs::inner_dim_reduction) {

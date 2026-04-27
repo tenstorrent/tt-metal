@@ -74,6 +74,11 @@ struct Core {
     struct Routed {
         static constexpr bool is_gate_mm_core = get_named_compile_time_arg_val("is_gate_mm_core") == 1;
         static constexpr bool is_gate_proj_core = get_named_compile_time_arg_val("is_gate_proj_core") == 1;
+        // 16-core down_proj grid (8 primaries + 8 secondaries) when gather_to_next=True;
+        // 8 cores otherwise. Senders (post-swap = secondaries) MUST be active so they
+        // NOC-write their accum onto the receiver/primary.
+        static constexpr bool is_down_proj_streamer_core =
+            get_named_compile_time_arg_val("is_down_proj_streamer_core") == 1;
     };
     struct Shared {
         static constexpr bool is_compute_core = get_named_compile_time_arg_val("is_shared_compute_core") == 1;
@@ -179,7 +184,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_k_parallel_per_bank"),
                 get_named_compile_time_arg_val("gate_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
-                get_named_compile_time_arg_val("gate_proj_partial_sem_addr")>;
+                get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_gather_to_next"),
+                get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_internal_acc")>;
 
             // up_proj DRAM Matmul Expert Compressed (reader) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
@@ -218,7 +226,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_k_parallel_per_bank"),
                 get_named_compile_time_arg_val("up_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
-                get_named_compile_time_arg_val("up_proj_partial_sem_addr")>;
+                get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_gather_to_next"),
+                get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_internal_acc")>;
 
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
@@ -273,7 +284,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_k_parallel_per_bank"),
                 get_named_compile_time_arg_val("down_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
-                get_named_compile_time_arg_val("down_proj_partial_sem_addr")>;
+                get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_gather_to_next"),
+                get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_internal_acc")>;
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
@@ -853,7 +867,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_out_silu"),
-                get_named_compile_time_arg_val("gate_proj_silu_tile_h")>;
+                get_named_compile_time_arg_val("gate_proj_silu_tile_h"),
+                get_named_compile_time_arg_val("gate_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("gate_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("gate_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("gate_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("gate_proj_gather_to_next"),
+                get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_internal_acc")>;
 
             // up_proj DRAM Matmul Expert Compressed (compute) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
@@ -884,7 +905,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_out_silu"),
-                get_named_compile_time_arg_val("up_proj_silu_tile_h")>;
+                get_named_compile_time_arg_val("up_proj_silu_tile_h"),
+                get_named_compile_time_arg_val("up_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("up_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("up_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("up_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("up_proj_gather_to_next"),
+                get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_internal_acc")>;
 
             // Eltwise Mul (compute)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
@@ -936,7 +964,14 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_out_silu"),
-                get_named_compile_time_arg_val("down_proj_silu_tile_h")>;
+                get_named_compile_time_arg_val("down_proj_silu_tile_h"),
+                get_named_compile_time_arg_val("down_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("down_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("down_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("down_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("down_proj_gather_to_next"),
+                get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_internal_acc")>;
 
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
@@ -944,8 +979,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("add_cb_in1"),
                 get_named_compile_time_arg_val("add_cb_out"),
                 get_named_compile_time_arg_val("add_num_tiles"),
-                get_named_compile_time_arg_val("down_proj_cb_out"),      // cb_in0_wait (actual producer)
-                get_named_compile_time_arg_val("down_proj_per_core_n"),  // cb_in0_wait_tiles
+                get_named_compile_time_arg_val("down_proj_cb_out"),  // cb_in0_wait (actual producer)
+                // Full per-primary N after gather: per_core_n × cores_per_bank.
+                // gather=False keeps cores_per_bank=1 → equals per_core_n (gate/up unchanged).
+                get_named_compile_time_arg_val("down_proj_per_core_n") *
+                    get_named_compile_time_arg_val("down_proj_cores_per_bank"),  // cb_in0_wait_tiles
                 get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
                 get_named_compile_time_arg_val("add_sender_index"),
                 get_named_compile_time_arg_val("add_slice_size_bytes")>;
@@ -1255,16 +1293,17 @@ void kernel_main() {
             gate();
         }
 
-        // 5. Mcast Index: Broadcast expert indices to gate_proj cores only
-        // Uses dedicated mcast with IsReceiverCore=is_gate_proj_core so only gate_proj
-        // cores push to CB 10. Other grid cores just drain the semaphore (no CB ops).
+        // 5. Mcast Index: Broadcast expert indices to all matmul-streamer cores.
+        // IsReceiverCore=is_down_proj_streamer_core (16 cores in gather mode, 8 otherwise);
+        // it's a superset of is_gate_proj_core so gate/up still get cb_index pushed.
+        // Other grid cores just drain the semaphore (no CB ops).
         {
             DeviceZoneScopedN("MCAST_INDEX");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
                 Core::is_mcast_grid_core,
-                Core::Routed::is_gate_proj_core,
+                Core::Routed::is_down_proj_streamer_core,
                 true,
                 /*ReceiverOnBrisc=*/true>
                 index_mcast;
@@ -1416,14 +1455,15 @@ void kernel_main() {
             down_proj_gather(moe.routed.down_proj_gather_args);
         }
 
-        // 11. down_proj Mcast: Broadcast gathered fused output to gate_proj cores
+        // 11. down_proj Mcast: Broadcast gathered fused output to all down_proj streamer cores
+        // (16 cores in gather mode, 8 otherwise) so secondaries' cb_in0 is also pushed.
         {
             DeviceZoneScopedN("DOWN_PROJ_MCAST");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
                 Core::is_mcast_grid_core,
-                Core::Routed::is_gate_proj_core,
+                Core::Routed::is_down_proj_streamer_core,
                 true,
                 /*ReceiverOnBrisc=*/true>
                 down_proj_mcast;
@@ -1431,10 +1471,13 @@ void kernel_main() {
         }
 
         // 12. down_proj: DRAM Matmul Expert Compressed (PopIndex=true: last consumer of expert index)
+        //     Active on `is_down_proj_streamer_core` (16 cores when gather_to_next=True,
+        //     8 cores otherwise) so senders (= secondaries post-swap) NOC-write their
+        //     accum onto the receiver/primary.
         {
             DeviceZoneScopedN("DOWN_PROJ");
             deepseek_b1_ops::MatmulExpertCompressedDRAM::
-                Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_gate_proj_core, true, true>
+                Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_down_proj_streamer_core, true, true>
                     down_proj;
             down_proj();
         }
