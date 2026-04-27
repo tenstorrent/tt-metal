@@ -540,10 +540,16 @@ class ResBlock(Module):
             pad_h = H_full - norm_h
             if pad_w > 0:
                 last_col = x_rm[:, :, norm_w - 1 : norm_w, :]
-                x_rm = ttnn.concat([x_rm] + [last_col] * pad_w, dim=2)
+                pad_block_w = ttnn.repeat(last_col, [1, 1, pad_w, 1])
+                ttnn.deallocate(last_col)
+                x_rm = ttnn.concat([x_rm, pad_block_w], dim=2)
+                ttnn.deallocate(pad_block_w)
             if pad_h > 0:
                 last_row = x_rm[:, norm_h - 1 : norm_h, :, :]
-                x_rm = ttnn.concat([x_rm] + [last_row] * pad_h, dim=1)
+                pad_block_h = ttnn.repeat(last_row, [1, pad_h, 1, 1])
+                ttnn.deallocate(last_row)
+                x_rm = ttnn.concat([x_rm, pad_block_h], dim=1)
+                ttnn.deallocate(pad_block_h)
         return x_rm
 
     def _gather_norm_partition(self, x_4d, norm, N, T, H, W, C, logical_h, logical_w):
