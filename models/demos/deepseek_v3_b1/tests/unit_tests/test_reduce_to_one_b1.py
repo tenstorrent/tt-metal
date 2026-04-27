@@ -352,6 +352,7 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-def test_reduce_to_one_2d(bh_2d_mesh_device):
+@pytest.mark.parametrize("num_iterations", [1, 100])
+def test_reduce_to_one_2d(bh_2d_mesh_device, num_iterations):
     """Test reduce_to_one with 2D fabric."""
-    run_reduce_to_one(bh_2d_mesh_device, num_iterations=100)
+    run_reduce_to_one(bh_2d_mesh_device, num_iterations=num_iterations)

@@ -235,12 +235,8 @@ class ReduceToOneB1:
         ]
         worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
 
-        # Persistent-signal sync setup for downstream sockets
-        agg_sem_addr = 0
-        total_num_workers_count = len(shard_cores) if downstream_sockets is not None else 0
-        if downstream_sockets is not None:
-            agg_sem = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
-            agg_sem_addr = ttnn.get_global_semaphore_address(agg_sem)
+        sync_sem = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+        sync_sem_addr = ttnn.get_global_semaphore_address(sync_sem)
 
         for row in range(mesh_rows):
             for col in range(mesh_cols):
@@ -368,13 +364,11 @@ class ReduceToOneB1:
                 ]
 
                 # Writer (BRISC) compile-time args
-                device_total_num_workers = (
-                    total_num_workers_count if (is_root1 and downstream_sockets is not None) else 0
-                )
-                device_agg_output_size = agg_output_size_bytes if (is_root1 and downstream_sockets is not None) else 0
-                device_forward_metadata_size = (
-                    forward_metadata_size_bytes if (is_root1 and downstream_sockets is not None) else 0
-                )
+                aggregator_core = input_cores_list[0]
+                fabric_sync_core = fabric_cores[0]  # TODO: (GR) check it's the right core
+                agg_core_phys = device.worker_core_from_logical_core(aggregator_core)
+                fabric_sync_core_phys = device.worker_core_from_logical_core(fabric_sync_core)
+
                 writer_ct_args = [
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
@@ -389,9 +383,19 @@ class ReduceToOneB1:
                     ("output_core_noc_y", output_core_phys.y),
                     ("num_workers", num_workers_per_column),
                     ("slot_size_bytes", slot_size_bytes),
-                    ("total_num_workers", device_total_num_workers),
-                    ("agg_output_size_bytes", device_agg_output_size),
-                    ("forward_metadata_size_bytes", device_forward_metadata_size),
+                    ("enable_downstream_socket", downstream_sockets is not None),
+                    ("total_num_workers", len(shard_cores)),
+                    ("forward_metadata_size_bytes", forward_metadata_size_bytes),
+                    ("agg_output_size_bytes", agg_output_size_bytes),
+                    ("agg_sem_l1_addr", sync_sem_addr),
+                    ("agg_core_noc_x", agg_core_phys.x),
+                    ("agg_core_noc_y", agg_core_phys.y),
+                    ("fabric_sync_core_noc_x", fabric_sync_core_phys.x),
+                    ("fabric_sync_core_noc_y", fabric_sync_core_phys.y),
+                    ("fabric_sync_sem_addr", sync_sem_addr),
+                    ("num_fabric_cores", len(fabric_cores) - 1),
+                    ("fabric_rt_arg_base", 0),
+                    ("do_tear_down_sync", num_iterations == 1),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -415,14 +419,6 @@ class ReduceToOneB1:
                 ]
 
                 # === Per-Core Runtime Args ===
-                # Persistent-signal core setup for ROOT1 with downstream sockets
-                # First worker core is the designated persistent-signal coordinator
-                persistent_core_noc_x = 0
-                persistent_core_noc_y = 0
-                if is_root1 and downstream_sockets is not None:
-                    persistent_core_phys = device.worker_core_from_logical_core(input_cores_list[0])
-                    persistent_core_noc_x = persistent_core_phys.x
-                    persistent_core_noc_y = persistent_core_phys.y
 
                 # Resolve metadata L1 address for ROOT1 last-worker forwarding
                 device_metadata_l1_addr = metadata_l1_addr if (is_root1 and forward_metadata_size_bytes > 0) else 0
@@ -451,9 +447,6 @@ class ReduceToOneB1:
                         socket_config_addr,
                         device_metadata_l1_addr,
                     ]
-                    if is_root1 and downstream_sockets is not None:
-                        worker_args.extend([agg_sem_addr, persistent_core_noc_x, persistent_core_noc_y])
-
                     brisc_per_core_args.append((core, worker_args))
 
                 # Fabric cores BRISC args: worker semaphore addresses (fabric args appended later)
@@ -540,6 +533,18 @@ class ReduceToOneB1:
                         value=1,
                         other_value=0,
                     ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_aggregator_core",
+                        core_range=ttnn.CoreRangeSet([ttnn.CoreRange(aggregator_core, aggregator_core)]),
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_fabric_sync_core",
+                        core_range=ttnn.CoreRangeSet([ttnn.CoreRange(fabric_sync_core, fabric_sync_core)]),
+                        value=1,
+                        other_value=0,
+                    ),
                 ]
                 # === Unified Kernel Descriptor ===
                 unified_kernel = UnifiedKernelDescriptor(
@@ -561,7 +566,12 @@ class ReduceToOneB1:
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()
-                fabric_group = kernel_result.get_group_by_arg("is_fabric_core", 1)
+                fabric_kernel_idx_by_core = {
+                    (c.x, c.y): g.brisc_kernel_index
+                    for g in kernel_result.groups
+                    if g.compile_time_arg_values.get("is_fabric_core") == 1
+                    for c in ttnn.corerange_to_cores(g.core_range_set)
+                }
 
                 # Worker→fabric semaphores are global (created before the loop)
                 semaphore_descriptors = []
@@ -578,10 +588,10 @@ class ReduceToOneB1:
                 # Add fabric connection args for fabric cores (must be done after program creation)
                 # ROOT1 doesn't send via fabric for exit socket, so skip that fabric setup
                 if not is_root1:
-                    fabric_kernel_idx = fabric_group.brisc_kernel_index
                     for fc_idx, fc in enumerate(fabric_cores):
                         col_idx = fc_idx
                         link_idx = 0 if col_idx < num_columns // 2 else 1
+                        fabric_kernel_idx = fabric_kernel_idx_by_core[(fc.x, fc.y)]
                         fabric_rt_args_ref = program.kernels[fabric_kernel_idx].runtime_args[fc.x][fc.y]
                         fabric_conn_args = ttnn.setup_fabric_connection(
                             fabric_node_id,

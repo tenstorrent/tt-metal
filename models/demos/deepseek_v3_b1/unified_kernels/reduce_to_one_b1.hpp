@@ -62,7 +62,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t received_cb = receivedCb;
-        static constexpr uint32_t is_fabric_core = isFabricCore;
+        static constexpr uint32_t is_fabric_core = isFabricCore == 1;
     };
 
     // Writer (BRISC) compile-time args
@@ -81,13 +81,21 @@ struct ReduceToOneB1 {
         uint32_t numWorkers,
         uint32_t slotSizeBytes,
         uint32_t isFabricCore,
-        bool enableDownstreamSocket,
-        uint32_t fabricRtArgBase = 0,
-        uint32_t totalNumWorkers = 0,
-        uint32_t aggOutputSizeBytes = 0,
-        uint32_t persistentFabricRtArgBase = 0,
-        uint32_t isReducePersistentFabricCore = 0,
-        uint32_t forwardMetadataSizeBytes = 0>
+        uint32_t enableDownstreamSocket,
+        uint32_t totalNumWorkers,
+        uint32_t forwardMetadataSizeBytes,
+        uint32_t isAggregatorCore,
+        uint32_t aggOutputSizeBytes,
+        uint32_t aggSemL1Addr,
+        uint32_t aggCoreNocX,
+        uint32_t aggCoreNocY,
+        uint32_t isFabricSyncCore,
+        uint32_t fabricSyncCoreNoCX,
+        uint32_t fabricSyncCoreNoCY,
+        uint32_t fabricSyncSemAddr,
+        uint32_t numFabricCores,
+        uint32_t fabricRtArgBase,
+        uint32_t doTearDownSync>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -102,14 +110,22 @@ struct ReduceToOneB1 {
         static constexpr uint32_t output_core_noc_y = outputCoreNocY;
         static constexpr uint32_t num_workers = numWorkers;
         static constexpr uint32_t slot_size_bytes = slotSizeBytes;
-        static constexpr uint32_t is_fabric_core = isFabricCore;
-        static constexpr uint32_t fabric_rt_arg_base = fabricRtArgBase;
+        static constexpr bool is_fabric_core = isFabricCore == 1;
+        static constexpr bool enable_downstream_socket = enableDownstreamSocket == 1;
         static constexpr uint32_t total_num_workers = totalNumWorkers;
-        static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
-        static constexpr bool enable_downstream_socket = enableDownstreamSocket;
-        static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
-        static constexpr uint32_t is_reduce_persistent_fabric_core = isReducePersistentFabricCore;
         static constexpr uint32_t forward_metadata_size_bytes = forwardMetadataSizeBytes;
+        static constexpr bool is_aggregator_core = isAggregatorCore == 1;
+        static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
+        static constexpr uint32_t agg_sem_l1_addr = aggSemL1Addr;
+        static constexpr uint32_t agg_core_noc_x = aggCoreNocX;
+        static constexpr uint32_t agg_core_noc_y = aggCoreNocY;
+        static constexpr bool is_fabric_sync_core = isFabricSyncCore == 1;
+        static constexpr uint32_t fabric_sync_core_noc_x = fabricSyncCoreNoCX;
+        static constexpr uint32_t fabric_sync_core_noc_y = fabricSyncCoreNoCY;
+        static constexpr uint32_t fabric_sync_sem_addr = fabricSyncSemAddr;
+        static constexpr uint32_t num_fabric_cores = numFabricCores;
+        static constexpr uint32_t fabric_rt_arg_base = fabricRtArgBase;
+        static constexpr bool do_tear_down_sync = doTearDownSync == 1;
     };
 
     // Compute (TRISC) compile-time args
@@ -128,7 +144,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t received_cb = receivedCb;
         static constexpr uint32_t output_cb = outputCb;
         static constexpr uint32_t scratch_cb = scratchCb;
-        static constexpr uint32_t is_fabric_core = isFabricCore;
+        static constexpr uint32_t is_fabric_core = isFabricCore == 1;
     };
 
     // ========================================================================
@@ -154,13 +170,6 @@ struct ReduceToOneB1 {
         uint32_t shard_idx;
         uint32_t socket_config_addr;  // Per-worker downstream socket config address
         uint32_t metadata_addr;       // L1 address of metadata (only used by last worker when forward_metadata > 0)
-        uint32_t agg_sem_l1_addr;     // Persistent-signal sync semaphore L1 address (global sem)
-        uint32_t agg_core_noc_x;      // Persistent-signal core physical NOC x
-        uint32_t agg_core_noc_y;      // Persistent-signal core physical NOC y
-        uint32_t persistent_enable;   // 1 if this core should send the persistent signal
-        uint32_t persistent_dst_noc_x;     // Bcast sender physical NOC x on entry device
-        uint32_t persistent_dst_noc_y;     // Bcast sender physical NOC y on entry device
-        uint32_t persistent_dst_sem_addr;  // persistent_next_iter_semaphore address on entry device
     };
 
     // Writer (BRISC) runtime args for fabric cores - handled dynamically via build_from_args
@@ -255,18 +264,7 @@ struct ReduceToOneB1 {
             // ================================================================
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
-                if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                    // Root1
-                    if constexpr (CTArgs::is_reduce_persistent_fabric_core == 1) {
-                        // Persistent fabric core: wait for aggregator signal
-                        size_t p_idx = CTArgs::fabric_rt_arg_base + CTArgs::num_workers;
-                        uint32_t wait_sem_addr = get_arg_val<uint32_t>(p_idx++);
-                        volatile tt_l1_ptr uint32_t* wait_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
-                        noc_semaphore_wait_min(wait_sem_ptr, 1);
-                        unified_kernels::semaphore_dec(wait_sem_ptr);
-                    }
-                } else {
+                if constexpr (CTArgs::device_role != MESH_ROOT1) {
                     // Non-Root1
 
                     // Read worker semaphore addresses from runtime args
@@ -305,6 +303,27 @@ struct ReduceToOneB1 {
 
                     fabric_sender.close();
                     noc_async_write_barrier();
+
+                    if constexpr (CTArgs::do_tear_down_sync) {
+                        uint64_t fabric_sync_sem_noc_addr = get_noc_addr(
+                            CTArgs::fabric_sync_core_noc_x,
+                            CTArgs::fabric_sync_core_noc_y,
+                            CTArgs::fabric_sync_sem_addr);
+                        noc_semaphore_inc(fabric_sync_sem_noc_addr, 1);
+                        noc_async_atomic_barrier();
+                    }
+                }
+
+                // If root_1, waits for signal from root_1 aggregator core, signalling reduce_to_one output passed to
+                // socket, and pipeline_stage_sync can begin. On other devices, wait for signal from all other fabric
+                // cores, ensuring pipeline_stage_sync has access to fabric_connection for intermediate sender devices.
+                if constexpr (CTArgs::is_fabric_sync_core && CTArgs::do_tear_down_sync) {
+                    constexpr uint32_t wait_value =
+                        CTArgs::device_role == MESH_ROOT1 ? 1 : CTArgs::num_fabric_cores - 1;
+                    volatile tt_l1_ptr uint32_t* wait_sem_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fabric_sync_sem_addr);
+                    noc_semaphore_wait_min(wait_sem_ptr, 1);
+                    unified_kernels::semaphore_dec(wait_sem_ptr);
                 }
             } else {
                 // Worker core logic
@@ -313,24 +332,32 @@ struct ReduceToOneB1 {
 
                 // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                    // Notify the aggregator (or persistent forwarder) that this worker is done.
+                    // Worker cores drain to a single aggregator core, which then signals the fabric
+                    // sync core. When pipeline_stage_sync then executes on the sync fabric core, it
+                    // won't start execution until reduce_to_one output fed to output socket.
                     // Issued between socket_notify_receiver and socket_barrier in the socket branch
                     // so the downstream consumer can wake up while we wait for the socket ack.
                     auto signal_aggregator = [&]() __attribute__((always_inline)) {
-                        if (args.persistent_enable != 0) {
+                        if constexpr (!CTArgs::do_tear_down_sync) {
+                            return;
+                        }
+
+                        if constexpr (CTArgs::is_aggregator_core) {
                             volatile tt_l1_ptr uint32_t* agg_sem_ptr =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::agg_sem_l1_addr);
                             noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
                             noc_semaphore_set(agg_sem_ptr, 0);
 
-                            uint64_t fc_sem = get_noc_addr(
-                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                            noc_semaphore_inc(fc_sem, 1);
+                            uint64_t fabric_sync_sem_noc_addr = get_noc_addr(
+                                CTArgs::fabric_sync_core_noc_x,
+                                CTArgs::fabric_sync_core_noc_y,
+                                CTArgs::fabric_sync_sem_addr);
+                            noc_semaphore_inc(fabric_sync_sem_noc_addr, 1);
                             noc_async_atomic_barrier();
-                        } else if (args.agg_sem_l1_addr != 0) {
-                            uint64_t agg_sem_noc =
-                                get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                            noc_semaphore_inc(agg_sem_noc, 1);
+                        } else {
+                            uint64_t agg_sem_noc_addr =
+                                get_noc_addr(CTArgs::agg_core_noc_x, CTArgs::agg_core_noc_y, CTArgs::agg_sem_l1_addr);
+                            noc_semaphore_inc(agg_sem_noc_addr, 1);
                             noc_async_atomic_barrier();
                         }
                     };
