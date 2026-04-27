@@ -1622,10 +1622,6 @@ FORCE_INLINE void update_bw_cycles(
         }
     }
 }
-<<<<<<< HEAD
-
-=======
->>>>>>> f0d05f88566 (Checkpoint all debug code)
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
