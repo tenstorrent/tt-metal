@@ -1054,14 +1054,12 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tile_height = tilize_input_tensor.tensor_spec().tile().get_height();
     const uint32_t output_height_shard_dim = args.output_height_shard_dim;
 
-    // this logic is awkward. needs to match selective_reduce_combine_program_factory. TODO (AM) clean up
+    // this logic is awkward. needs to match selective_reduce_combine_program_factory.
     constexpr auto double_buffer = 2;
     const auto shards = tilize_output_tensor.memory_config().shard_spec()->grid.num_cores();
     const auto token_expert_row_offset = tilize_output_tensor.logical_shape().volume() / shards /
                                          (hidden_size / combine_data_parallel_cores / double_buffer) /
                                          combine_token_parallel_cores;
-
-    std::cout << "compute token_expert_row_offset: " << token_expert_row_offset << "\n";
 
     // activation function
     const ttnn::experimental::prim::detail::MoEActivationFunction activation_type = args.activation_type;
@@ -1103,10 +1101,6 @@ MoEComputeMeshWorkloadFactory::create_at(
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
-
-    std::cout << "combine_cores.size(): " << combine_cores.size()
-              << " combine_data_parallel_cores: " << combine_data_parallel_cores << " combine_token_parallel_cores "
-              << combine_token_parallel_cores << std::endl;
 
     std::map<std::string, std::string> dm1_defines = {
         {"OUTPUT_SHARD_CORE_MAP", serialize_physical_core_coords(combine_cores, *mesh_device)}};
