@@ -91,22 +91,17 @@ void kernel_main() {
     experimental::CircularBuffer cb_ex_sqr_obj(cb_ex_sqr);
 
 #ifdef RMSNORM
-    if (is_allgather_worker) {
-        binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
-    } else {
-        binary_op_init_common(cb_in0, cb_scaler_global, cb_out);
-    }
+    constexpr uint32_t init_in_cb = is_allgather_worker ? cb_stats : cb_in0;
+    constexpr uint32_t init_out_cb = is_allgather_worker ? cb_var : cb_out;
     constexpr uint32_t stats_tiles = 1;
     constexpr uint32_t cb_xmm = cb_in0;  // x
 #else
-    if (is_allgather_worker) {
-        binary_op_init_common(cb_stats, cb_scaler_global, cb_stats_reduced);
-    } else {
-        binary_op_init_common(cb_in0, cb_scaler_global, cb_out);
-    }
+    constexpr uint32_t init_in_cb = is_allgather_worker ? cb_stats : cb_in0;
+    constexpr uint32_t init_out_cb = is_allgather_worker ? cb_stats_reduced : cb_out;
     constexpr uint32_t stats_tiles = 2;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
 #endif
+    binary_op_init_common(init_in_cb, cb_scaler_global, init_out_cb);
     experimental::CircularBuffer cb_xmm_obj(cb_xmm);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
