@@ -30,6 +30,7 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
+    assert output_tensor.memory_config() == input_tensor.memory_config()
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
@@ -155,3 +156,10 @@ def test_mean_shard(device, mem_config, keepdim):
         atol=0.002,
         frobenius_threshold=0.0055,
     )
+
+    output_mem_config = output_tensor.memory_config()
+    if mem_config == ttnn.DRAM_MEMORY_CONFIG:
+        assert output_mem_config == mem_config
+    else:
+        assert output_mem_config.buffer_type == ttnn.BufferType.L1
+        assert output_mem_config.is_sharded()
