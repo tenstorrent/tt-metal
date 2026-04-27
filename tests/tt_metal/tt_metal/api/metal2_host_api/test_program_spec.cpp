@@ -1892,8 +1892,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("is a compute kernel with 1 semaphore binding(s). "
-                                 "On WH/BH, semaphores can only be bound to data movement kernels.")));
+            ::testing::HasSubstr("has semaphore bindings, but it is a compute kernel.")));
 }
 
 TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {

@@ -93,14 +93,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     const string path = out_dir + "kernel_bindings_generated.h";
 
     // Get the DFB bindings from the settings callback
-    // Sort them to ensure the file output is deterministic (note: this is strictly unnecessary, could remove)
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
     vector<pair<string, uint16_t>> dfb_entries;
     settings.process_dataflow_buffer_local_accessor_handles(
         [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
     // Get the semaphore bindings from the settings callback
-    // Sort them to ensure the file output is deterministic (note: this is strictly unnecessary, could remove)
+    // Sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
     vector<pair<string, uint16_t>> sem_entries;
     settings.process_semaphore_local_accessor_handles(
         [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
