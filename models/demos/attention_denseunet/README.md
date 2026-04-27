@@ -1,265 +1,186 @@
-# Attention DenseUNet - TTNN Implementation
+# Attention DenseUNet (TTNN)
 
-## Overview
+## Platforms
 
-This is the TTNN implementation of **Attention DenseUNet** for medical image segmentation and general semantic segmentation tasks on Tenstorrent hardware (Wormhole N150/N300).
+- Wormhole (N150 / N300 class devices)
 
-Attention DenseUNet combines:
-- **DenseNet Encoder**: Densely connected blocks for efficient feature reuse
-- **Attention Gates**: Selective emphasis on relevant spatial regions during decoding
-- **U-Net Architecture**: Skip connections with upsampling for precise localization
+## Introduction
 
-This implementation is part of bounty [#30863](https://github.com/tenstorrent/tt-metal/issues/30863).
+This demo implements **Attention DenseUNet** using TTNN APIs for segmentation workloads on Tenstorrent hardware.
 
-## Model Architecture
+The model combines:
 
-### Key Components
+- DenseNet-style encoder blocks
+- Attention-gated skip connections
+- U-Net decoder with transposed convolutions
 
-1. **DenseNet Encoder**
-   - 4 Dense Blocks with growth rate = 16
-   - Each block contains 4 dense layers
-   - Dense connections: each layer receives features from all preceding layers
-   - Transition layers compress channels (compression = 0.5) and reduce spatial dims via pooling
+Tracking issue / bounty: [#30863](https://github.com/tenstorrent/tt-metal/issues/30863)
 
-2. **Bottleneck**
-   - 2 convolution blocks at lowest resolution
-   - Processes features before decoder path
+## Repo Layout
 
-3. **Attention-Gated Decoder**
-   - 4 decoder stages with transposed convolution for upsampling
-   - **Attention Gates**: Weight skip connections based on gating signal from decoder
-   - Decoder blocks refine concatenated features
-
-4. **Architecture Flow** (for 256×256 input):
-   ```
-   Input (3, 256, 256)
-     ↓ Conv0
-   (32, 256, 256)
-     ↓ DenseBlock1 → TransitionDown
-   (48, 128, 128)
-     ↓ DenseBlock2 → TransitionDown
-   (56, 64, 64)
-     ↓ DenseBlock3 → TransitionDown
-   (60, 32, 32)
-     ↓ DenseBlock4 → TransitionDown
-   (62, 16, 16)
-     ↓ Bottleneck
-   (62, 16, 16)
-     ↓ UpConv + Attention + Decoder
-   (124, 32, 32)
-     ↓ UpConv + Attention + Decoder
-   (120, 64, 64)
-     ↓ UpConv + Attention + Decoder
-   (112, 128, 128)
-     ↓ UpConv + Attention + Decoder
-   (96, 256, 256)
-     ↓ Conv Out
-   Output (1, 256, 256)
-   ```
-
-### Model Parameters
-
-| Parameter | Value |
-|-----------|-------|
-| Initial Features | 32 |
-| Growth Rate | 16 |
-| Layers per Block | (4, 4, 4, 4) |
-| Compression | 0.5 |
-| Total Parameters | ~1.5M |
-
-## Prerequisites
-
-1. **TT-Metalium / TT-NN Installation**
-   - Follow [INSTALLING.md](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-
-2. **Python Dependencies**
-   ```bash
-   pip install torch torchvision scikit-image
-   ```
-
-3. **Hardware**
-   - Wormhole N150 or N300
-
-## Directory Structure
-
-```
+```text
 models/demos/attention_denseunet/
-├── README.md                        # This file
-├── __init__.py
-├── reference/
-│   ├── __init__.py
-│   └── model.py                     # PyTorch reference implementation
-├── tt/
-│   ├── __init__.py
-│   ├── common.py                    # Constants and preprocessing
-│   ├── config.py                    # Layer configurations and builder
-│   └── model.py                     # TTNN model implementation
-├── demo/
-│   ├── __init__.py
-│   └── demo.py                      # Demo script for inference
-└── tests/
-    ├── __init__.py
-    └── test_attention_denseunet.py  # Test suite with PCC validation
+├── README.md
+├── eval/evaluate_iou_dice.py       # IoU/Dice evaluator
+├── reference/model.py              # PyTorch reference model
+├── tt/common.py                    # constants + parameter preprocessing
+├── tt/config.py                    # TTNN configs + optimization presets
+├── tt/model.py                     # TTNN model implementation
+├── demo/demo.py                    # direct CLI demo + pytest demo entry
+└── tests/test_attention_denseunet.py
 ```
 
-## Quick Start
+## Setup
 
-### 1. Run PyTorch Reference Demo
+```bash
+source python_env/bin/activate
+```
 
-Validate the PyTorch implementation:
+If needed:
+
+```bash
+pip install pillow requests
+```
+
+## Run the Model
+
+### 1) PyTorch reference sanity
 
 ```bash
 python models/demos/attention_denseunet/reference/model.py
 ```
 
-Expected output:
-```
-Input shape: torch.Size([1, 3, 256, 256])
-Output shape: torch.Size([1, 1, 256, 256])
-Model parameters: 1,522,689
-✓ Output shape matches input spatial dimensions
-```
+### 2) Direct demo script
 
-### 2. Run TTNN Demo
-
-Run inference using TTNN on Tenstorrent hardware:
+PyTorch path (no device):
 
 ```bash
-# Using pytest (recommended - handles device setup)
-pytest models/demos/attention_denseunet/demo/demo.py::test_attention_denseunet_demo -v
-
-# PyTorch-only mode (for testing without hardware)
-python models/demos/attention_denseunet/demo/demo.py --pytorch
+python models/demos/attention_denseunet/demo/demo.py --pytorch --output-name demo_pytorch.png
 ```
 
-### 3. Run Test Suite
-
-Run comprehensive tests including PCC validation:
+TTNN path (device):
 
 ```bash
-# Run all tests
-pytest models/demos/attention_denseunet/tests/ -v
-
-# Run specific test
-pytest models/demos/attention_denseunet/tests/test_attention_denseunet.py::test_attention_denseunet_inference -v
+python models/demos/attention_denseunet/demo/demo.py --output-name demo_ttnn.png --optimization-level stage2
 ```
 
-## Implementation Details
+By default, the demo uses:
+`http://images.cocodataset.org/val2017/000000039769.jpg`
 
-### Stage 1 - Bring-Up (Current)
+You can still override with any URL or local path:
 
-**Status**: ✅ Complete
-
-- ✅ TTNN implementation of all components
-- ✅ PyTorch weight preprocessing with BatchNorm folding
-- ✅ Full encoder-decoder pipeline
-- ✅ Attention gate implementation
-- ✅ Memory management and tensor deallocation
-- ✅ Demo script functional
-- ✅ Test suite with PCC validation
-
-**Configuration**:
-- Memory: DRAM interleaved (simple strategy for Stage 1)
-- Math Fidelity: LoFi for faster computation
-- Sharding: Auto-sharded (basic strategy)
-
-**Target Metrics**:
-- PCC ≥ 0.97 against PyTorch reference
-- Runs on Wormhole without OOM errors
-- Produces valid segmentation masks
-
-### Stage 2 - Basic Optimizations (Todo)
-
-Planned optimizations:
-- [ ] Apply height/block sharding for convolutions
-- [ ] Store intermediates in L1 memory where beneficial
-- [ ] Use fused operations (e.g., ReLU with Conv)
-- [ ] Optimize attention gate computation
-- [ ] Benchmark and profile performance
-
-### Stage 3 - Deeper Optimization (Todo)
-
-Advanced optimizations:
-- [ ] Maximize core parallelism for encoder/decoder
-- [ ] Optimize attention gates for minimal overhead
-- [ ] Custom kernels for dense connections if needed
-- [ ] Performance tuning and analysis
-
-## Implementation Notes
-
-### BatchNorm Folding
-
-All BatchNorm layers are folded into preceding Conv layers during preprocessing for efficiency:
-```python
-conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv, bn)
+```bash
+python models/demos/attention_denseunet/demo/demo.py --image /path/to/image.jpg
 ```
 
-### Dense Connections
+Outputs are written to:
 
-Dense blocks concatenate features from all preceding layers:
-```python
-# In TtDenseLayer
-out = self.bottleneck(x)  # 1x1 conv
-out = self.expansion(out)  # 3x3 conv
-return concatenate_features(x, out)  # Input + new features
+- `models/demos/attention_denseunet/demo/pred/*_prob.png`
+- `models/demos/attention_denseunet/demo/pred/*_mask_0p5.png`
+- `models/demos/attention_denseunet/demo/pred/*_mask_adaptive.png`
+- `models/demos/attention_denseunet/demo/pred/*_overlay.png`
+
+### 3) Tests
+
+```bash
+# Main correctness tests (init + inference PCC)
+pytest -v models/demos/attention_denseunet/tests/test_attention_denseunet.py
+
+# Demo tests (TTNN and PyTorch parametrized)
+pytest -v models/demos/attention_denseunet/demo/demo.py
 ```
 
-Channel count grows by `growth_rate` (16) per layer.
+### 4) IoU/Dice evaluation (dataset-backed)
 
-### Attention Mechanism
+Quick way to prepare a small real dataset (Oxford-IIIT Pet subset):
 
-Attention gates compute spatial attention to emphasize relevant skip features:
-```python
-theta_x = theta_conv(skip)  # Project skip connection
-phi_g = phi_conv(gating)     # Project gating signal
-f = relu(theta_x + phi_g)    # Combine
-attention = sigmoid(psi(f))  # Compute attention map
-output = W(attention * skip) # Apply attention and project
+```bash
+python models/demos/attention_denseunet/eval/prepare_oxford_pets_subset.py \
+  --max-images 20 \
+  --height 256 --width 256
 ```
 
-### Memory Management
+This creates:
 
-Aggressive deallocation to minimize memory footprint:
-- Skip connections stored in DRAM
-- Intermediate activations deallocated after use
-- Concatenation handles memory layout conversions
+```text
+models/demos/attention_denseunet/eval/datasets/oxford_pets_small/
+├── images/
+└── masks/
+```
 
-## Validation
+Dataset used for the README evaluation flow:
 
-### PCC (Pearson Correlation Coefficient)
+- Oxford-IIIT Pet segmentation dataset (small subset created by `prepare_oxford_pets_subset.py`)
+- Foreground masks are derived from trimaps (`class 1` as foreground, others as background)
 
-Target: **≥ 0.97**
+Expected dataset layout:
 
-The model output is validated against PyTorch reference using PCC, which measures the linear correlation between outputs. A PCC ≥ 0.97 indicates high numerical accuracy.
+```text
+<dataset_root>/
+├── images/
+│   ├── sample1.png
+│   └── sample2.png
+└── masks/
+    ├── sample1.png
+    └── sample2.png
+```
 
-### Test Coverage
+Run evaluator:
 
-- ✅ Model initialization
-- ✅ Full forward pass
-- ✅ Shape validation
-- ✅ PCC validation
-- ⏳ Component unit tests (planned)
-- ⏳ Performance benchmarks (planned)
+```bash
+python models/demos/attention_denseunet/eval/evaluate_iou_dice.py \
+  --image-dir models/demos/attention_denseunet/eval/datasets/oxford_pets_small/images \
+  --mask-dir models/demos/attention_denseunet/eval/datasets/oxford_pets_small/masks \
+  --height 256 --width 256 \
+  --optimization-level stage2 \
+  --output-json models/demos/attention_denseunet/eval/results/oxford_pets_small_metrics.json
+```
+Note:- oxford_pets_small dataset was installed by me through a script i am not adding that here because you can use any dataset
+You can still use your own dataset by replacing `--image-dir` and `--mask-dir` with
+`<dataset_root>/images` and `<dataset_root>/masks`.
 
-## Performance (Stage 1 Baseline)
+What this reports:
 
-*To be measured and documented after successful bring-up on hardware*
+- TTNN vs PyTorch reference IoU/Dice (always)
+- TTNN vs GT and PyTorch vs GT IoU/Dice (when `--mask-dir` is provided)
 
-Expected metrics:
-- Inference latency: TBD
-- Memory usage: TBD
-- PCC: ≥ 0.97
+If you have trained weights compatible with `reference/model.py`, add:
 
-## Known Limitations
+```bash
+--checkpoint /path/to/checkpoint.pt
+```
 
-1. **Batch Size**: Currently optimized for batch_size = 1
-2. **Input Size**: Tested with 256×256 (configurable)
-3. **Optimization Level**: Stage 1 uses basic memory/sharding strategies
-4. **Attention Gate**: Uses CPU interpolation (to be optimized in Stage 2)
+## Current Validation Coverage
+
+- Model initialization on device
+- End-to-end TTNN inference
+- Shape parity vs PyTorch
+- PCC check vs PyTorch reference (`>= 0.97`)
+
+## Optimization Presets in Code
+
+Defined in `tt/config.py`:
+
+- `stage1`: baseline auto-sharding
+- `stage2`: preferred profile currently used by tests
+- `stage3`: aggressive profile for deeper tuning
+
+Current tests run with `OptimizationLevel.STAGE2`.
+
+## What Is Implemented vs Pending
+
+### Implemented (code + tests)
+
+- TTNN model bring-up and demo
+- PCC-based correctness test against PyTorch
+- Direct single-image demo script path
+- Profiling/visualizer compatible run path
+
 
 ## References
 
-- **DenseNet**: [Densely Connected Convolutional Networks](https://arxiv.org/abs/1608.06993)
-- **Attention U-Net**: [Attention U-Net for Image Segmentation](https://arxiv.org/abs/1804.03999)
-- **TTNN Model Bring-up**: [Tech Report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md)
-- **CNN Optimization Guide**: [CNNs in TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/cnn_optimizations.md)
+- [TTNN model bring-up tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md)
+- [CNN optimization guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/cnn_optimizations.md)
+- [DenseNet paper](https://arxiv.org/abs/1608.06993)
+- [Attention U-Net paper](https://arxiv.org/abs/1804.03999)
+
