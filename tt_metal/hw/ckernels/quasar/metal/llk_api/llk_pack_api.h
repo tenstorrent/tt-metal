@@ -52,7 +52,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t l1_tile_index;
-    LocalDFBInterface& local_dfb_interface = g_dfb_interface[output_id];
+    LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     if constexpr (out_of_order_output) {
         // Use the write tile index to track position within DFB
         l1_tile_index =
@@ -137,7 +137,7 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
 
         // TODO: with multiple TCs are there multiple descriptors?
         buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B = g_dfb_interface[i].tc_slots[0].base_addr;
+        bd_val.f.l1_addr_16B = get_local_dfb_interface(i).tc_slots[0].base_addr;
         bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
         bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
         bd_val.f.y_dim = pack_tile_face_r_dim[i];

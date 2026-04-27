@@ -10,7 +10,7 @@
  * This file contains the implementation details for the tilize() function.
  * It should only be included by tilize_helpers.hpp.
  */
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 #include "experimental/circular_buffer.h"
 
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.

@@ -344,6 +344,7 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
     from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+    from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
     if gate_fallback_mode is None:
@@ -542,6 +543,7 @@ def load_and_compute_layer_by_layer(
     if compute_reference:
         norm_with_prefix = {f"norm.{k}": v for k, v in norm_dequant.items()}
         hf_model.load_state_dict(norm_with_prefix, strict=False)
+        logger.debug(f"[norm] h_ref {h_ref.dtype=}, norm_weight dtype={norm_dequant['weight'].dtype}")
         with torch.no_grad():
             h_ref = hf_model.norm(h_ref)
         ref_snapshots.append(h_ref)
@@ -562,6 +564,35 @@ def load_and_compute_layer_by_layer(
     del norm_sd, norm_dequant
     gc.collect()
 
+    # --- Process LM Head ---
+    logger.info("Processing lm_head...")
+    lm_head_sd = sub_state_dict(lazy_sd, "lm_head.")
+    lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
+
+    if compute_reference:
+        # Apply lm_head projection: logits = h_ref @ lm_head_weight.T
+        logger.debug(f"[lm_head] h_ref {h_ref.dtype=}, lm_head_weight.dtype={lm_head_dequant['weight'].dtype}")
+        lm_head_weight = lm_head_dequant["weight"].to(torch.bfloat16)
+        with torch.no_grad():
+            h_ref_lm = torch.nn.functional.linear(h_ref.to(torch.bfloat16), lm_head_weight)
+        ref_snapshots.append(h_ref_lm)
+        del lm_head_weight
+
+    if build_ttnn_cache:
+        TtLMHead.build_ttnn_cache(
+            torch_weight=lm_head_dequant["weight"],
+            vocab_size=config.vocab_size,
+            emb_dim=config.hidden_size,
+            mesh_device=mesh_device,
+            cache_path=weight_cache_path,
+        )
+
+    for k in lm_head_sd.keys():
+        lazy_sd.evict(k)
+    del lm_head_sd, lm_head_dequant
+    gc.collect()
+    _log_memory("After lm_head processed and cleared")
+
     # Cleanup
     lazy_sd.close()
 
@@ -573,6 +604,32 @@ def load_and_compute_layer_by_layer(
         ref_snapshots=ref_snapshots,
         ref_kvpe_list=ref_kvpe_list,
     )
+
+
+def check_reference_cache_exists(cache_key: str) -> bool:
+    """
+    Check if reference output cache exists for the given cache key.
+
+    Reference cache contains forward pass outputs from HF model for PCC validation.
+    This cache is machine-independent and can be generated once and shared.
+
+    Args:
+        cache_key: Cache identifier like "pretrained_json_prompts_isl1024_layers24_experts256"
+
+    Returns:
+        True if cache file exists, False otherwise
+    """
+    cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
+    cache_path = cache_dir / f"{cache_key}.pt"
+
+    exists = cache_path.exists()
+
+    if exists:
+        logger.info(f"Reference cache found: {cache_path}")
+    else:
+        logger.debug(f"Reference cache not found: {cache_path}")
+
+    return exists
 
 
 def save_reference_cache(cache_key: str, ref_snapshots, ref_kvpe_list):

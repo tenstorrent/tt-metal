@@ -178,8 +178,8 @@ def _format_core_location(device_label: str | None, location: OnChipCoordinate |
     if location is None:
         return "N/A"
     if device_label is None:
-        return location.to_str("noc0")
-    return f"{device_label}:{location.to_str('noc0')}"
+        return location.to_user_str()
+    return f"{device_label}:{location.to_user_str()}"
 
 
 def _collect_dispatcher_data(

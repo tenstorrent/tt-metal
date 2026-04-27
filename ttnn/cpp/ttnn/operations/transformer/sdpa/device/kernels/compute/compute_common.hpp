@@ -1228,10 +1228,13 @@ ALWI void matmul_blocks(
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
                 cb_wait_front(zero_cb, 1);
+                reconfig_data_format(zero_cb, mask_cb);
                 add_tiles_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
+                reconfig_data_format(in1_cb, in0_cb);
+                mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -1439,10 +1442,11 @@ void apply_causal_mask_lightweight(
 
 /**
  * Context for lightweight mask application in ring joint SDPA.
- * All mask tiles reside in a single CB. A default-constructed instance disables lightweight masking.
+ * All mask tiles reside in a single CB. This struct stores the pre-resolved mask metadata used when
+ * lightweight masking is enabled; enablement itself is controlled by the `lightweight_mask_enabled`
+ * template parameter(s), not by default-constructing this context.
  */
 struct LightweightMaskContext {
-    bool enabled = false;
     bool is_causal = false;                  // True only on ring_iter 0 for causal configs
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
@@ -1453,6 +1457,8 @@ struct LightweightMaskContext {
     uint32_t joint_l_partial_col = 0;        // Column within tile where joint_l padding starts (0 = no partial)
     uint32_t global_n_partial_tile_idx = 0;  // Index of global_n partial tile in the mask CB
     uint32_t joint_l_partial_tile_idx = 0;   // Index of joint_l partial tile in the mask CB
+    uint32_t straddle_num_padded_tiles = 0;  // Trailing -inf tiles on straddle chunk (0 = inactive)
+    uint32_t straddle_mask_chunk_id = 0;     // K chunk index where straddle mask applies
 
     /**
      * Resolve which mask type applies for a given K chunk and return pre-resolved params.
@@ -1489,6 +1495,8 @@ struct LightweightMaskContext {
             out_has_partial = (joint_l_partial_col > 0);
             out_boundary_col = Sk_chunk_t - out_num_padded - (out_has_partial ? 1 : 0);
             out_partial_tile_idx = joint_l_partial_tile_idx;
+        } else if (straddle_num_padded_tiles > 0 && k_chunk == straddle_mask_chunk_id) {
+            out_num_padded = straddle_num_padded_tiles;
         }
     }
 
@@ -1587,6 +1595,7 @@ enum SDPAType {
  * @tparam is_chunked - Whether query is chunked
  * @tparam scale_fp32 - FP32 scale factor
  * @tparam sliding_window_size - Sliding window attention size
+ * @tparam lightweight_mask_enabled - Enables the lightweight mask path (compile-time gated)
  *
  * Runtime Parameters:
  * @param Skt - Sequence length in tiles
@@ -1660,7 +1669,8 @@ template <
     bool use_joint_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool lightweight_mask_enabled = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1838,7 +1848,8 @@ void sdpa_inner_loop(
                 (sdpa_type == RING) &&
                 ((ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
                  (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
-                 (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id));
+                 (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) ||
+                 (lw_mask.straddle_num_padded_tiles > 0 && k_chunk == lw_mask.straddle_mask_chunk_id));
             if (sdpa_type == RING && !is_causal) {
                 apply_mask = needs_padding_mask;
             } else if (is_causal || sliding_window_size > 0) {
@@ -1859,7 +1870,7 @@ void sdpa_inner_loop(
             if (apply_mask) {
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
-                if (lw_mask.enabled) {
+                if constexpr (lightweight_mask_enabled) {
                     // Re-enter reserved state on cb_qk_im so the lightweight mask can be stamped in-place.
                     // matmul_blocks above already pushed the QK tiles, so tiles_received has been bumped;
                     // without the pop+push cycle below, reduce_c's cb_wait_front would return immediately
@@ -2142,7 +2153,8 @@ template <
     bool use_padded_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool lightweight_mask_enabled = false>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2199,7 +2211,8 @@ void sdpa_standard(
         false,  // use_joint_mask (not used)
         is_chunked,
         scale_fp32,
-        sliding_window_size>(
+        sliding_window_size,
+        lightweight_mask_enabled>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
@@ -2391,7 +2404,8 @@ template <
     uint32_t NH,
     uint32_t DHt,
     uint32_t vDHt,
-    uint32_t scale_fp32>
+    uint32_t scale_fp32,
+    bool lightweight_mask_enabled = false>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2464,8 +2478,9 @@ void sdpa_ring(
         false,  // use_joint_mask (not used)
         false,  // is_chunked (not used)
         scale_fp32,
-        0>(  // sliding_window_size (not used)
-        0,   // Skt (not used)
+        0,  // sliding_window_size (not used)
+        lightweight_mask_enabled>(
+        0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
         qk_subblock_h,

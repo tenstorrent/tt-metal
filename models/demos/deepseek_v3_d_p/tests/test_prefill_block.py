@@ -97,7 +97,12 @@ def test_prefill_block(
     pcc_validation,
     input_source,
     request,
+    is_ci_env,
+    is_ci_v2_env,
 ):
+    if is_ci_env or is_ci_v2_env and pcc_validation == False:
+        pytest.skip("Skip non-PCC test in CI to save time")
+
     profiler.clear()
     profiler.start("total_test_time")
     config = config_only
