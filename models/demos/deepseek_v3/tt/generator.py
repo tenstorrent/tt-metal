@@ -207,9 +207,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 model_max_seq_len,
             )
         self.hf_config.max_seq_len = requested_max_seq_len
-        assert (
-            self.hf_config.max_seq_len % ttnn.TILE_SIZE == 0
-        ), f"hf_config.max_seq_len {self.hf_config.max_seq_len} must be TILE_SIZE={ttnn.TILE_SIZE} aligned"
 
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
@@ -302,6 +299,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.prefill_max_tokens = prefill_max_tokens
         self.force_recalculate = force_recalculate
         self.profile_decode = profile_decode  # Profile decode: skip prefill, run only 1st dense + 1st MoE layer
+        self._warmup_completed_configs: set[tuple[bool, bool, int, int, int]] = set()
         logger.info(f"Enable trace: {self.enable_trace}")
         if self.profile_decode:
             logger.info("profile_decode=True: Prefill skipped, decode runs only 1st dense layer + 1st MoE layer")
@@ -386,12 +384,11 @@ class DeepseekGenerator(WarmupForwardMixin):
         upper_bound = align_up(upper_bound, alignment_value)
         lower_bound = align_up(min_prompt_len, alignment_value)
 
-        assert (
-            upper_bound <= self.hf_config.max_seq_len
-        ), f"Upper bound {upper_bound} can not exceed model max seq len {self.hf_config.max_seq_len}"
-        assert (
-            lower_bound <= self.hf_config.max_seq_len
-        ), f"Lower bound {lower_bound} can not exceed model max seq len {self.hf_config.max_seq_len}"
+        if upper_bound > self.hf_config.max_seq_len:
+            raise ValueError(f"Upper bound {upper_bound} can not exceed model max seq len {self.hf_config.max_seq_len}")
+        if lower_bound > self.hf_config.max_seq_len:
+            raise ValueError(f"Lower bound {lower_bound} can not exceed model max seq len {self.hf_config.max_seq_len}")
+
         cache_key = (lower_bound, upper_bound, mode)
         cache = getattr(self, "_prefill_warmup_prompt_lens_cache", {})
         if cache_key in cache:
@@ -1891,17 +1888,31 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Once https://github.com/tenstorrent/tt-metal/issues/43099 is fixed, we can use the actual min lengths of the prompts
         min_token_len = padded_seq_len
         max_token_len = padded_seq_len
-        assert (
-            max_token_len <= self.hf_config.max_seq_len
-        ), f"Max prompt length {max_token_len} exceeds model max seq len {self.hf_config.max_seq_len}"
-
-        if self.signpost:
-            signpost(header="warmup_model")
+        if max_token_len > self.hf_config.max_seq_len:
+            raise ValueError(
+                f"Max prompt length {max_token_len} exceeds model max seq len {self.hf_config.max_seq_len}"
+            )
+        # Warmup is expensive and only depends on runtime mode + prefill length bounds.
+        # Cache completed warmups per configuration so repeated generate() calls can skip it.
+        warmup_cache_key = (
+            bool(self.enable_trace),
+            bool(self.sample_on_device),
+            int(self.hf_config.max_seq_len),
+            int(min_token_len),
+            int(max_token_len),
+        )
         profiler.start("warmup_model")
-        self.warmup_model(min_token_len, max_token_len)
+        if warmup_cache_key not in self._warmup_completed_configs:
+            if self.signpost:
+                signpost(header="warmup_model")
+            self.warmup_model(min_token_len, max_token_len)
+            self._warmup_completed_configs.add(warmup_cache_key)
+            if self.signpost:
+                signpost(header="warmup_model")
+        else:
+            # Keep profiler timing for "warmup_model" even when warmup is skipped.
+            logger.info(f"Skipping warmup_model; warmup already completed for cache key={warmup_cache_key}.")
         profiler.end("warmup_model")
-        if self.signpost:
-            signpost(header="warmup_model")
 
         decode_steps_for_stats = 0
         decode_forward_passes = 0
@@ -2396,7 +2407,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         seq_len = tokens.shape[-1]
         if self.vllm_context:
             # In vLLM context, we perform warmup for prefill and decode.
-            # prefill warmup is performed for all supported prompt lengths in the list returned by _get_prefill_warmup_prompt_lens()
+            # prefill warmup is performed for all supported prompt lengths in the list returned by _get_prefill_warmup_token_lens()
             # We need to pad the seq_len to the closest supported warmup prompt length, otherwise memory corruption can happen.
             # The memory corruption happens when any new device memory is allocated when trace is active.
             max_supported_seq_len = max(self._get_prefill_warmup_token_lens())
@@ -2407,7 +2418,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 )
             padded_seq_len = self._pad_seq_len_to_warmup_prompt_lens(seq_len)
             if padded_seq_len > seq_len:
-                pad_token_id = getattr(self, "pad_token_id", 0)
+                pad_token_id = self._get_pad_id()
                 pad_tokens = torch.full(
                     (tokens.shape[0], tokens.shape[1], padded_seq_len - seq_len),
                     pad_token_id,
@@ -3014,26 +3025,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 ttnn.ReadDeviceProfiler(self.mesh_device)
             return logits.squeeze(0).squeeze(0)
 
-    def _get_warmup_page_size(self) -> int:
-        for attr_name in ("page_size", "block_size", "kv_cache_page_size"):
-            value = getattr(self, attr_name, None)
-            if isinstance(value, int) and value > 0:
-                return value
-        for container_name in ("model_args", "model_config", "config"):
-            container = getattr(self, container_name, None)
-            if container is None:
-                continue
-            for attr_name in ("page_size", "block_size", "kv_cache_page_size"):
-                value = getattr(container, attr_name, None)
-                if isinstance(value, int) and value > 0:
-                    return value
-        return 1
-
-    def _build_warmup_page_table(self, prompt_len: int) -> torch.Tensor:
-        page_size = self._get_warmup_page_size()
-        num_pages = max(1, (prompt_len + page_size - 1) // page_size)
-        return torch.arange(num_pages, dtype=torch.int32).unsqueeze(0)
-
     def warmup_model_prefill(
         self,
         kv_cache,
@@ -3057,8 +3048,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         for sample_on_device in sample_on_device_list:
             for token_len in self._get_prefill_warmup_token_lens(min_token_len, max_token_len):
                 vocab = int(getattr(self.hf_config, "vocab_size", 129280))
-                tokens = torch.randint(vocab, (1, token_len), dtype=torch.int32)
-                tokens, _ = self._pad_batch(tokens, 1)
+                warmup_token_ids = [torch.randint(vocab, (token_len,), dtype=torch.int32).tolist()]
+                tokens, _ = self._pad_batch(warmup_token_ids, 1)
                 # TODO: MTP path warmup needed?
                 prefill_logits = self._prefill(
                     tokens=tokens,
@@ -3072,9 +3063,25 @@ class DeepseekGenerator(WarmupForwardMixin):
                         sample_on_device,
                         enable_trace=enable_trace,
                     )
-
-                    prefill_logits = self._slice_last_token_logits(prefill_logits, token_len, expand_to_batch=True)
-                    self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                    sliced_prefill_logits = self._slice_last_token_logits(
+                        prefill_logits, token_len, expand_to_batch=True
+                    )
+                    sampled_tokens = self._sample_tokens_device(sliced_prefill_logits, user_slots=[user_id])
+                    try:
+                        if sampled_tokens is not None:
+                            ttnn.deallocate(sampled_tokens)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate sampled tokens: {e}")
+                    try:
+                        if sliced_prefill_logits is not None:
+                            ttnn.deallocate(sliced_prefill_logits)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate sliced prefill logits: {e}")
+                    try:
+                        if prefill_logits is not None:
+                            ttnn.deallocate(prefill_logits)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate prefill logits: {e}")
 
         # Warmup creates temporary page tables; clean them up to free memory.
         try:

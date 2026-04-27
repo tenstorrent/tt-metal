@@ -54,7 +54,7 @@ def get_fabric_config():
     )
 
 
-# We cann't warmup prefill for all possible prompt lengths, only warmup for the selective prompt lengths.
+# We can't warmup prefill for all possible prompt lengths, only warmup for the selective prompt lengths.
 # LINEAR_ADDITIVE: tile, 2*tile, 3*tile, ... hf_config.max_seq_len
 # LINEAR_MULTIPLES: tile, 2*tile, 4*tile, 8*tile, ... hf_config.max_seq_len
 PREFILL_WARMUP_MODE_LINEAR_ADDITIVE = "LINEAR_ADDITIVE"
@@ -70,7 +70,7 @@ def is_quad_mesh(mesh_device: ttnn.MeshDevice) -> bool:
 
 def align_up(value: int, align_value: int) -> int:
     """Round value up to the next multiple of align_value, with a minimum of align_value."""
-    return max(align_value, (value + align_value - 1) // align_value * align_value)
+    return int(max(align_value, (value + align_value - 1) // align_value * align_value))
 
 
 def get_min_alignment_value_for_prefill(rows: int) -> int:
@@ -89,7 +89,7 @@ def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
     rows = int(num_mesh_rows)
     if rows <= 0:
         raise ValueError(f"num_mesh_rows must be > 0, got {num_mesh_rows!r}")
-    alignment = get_min_alignment_value_for_prefill(num_mesh_rows)
+    alignment = get_min_alignment_value_for_prefill(rows)
     return align_up(seq_len_i, alignment)
 
 
