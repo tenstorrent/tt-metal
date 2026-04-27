@@ -81,6 +81,26 @@ struct FfnCase {
     std::vector<uint32_t> counts;
 };
 
+// Build a list of per-expert rank-4 TensorPtrs from a stacked rank-3 xtensor
+// [E, K, N]. The list is what the op consumes; the stacked xtensor stays
+// around for the CPU reference to use.
+std::vector<ttml::autograd::TensorPtr> make_expert_weight_list(
+    const xt::xarray<float>& w3d, ttnn::distributed::MeshDevice* device) {
+    const std::size_t E = w3d.shape()[0];
+    const std::size_t K = w3d.shape()[1];
+    const std::size_t N = w3d.shape()[2];
+    std::vector<ttml::autograd::TensorPtr> out;
+    out.reserve(E);
+    for (std::size_t e = 0; e < E; ++e) {
+        std::vector<std::size_t> shape4d{1U, 1U, K, N};
+        xt::xarray<float> w4d = xt::xarray<float>::from_shape(shape4d);
+        auto src = xt::view(w3d, e, xt::all(), xt::all());
+        std::copy(src.cbegin(), src.cend(), w4d.begin());
+        out.push_back(ttml::autograd::create_tensor(ttml::core::from_xtensor(w4d, device), /*requires_grad=*/true));
+    }
+    return out;
+}
+
 void RunCase(const FfnCase& c) {
     using namespace ttml;
 
@@ -131,9 +151,9 @@ void RunCase(const FfnCase& c) {
     auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
 
-    auto t_wg = autograd::create_tensor(core::from_xtensor(w_gate, device), /*requires_grad=*/true);
-    auto t_wu = autograd::create_tensor(core::from_xtensor(w_up, device), /*requires_grad=*/true);
-    auto t_wd = autograd::create_tensor(core::from_xtensor(w_down, device), /*requires_grad=*/true);
+    auto t_wg = make_expert_weight_list(w_gate, device);
+    auto t_wu = make_expert_weight_list(w_up, device);
+    auto t_wd = make_expert_weight_list(w_down, device);
 
     auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
     xt::xarray<float> out_xt = core::to_xtensor(t_out->get_value());  // [1,1,T_cap,H]
@@ -243,28 +263,31 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
     auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
     auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
-    auto t_wg = autograd::create_tensor(core::from_xtensor(w_gate, device), /*requires_grad=*/true);
-    auto t_wu = autograd::create_tensor(core::from_xtensor(w_up, device), /*requires_grad=*/true);
-    auto t_wd = autograd::create_tensor(core::from_xtensor(w_down, device), /*requires_grad=*/true);
+    auto t_wg = make_expert_weight_list(w_gate, device);
+    auto t_wu = make_expert_weight_list(w_up, device);
+    auto t_wd = make_expert_weight_list(w_down, device);
 
     auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
     t_out->set_grad(core::ones_like(t_out->get_value()));
     t_out->backward();
 
     auto dgrouped = core::to_xtensor(t_grouped->get_grad());
-    auto dwg = core::to_xtensor(t_wg->get_grad());
-    auto dwu = core::to_xtensor(t_wu->get_grad());
-    auto dwd = core::to_xtensor(t_wd->get_grad());
-
     EXPECT_EQ(dgrouped.shape(), grouped_4d.shape());
-    EXPECT_EQ(dwg.shape(), w_gate.shape());
-    EXPECT_EQ(dwu.shape(), w_up.shape());
-    EXPECT_EQ(dwd.shape(), w_down.shape());
-
     EXPECT_TRUE(xt::all(xt::isfinite(dgrouped))) << "non-finite dgrouped";
-    EXPECT_TRUE(xt::all(xt::isfinite(dwg))) << "non-finite dW_gate";
-    EXPECT_TRUE(xt::all(xt::isfinite(dwu))) << "non-finite dW_up";
-    EXPECT_TRUE(xt::all(xt::isfinite(dwd))) << "non-finite dW_down";
+
+    auto check_per_expert_grads = [&](const std::vector<autograd::TensorPtr>& list,
+                                      const std::vector<std::size_t>& expected_per_expert_shape,
+                                      const std::string& name) {
+        ASSERT_EQ(list.size(), E);
+        for (uint32_t e = 0; e < E; ++e) {
+            auto g = core::to_xtensor(list[e]->get_grad());
+            EXPECT_EQ(g.shape(), expected_per_expert_shape) << name << "[" << e << "] shape mismatch";
+            EXPECT_TRUE(xt::all(xt::isfinite(g))) << "non-finite " << name << "[" << e << "]";
+        }
+    };
+    check_per_expert_grads(t_wg, {1U, 1U, H, I}, "dW_gate");
+    check_per_expert_grads(t_wu, {1U, 1U, H, I}, "dW_up");
+    check_per_expert_grads(t_wd, {1U, 1U, I, H}, "dW_down");
 
     // Loss = sum(Y); inputs are positive, weights are positive — every active row
     // contributes a non-zero gradient. Active-row dgrouped should be non-trivial.

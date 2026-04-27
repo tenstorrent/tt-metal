@@ -9,13 +9,11 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "metal/operations.hpp"
-#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/narrow/narrow.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn_fixed/matmuls.hpp"
@@ -24,37 +22,7 @@ namespace ttml::ops {
 
 namespace {
 
-// Get expert e's per-expert weight slot from W [num_experts, K, N] as rank-4 [1,1,K,N].
-//
-// Uses ttnn::narrow (zero-copy view) when its DRAM bank-alignment check passes,
-// otherwise falls back to ttnn::slice (DRAM-to-DRAM copy). Length is always 1
-// so the length-divides-dim-size constraint is trivially satisfied; the only
-// runtime question is bank alignment of the per-expert block:
-//
-//   start_page_id = e * K * N / TILE_HW   must be divisible by num_banks
-//   ⇔  K * N  divisible by  num_banks * TILE_HW
-//
-// On P150 (8 banks) this holds for any K, N where K*N is a multiple of 8192 (assuming 32x32 tiles)
-// on P100 (7 banks) it requires a factor of 7 in K*N
-ttnn::Tensor slice_expert_weight(const ttnn::Tensor& W, uint32_t e, uint32_t K, uint32_t N) {
-    auto* device = W.device();
-    const uint32_t num_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
-    const uint64_t tile_hw = W.tensor_spec().tile().get_tile_hw();
-    const uint64_t bank_block = static_cast<uint64_t>(num_banks) * tile_hw;
-    const bool can_narrow = (static_cast<uint64_t>(K) * N) % bank_block == 0U;
-
-    if (can_narrow) {
-        auto W_e_3d = ttnn::narrow(W, /*dim=*/0, /*start=*/static_cast<int32_t>(e), /*length=*/1U);
-        return ttnn::view(W_e_3d, ttnn::Shape({1U, 1U, K, N}));
-    }
-    static const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U};
-    const ttsl::SmallVector<uint32_t> start = {e, 0U, 0U};
-    const ttsl::SmallVector<uint32_t> end = {e + 1U, K, N};
-    auto W_e_3d = ttnn::slice(W, start, end, step);
-    return W_e_3d.reshape(ttnn::Shape({1U, 1U, K, N}));
-}
-
-// Slice rows [row_lo, row_hi) of [1,1,T,inner] tensor
+// Slice rows [row_lo, row_hi) of a [1,1,T,inner] tensor.
 ttnn::Tensor slice_rows(const ttnn::Tensor& T, uint32_t row_lo, uint32_t row_hi, uint32_t inner) {
     static const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
     const ttsl::SmallVector<uint32_t> start = {0U, 0U, row_lo, 0U};
@@ -67,44 +35,40 @@ ttnn::Tensor slice_rows(const ttnn::Tensor& T, uint32_t row_lo, uint32_t row_hi,
 autograd::TensorPtr moe_ffn_swiglu_fw(
     const autograd::TensorPtr& grouped,
     const ttnn::Tensor& offsets,
-    const autograd::TensorPtr& w_gate,
-    const autograd::TensorPtr& w_up,
-    const autograd::TensorPtr& w_down) {
+    const std::vector<autograd::TensorPtr>& w_gate,
+    const std::vector<autograd::TensorPtr>& w_up,
+    const std::vector<autograd::TensorPtr>& w_down) {
     const auto& grouped_value = grouped->get_value();
-    const auto& w_gate_value = w_gate->get_value();
-    const auto& w_up_value = w_up->get_value();
-    const auto& w_down_value = w_down->get_value();
-
     const auto grouped_shape = grouped_value.logical_shape();
-    const auto w_gate_shape = w_gate_value.logical_shape();
-    const auto w_up_shape = w_up_value.logical_shape();
-    const auto w_down_shape = w_down_value.logical_shape();
+    const uint32_t token_capacity = grouped_shape[-2];
+    const uint32_t hidden_dim = grouped_shape[-1];
+    const uint32_t num_experts = static_cast<uint32_t>(w_gate.size());
 
-    const uint32_t token_capacity = grouped_shape[-2];   // total tokens
-    const uint32_t hidden_dim = grouped_shape[-1];       // hidden dim
-    const uint32_t num_experts = w_gate_shape[0];        // expert local
-    const uint32_t intermediate_dim = w_gate_shape[-1];  // intermediate dim
-
-    if (w_gate_shape[-2] != hidden_dim || w_up_shape[-2] != hidden_dim || w_down_shape[-1] != hidden_dim) {
-        throw std::runtime_error("moe_ffn_swiglu_fw: weight inner dims do not match grouped's hidden_dim.");
+    if (num_experts == 0U) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: weight lists are empty.");
     }
-    if (w_up_shape[-1] != intermediate_dim || w_down_shape[-2] != intermediate_dim) {
-        throw std::runtime_error("moe_ffn_swiglu_fw: gate/up/down intermediate dim mismatch.");
+    if (w_up.size() != num_experts || w_down.size() != num_experts) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: w_gate/w_up/w_down must have the same length.");
+    }
+
+    const auto wg0_shape = w_gate[0]->get_value().logical_shape();
+    if (wg0_shape[-2] != hidden_dim) {
+        throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
 
     auto offsets_host = offsets.to_vector<uint32_t>();
     if (offsets_host.size() != num_experts + 1U) {
-        throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be E_local + 1.");
+        throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be num_experts + 1.");
     }
     if (offsets_host.back() != token_capacity) {
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets[-1] must equal token_capacity.");
     }
 
-    // Per-expert forward: slice grouped_value once per expert, run gate+up matmuls,
-    // silu·multiply on the per-expert chunk, run down matmul. Output is
-    // assembled with a single concat at the end. linear1_e and gate_e are
-    // saved (per-expert chunks) for backward; gated_e is recomputed in
-    // backward (one elementwise pass)
+    // Per-expert forward: slice grouped once per expert, run gate+up matmuls
+    // directly against the per-expert weight tensors (no slicing of weights),
+    // silu·multiply on the chunk, then down matmul. One concat at the end.
+    // linear1_e and gate_e are saved per-expert for backward; gated_e is
+    // recomputed in backward.
     std::vector<ttnn::Tensor> y_parts;
     std::vector<ttnn::Tensor> linear1_parts;
     std::vector<ttnn::Tensor> gate_parts;
@@ -124,9 +88,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         }
 
         auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
-        auto Wg_e = slice_expert_weight(w_gate_value, e, hidden_dim, intermediate_dim);
-        auto Wu_e = slice_expert_weight(w_up_value, e, hidden_dim, intermediate_dim);
-        auto Wd_e = slice_expert_weight(w_down_value, e, intermediate_dim, hidden_dim);
+        const auto& Wg_e = w_gate[e]->get_value();
+        const auto& Wu_e = w_up[e]->get_value();
+        const auto& Wd_e = w_down[e]->get_value();
 
         auto linear1_e = ttnn_fixed::matmul(X_e, Wg_e, false, false);  // [1,1,len,intermediate_dim]
         auto gate_e = ttnn_fixed::matmul(X_e, Wu_e, false, false);     // [1,1,len,intermediate_dim]
@@ -156,25 +120,12 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    linear1_parts = std::move(linear1_parts),
                                    gate_parts = std::move(gate_parts),
                                    num_experts,
-                                   hidden_dim,
-                                   intermediate_dim]() mutable {
+                                   hidden_dim]() mutable {
         auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
-        const auto& w_gate_value = w_gate->get_value();
-        const auto& w_up_value = w_up->get_value();
-        const auto& w_down_value = w_down->get_value();
-
-        auto* device = grouped_value.device();
-        const auto dram = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
 
         std::vector<ttnn::Tensor> dX_parts;
-        std::vector<ttnn::Tensor> dW_gate_parts;
-        std::vector<ttnn::Tensor> dW_up_parts;
-        std::vector<ttnn::Tensor> dW_down_parts;
         dX_parts.reserve(num_experts);
-        dW_gate_parts.reserve(num_experts);
-        dW_up_parts.reserve(num_experts);
-        dW_down_parts.reserve(num_experts);
 
         std::size_t saved_idx = 0U;
         for (uint32_t e = 0; e < num_experts; ++e) {
@@ -182,34 +133,15 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             const uint32_t row_hi = offsets_host[e + 1U];
 
             if (row_hi == row_lo) {
-                // Empty expert: contribute zero per-expert dW slots so concat
-                // keeps the [num_experts, *, *] shape; no dX rows because the range is empty.
-                dW_gate_parts.push_back(ttnn::zeros(
-                    ttnn::Shape({1U, hidden_dim, intermediate_dim}),
-                    w_gate_value.dtype(),
-                    ttnn::Layout::TILE,
-                    std::ref(*device),
-                    dram));
-                dW_up_parts.push_back(ttnn::zeros(
-                    ttnn::Shape({1U, hidden_dim, intermediate_dim}),
-                    w_up_value.dtype(),
-                    ttnn::Layout::TILE,
-                    std::ref(*device),
-                    dram));
-                dW_down_parts.push_back(ttnn::zeros(
-                    ttnn::Shape({1U, intermediate_dim, hidden_dim}),
-                    w_down_value.dtype(),
-                    ttnn::Layout::TILE,
-                    std::ref(*device),
-                    dram));
+                // Empty expert: zero gradient — nothing to add to w_*[e].
                 continue;
             }
 
             auto X_e = slice_rows(grouped_value, row_lo, row_hi, hidden_dim);
             auto dY_e = slice_rows(dY, row_lo, row_hi, hidden_dim);
-            auto Wg_e = slice_expert_weight(w_gate_value, e, hidden_dim, intermediate_dim);
-            auto Wu_e = slice_expert_weight(w_up_value, e, hidden_dim, intermediate_dim);
-            auto Wd_e = slice_expert_weight(w_down_value, e, intermediate_dim, hidden_dim);
+            const auto& Wg_e = w_gate[e]->get_value();
+            const auto& Wu_e = w_up[e]->get_value();
+            const auto& Wd_e = w_down[e]->get_value();
 
             // Recompute gated_e from saved linear1_e, gate_e (one eltwise pass).
             auto& linear1_e = linear1_parts[saved_idx];
@@ -219,22 +151,21 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
             // Down branch:  dgated_e = dY_e @ Wd_e^T,  dW_down_e = gated_e^T @ dY_e
             auto dgated_e = ttnn_fixed::matmul(dY_e, Wd_e, /*transpose_a=*/false, /*transpose_b=*/true);
-            auto dW_down_e_4d = ttnn_fixed::matmul(gated_e, dY_e, /*transpose_a=*/true, /*transpose_b=*/false);
-            dW_down_parts.push_back(dW_down_e_4d.reshape(ttnn::Shape({1U, intermediate_dim, hidden_dim})));
+            auto dW_down_e = ttnn_fixed::matmul(gated_e, dY_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            w_down[e]->add_grad(dW_down_e);
             gated_e.deallocate();
             dY_e.deallocate();
-            Wd_e.deallocate();
 
             // SwiGLU eltwise BW (in-place into linear1_e's storage).
             auto [d_linear1_e, d_gate_e] = ttml::metal::swiglu_elemwise_bw(linear1_e, gate_e, dgated_e, linear1_e);
             gate_e.deallocate();
             dgated_e.deallocate();
 
-            // dW_gate_e = X_e^T @ d_linear1_e,  dW_up_e = X_e^T @ d_gate_e
-            auto dW_gate_e_4d = ttnn_fixed::matmul(X_e, d_linear1_e, /*transpose_a=*/true, /*transpose_b=*/false);
-            dW_gate_parts.push_back(dW_gate_e_4d.reshape(ttnn::Shape({1U, hidden_dim, intermediate_dim})));
-            auto dW_up_e_4d = ttnn_fixed::matmul(X_e, d_gate_e, /*transpose_a=*/true, /*transpose_b=*/false);
-            dW_up_parts.push_back(dW_up_e_4d.reshape(ttnn::Shape({1U, hidden_dim, intermediate_dim})));
+            // dW_gate_e = X_e^T @ d_linear1_e,  dW_up_e = X_e^T @ d_gate_e — added directly to per-expert grads.
+            auto dW_gate_e = ttnn_fixed::matmul(X_e, d_linear1_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            w_gate[e]->add_grad(dW_gate_e);
+            auto dW_up_e = ttnn_fixed::matmul(X_e, d_gate_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            w_up[e]->add_grad(dW_up_e);
             X_e.deallocate();
 
             // dX_e = d_linear1_e @ Wg_e^T  +  d_gate_e @ Wu_e^T
@@ -242,8 +173,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             auto dX_via_up_e = ttnn_fixed::matmul(d_gate_e, Wu_e, /*transpose_a=*/false, /*transpose_b=*/true);
             d_linear1_e.deallocate();
             d_gate_e.deallocate();
-            Wg_e.deallocate();
-            Wu_e.deallocate();
 
             auto dX_e = ttnn::add(dX_via_gate_e, dX_via_up_e);
             dX_via_gate_e.deallocate();
@@ -255,17 +184,45 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         gate_parts.clear();
 
         auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
-        auto dW_gate = ttnn::concat(dW_gate_parts, /*dim=*/0);
-        auto dW_up = ttnn::concat(dW_up_parts, /*dim=*/0);
-        auto dW_down = ttnn::concat(dW_down_parts, /*dim=*/0);
-
         grouped->add_grad(dX);
-        w_gate->add_grad(dW_gate);
-        w_up->add_grad(dW_up);
-        w_down->add_grad(dW_down);
     };
 
-    out->set_node(autograd::add_backward_node(std::move(grad), out, grouped, w_gate, w_up, w_down));
+    // Manual autograd registration: variadic add_backward_node template can't
+    // unpack a runtime-sized weight vector, so we build the link list directly
+    // and call ctx().add_backward_node ourselves.
+    bool needs_grad = (grouped != nullptr) && grouped->get_requires_grad();
+    auto check_list = [&](const std::vector<autograd::TensorPtr>& v) {
+        for (const auto& t : v) {
+            if (t && t->get_requires_grad()) {
+                needs_grad = true;
+                return;
+            }
+        }
+    };
+    check_list(w_gate);
+    check_list(w_up);
+    check_list(w_down);
+    out->set_requires_grad(needs_grad);
+
+    if (needs_grad) {
+        std::vector<autograd::NodeId> links;
+        links.reserve(1U + 3U * num_experts);
+        auto add_link = [&](const autograd::TensorPtr& t) {
+            if (!t) {
+                return;
+            }
+            const auto& node = t->get_node();
+            if (node) {
+                links.push_back(node.value());
+            }
+        };
+        add_link(grouped);
+        for (const auto& w : w_gate) add_link(w);
+        for (const auto& w : w_up) add_link(w);
+        for (const auto& w : w_down) add_link(w);
+        out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    }
+
     return out;
 }
 
