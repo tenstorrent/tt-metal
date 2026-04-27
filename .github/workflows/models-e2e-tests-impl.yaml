@@ -137,13 +137,6 @@ jobs:
             echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
           fi
-      - name: Validate perf and accuracy targets
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        shell: bash
-        run: |
-          python3 .github/scripts/utils/validate_perf_targets.py \
-            --path-profile repo-root \
-            --sku "${{ matrix.test-group.sku }}"
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
@@ -153,6 +146,14 @@ jobs:
           path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - name: Validate perf and accuracy targets
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        shell: bash
+        run: |
+          python3 .github/scripts/utils/validate_perf_targets.py \
+            --strict-missing \
+            --path-profile repo-root \
+            --sku "${{ matrix.test-group.sku }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
