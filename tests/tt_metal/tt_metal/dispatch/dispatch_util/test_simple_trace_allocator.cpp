@@ -547,8 +547,11 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, SingleProgram) {
         trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
     ASSERT_EQ(
         trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs.size(), hal_.get_programmable_core_type_count());
-    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
-    EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 32u);
+    // Non-binary is short-lived so it is placed at the top of the 256-byte buffer (256 - 32).
+    // The single program's binary has no future use, so it is also packed top-down, just below
+    // the non-binary region (224 - 16 = 208).
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 224u);
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 208u);
     EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
     EXPECT_EQ(trace_nodes[0].dispatch_metadata.sync_count, 0u);
     EXPECT_TRUE(trace_nodes[0].dispatch_metadata.stall_first);
@@ -569,10 +572,13 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, TwoDistinctPrograms) {
     auto allocator = make_allocator(256);
     allocator.allocate_trace_programs(hal_, trace_node_ptrs);
 
-    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
-    EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 32u);
-    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 48u);
-    EXPECT_EQ(trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 80u);
+    // Each program's non-binary and (un-reused) binary are packed top-down. The first program
+    // gets non-binary at 256 - 32 = 224 and binary at 224 - 16 = 208. The second program then
+    // packs just below: non-binary at 208 - 32 = 176, binary at 176 - 16 = 160.
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 224u);
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 208u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 176u);
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr, 160u);
     EXPECT_TRUE(trace_nodes[1].dispatch_metadata.send_binary);
 }
 
@@ -597,7 +603,10 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, SameProgramBinaryCached) {
     EXPECT_EQ(
         trace_nodes[0].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr,
         trace_nodes[1].dispatch_metadata.binary_kernel_config_addrs[*core_index].addr);
-    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 48u);
+    // Binary is reused, so it is allocated bottom-up (and stays cached). Non-binary entries are
+    // short-lived and packed top-down: the first node gets 256 - 32 = 224, the second packs just
+    // below at 224 - 32 = 192.
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 192u);
 }
 
 TEST_F(SimpleTraceAllocatorDeviceFixture, BinaryEvictionRetriesAfterReset) {
@@ -641,7 +650,9 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, NonBinaryEvictionSetsStallFirst) {
     auto allocator = make_allocator(100);
     allocator.allocate_trace_programs(hal_, trace_node_ptrs);
 
-    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    // Buffer is 100 bytes and each non-binary is 80 bytes. Top-down placement puts node 0's
+    // non-binary at 100 - 80 = 20. Node 1's only viable slot is the same one (evicting node 0).
+    EXPECT_EQ(trace_nodes[1].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 20u);
     EXPECT_EQ(trace_nodes[1].dispatch_metadata.sync_count, 2u);
     EXPECT_TRUE(trace_nodes[1].dispatch_metadata.stall_first);
     EXPECT_FALSE(trace_nodes[1].dispatch_metadata.stall_before_program);
@@ -730,7 +741,8 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, SubDeviceFiltering) {
     auto allocator = make_allocator(256);
     allocate_on_subdevice(allocator, trace_nodes, SubDeviceId{0});
 
-    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 0u);
+    // Top-down placement of the (short-lived) non-binary in a 256-byte buffer: 256 - 32 = 224.
+    EXPECT_EQ(trace_nodes[0].dispatch_metadata.nonbinary_kernel_config_addrs[*core_index].addr, 224u);
     EXPECT_TRUE(trace_nodes[0].dispatch_metadata.send_binary);
     EXPECT_EQ(trace_nodes[0].dispatch_metadata.sync_count, 0u);
     EXPECT_TRUE(trace_nodes[0].dispatch_metadata.stall_first);
