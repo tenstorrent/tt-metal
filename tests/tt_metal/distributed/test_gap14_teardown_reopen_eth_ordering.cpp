@@ -366,19 +366,19 @@ TEST_F(TeardownReopenEthOrderingFixture, TeardownReopenPreservesEthLaunchOrderin
         // shape was explicitly configured.  Reasoning at the level of shape
         // characteristics avoids hardcoding device counts.
         const auto final_shape = mesh_device_->shape();
-        auto global_shape = Shape2D{
-            static_cast<uint32_t>(final_shape.num_rows()),
-            static_cast<uint32_t>(final_shape.num_cols())};
+        const uint32_t shape_rows = final_shape[0];
+        const uint32_t shape_cols = final_shape[1];
+        auto global_shape = Shape2D{shape_rows, shape_cols};
         auto shard_shape = Shape2D{1, 1};
         auto dist_config = ShardedBufferConfig{
-            .global_size = final_shape.num_rows() * final_shape.num_cols() * page_size,
+            .global_size = static_cast<size_t>(shape_rows) * shape_cols * page_size,
             .global_buffer_shape = global_shape,
             .shard_shape = shard_shape};
 
         auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
 
         const size_t n_words =
-            page_size / sizeof(uint32_t) * final_shape.num_rows() * final_shape.num_cols();
+            page_size / sizeof(uint32_t) * shape_rows * shape_cols;
         std::vector<uint32_t> src(n_words);
         for (size_t i = 0; i < n_words; i++) {
             // Pattern encodes GAP-14 tag (AE0AF) and index for easy debugging.
