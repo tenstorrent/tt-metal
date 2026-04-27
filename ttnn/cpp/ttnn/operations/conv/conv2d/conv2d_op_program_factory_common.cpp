@@ -292,11 +292,19 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = true,
         .data_format = output_df});
 
-    // Reader indices CB
+    // Reader indices CB.
+    // Each block of act_block_h_ntiles*TILE_HEIGHT output pixels can produce at most
+    // 2*act_block_h_ntiles*TILE_HEIGHT + 2 entries (all non-contiguous) × 2 bytes each.
+    // With num_blocks_per_core = per_core_out_matrix_height_ntile / act_block_h_ntiles blocks,
+    // the upper bound in bytes is 4*per_core_out*TILE_HEIGHT + 4*per_core_out/act_block_h_ntiles + 2
+    // (the +2 accounts for even-alignment padding in construct_on_host_config_tensor).
+    const uint32_t reader_indices_page_size =
+        4 * pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT +
+        4 * pconfig.per_core_out_matrix_height_ntile / block_config.act_block_h_ntiles + 2;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
-        .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
+        .page_size = reader_indices_page_size,
         .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
 
