@@ -107,7 +107,7 @@ def test_binary_invalid_rank(device, a_shape, b_shape):
     pt_b, tt_b = rand_bf16_gen(b_shape, device)
 
     with pytest.raises(RuntimeError):
-        tt_c = ttnn.add(tt_a, tt_b)
+        ttnn.add(tt_a, tt_b)
 
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
