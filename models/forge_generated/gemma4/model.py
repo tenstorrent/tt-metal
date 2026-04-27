@@ -232,26 +232,6 @@ class Gemma4ForCausalLM:
         var_2 = input[7]
         var_3 = input[9]
         var_7 = input[26]
-        var_19 = input[98]
-        var_20 = input[99]
-        var_37 = input[199]
-        var_38 = input[200]
-        var_55 = input[300]
-        var_56 = input[301]
-        var_73 = input[401]
-        var_74 = input[402]
-        var_91 = input[502]
-        var_92 = input[503]
-        var_109 = input[603]
-        var_110 = input[604]
-        var_127 = input[704]
-        var_128 = input[705]
-        var_145 = input[805]
-        var_146 = input[806]
-        var_163 = input[906]
-        var_164 = input[907]
-        var_181 = input[1007]
-        var_182 = input[1008]
         var_185 = self.shared["var_185"]
         utils_DeviceGetter_get_device_0 = utils.DeviceGetter.get_device((1, 4))
         ttnn_to_layout_0 = ttnn.to_layout(var_0, ttnn.Layout.TILE, None, memory_config=None)
@@ -310,7 +290,6 @@ class Gemma4ForCausalLM:
         # `var_7 = input[26]` (the position-id helper) is consumed inside _sliding_prelude;
         # the original codegen freed it after the layer 0 body, so we mirror that timing.
         ttnn.deallocate(var_7, False)
-        layer_kv_outputs = [None] * 59
         hidden = ttnn_multiply_0
         sliding_state = dict(
             causal_mask_logical_and=ttnn_logical_and_0,
@@ -324,81 +303,21 @@ class Gemma4ForCausalLM:
             full_sin_cache=ttnn_typecast_36,
             full_pos_mask=ttnn_typecast_39,
         )
-        for layer_idx, layer in enumerate(self.layers):
-            result = layer(
+        # Run L0..L58 through the regular loop. Each layer returns (residual,
+        # *kv_outputs); the kv_outputs were captured by the legacy _main
+        # return tuple but are unused after the model output trim — KV cache
+        # writes happen as side effects inside the layer body.
+        for layer in self.layers:
+            hidden = layer(
                 hidden,
                 sliding_state=sliding_state,
                 full_state=full_state,
                 input=input,
                 shared=self.shared,
-            )
-            hidden = result[0]
-            layer_kv_outputs[layer_idx] = result[1:]
+            )[0]
 
-        # Restore original per-layer tensor names so the inline L58/L59
-        # bodies and the postlude return list continue to resolve.
-        ttnn_multiply_1062 = hidden
-        ttnn_add_3, ttnn_where_1, ttnn_where_3 = layer_kv_outputs[0]
-        ttnn_add_15, ttnn_where_8, ttnn_where_10 = layer_kv_outputs[1]
-        ttnn_add_25, ttnn_where_13, ttnn_where_15 = layer_kv_outputs[2]
-        ttnn_add_35, ttnn_where_18, ttnn_where_20 = layer_kv_outputs[3]
-        ttnn_add_45, ttnn_where_23, ttnn_where_25 = layer_kv_outputs[4]
-        (ttnn_add_55,) = layer_kv_outputs[5]
-        ttnn_add_65, ttnn_where_30, ttnn_where_32 = layer_kv_outputs[6]
-        ttnn_add_75, ttnn_where_35, ttnn_where_37 = layer_kv_outputs[7]
-        ttnn_add_85, ttnn_where_40, ttnn_where_42 = layer_kv_outputs[8]
-        ttnn_add_95, ttnn_where_45, ttnn_where_47 = layer_kv_outputs[9]
-        ttnn_add_105, ttnn_where_50, ttnn_where_52 = layer_kv_outputs[10]
-        (ttnn_add_115,) = layer_kv_outputs[11]
-        ttnn_add_125, ttnn_where_56, ttnn_where_58 = layer_kv_outputs[12]
-        ttnn_add_135, ttnn_where_61, ttnn_where_63 = layer_kv_outputs[13]
-        ttnn_add_145, ttnn_where_66, ttnn_where_68 = layer_kv_outputs[14]
-        ttnn_add_155, ttnn_where_71, ttnn_where_73 = layer_kv_outputs[15]
-        ttnn_add_165, ttnn_where_76, ttnn_where_78 = layer_kv_outputs[16]
-        (ttnn_add_175,) = layer_kv_outputs[17]
-        ttnn_add_185, ttnn_where_82, ttnn_where_84 = layer_kv_outputs[18]
-        ttnn_add_195, ttnn_where_87, ttnn_where_89 = layer_kv_outputs[19]
-        ttnn_add_205, ttnn_where_92, ttnn_where_94 = layer_kv_outputs[20]
-        ttnn_add_215, ttnn_where_97, ttnn_where_99 = layer_kv_outputs[21]
-        ttnn_add_225, ttnn_where_102, ttnn_where_104 = layer_kv_outputs[22]
-        (ttnn_add_235,) = layer_kv_outputs[23]
-        ttnn_add_245, ttnn_where_108, ttnn_where_110 = layer_kv_outputs[24]
-        ttnn_add_255, ttnn_where_113, ttnn_where_115 = layer_kv_outputs[25]
-        ttnn_add_265, ttnn_where_118, ttnn_where_120 = layer_kv_outputs[26]
-        ttnn_add_275, ttnn_where_123, ttnn_where_125 = layer_kv_outputs[27]
-        ttnn_add_285, ttnn_where_128, ttnn_where_130 = layer_kv_outputs[28]
-        (ttnn_add_295,) = layer_kv_outputs[29]
-        ttnn_add_305, ttnn_where_134, ttnn_where_136 = layer_kv_outputs[30]
-        ttnn_add_315, ttnn_where_139, ttnn_where_141 = layer_kv_outputs[31]
-        ttnn_add_325, ttnn_where_144, ttnn_where_146 = layer_kv_outputs[32]
-        ttnn_add_335, ttnn_where_149, ttnn_where_151 = layer_kv_outputs[33]
-        ttnn_add_345, ttnn_where_154, ttnn_where_156 = layer_kv_outputs[34]
-        (ttnn_add_355,) = layer_kv_outputs[35]
-        ttnn_add_365, ttnn_where_160, ttnn_where_162 = layer_kv_outputs[36]
-        ttnn_add_375, ttnn_where_165, ttnn_where_167 = layer_kv_outputs[37]
-        ttnn_add_385, ttnn_where_170, ttnn_where_172 = layer_kv_outputs[38]
-        ttnn_add_395, ttnn_where_175, ttnn_where_177 = layer_kv_outputs[39]
-        ttnn_add_405, ttnn_where_180, ttnn_where_182 = layer_kv_outputs[40]
-        (ttnn_add_415,) = layer_kv_outputs[41]
-        ttnn_add_425, ttnn_where_186, ttnn_where_188 = layer_kv_outputs[42]
-        ttnn_add_435, ttnn_where_191, ttnn_where_193 = layer_kv_outputs[43]
-        ttnn_add_445, ttnn_where_196, ttnn_where_198 = layer_kv_outputs[44]
-        ttnn_add_455, ttnn_where_201, ttnn_where_203 = layer_kv_outputs[45]
-        ttnn_add_465, ttnn_where_206, ttnn_where_208 = layer_kv_outputs[46]
-        (ttnn_add_475,) = layer_kv_outputs[47]
-        ttnn_add_485, ttnn_where_212, ttnn_where_214 = layer_kv_outputs[48]
-        ttnn_add_495, ttnn_where_217, ttnn_where_219 = layer_kv_outputs[49]
-        ttnn_add_505, ttnn_where_222, ttnn_where_224 = layer_kv_outputs[50]
-        ttnn_add_515, ttnn_where_227, ttnn_where_229 = layer_kv_outputs[51]
-        ttnn_add_525, ttnn_where_232, ttnn_where_234 = layer_kv_outputs[52]
-        (ttnn_add_535,) = layer_kv_outputs[53]
-        ttnn_add_545, ttnn_where_238, ttnn_where_240 = layer_kv_outputs[54]
-        ttnn_add_555, ttnn_where_243, ttnn_where_245 = layer_kv_outputs[55]
-        ttnn_add_565, ttnn_where_248, ttnn_where_250 = layer_kv_outputs[56]
-        ttnn_add_575, ttnn_where_253, ttnn_where_255 = layer_kv_outputs[57]
-        ttnn_add_585, ttnn_where_258, ttnn_where_260 = layer_kv_outputs[58]
         ttnn_add_601 = self.l59(
-            ttnn_multiply_1062,
+            hidden,
             sliding_state=sliding_state,
             full_state=full_state,
             input=input,
@@ -415,29 +334,6 @@ class Gemma4ForCausalLM:
         var_2 = input[7]
         var_3 = input[9]
         var_7 = input[26]
-        var_19 = input[98]
-        var_20 = input[99]
-        var_37 = input[199]
-        var_38 = input[200]
-        var_55 = input[300]
-        var_56 = input[301]
-        var_73 = input[401]
-        var_74 = input[402]
-        var_91 = input[502]
-        var_92 = input[503]
-        var_109 = input[603]
-        var_110 = input[604]
-        var_127 = input[704]
-        var_128 = input[705]
-        var_145 = input[805]
-        var_146 = input[806]
-        var_163 = input[906]
-        var_164 = input[907]
-        var_178 = input[977]
-        var_179 = input[991]
-        var_180 = input[993]
-        var_181 = input[1007]
-        var_182 = input[1008]
         var_185 = self.shared["var_185"]
         var_186 = self.shared["var_186"]
         var_187 = self.shared["var_187"]
@@ -517,7 +413,6 @@ class Gemma4ForCausalLM:
         # the matching parameterized helper. L58 + L59 stay inline below as
         # documented special cases.
         hidden = ttnn_multiply_0
-        layer_kv_outputs = [None] * 58
         sliding_state = {
             "causal_mask_logical_and": ttnn_logical_and_0,
             "causal_mask_logical_not": ttnn_logical_not_0,
@@ -532,90 +427,29 @@ class Gemma4ForCausalLM:
             "full_sin_cache": ttnn_reshape_105,
             "full_pos_mask": ttnn_typecast_39,
         }
-        for layer_idx, layer in enumerate(self.layers):
-            result = layer(
+        # Run L0..L57 through the regular loop. Each layer returns (residual,
+        # *kv_outputs); the kv_outputs were captured by the legacy _main
+        # return tuple but are unused after the model output trim — KV cache
+        # writes happen as side effects inside the layer body.
+        for layer in self.layers:
+            hidden = layer(
                 hidden,
                 sliding_state=sliding_state,
                 full_state=full_state,
                 input=input,
                 shared=self.shared,
-            )
-            hidden = result[0]
-            layer_kv_outputs[layer_idx] = result[1:]
+            )[0]
 
-        # Restore original per-layer tensor names so the inline L58/L59
-        # bodies and the postlude return list continue to resolve.
-        ttnn_add_4, ttnn_where_1, ttnn_where_3 = layer_kv_outputs[0]
-        ttnn_add_16, ttnn_where_8, ttnn_where_10 = layer_kv_outputs[1]
-        ttnn_add_26, ttnn_where_13, ttnn_where_15 = layer_kv_outputs[2]
-        ttnn_add_36, ttnn_where_18, ttnn_where_20 = layer_kv_outputs[3]
-        ttnn_add_46, ttnn_where_23, ttnn_where_25 = layer_kv_outputs[4]
-        (ttnn_add_56,) = layer_kv_outputs[5]
-        ttnn_add_66, ttnn_where_30, ttnn_where_32 = layer_kv_outputs[6]
-        ttnn_add_76, ttnn_where_35, ttnn_where_37 = layer_kv_outputs[7]
-        ttnn_add_86, ttnn_where_40, ttnn_where_42 = layer_kv_outputs[8]
-        ttnn_add_96, ttnn_where_45, ttnn_where_47 = layer_kv_outputs[9]
-        ttnn_add_106, ttnn_where_50, ttnn_where_52 = layer_kv_outputs[10]
-        (ttnn_add_116,) = layer_kv_outputs[11]
-        ttnn_add_126, ttnn_where_56, ttnn_where_58 = layer_kv_outputs[12]
-        ttnn_add_136, ttnn_where_61, ttnn_where_63 = layer_kv_outputs[13]
-        ttnn_add_146, ttnn_where_66, ttnn_where_68 = layer_kv_outputs[14]
-        ttnn_add_156, ttnn_where_71, ttnn_where_73 = layer_kv_outputs[15]
-        ttnn_add_166, ttnn_where_76, ttnn_where_78 = layer_kv_outputs[16]
-        (ttnn_add_176,) = layer_kv_outputs[17]
-        ttnn_add_186, ttnn_where_82, ttnn_where_84 = layer_kv_outputs[18]
-        ttnn_add_196, ttnn_where_87, ttnn_where_89 = layer_kv_outputs[19]
-        ttnn_add_206, ttnn_where_92, ttnn_where_94 = layer_kv_outputs[20]
-        ttnn_add_216, ttnn_where_97, ttnn_where_99 = layer_kv_outputs[21]
-        ttnn_add_226, ttnn_where_102, ttnn_where_104 = layer_kv_outputs[22]
-        (ttnn_add_236,) = layer_kv_outputs[23]
-        ttnn_add_246, ttnn_where_108, ttnn_where_110 = layer_kv_outputs[24]
-        ttnn_add_256, ttnn_where_113, ttnn_where_115 = layer_kv_outputs[25]
-        ttnn_add_266, ttnn_where_118, ttnn_where_120 = layer_kv_outputs[26]
-        ttnn_add_276, ttnn_where_123, ttnn_where_125 = layer_kv_outputs[27]
-        ttnn_add_286, ttnn_where_128, ttnn_where_130 = layer_kv_outputs[28]
-        (ttnn_add_296,) = layer_kv_outputs[29]
-        ttnn_add_306, ttnn_where_134, ttnn_where_136 = layer_kv_outputs[30]
-        ttnn_add_316, ttnn_where_139, ttnn_where_141 = layer_kv_outputs[31]
-        ttnn_add_326, ttnn_where_144, ttnn_where_146 = layer_kv_outputs[32]
-        ttnn_add_336, ttnn_where_149, ttnn_where_151 = layer_kv_outputs[33]
-        ttnn_add_346, ttnn_where_154, ttnn_where_156 = layer_kv_outputs[34]
-        (ttnn_add_356,) = layer_kv_outputs[35]
-        ttnn_add_366, ttnn_where_160, ttnn_where_162 = layer_kv_outputs[36]
-        ttnn_add_376, ttnn_where_165, ttnn_where_167 = layer_kv_outputs[37]
-        ttnn_add_386, ttnn_where_170, ttnn_where_172 = layer_kv_outputs[38]
-        ttnn_add_396, ttnn_where_175, ttnn_where_177 = layer_kv_outputs[39]
-        ttnn_add_406, ttnn_where_180, ttnn_where_182 = layer_kv_outputs[40]
-        (ttnn_add_416,) = layer_kv_outputs[41]
-        ttnn_add_426, ttnn_where_186, ttnn_where_188 = layer_kv_outputs[42]
-        ttnn_add_436, ttnn_where_191, ttnn_where_193 = layer_kv_outputs[43]
-        ttnn_add_446, ttnn_where_196, ttnn_where_198 = layer_kv_outputs[44]
-        ttnn_add_456, ttnn_where_201, ttnn_where_203 = layer_kv_outputs[45]
-        ttnn_add_466, ttnn_where_206, ttnn_where_208 = layer_kv_outputs[46]
-        (ttnn_add_476,) = layer_kv_outputs[47]
-        ttnn_add_486, ttnn_where_212, ttnn_where_214 = layer_kv_outputs[48]
-        ttnn_add_496, ttnn_where_217, ttnn_where_219 = layer_kv_outputs[49]
-        ttnn_add_506, ttnn_where_222, ttnn_where_224 = layer_kv_outputs[50]
-        ttnn_add_516, ttnn_where_227, ttnn_where_229 = layer_kv_outputs[51]
-        ttnn_add_526, ttnn_where_232, ttnn_where_234 = layer_kv_outputs[52]
-        (ttnn_add_536,) = layer_kv_outputs[53]
-        ttnn_add_546, ttnn_where_238, ttnn_where_240 = layer_kv_outputs[54]
-        ttnn_add_556, ttnn_where_243, ttnn_where_245 = layer_kv_outputs[55]
-        ttnn_add_566, ttnn_where_248, ttnn_where_250 = layer_kv_outputs[56]
-        ttnn_add_576, ttnn_where_253, ttnn_where_255 = layer_kv_outputs[57]
-
-        # L58: same structure as a regular sliding-prefill layer. The codegen
-        # also emitted two prestage `ttnn_concat_*` outputs (KV cache prestage
-        # for L59) but their values were only consumed by the legacy `_main`
-        # return tuple — gone since the model output trim. Calling self.l58
-        # produces the same residual/KV side-effects without those dead ops.
-        ttnn_multiply_1062, _, _, _ = self.l58(
+        # L58 (sliding) — also flows through SlidingDecoderLayer. The codegen's
+        # extra prestage concat ops are dropped (their outputs were consumed
+        # only by the legacy return tuple).
+        ttnn_multiply_1062 = self.l58(
             hidden,
             sliding_state=sliding_state,
             full_state=full_state,
             input=input,
             shared=self.shared,
-        )
+        )[0]
         # L59 in prefill consumes sliding_state's prelude outputs unchanged
         # via __call__, but the full_state for L59 prefill uses the
         # ttnn_reshape_104/105 (post-prelude) that the regular full layers
