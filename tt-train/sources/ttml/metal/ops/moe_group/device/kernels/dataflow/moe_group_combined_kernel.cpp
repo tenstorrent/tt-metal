@@ -108,10 +108,6 @@ constexpr uint32_t MD_ROW_STRIDE_U16 = md_aligned_page / sizeof(uint16_t);
 // SHARED_SLOT_U32 uint32s (multiple of 16B) to keep adjacent cores' writes
 // from overlapping and to meet the NOC L1 write address alignment.
 
-inline uint32_t round_up_32(uint32_t x) {
-    return ((x + 31U) >> 5U) << 5U;
-}
-
 void kernel_main() {
     // ---- Runtime args (only per-core + buffer addrs; everything globally
     //      constant has been moved to CT args above) ----
@@ -155,16 +151,16 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* shared_per_core_start = shared_local_counts + num_total_cores * SHARED_SLOT_U32;
     // md_block 32B aligned, after shared tables
     uint32_t md_block_addr_raw = (uint32_t)(shared_per_core_start + num_total_cores * SHARED_SLOT_U32);
-    uint32_t md_block_addr = (md_block_addr_raw + 31U) & ~31U;
+    uint32_t md_block_addr = round_up(md_block_addr_raw, 32U);
     volatile tt_l1_ptr uint16_t* md_block = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(md_block_addr);
     // BLOCK_ROWS for streaming metadata. Use slice size if it fits, else 1024.
     uint32_t my_slice_size = my_slice_end - my_slice_start;
     uint32_t block_rows = my_slice_size < 1024U ? my_slice_size : 1024U;
     uint32_t md_block_bytes = block_rows * md_aligned_page;
-    uint32_t plan_stage_addr = (md_block_addr + md_block_bytes + 31U) & ~31U;
+    uint32_t plan_stage_addr = round_up(md_block_addr + md_block_bytes, 32U);
     volatile tt_l1_ptr uint32_t* plan_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_stage_addr);
     uint32_t plan_stage_bytes = e_local * PLAN_CHUNK * sizeof(uint32_t);
-    uint32_t fill_addr = (plan_stage_addr + plan_stage_bytes + 31U) & ~31U;
+    uint32_t fill_addr = round_up(plan_stage_addr + plan_stage_bytes, 32U);
     volatile tt_l1_ptr uint32_t* fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_addr);
 
     // ---- Load leids (uint16) into leids_buf ----
@@ -180,8 +176,7 @@ void kernel_main() {
     if (my_slice_size > 0U) {
         for (uint32_t block_start = my_slice_start; block_start < my_slice_end; block_start += block_rows) {
             uint32_t block_end = block_start + block_rows;
-            if (block_end > my_slice_end)
-                block_end = my_slice_end;
+            block_end = std::min(block_end, my_slice_end);
             // Batched reads
             for (uint32_t row = block_start; row < block_end; ++row) {
                 uint32_t local_row = row - block_start;
@@ -254,12 +249,11 @@ void kernel_main() {
             uint32_t running = offsets[e];
             for (uint32_t c = 0; c < num_total_cores; ++c) {
                 shared_per_core_start[c * SHARED_SLOT_U32 + e] = running;
-                uint32_t padded =
-                    (shared_local_counts[c * SHARED_SLOT_U32 + e] + L1_ALIGN_U32_MASK) & ~L1_ALIGN_U32_MASK;
+                uint32_t padded = round_up(shared_local_counts[c * SHARED_SLOT_U32 + e], L1_ALIGN_U32_MASK + 1U);
                 running += padded;
             }
             // offsets[e+1] rounded up to 32-row (tile alignment for grouped)
-            offsets[e + 1U] = (running + 31U) & ~31U;
+            offsets[e + 1U] = round_up(running, 32U);
         }
 
         // Pre-fill plan DRAM with SENTINEL in 32-entry bursts.

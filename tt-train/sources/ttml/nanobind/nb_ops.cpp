@@ -12,6 +12,7 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/moe_group/moe_group.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -59,6 +60,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("unary");
+    m.def_submodule("metal_ops");
 }
 
 void py_module(nb::module_& m) {
@@ -409,6 +411,29 @@ void py_module(nb::module_& m) {
         py_unary.def("broadcast_batch", &ttml::ops::broadcast_batch, nb::arg("tensor"), nb::arg("new_batch_dim"));
         py_unary.def("log_softmax", &ttml::ops::log_softmax, nb::arg("tensor"), nb::arg("dim"));
         py_unary.def("log_softmax_moreh", &ttml::ops::log_softmax_moreh, nb::arg("tensor"), nb::arg("dim"));
+    }
+
+    {
+        auto py_metal = m.def_submodule("metal_ops");
+        py_metal.def(
+            "moe_group",
+            [](const ttnn::Tensor& dispatched,
+               const ttnn::Tensor& metadata,
+               const ttnn::Tensor& local_expert_ids,
+               uint32_t e_local,
+               uint32_t k) {
+                auto [grouped, counts, offsets, plan] =
+                    ttml::metal::moe_group(dispatched, metadata, local_expert_ids, e_local, k);
+                return nb::make_tuple(grouped, counts, offsets, plan);
+            },
+            nb::arg("dispatched"),
+            nb::arg("metadata"),
+            nb::arg("local_expert_ids"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            "Group dispatched tokens by local expert.\n"
+            "Returns (grouped [1,1,T_cap,H] TILE bf16, counts [E_local] uint32,\n"
+            "         offsets [E_local+1] uint32, plan [T_cap] uint32).");
     }
 }
 

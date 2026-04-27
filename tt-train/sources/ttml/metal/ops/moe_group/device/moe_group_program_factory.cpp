@@ -9,6 +9,7 @@
 #include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -31,6 +32,10 @@ constexpr uint32_t kCbOffset = tt::CBIndex::c_5;
 constexpr uint32_t kCbCtrl = tt::CBIndex::c_6;  // NCRISC->compute: per-core active block count
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
+
+// L1 alignment for CB pages and cross-core NOC writes. NOT the tile width
+// (which happens to also be 32 elements) — different unit, same number.
+constexpr uint32_t kL1_ALIGN = 32U;
 
 uint32_t pick_num_chunks(uint32_t h) {
     uint32_t row_bytes = h * 2U;
@@ -120,7 +125,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
             .set_page_size(kCbPlan, kPlanCbBytes);
     CreateCircularBuffer(program, all_cores, cb_plan_cfg);
 
-    uint32_t offset_cb_bytes = (((e_local + 1U) * sizeof(uint32_t) + 31U) / 32U) * 32U;
+    uint32_t offset_cb_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
     tt::tt_metal::CircularBufferConfig cb_offset_cfg =
         tt::tt_metal::CircularBufferConfig(offset_cb_bytes, {{kCbOffset, tt::DataFormat::UInt32}})
             .set_page_size(kCbOffset, offset_cb_bytes);
@@ -136,34 +141,44 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     CreateCircularBuffer(program, all_cores, cb_ctrl_cfg);
 
     // cb_scan: every core's scratch for scan + shared tables (only meaningful on lead).
-    // Layout: [stage 32][leids_buf 32][counts e_local*4][offsets (e_local+1)*4]
+    // Layout: [stage 128B][leids_buf 32B][counts e_local*4][offsets (e_local+1)*4]
     //         [cursors e_local*4]
     //         [shared_local_counts num_total_cores * e_local * 4]
     //         [shared_per_core_start num_total_cores * e_local * 4]
     //         [md_block (BLOCK_ROWS or slice_size)*32 + 32]
-    //         [plan_stage e_local * 32 * 4][fill e_local * 4]
+    //         [plan_stage e_local * PLAN_CHUNK * 4][fill e_local * 4]
     constexpr uint32_t kBlockRows = 1024U;
     uint32_t slice_block_rows = scan_slice_size < kBlockRows ? scan_slice_size : kBlockRows;
     if (slice_block_rows == 0U)
         slice_block_rows = 1U;
 
-    uint32_t overhead_bytes = 128U + 32U + (3U * e_local + 1U) * sizeof(uint32_t) + 64U;
+    // Named sizes for the cb_scan layout.
+    constexpr uint32_t kStageBytes = 128U;    // scan stage scratch (lead-only)
+    constexpr uint32_t kLeidsBufBytes = 32U;  // leids_buf — one cache line, holds up to 16 leids
+    constexpr uint32_t kPlanChunk = 32U;      // plan pre-fill burst size (entries per chunk)
+    constexpr uint32_t kMdAlignedPage = 32U;  // metadata aligned page size (one cache line)
+    constexpr uint32_t kOverheadSlack = 64U;  // safety pad between sections (covers alignment carry-over)
+    // counts(e_local) + offsets(e_local+1) + cursors(e_local) = 3*e_local + 1 uint32 entries.
+    constexpr uint32_t kHeaderU32PerExpert = 3U;
+    uint32_t header_bytes = (kHeaderU32PerExpert * e_local + 1U) * sizeof(uint32_t);
+
+    uint32_t overhead_bytes = kStageBytes + kLeidsBufBytes + header_bytes + kOverheadSlack;
     // Each shared table has num_total_cores slots; slot size =
     // round_up_to_align(e_local) uint32s (smallest multiple of the arch's L1
     // alignment that fits e_local). Arch-specific via HAL (16 B on WH/BH today,
     // may change on future parts).
     const uint32_t l1_align_u32 = tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t);
-    uint32_t shared_slot_u32 = ((e_local + l1_align_u32 - 1U) / l1_align_u32) * l1_align_u32;
+    uint32_t shared_slot_u32 = tt::round_up(e_local, l1_align_u32);
     if (shared_slot_u32 < l1_align_u32)
         shared_slot_u32 = l1_align_u32;
     uint32_t kSharedSlotBytes = shared_slot_u32 * sizeof(uint32_t);
     uint32_t shared_table_bytes = num_total_cores * kSharedSlotBytes;
     uint32_t two_shared_tables = 2U * shared_table_bytes;
-    uint32_t md_block_bytes = slice_block_rows * 32U + 32U;
-    uint32_t plan_stage_bytes = ((e_local * 32U * sizeof(uint32_t) + 31U) / 32U) * 32U;
-    uint32_t fill_bytes = ((e_local * sizeof(uint32_t) + 31U) / 32U) * 32U;
+    uint32_t md_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
+    uint32_t plan_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint32_t), kL1_ALIGN);
+    uint32_t fill_bytes = tt::round_up(e_local * sizeof(uint32_t), kL1_ALIGN);
     uint32_t scan_scratch_bytes = overhead_bytes + two_shared_tables + md_block_bytes + plan_stage_bytes + fill_bytes;
-    scan_scratch_bytes = ((scan_scratch_bytes + 31U) / 32U) * 32U;
+    scan_scratch_bytes = tt::round_up(scan_scratch_bytes, kL1_ALIGN);
 
     tt::tt_metal::CircularBufferConfig cb_scan_cfg =
         tt::tt_metal::CircularBufferConfig(scan_scratch_bytes, {{kCbScan, tt::DataFormat::UInt32}})
@@ -171,11 +186,10 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     CreateCircularBuffer(program, all_cores, cb_scan_cfg);
 
     // Compute address of shared tables in cb_scan (offset within scratch).
-    // Layout: stage(128B), leids_buf(32B), counts, offsets, cursors.
-    // MUST be 32B-aligned for cross-core NOC writes to land correctly.
-    uint32_t shared_tables_offset_raw =
-        128U + 32U + e_local * sizeof(uint32_t) + (e_local + 1U) * sizeof(uint32_t) + e_local * sizeof(uint32_t);
-    uint32_t shared_tables_offset = (shared_tables_offset_raw + 31U) & ~31U;
+    // Layout: stage(kStageBytes), leids_buf(kLeidsBufBytes), counts, offsets, cursors.
+    // MUST be kL1_ALIGN-aligned for cross-core NOC writes to land correctly.
+    uint32_t shared_tables_offset_raw = kStageBytes + kLeidsBufBytes + header_bytes;
+    uint32_t shared_tables_offset = tt::round_up(shared_tables_offset_raw, kL1_ALIGN);
 
     // Phase semaphores
     uint32_t scan_phase1_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
