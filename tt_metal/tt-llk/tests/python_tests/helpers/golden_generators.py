@@ -48,6 +48,64 @@ MAX_TILES_32_BIT_DEST = 4
 golden_registry = {}
 
 
+def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.Tensor:
+    """Apply integer saturation during format conversion.
+
+    Hardware saturates (clamps) values instead of wrapping on overflow.
+    This handles downsizing (Int32->Int8), signed/unsigned conversions (UInt8->Int8),
+    and any case where source values might exceed destination range.
+    """
+    iinfo = torch.iinfo(torch_format)
+    is_unsigned = str(data_format).startswith("U")
+    if is_unsigned:
+        min_val, max_val = iinfo.min, iinfo.max
+    else:
+        # +1 because hardware uses sign-magnitude representation
+        min_val, max_val = iinfo.min + 1, iinfo.max
+
+    # Convert to intermediate type (int64 or int32) to avoid overflow during clamping
+    # Use int64 when source can hold values outside int32 range (e.g. UInt32 is torch.int64)
+    intermediate_type = (
+        torch.int64 if result.dtype in (torch.uint32, torch.int64) else torch.int32
+    )
+    result = result.to(intermediate_type)
+    result = torch.clamp(result, min_val, max_val)
+    return result.to(torch_format)
+
+
+def apply_l1_accumulation(
+    partials: list[torch.Tensor],
+    data_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Simulate L1 accumulation by summing partial results.
+
+    With L1 acc enabled, the packer accumulates into the same output tile
+    slots across multiple passes. For integer formats the hardware
+    saturates at every step instead of wrapping, so the golden must
+    clamp the running sum to the output range after each addition.
+
+    Args:
+        partials: List of tensors, one per accumulation pass, all of the
+                  same shape. Each tensor represents the contribution
+                  packed into the output tiles during that pass.
+        data_format: DataFormat of the pack output.  When the format is integer,
+               each accumulation step is saturated to the format's representable range.
+    Returns:
+        Element-wise sum of all partials (saturated per-step for integers).
+    """
+    needs_saturation = data_format.is_integer()
+
+    accumulated = partials[0].clone()
+    for partial in partials[1:]:
+        if needs_saturation:
+            wide = accumulated.to(torch.int64) + partial.to(torch.int64)
+            accumulated = saturate_integer(wide, data_format, format_dict[data_format])
+        else:
+            accumulated += partial
+    return accumulated
+
+
 def check_bfp8_b(operand: list) -> list:
     """Check if datum is BFP8_B there is a +/- inf then zero out entire row of 16 elements because they inherit the same exponent and therefore get zeroed out in tensix."""
     # tensor_bytes = pack_bfp8_b(torch.tensor(operand, dtype=torch.bfloat16))
@@ -182,6 +240,9 @@ class DummyGoldenGenerator:
         return torch.zeros(1024, dtype=torch.bfloat16)
 
     def transpose_within_faces_multi_tile(*args, **kwargs):
+        return torch.zeros(1024, dtype=torch.bfloat16)
+
+    def accumulate_l1(*args, **kwargs):
         return torch.zeros(1024, dtype=torch.bfloat16)
 
 
@@ -1242,31 +1303,10 @@ class DataCopyGolden:
 
         # Ensure result is in correct format if not already
         if result.dtype != torch_format:
-            # Apply saturation for integer format conversions to match hardware behavior
-            # Hardware saturates (clamps) values instead of wrapping around
             if data_format.is_integer():
-                iinfo = torch.iinfo(torch_format)
-                is_unsigned = str(data_format).startswith("U")
-                if is_unsigned:
-                    min_val, max_val = iinfo.min, iinfo.max
-                else:
-                    min_val, max_val = iinfo.min + 1, iinfo.max
-
-                # Convert to intermediate type (int64 or int32) to avoid overflow during clamping
-                # Use int64 when source can hold values outside int32 range (e.g. UInt32 is torch.int64)
-                intermediate_type = (
-                    torch.int64
-                    if result.dtype in (torch.uint32, torch.int64)
-                    else torch.int32
-                )
-                result = result.to(intermediate_type)
-
-                # Apply saturation to clamp values to destination range
-                # This handles downsizing (Int32->Int8), signed/unsigned conversions (UInt8->Int8),
-                # and any case where source values might exceed destination range
-                result = torch.clamp(result, min_val, max_val)
-
-            result = result.to(torch_format)
+                result = saturate_integer(result, data_format, torch_format)
+            else:
+                result = result.to(torch_format)
 
         # Apply bfp4_b output quantization round-trip to match hardware behaviour
         if data_format == DataFormat.Bfp4_b:
@@ -1322,12 +1362,16 @@ class PackGolden:
 
         if not isinstance(operand1, torch.Tensor):
             operand1 = torch.tensor(operand1, dtype=torch_format)
-        elif operand1.dtype != torch_format:
-            operand1 = operand1.to(torch_format)
 
         result = operand1.view(tile_cnt, tile_size)[
             :, :elements_per_tile_needed
         ].reshape(-1)
+
+        if result.dtype != torch_format:
+            if data_format.is_integer():
+                result = saturate_integer(result, data_format, torch_format)
+            else:
+                result = result.to(torch_format)
 
         return result
 
@@ -1506,6 +1550,13 @@ class PackGolden:
                 )
                 # Clamp between 0 and threshold
                 return torch.clamp(result, min=0.0, max=threshold)
+
+    @staticmethod
+    def accumulate_l1(
+        partials: list[torch.Tensor],
+        data_format: DataFormat,
+    ) -> torch.Tensor:
+        return apply_l1_accumulation(partials, data_format)
 
 
 @register_golden
