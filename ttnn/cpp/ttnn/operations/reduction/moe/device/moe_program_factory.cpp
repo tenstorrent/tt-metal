@@ -58,6 +58,13 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
     uint32_t Wt = input_shape[3] / tile_width;
+
+    uint32_t Kt = (k + tile_width - 1) / tile_width;
+    uint32_t topk_mask_cb_units = Ht * Kt;
+    uint32_t values_and_topk_indices_cb_units = Ht * Kt;
+    uint32_t index_from_reader_cb_units = Ht * Wt;
+    uint32_t expert_mask_cb_units = Ht * Wt;
+
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
@@ -69,7 +76,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     // tiles of space
     uint32_t input_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * input_tile_size,
+        .total_size = std::max(cb_in_units, Ht * Wt) * input_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(input_cb_index),
@@ -80,7 +87,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
 
     uint32_t expert_mask_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * expert_mask_tile_size,
+        .total_size = expert_mask_cb_units * expert_mask_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(expert_mask_cb_index),
@@ -91,7 +98,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
 
     uint32_t topk_mask_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * topk_mask_tile_size,
+        .total_size = topk_mask_cb_units * topk_mask_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(topk_mask_cb_index),
@@ -117,7 +124,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     // tiles of space This CB carries the indices that are created in the reader kernel
     uint32_t index_cb_index = tt::CBIndex::c_4;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * index_tile_size,
+        .total_size = index_from_reader_cb_units * index_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(index_cb_index),
@@ -153,7 +160,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     // topk values
     uint32_t values_cb_index = tt::CBIndex::c_7;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cb_unit * value_tile_size,
+        .total_size = values_and_topk_indices_cb_units * value_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(values_cb_index),
@@ -165,7 +172,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     // topk indices
     uint32_t output_ind_cb_index = tt::CBIndex::c_8;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cb_unit * index_tile_size,
+        .total_size = values_and_topk_indices_cb_units * index_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_ind_cb_index),
@@ -173,6 +180,15 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
             .page_size = index_tile_size,
         }}},
     });
+
+    // Expert-0 gate as Float16_b (same as values_cb). UInt16 top-k indices cannot be multiplied with BF16 values in
+    // mul_tiles without format mismatch; eqz output is typecast UInt16 -> Float16_b into this CB.
+    uint32_t expert0_gate_mask_cb_index = tt::CBIndex::c_12;
+    tt::tt_metal::CircularBufferConfig expert0_gate_mask_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            values_and_topk_indices_cb_units * value_tile_size, {{expert0_gate_mask_cb_index, value_cb_data_format}})
+            .set_page_size(expert0_gate_mask_cb_index, value_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core, expert0_gate_mask_cb_config);
 
     uint32_t cb_cur_max_index = tt::CBIndex::c_9;
     desc.cbs.push_back(CBDescriptor{
@@ -263,7 +279,8 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
         static_cast<uint32_t>(std::log2(Wt)),
         cb_cur_max_index,
         cb_cur_sum_index,
-        tile_width};
+        tile_width,
+        expert0_gate_mask_cb_index};
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp";

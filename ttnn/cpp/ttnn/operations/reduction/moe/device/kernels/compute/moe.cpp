@@ -15,6 +15,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/debug/dprint.h"
+#include "api/compute/eltwise_unary/typecast.h"
 #include "ckernel_sfpu.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 using namespace ckernel;
@@ -124,6 +125,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     cb_pop_front(in1_cb, rows);
 }
 
+/* Need to check correctness
 void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
     // Precondition: in0_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
@@ -139,6 +141,32 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
         pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
         cb_push_back(in0_cb, 1);
+        release_dst();
+    }
+}
+*/
+
+// Consumes UInt16 top-k index tiles from indices_cb and produces Float16_b expert-0 mask tiles (1.0 where index==0).
+// Packing mask as UInt16 into the same CB as indices caused mul_tiles(values_bf16 × mask_uint16) to unpack incorrectly.
+void topk_indices_to_expert0_mask_bf16(uint32_t indices_cb, uint32_t mask_bf16_cb, uint32_t num_tiles) {
+    constexpr uint32_t df_u16 = static_cast<uint32_t>(DataFormat::UInt16);
+    constexpr uint32_t df_f16b = static_cast<uint32_t>(DataFormat::Float16_b);
+
+    reconfig_data_format_srca(indices_cb);
+    eqz_tile_init();
+    copy_tile_to_dst_init_short(indices_cb);
+    cb_wait_front(indices_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        copy_tile(indices_cb, 0, 0);
+        cb_pop_front(indices_cb, 1);
+        eqz_tile_uint16(0);
+        typecast_tile_init<df_u16, df_f16b>();
+        typecast_tile<df_u16, df_f16b>(0);
+        cb_reserve_back(mask_bf16_cb, 1);
+        pack_reconfig_data_format(mask_bf16_cb);
+        pack_tile(0, mask_bf16_cb);
+        cb_push_back(mask_bf16_cb, 1);
         release_dst();
     }
 }
@@ -354,6 +382,7 @@ void kernel_main() {
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
     constexpr uint32_t tile_width = get_compile_time_arg_val(17);
+    constexpr uint32_t expert0_gate_mask_cb_index = get_compile_time_arg_val(18);
 
     constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
@@ -379,7 +408,9 @@ void kernel_main() {
 
     // mask out all experts except the top-k
     add_block_bcast_rows_inplace(values_cb_index, topk_mask_cb_index, Ht, Kt, false);
-    eqz_block_inplace(output_ind_cb_index, Ht * Kt);
+
+    // eqz_block_inplace(output_ind_cb_index, Ht * Kt);
+    topk_indices_to_expert0_mask_bf16(output_ind_cb_index, expert0_gate_mask_cb_index, Ht * Kt);
 
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max>(Ht, Kt);
@@ -389,7 +420,8 @@ void kernel_main() {
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
 
     // select 0th expert
-    mul_block_inplace(values_cb_index, output_ind_cb_index, Ht * Kt);
+    // mul_block_inplace(values_cb_index, output_ind_cb_index, Ht * Kt);
+    mul_block_inplace(values_cb_index, expert0_gate_mask_cb_index, Ht * Kt);
 
     // final sum
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index>(Ht, Kt);

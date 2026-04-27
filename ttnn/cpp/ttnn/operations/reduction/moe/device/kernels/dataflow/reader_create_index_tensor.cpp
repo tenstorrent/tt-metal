@@ -103,6 +103,7 @@ void kernel_main() {
         cb_topk.push_back(Kt);
 
         // expert mask
+        /* Not consumed by compute kernel
         cb_expert.reserve_back(Wt);
         for (uint32_t j = 0; j < Wt; ++j) {
             noc.async_read(
@@ -111,5 +112,6 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         cb_expert.push_back(Wt);
+        */
     }
 }
