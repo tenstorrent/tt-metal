@@ -100,6 +100,8 @@ bool is_supported_quasar(tt::DataFormat format) {
         case tt::DataFormat::Int32:
         case tt::DataFormat::Lf8:
         case tt::DataFormat::MxFp4:
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P:
         case tt::DataFormat::RawUInt8:
         case tt::DataFormat::RawUInt16:
         case tt::DataFormat::RawUInt32:
@@ -137,7 +139,12 @@ std::ostream& tt::operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::Lf8: os << "Lf8"; break;
         case DataFormat::Fp8_e4m3: os << "Fp8_e4m3"; break;
         case DataFormat::MxFp4: os << "MxFp4"; break;
-        case DataFormat::UInt16: os << "UInt16"; break;
+        case DataFormat::MxFp8R: os << "MxFp8R"; break;
+        case DataFormat::MxFp8P:
+            os << "MxFp8P";
+        break case DataFormat::UInt16:
+            os << "UInt16";
+            break;
         case DataFormat::Int16: os << "Int16"; break;
         case DataFormat::UInt32: os << "UInt32"; break;
         case DataFormat::Int32: os << "Int32"; break;
