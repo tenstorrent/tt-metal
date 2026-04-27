@@ -10,21 +10,18 @@ Usage:
 Description:
     Thread-safe data provider for caching ParsedElfFile objects.
     Provides an API for grabbing or caching ParsedElfFile objects by given elf path.
-    ELF files are accessed via mmap rather than held-open file descriptors.
 
 Owner:
     adjordjevic-TT
 """
 
-import mmap
 import os
 import threading
-
-from elftools.elf.elffile import ELFFile
 
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
+from ttexalens.tt_exalens_lib import parse_elf
 from utils import INFO
 
 script_config = ScriptConfig(
@@ -34,9 +31,11 @@ script_config = ScriptConfig(
 
 class ElfsCache:
     """
-    Thread-safe cache for ParsedElfFile objects, backed by mmap.
+    Thread-safe cache for ParsedElfFile objects.
     When `enabled=False` the cache acts as a pass-through: every lookup
-    re-parses the ELF. Intended as a mitigation toggle via --disable-elf-cache
+    re-parses the ELF and returns it without storing a reference, so the
+    ParsedElfFile is released (and its file descriptor closed) once the
+    caller drops it. Intended as a mitigation toggle via --disable-elf-cache
     if the cache misbehaves.
     """
 
@@ -57,7 +56,12 @@ class ElfsCache:
             if self._enabled and elf_path in self._cache:
                 return self._cache[elf_path]
 
-            parsed_elf = self._parse(elf_path)
+            parsed_elf = parse_elf(elf_path, self.context)
+            if not parsed_elf:
+                raise TTTriageError(
+                    f"Failed to extract DWARF info from ELF file {elf_path}.\n"
+                    f"Run workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+                )
 
             if elf_path not in self._distinct_paths:
                 self._distinct_paths.add(elf_path)
@@ -91,27 +95,6 @@ class ElfsCache:
                 f"distinct elf files={len(self._distinct_paths)}\n"
                 f"total size={self._total_bytes / 1e6:.1f}MB\n"
             )
-
-    @staticmethod
-    def _parse(elf_path: str) -> ParsedElfFile:
-        fd = os.open(elf_path, os.O_RDONLY)
-        try:
-            mm = mmap.mmap(fd, 0, prot=mmap.PROT_READ)
-        finally:
-            os.close(fd)
-
-        try:
-            elf = ELFFile(mm)
-            if not elf.has_dwarf_info():
-                raise TTTriageError(
-                    f"Failed to extract DWARF info from ELF file {elf_path}.\n"
-                    f"Run workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-                )
-        except Exception:
-            mm.close()
-            raise
-
-        return ParsedElfFile(elf, elf_path)
 
 
 @triage_singleton
