@@ -369,6 +369,12 @@ class ReduceToOneB1:
                 agg_core_phys = device.worker_core_from_logical_core(aggregator_core)
                 fabric_sync_core_phys = device.worker_core_from_logical_core(fabric_sync_core)
 
+                # Tear down sync only required in fused model, where pipeline_stage_sync will be executing after reduce_to_one,
+                # and we need to ensure fabric_connection disjointness between the two aforementioned micro-ops.
+                # Tear down sync protocol has a race condition when reduce_to_one executed purely in a loop, so only execute
+                # this logic when running a single iteration (perfectly safe in full model context).
+                do_tear_down_sync = num_iterations == 1
+
                 writer_ct_args = [
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
@@ -395,7 +401,7 @@ class ReduceToOneB1:
                     ("fabric_sync_sem_addr", sync_sem_addr),
                     ("num_fabric_cores", len(fabric_cores) - 1),
                     ("fabric_rt_arg_base", 0),
-                    ("do_tear_down_sync", num_iterations == 1),
+                    ("do_tear_down_sync", do_tear_down_sync),
                     ("num_loop_iters", num_iterations),
                 ]
 
