@@ -284,4 +284,9 @@ RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealt
 UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
 IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerActive
 
-__all__ = []
+__all__ = [
+    "ProgramRealtimeRecord",
+    "RegisterProgramRealtimeProfilerCallback",
+    "UnregisterProgramRealtimeProfilerCallback",
+    "IsProgramRealtimeProfilerActive",
+]
