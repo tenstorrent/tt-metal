@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 from typing import TYPE_CHECKING
 
 import torch
 
 import ttnn
+
+_d2h_logger = logging.getLogger("fast_d2h")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -503,7 +507,14 @@ def fast_device_to_host(
         gathered_tensor = tt_tensor
         inter_dim = concat_dims[inter_host_axis]
         if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
+            t0_tile = time.perf_counter()
             gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.TILE_LAYOUT)
+            ttnn.synchronize_device(mesh_device)
+            _d2h_logger.info(
+                f"  [d2h] to_layout(TILE) : {time.perf_counter()-t0_tile:.3f}s  shape={list(gathered_tensor.shape)}"
+            )
+
+            t0_ag = time.perf_counter()
             gathered_tensor = ccl_manager.all_gather(
                 gathered_tensor,
                 dim=inter_dim,
@@ -511,15 +522,52 @@ def fast_device_to_host(
                 use_hyperparams=True,
                 use_persistent_buffer=True,
             )
-            gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.synchronize_device(mesh_device)
+            _d2h_logger.info(
+                f"  [d2h] all_gather      : {time.perf_counter()-t0_ag:.3f}s  shape={list(gathered_tensor.shape)}"
+            )
+
+            # Only convert to ROW_MAJOR when last dims are not tile-aligned
+            # (e.g. encoder latent W=20 or 5). Decoder full-res W is aligned,
+            # so we can stay in TILE and avoid the costly layout conversion.
+            TILE_SIZE = 32
+            shape = list(gathered_tensor.shape)
+            needs_rm = shape[-1] % TILE_SIZE != 0 or shape[-2] % TILE_SIZE != 0
+            if needs_rm:
+                t0_rm = time.perf_counter()
+                gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.synchronize_device(mesh_device)
+                _d2h_logger.info(
+                    f"  [d2h] to_layout(RM)   : {time.perf_counter()-t0_rm:.3f}s  shape={shape} (non-tile-aligned)"
+                )
+            else:
+                _d2h_logger.info(f"  [d2h] to_layout(RM)   : SKIPPED (tile-aligned)  shape={shape}")
+
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
+                t0_rp = time.perf_counter()
                 repeat_dims = [1] * len(gathered_tensor.shape)
                 repeat_dims[inter_dim] = n_hosts
                 gathered_tensor = ttnn.repeat(gathered_tensor, repeat_dims)
+                ttnn.synchronize_device(mesh_device)
+                _d2h_logger.info(
+                    f"  [d2h] repeat          : {time.perf_counter()-t0_rp:.3f}s  shape={list(gathered_tensor.shape)}"
+                )
+
+                t0_mp = time.perf_counter()
                 gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
+                ttnn.synchronize_device(mesh_device)
+                _d2h_logger.info(
+                    f"  [d2h] mesh_partition  : {time.perf_counter()-t0_mp:.3f}s  shape={list(gathered_tensor.shape)}"
+                )
+
             if pre_transfer_fn is not None:
+                t0_pre = time.perf_counter()
                 gathered_tensor = pre_transfer_fn(gathered_tensor)
+                ttnn.synchronize_device(mesh_device)
+                _d2h_logger.info(
+                    f"  [d2h] pre_transfer_fn : {time.perf_counter()-t0_pre:.3f}s  shape={list(gathered_tensor.shape)}"
+                )
         elif pre_transfer_fn is not None:
             gathered_tensor = pre_transfer_fn(gathered_tensor)
 
@@ -531,8 +579,10 @@ def fast_device_to_host(
         # Single .cpu() on the mesh tensor batches all local DMA reads into
         # one C++ dispatch — the reader thread pool processes all device
         # completion queues in parallel.
+        t0_dma = time.perf_counter()
         host_tensor = gathered_tensor.cpu(blocking=False)
         ttnn.synchronize_device(mesh_device)
+        _d2h_logger.info(f"  [d2h] DMA cpu+sync    : {time.perf_counter()-t0_dma:.3f}s")
 
         # Extract local shard buffers via get_shard (zero-copy, no MPI).
         host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
