@@ -24,6 +24,7 @@ try:
 except ImportError:
     yaml = None
 
+from model_tracer.generic_ops_tracer import normalize_arguments_for_comparison
 from model_tracer.mesh_metadata import normalize_machine_info
 
 # Default manifest path (relative to repo root)
@@ -1423,6 +1424,12 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             config_dict.pop("executions", None)
             config_dict.pop("source", None)
             config_dict.pop("machine_info", None)
+            # Normalize arguments so master traces are directly comparable
+            # to sweep traces (both sides use the same normalization).
+            if "arguments" in config_dict:
+                config_dict["arguments"] = normalize_arguments_for_comparison(
+                    config_dict["arguments"], op_name
+                )
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
             ops[op_name][config_id] = config_dict
