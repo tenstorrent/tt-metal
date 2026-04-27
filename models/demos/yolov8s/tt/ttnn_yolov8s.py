@@ -6,11 +6,29 @@ import json
 import math
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.yolov8s.tt.tt_yolov8s_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 with open("models/demos/yolov8s/tt/configs.json", "r") as file:
     configs = json.load(file)
+
+# BH (12x10=120 Tensix, 1.5MB L1/core) vs WH (8x8=64, 1MB L1/core).
+# 80 (8x10) is the largest rectangular grid whose count divides the
+# 640-resolution shard heights cleanly on BH; WH stays at 64 (8x8).
+_SPPF_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+_SPPF_NUM_CORES = 64
+
+
+def _init_device_grid():
+    global _SPPF_CORE_GRID, _SPPF_NUM_CORES
+    if is_wormhole_b0():
+        _SPPF_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+        _SPPF_NUM_CORES = 64
+    else:  # BH: 8x10=80 cores
+        _SPPF_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 7))})
+        _SPPF_NUM_CORES = 80
+
 
 conv_config = configs["conv_config"]
 sppf_configs = configs["sppf_configs"]
@@ -18,7 +36,9 @@ c2f_configs = configs["c2f_configs"]
 detect_config = configs["detect_config"]
 
 
-def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+def sharded_concat_sppf(input_tensors, num_cores=None, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+    if num_cores is None:
+        num_cores = _SPPF_NUM_CORES
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
 
     input_sharded_memory_configs = []
@@ -26,7 +46,7 @@ def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input t
     for i in range(len(input_tensors)):
         input_sharded_memory_config = ttnn.create_sharded_memory_config(
             (shard_height, input_tensors[i].shape[-1]),
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            core_grid=_SPPF_CORE_GRID,
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
@@ -39,7 +59,7 @@ def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input t
     total_width = sum(tensor.shape[-1] for tensor in input_tensors)
     out_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, total_width),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        core_grid=_SPPF_CORE_GRID,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
@@ -51,8 +71,10 @@ def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input t
 
 
 def sharded_concat(
-    input_tensors, num_cores=64, dim=3, skip_s2i=False
+    input_tensors, num_cores=None, dim=3, skip_s2i=False
 ):  # expected input tensors to be in fp16, RM, same (h*w)
+    if num_cores is None:
+        num_cores = _SPPF_NUM_CORES
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
 
     input_sharded_memory_configs = []
@@ -60,7 +82,7 @@ def sharded_concat(
     for i in range(len(input_tensors)):
         input_sharded_memory_config = ttnn.create_sharded_memory_config(
             (shard_height, input_tensors[i].shape[-1]),
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            core_grid=_SPPF_CORE_GRID,
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
@@ -73,7 +95,7 @@ def sharded_concat(
     total_width = sum(tensor.shape[-1] for tensor in input_tensors)
     out_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, total_width),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        core_grid=_SPPF_CORE_GRID,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
@@ -174,7 +196,7 @@ class TtConv:
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=not is_wormhole_b0(),  # BH has 1.5MB L1 vs WH 1MB — safe to accumulate in L1
         )
 
     def __call__(self, x):
@@ -563,6 +585,8 @@ class TtDetectionModel:
         self.res = res
         self.reg_max = reg_max
         self.batch_size = batch_size
+        # Pick the device-appropriate concat core grid (WH 8x8=64, BH 8x10=80).
+        _init_device_grid()
 
         self.conv_0 = TtConv(
             device,

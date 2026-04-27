@@ -7,8 +7,24 @@ import os
 import warnings
 
 import ttnn
-from models.common.utility_functions import roundup32
+from models.common.utility_functions import is_wormhole_b0, roundup32
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+
+
+def _yolov11s_concat_grid():
+    """Default sharded-concat grid: WH 8x8=64 cores, BH 8x10=80 cores.
+    BH widens the grid by one extra column row so all 80 utilizable cores
+    participate in the concat (mirrors the yolov8l 640 BH path)."""
+    if is_wormhole_b0():
+        return (
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            64,
+        )
+    # BH: 8x10
+    return (
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 7))}),
+        80,
+    )
 
 
 def _default_yolov11s_conv_shard_layout():
@@ -223,10 +239,17 @@ def reshard_if_possible(x, core_grid=None):
     return ttnn.to_memory_config(x, resharded_memory_config)
 
 
-def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
+def sharded_concat(input_tensors, num_cores=None, dim=3, to_interleaved=True):
     # bool is a subclass of int; accidental positional `to_interleaved` used to set num_cores=False → // 0.
-    nc = num_cores if isinstance(num_cores, int) and not isinstance(num_cores, bool) and num_cores > 0 else 64
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    default_grid, default_nc = _yolov11s_concat_grid()
+    if num_cores is None or isinstance(num_cores, bool) or num_cores <= 0:
+        nc = default_nc
+        shard_grid = default_grid
+    else:
+        nc = num_cores
+        # Caller specified a count; build a square 8xN grid for that count
+        # if possible, else fall back to the device-default grid.
+        shard_grid = default_grid
     shard_height = (input_tensors[0].shape[2] + nc - 1) // nc
     # Branches can differ on the channel dim (e.g. C3k2 bk path: 32 + 32 + 16). One shared shard width
     # (from the first tensor) mis-shards narrower tensors and destroys PCC (~0.07 vs torch).
@@ -259,7 +282,7 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
 
 # for input tensor's whose shard_w is different from each other
 def sharded_concat_2(
-    input_tensor_1, input_tensor_2, num_cores=64, shard_grid_coord_min=0, shard_grid_coord_max=7, dim=-1
+    input_tensor_1, input_tensor_2, num_cores=None, shard_grid_coord_min=None, shard_grid_coord_max=None, dim=-1
 ):
     if input_tensor_1.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         input_tensor_1 = ttnn.to_layout(input_tensor_1, ttnn.ROW_MAJOR_LAYOUT)
@@ -267,31 +290,36 @@ def sharded_concat_2(
     if input_tensor_2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         input_tensor_2 = ttnn.to_layout(input_tensor_2, ttnn.ROW_MAJOR_LAYOUT)
 
-    shard_height = (input_tensor_1.shape[2] + num_cores - 1) // num_cores
-
-    input_sharded_memory_config_1 = ttnn.create_sharded_memory_config(
-        (shard_height, input_tensor_1.shape[-1]),
-        core_grid=ttnn.CoreRangeSet(
+    # Caller can override the grid via shard_grid_coord_*; otherwise pick the
+    # device-appropriate default (WH 8x8=64, BH 8x10=80).
+    if shard_grid_coord_min is not None and shard_grid_coord_max is not None:
+        shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
                     ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
                 )
             }
-        ),
+        )
+        if num_cores is None:
+            num_cores = (shard_grid_coord_max - shard_grid_coord_min + 1) ** 2
+    else:
+        default_grid, default_nc = _yolov11s_concat_grid()
+        shard_grid = default_grid
+        if num_cores is None:
+            num_cores = default_nc
+
+    shard_height = (input_tensor_1.shape[2] + num_cores - 1) // num_cores
+
+    input_sharded_memory_config_1 = ttnn.create_sharded_memory_config(
+        (shard_height, input_tensor_1.shape[-1]),
+        core_grid=shard_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
     input_sharded_memory_config_2 = ttnn.create_sharded_memory_config(
         (shard_height, input_tensor_2.shape[-1]),
-        core_grid=ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
-                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
-                )
-            }
-        ),
+        core_grid=shard_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
@@ -299,14 +327,7 @@ def sharded_concat_2(
     input_tensor_2 = ttnn.to_memory_config(input_tensor_2, input_sharded_memory_config_2)
     out_sharded_memory_config_ = ttnn.create_sharded_memory_config(
         (shard_height, input_tensor_1.shape[-1] + input_tensor_2.shape[-1]),
-        core_grid=ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
-                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
-                )
-            }
-        ),
+        core_grid=shard_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )

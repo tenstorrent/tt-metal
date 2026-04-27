@@ -360,7 +360,12 @@
         </button>
       </div>
     </div>
-    <div></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;align-items:center;">
+      <button id="resetBtn" title="Stop pipeline and reset all 32 Galaxy chips. Use if a switch hangs or detections stop arriving."
+              style="background:#3a1f1f;color:#f8c0c0;border:1px solid #6a2a2a;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;">
+        ↻ Reset Chips
+      </button>
+    </div>
   </header>
 
   <main>
@@ -803,13 +808,84 @@ function teardown() {
 }
 
 async function postSource(transport, w, h) {
+  // /api/source returns 202 while the pipeline (re)spawns asynchronously.
+  // Poll /api/status until the supervisor reports state="ready" or "error".
+  // This keeps the launch page responsive even when chip init takes 30-60 s.
   const r = await fetch(`${SUPERVISOR}/api/source`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ transport, width: w | 0, height: h | 0 }),
   });
-  if (!r.ok) throw new Error(`supervisor /api/source ${r.status}`);
-  return r.json();
+  if (!r.ok && r.status !== 202) {
+    let msg = `${r.status}`;
+    try { const j = await r.json(); if (j.error) msg += ` — ${j.error}`; } catch (_) {}
+    throw new Error(`supervisor /api/source ${msg}`);
+  }
+  const initial = await r.json();
+  if (initial.state === "ready") return initial;
+  // 240 s budget: a chip-state failure triggers recovery (≈40 s) + retry
+  // (≈50 s for video, ≈60 s for multi) on top of the initial spawn (≈30 s).
+  return await awaitState(transport, 240000);
+}
+
+// Poll /api/status until state is "ready" or "error" (or timeoutMs elapses).
+// Updates the loading panel with the current state so the user sees progress.
+async function awaitState(targetTransport, timeoutMs) {
+  const t0 = Date.now();
+  let lastState = null;
+  while (Date.now() - t0 < timeoutMs) {
+    let s = null;
+    try {
+      const r = await fetch(`${SUPERVISOR}/api/status`, { cache: "no-store" });
+      if (r.ok) s = await r.json();
+    } catch (_e) { /* network blip — retry */ }
+    if (s && s.state !== lastState) {
+      lastState = s.state;
+      const label = s.state === "switching" ? `Loading ${s.pending_transport || targetTransport}…`
+                  : s.state === "recovering" ? "Resetting chips…"
+                  : s.state === "ready" ? `Ready (${s.transport})`
+                  : s.state === "error" ? `Error: ${s.last_error || "unknown"}`
+                  : `${s.state}…`;
+      try { showSwitch(label); } catch (_) {}
+    }
+    if (s && s.state === "ready" && s.transport === targetTransport) return s;
+    if (s && s.state === "error") {
+      throw new Error(s.last_error || "supervisor error");
+    }
+    await new Promise(r => setTimeout(r, 750));
+  }
+  throw new Error(`timed out waiting for state=ready (last=${lastState || "none"})`);
+}
+
+async function resetChips() {
+  showSwitch("Resetting chips (≈40 s)…");
+  try {
+    const r = await fetch(`${SUPERVISOR}/api/reset`, { method: "POST" });
+    if (!r.ok && r.status !== 202) {
+      let msg = `${r.status}`;
+      try { const j = await r.json(); if (j.error) msg += ` — ${j.error}`; } catch (_) {}
+      throw new Error(`supervisor /api/reset ${msg}`);
+    }
+    // After reset, supervisor is in "idle" state; user clicks Video/Multi to start.
+    await new Promise(r => setTimeout(r, 1000));
+    let last = null;
+    for (let i = 0; i < 240; i++) {  // up to ~3 min
+      const r2 = await fetch(`${SUPERVISOR}/api/status`, { cache: "no-store" });
+      if (r2.ok) {
+        const s = await r2.json();
+        if (s.state !== last) {
+          last = s.state;
+          showSwitch(s.state === "recovering" ? "Resetting chips…" : `${s.state}`);
+        }
+        if (s.state === "idle") { hideSwitch(); toast("Chips reset; click Video or Multi to restart."); return; }
+        if (s.state === "error") { hideSwitch(); toast(`Reset error: ${s.last_error || "unknown"}`); return; }
+      }
+      await new Promise(r => setTimeout(r, 750));
+    }
+    hideSwitch(); toast("Reset still running — check supervisor log.");
+  } catch (e) {
+    hideSwitch(); toast(`Reset failed: ${e.message || e}`);
+  }
 }
 
 async function offerToPipeline(pcLocal) {
@@ -968,6 +1044,19 @@ async function selectMode(mode) {
 }
 
 segs.forEach(s => s.addEventListener("click", () => selectMode(s.dataset.id)));
+
+// Wire up the manual reset button.  Confirm before triggering since this
+// blasts all 32 Galaxy chips for ~30-60 s and any other tenant on this host
+// will see their pipeline crash.
+(() => {
+  const btn = document.getElementById("resetBtn");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    if (!confirm("Reset ALL 32 Galaxy chips? This kills the running pipeline and takes ~40 s. Use only if the demo is stuck.")) return;
+    btn.disabled = true;
+    try { await resetChips(); } finally { btn.disabled = false; }
+  });
+})();
 window.addEventListener("resize", () => setActiveSeg(currentMode, false));
 
 /* ===================================================================

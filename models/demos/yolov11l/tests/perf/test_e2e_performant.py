@@ -73,7 +73,6 @@ def run_yolov11_inference(
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -86,6 +85,51 @@ def run_yolov11_inference(
     indirect=True,
 )
 def test_e2e_performant(
+    device,
+    batch_size_per_device,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    resolution,
+    reset_seeds,
+):
+    run_yolov11_inference(
+        device,
+        batch_size_per_device,
+        act_dtype,
+        weight_dtype,
+        resolution=resolution,
+        model_location_generator=model_location_generator,
+    )
+
+
+# Alias matching the yolov8l/yolov8s/yolov11s naming convention so the same
+# pytest selector pattern works across all yolov*/yolov11* models on BH:
+#   pytest .../test_e2e_performant.py::test_run_yolov<NN><size>_trace_2cqs_inference[...]
+@pytest.mark.parametrize(
+    "batch_size_per_device, act_dtype, weight_dtype",
+    ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (640, 640),
+        (1280, 1280),
+    ],
+    ids=["640", "1280"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": yolov11_l1_small_size_for_res(1280, 1280),
+            "trace_region_size": yolov11_trace_region_size_e2e_for_res(1280, 1280),
+            "num_command_queues": 2,
+        }
+    ],
+    indirect=True,
+)
+def test_run_yolov11l_trace_2cqs_inference(
     device,
     batch_size_per_device,
     act_dtype,

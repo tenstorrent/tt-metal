@@ -390,7 +390,12 @@ def infer_ttnn_module_args(*, model, run_model, device):
     with trace():
         output = run_model(model)
 
-    visualize(output, file_name=ttnn.CONFIG.tmp_dir / "model_graph.svg")
+    # Optional visualization — only render if the graphviz `dot` binary is
+    # available on PATH.  Without this guard, every model preprocessing run
+    # crashes on hosts that don't have the system graphviz package installed.
+    # ttnn.tracer.visualize already has the same guard; we mirror it here.
+    if shutil.which("dot") is not None:
+        visualize(output, file_name=ttnn.CONFIG.tmp_dir / "model_graph.svg")
 
     def _infer_ttnn_module_args(graph):
         ttnn_module_args = {}

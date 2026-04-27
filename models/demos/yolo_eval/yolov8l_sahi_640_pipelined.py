@@ -902,31 +902,45 @@ def _fused_nms_merge(
     _empty = (np.empty((0, 4), dtype=np.float32), np.empty(0, dtype=np.float32), np.empty(0, dtype=np.int32))
 
     # --- Fully vectorized prep across ALL tiles at once ---
-    preds = preds_batch.transpose(-1, -2)  # [B, N, 84]
+    preds = preds_batch.transpose(-1, -2)  # [B, N, C] where C is 84 (full) or 6 (compact)
     xy = preds[..., :2]
     half_wh = preds[..., 2:4] / 2
     box_xyxy = torch.cat([xy - half_wh, xy + half_wh], dim=-1)  # [B, N, 4]
-    cls_scores = preds[..., 4:]  # [B, N, 80]
-    max_cls = cls_scores.amax(dim=-1)  # [B, N]
 
-    # Batch-wide conf mask + gather (single nonzero call for all tiles)
-    mask = max_cls > conf  # [B, N]
-    tile_idx, anchor_idx = torch.nonzero(mask, as_tuple=True)
+    if preds.shape[-1] == 6:
+        # Compact format: [B, N, 6] = box(4) + max_conf(1) + argmax_id(1)
+        # The on-device reduction already computed max + argmax, no second pass needed.
+        max_cls = preds[..., 4]  # [B, N]
+        cls_id_full = preds[..., 5]  # [B, N] (bf16-stored class id)
+        mask = max_cls > conf
+        tile_idx, anchor_idx = torch.nonzero(mask, as_tuple=True)
+        if tile_idx.numel() == 0:
+            return _empty
+        all_boxes = box_xyxy[tile_idx, anchor_idx].float()
+        all_conf = max_cls[tile_idx, anchor_idx].float()
+        all_cls_id = cls_id_full[tile_idx, anchor_idx].to(torch.int64)
+    else:
+        cls_scores = preds[..., 4:]  # [B, N, 80]
+        max_cls = cls_scores.amax(dim=-1)  # [B, N]
 
-    if tile_idx.numel() == 0:
-        return _empty
+        # Batch-wide conf mask + gather (single nonzero call for all tiles)
+        mask = max_cls > conf  # [B, N]
+        tile_idx, anchor_idx = torch.nonzero(mask, as_tuple=True)
 
-    # Gather all passing detections at once
-    all_boxes = box_xyxy[tile_idx, anchor_idx]  # [M, 4]
-    all_cls_scores = cls_scores[tile_idx, anchor_idx]  # [M, 80]
-    all_conf, all_cls_id = all_cls_scores.max(dim=1)  # [M], [M]
+        if tile_idx.numel() == 0:
+            return _empty
 
-    # Second conf filter (on max class score)
-    pass2 = all_conf > conf
-    tile_idx = tile_idx[pass2]
-    all_boxes = all_boxes[pass2].float()
-    all_conf = all_conf[pass2].float()
-    all_cls_id = all_cls_id[pass2]
+        # Gather all passing detections at once
+        all_boxes = box_xyxy[tile_idx, anchor_idx]  # [M, 4]
+        all_cls_scores = cls_scores[tile_idx, anchor_idx]  # [M, 80]
+        all_conf, all_cls_id = all_cls_scores.max(dim=1)  # [M], [M]
+
+        # Second conf filter (on max class score)
+        pass2 = all_conf > conf
+        tile_idx = tile_idx[pass2]
+        all_boxes = all_boxes[pass2].float()
+        all_conf = all_conf[pass2].float()
+        all_cls_id = all_cls_id[pass2]
 
     # Pre-compute NMS input: offset boxes by class for multi-class NMS
     nms_boxes = all_boxes + all_cls_id.float().unsqueeze(1) * 7680
@@ -1177,8 +1191,10 @@ def _postprocess_worker_shm(
                 return
 
             (pred_slot, ring_slot, shifts, tpf, scale_x, scale_y) = item
-            # Slice physical→logical (free view, no copy)
-            preds_torch = shm_preds[pred_slot, :, :84, :8400]
+            # Slice physical→logical (free view, no copy). Channel dim is 6 in
+            # compact-output mode (box+max_conf+argmax_id), 84 otherwise.
+            _logical_c = shm_preds.shape[2]
+            preds_torch = shm_preds[pred_slot, :, :_logical_c, :8400]
 
             t_post_start = time.perf_counter()
             if fc == 0:
@@ -1190,16 +1206,30 @@ def _postprocess_worker_shm(
 
             # Debug raw model output stats (~95ms — only at startup)
             if fc == 0:
-                raw = preds_torch  # [24, 84, 8400]
+                raw = preds_torch
                 bbox_raw = raw[:, :4, :]
-                cls_raw = raw[:, 4:, :]
-                print(
-                    f"{TAG} raw output frame {fc}: "
-                    f"bbox min={bbox_raw.min():.2f} max={bbox_raw.max():.2f} "
-                    f"cls min={cls_raw.min():.2f} max={cls_raw.max():.2f} "
-                    f"nan={raw.isnan().sum()} inf={raw.isinf().sum()}",
-                    flush=True,
-                )
+                if _logical_c == 6:
+                    conf_raw = raw[:, 4, :]  # max class confidence per anchor
+                    clsid_raw = raw[:, 5, :]  # argmax class id per anchor
+                    n_above_thresh = int((conf_raw.float() > conf).sum())
+                    print(
+                        f"{TAG} raw output frame {fc} (compact_output): "
+                        f"bbox min={bbox_raw.min():.2f} max={bbox_raw.max():.2f} "
+                        f"max_conf min={conf_raw.min():.4f} max={conf_raw.max():.4f} mean={conf_raw.float().mean():.4f} "
+                        f"argmax_id min={clsid_raw.min():.0f} max={clsid_raw.max():.0f} "
+                        f"anchors_above_conf({conf})={n_above_thresh}/{conf_raw.numel()} "
+                        f"nan={raw.isnan().sum()} inf={raw.isinf().sum()}",
+                        flush=True,
+                    )
+                else:
+                    cls_raw = raw[:, 4:, :]
+                    print(
+                        f"{TAG} raw output frame {fc} (channels={_logical_c}): "
+                        f"bbox min={bbox_raw.min():.2f} max={bbox_raw.max():.2f} "
+                        f"cls min={cls_raw.min():.2f} max={cls_raw.max():.2f} "
+                        f"nan={raw.isnan().sum()} inf={raw.isinf().sum()}",
+                        flush=True,
+                    )
 
             # Fused NMS + cross-tile merge + scale (returns numpy arrays)
             t0 = time.perf_counter()
@@ -1552,7 +1582,15 @@ def run_sahi_640_pipelined(args):
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
         weights_mesh_mapper=weights_mesh_mapper,
+        compact_output=True,
+        staging_ring=3,
     )
+    # Perf ceiling measurement: SAHI_SKIP_H2D=1 makes the runner reuse the
+    # device-side input every frame.  Detection results become stale (don't
+    # commit this on!) but the iter time reflects only compute + d2h.
+    if os.environ.get("SAHI_SKIP_H2D") == "1":
+        runner._skip_h2d = True
+        print(f"{TAG} *** DEBUG: H2D SKIPPED (stale inputs) ***", flush=True)
     print(f"{TAG} Runner ready.", flush=True)
 
     # Staging buffer is pre-allocated during runner construction (before trace capture).
@@ -1963,16 +2001,28 @@ def run_sahi_640_pipelined(args):
             else:
                 t_compose = 0.0
 
-            # --- PCIe D2H ---
+            # --- PCIe D2H (async: returns immediately, compose waits on event) ---
+            # Non-blocking d2h lets the host issue submit(N+1) during the
+            # 24-chip per-DMA setup window (~9-10ms with the compact 6-channel
+            # output).  Compose threads event-sync on read_done_event before
+            # reading host_staging.
             t0_d2h = time.perf_counter()
-            has_result = runner.pcie_d2h()
+            d2h_slot = runner.pcie_d2h(async_d2h=True, return_slot=True)
+            has_result = d2h_slot is not False
             t_staging_wait = runner.last_timing.get("staging_wait_ms", 0)
             t_pcie_d2h = runner.last_timing.get("pcie_d2h_ms", 0)
 
-            # --- Launch compose(N-1): reads host_staging written by d2h ---
+            # --- Launch compose(N-1): waits for d2h event, then reads host_staging ---
+            # Pass the d2h_slot so the BG thread reads the correct ring slot
+            # even after the next pcie_d2h has rotated the ring index on.
             if has_result:
                 pred_slot = pred_write_idx % PRED_RING
-                _compose_future = _submit_executor.submit(runner.compose, dest=shm_preds[pred_slot])
+                _compose_future = _submit_executor.submit(
+                    runner.compose,
+                    dest=shm_preds[pred_slot],
+                    wait_d2h=True,
+                    slot=d2h_slot,
+                )
                 r_shifts, r_ring_slot = result_meta
                 pred_write_idx += 1
                 _compose_enqueue_item = (

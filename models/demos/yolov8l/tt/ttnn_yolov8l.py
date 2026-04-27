@@ -6,6 +6,7 @@ import json
 import math
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.yolov8l.tt.tt_yolov8l_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
@@ -14,6 +15,11 @@ SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES = 0  # Force DRAM path for 640x640 (o
 # Resolution-dependent memory config: L1 for 640x640, DRAM for larger resolutions.
 # Set by TtDetectionModel.__init__ before the forward pass.
 _DETECT_MEM_CONFIG = ttnn.DRAM_MEMORY_CONFIG  # default; overridden at model init
+
+# Device-dependent sharded-concat grid: 8x8=64 cores (WH) or 12x10=120 cores (BH).
+# Set by TtDetectionModel.__init__ before the forward pass.
+_SPPF_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+_SPPF_NUM_CORES = 64
 
 with open("models/demos/yolov8l/tt/configs.json", "r") as file:
     configs = json.load(file)
@@ -30,7 +36,9 @@ def to_row_major_if_needed(tensor):
     return tensor
 
 
-def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+def sharded_concat_sppf(input_tensors, num_cores=None, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+    if num_cores is None:
+        num_cores = _SPPF_NUM_CORES
     if _DETECT_MEM_CONFIG == ttnn.L1_MEMORY_CONFIG:
         # L1 sharded path (fast, used for 640x640)
         shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
@@ -38,7 +46,7 @@ def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input t
         for i in range(len(input_tensors)):
             input_sharded_memory_config = ttnn.create_sharded_memory_config(
                 (shard_height, input_tensors[i].shape[-1]),
-                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+                core_grid=_SPPF_CORE_GRID,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 use_height_and_width_as_shard_shape=True,
             )
@@ -49,7 +57,7 @@ def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input t
         total_width = sum(tensor.shape[-1] for tensor in input_tensors)
         out_sharded_memory_config = ttnn.create_sharded_memory_config(
             (shard_height, total_width),
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            core_grid=_SPPF_CORE_GRID,
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
@@ -69,7 +77,10 @@ def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input t
     return output
 
 
-def sharded_concat(input_tensors, num_cores=64, dim=3, skip_s2i=False):
+def sharded_concat(input_tensors, num_cores=None, dim=3, skip_s2i=False):
+    if num_cores is None:
+        num_cores = _SPPF_NUM_CORES
+
     def concat_via_dram_interleaved():
         dram_tensors = []
         for tensor in input_tensors:
@@ -96,7 +107,7 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, skip_s2i=False):
         return output
 
     # Original sharded logic for smaller tensors
-    target_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    target_grid = _SPPF_CORE_GRID
     sharded_inputs = []
     for i in range(len(input_tensors)):
         cfg = ttnn.create_sharded_memory_config(
@@ -214,7 +225,7 @@ class TtConv:
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=not is_wormhole_b0(),  # BH has 1.5MB L1 vs WH 1MB — safe to accumulate in L1
         )
 
     def __call__(self, x):
@@ -760,6 +771,14 @@ class TtDetectionModel:
         # 640x640 tensors fit in L1; larger resolutions need DRAM
         self._use_l1 = res[0] <= 640 and res[1] <= 640
         _DETECT_MEM_CONFIG = ttnn.L1_MEMORY_CONFIG if self._use_l1 else ttnn.DRAM_MEMORY_CONFIG
+
+        global _SPPF_CORE_GRID, _SPPF_NUM_CORES
+        if is_wormhole_b0():
+            _SPPF_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+            _SPPF_NUM_CORES = 64
+        else:  # BH: 8x10=80 cores (full column width, divides 640 and 1280 evenly)
+            _SPPF_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 7))})
+            _SPPF_NUM_CORES = 80
 
         # Enable L1 sharded concat for 640x640 (tensors fit in L1)
         if self._use_l1:

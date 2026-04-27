@@ -58,25 +58,35 @@ class YOLOv8lPerformanceRunnerInfra:
         self.output_tensor = self.ttnn_yolov8_model(self.input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
-        if is_wormhole_b0():
-            core_grid = ttnn.CoreGrid(y=8, x=8)
-        else:  # BH
-            core_grid = ttnn.CoreGrid(y=12, x=10)
-            # exit("Unsupported device")
-
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+        n, c_in, h, w = torch_input_tensor.shape
+
+        # On BH, sending 3-channel bf16 instead of pre-padding to 16 channels
+        # gives two compounding wins:
+        #   1. h2d volume shrinks 5.3x (3*H*W*2 vs 16*H*W*2 bytes per chip)
+        #   2. shard_height = N*C*H = 1*3*640 = 1920 divides cleanly by 120,
+        #      so the input shard can use the full BH grid of 120 cores
+        #      (vs 80 with 16-channel padding, where 10240 % 120 != 0).
+        # WH stays at 16-channel padded + 8x8=64 cores (1MB L1 makes the
+        # narrow shards from 3-channel input less helpful).
+        if is_wormhole_b0():
+            c = max(c_in, min_channels)
+            if c % min_channels != 0:
+                c = ((c // min_channels) + 1) * min_channels
+            core_grid = ttnn.CoreGrid(y=8, x=8)
+        else:
+            c = c_in  # keep 3-channel; conv_0 picks up in_channels=3 from x.shape[-1]
+            # BH single-chip compute grid is 12 cols × 10 rows; CoreGrid(y, x)
+            # = (rows, cols), so y=10 x=12 = 120 cores.  shard_height = 1×3×640
+            # = 1920 divides cleanly by 120 (1920/120 = 16 elements per core).
+            core_grid = ttnn.CoreGrid(y=10, x=12)
 
         # Cache memory config (same shape every frame)
         if not hasattr(self, "_cached_input_mem_config"):
-            n, c, h, w = torch_input_tensor.shape
-            if c < min_channels:
-                c = min_channels
-            elif c % min_channels != 0:
-                c = ((c // min_channels) + 1) * min_channels
-            n = n // self.num_devices if n // self.num_devices != 0 else n
+            n_per = n // self.num_devices if n // self.num_devices != 0 else n
             self._cached_input_mem_config = ttnn.create_sharded_memory_config(
-                [n, c, h, w],
-                ttnn.CoreGrid(x=8, y=8),
+                [n_per, c, h, w],
+                core_grid,
                 ttnn.ShardStrategy.HEIGHT,
             )
             self._cached_device_shape = device.shape

@@ -63,10 +63,13 @@ class YOLOv11PerformanceRunnerInfra:
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
+        # Pick the largest rectangular grid whose core count divides the
+        # input shard_height cleanly.  WH 8x8=64; BH 8x10=80 — divides
+        # both 1×16×640=10240 and 1×16×1280=20480 evenly.
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
-        else:
-            exit("Unsupported device")
+        else:  # BH
+            core_grid = ttnn.CoreGrid(y=8, x=10)
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
@@ -79,7 +82,7 @@ class YOLOv11PerformanceRunnerInfra:
         n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
-            ttnn.CoreGrid(x=8, y=8),
+            core_grid,
             ttnn.ShardStrategy.HEIGHT,
         )
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"

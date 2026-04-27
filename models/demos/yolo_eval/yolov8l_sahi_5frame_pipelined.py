@@ -300,7 +300,9 @@ def _postprocess_worker_shm_multi(
                 return
 
             pred_slot = item[0]
-            preds_torch = shm_preds[pred_slot, :, :84, :8400]  # [32, 84, 8400]
+            # Channel dim is 6 in compact-output mode (box+max_conf+argmax_id), 84 otherwise.
+            _logical_c = shm_preds.shape[2]
+            preds_torch = shm_preds[pred_slot, :, :_logical_c, :8400]  # [32, 6 or 84, 8400]
 
             t_post_start = time.perf_counter()
             if fc == 0:
@@ -486,6 +488,8 @@ def run_sahi_5frame_pipelined(args):
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
         weights_mesh_mapper=weights_mesh_mapper,
+        compact_output=True,
+        staging_ring=3,
     )
     print(f"{TAG} Runner ready.", flush=True)
 
@@ -712,12 +716,18 @@ def run_sahi_5frame_pipelined(args):
                 t_after_compose_wait = t_compose_wait_start
                 t_after_qput = t_compose_wait_start
 
-            has_result = runner.pcie_d2h()
+            d2h_slot = runner.pcie_d2h(async_d2h=True, return_slot=True)
+            has_result = d2h_slot is not False
             t_after_d2h = time.perf_counter()
 
             if has_result:
                 pred_slot = pred_write_idx % PRED_RING
-                _compose_future = _submit_executor.submit(runner.compose, dest=shm_preds[pred_slot])
+                _compose_future = _submit_executor.submit(
+                    runner.compose,
+                    dest=shm_preds[pred_slot],
+                    wait_d2h=True,
+                    slot=d2h_slot,
+                )
                 pred_write_idx += 1
                 _compose_enqueue_item = (pred_slot,)
 

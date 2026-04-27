@@ -4,9 +4,19 @@
 
 import math
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 
 
-def determine_num_cores(nhw: int, width: int, max_cores=64) -> int:
+def _device_grid_params():
+    """Return (grid_rows, grid_cols, max_cores) for the current device."""
+    if is_wormhole_b0():
+        return 8, 8, 64
+    return 12, 10, 120  # Blackhole
+
+
+def determine_num_cores(nhw: int, width: int, max_cores=None) -> int:
+    if max_cores is None:
+        _, _, max_cores = _device_grid_params()
     gcd_nhw_width = math.gcd(nhw, width)
     cores = nhw // gcd_nhw_width
     if cores > max_cores:
@@ -17,7 +27,9 @@ def determine_num_cores(nhw: int, width: int, max_cores=64) -> int:
     return cores
 
 
-def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = None, grid_cols: int = None):
+    if grid_rows is None or grid_cols is None:
+        grid_rows, grid_cols, _ = _device_grid_params()
     rows = num_cores // grid_cols
     assert rows <= grid_rows, "Not enough cores for specified core grid"
     ranges = []
@@ -25,10 +37,10 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
         ranges.append(
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(grid_rows - 1, rows - 1),
+                ttnn.CoreCoord(grid_cols - 1, rows - 1),
             )
         )
-    remainder = num_cores % grid_rows
+    remainder = num_cores % grid_cols
     if remainder != 0:
         assert rows + 1 <= grid_rows, "Not enough cores for specified core grid"
         ranges.append(

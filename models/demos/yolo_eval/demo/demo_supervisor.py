@@ -189,6 +189,21 @@ class Supervisor:
         self.n_streams: int = 0
         self.tiles_per_stream: int = 0
         self._lock = asyncio.Lock()
+        # State machine for the launch page to poll.  Transitions:
+        # idle -> switching -> ready | error
+        # ready -> switching (mode change) -> ready | error
+        # error -> recovering (auto on init failure / manual /api/reset) -> idle
+        self.state: str = "idle"
+        self.last_error: Optional[str] = None
+        self.pending_transport: Optional[str] = None
+        self._restart_task: Optional[asyncio.Task] = None
+        self._recover_task: Optional[asyncio.Task] = None
+        self._consecutive_failures: int = 0
+        # Bookkeeping for retry-after-recovery: when an init failure auto-
+        # triggers chip recovery, _recover_chips uses this to re-issue the
+        # original transport request once the reset finishes.  Cleared once
+        # consumed (single retry only — we don't want infinite loops).
+        self._pending_retry: Optional[tuple] = None
 
     @staticmethod
     def _bitrate_bps(val: str) -> str:
@@ -342,7 +357,131 @@ class Supervisor:
                 pass
         self.proc = None
 
-    async def restart(self, transport: str, width: int, height: int) -> dict:
+    def _status_payload(self) -> dict:
+        """Snapshot used by both /api/status and the response from /api/source."""
+        return {
+            "state": self.state,
+            "transport": self.transport,
+            "pending_transport": self.pending_transport,
+            "ready": self.state == "ready",
+            "last_error": self.last_error,
+            "frame_w": self.frame_w,
+            "frame_h": self.frame_h,
+            "tiles_x": self.tiles.get("tiles_x", 0),
+            "tiles_y": self.tiles.get("tiles_y", 0),
+            "n_tiles": self.tiles.get("n_tiles", 0),
+            "fps": self.fps,
+            "n_frames": self.n_frames,
+            "n_streams": self.n_streams,
+            "tiles_per_stream": self.tiles_per_stream,
+            "uptime_s": (time.time() - self.start_t) if self.start_t else 0.0,
+            "url": f"http://{_connect_host(self.pipeline_host)}:{self.pipeline_port}/",
+            "kind": "webrtc",
+            # Legacy "ok" field; older callers checked status.ok rather than state.
+            "ok": self.state == "ready",
+        }
+
+    async def request_restart(self, transport: str, width: int, height: int) -> dict:
+        """Validate the request and kick off a background restart task.
+
+        Returns immediately with state="switching" so the HTTP handler
+        doesn't hold the connection open for 30-90 s while the pipeline
+        spawns and chip init completes.  The launch page polls
+        /api/status to learn when state becomes "ready" or "error".
+        """
+        async with self._lock:
+            if self.state in ("switching", "recovering"):
+                return {
+                    "ok": False,
+                    "state": self.state,
+                    "error": f"busy ({self.state}); wait or POST /api/reset",
+                }
+            # Idempotent: same transport + dims + already ready -> just
+            # echo current status, no spawn.  Mirrors the prior behavior.
+            if (
+                self.state == "ready"
+                and self.transport == transport
+                and self.proc is not None
+                and self.proc.poll() is None
+                and (
+                    transport == "multi"
+                    or width <= 0
+                    or height <= 0
+                    or (self.frame_w == int(width) and self.frame_h == int(height))
+                )
+            ):
+                print(
+                    f"[supervisor] /api/source no-op: already ready " f"transport={transport} (pid={self.proc.pid})",
+                    flush=True,
+                )
+                return self._status_payload()
+            # Cancel any stale task from prior run
+            if self._restart_task and not self._restart_task.done():
+                self._restart_task.cancel()
+            self.state = "switching"
+            self.pending_transport = transport
+            self.last_error = None
+
+        # Kick off background work; HTTP handler returns immediately.
+        self._restart_task = asyncio.create_task(self._do_restart(transport, width, height))
+        # Return a snapshot AFTER releasing the lock; state is now "switching".
+        return self._status_payload()
+
+    async def _do_restart(self, transport: str, width: int, height: int) -> None:
+        """Background task that performs the actual restart.
+
+        On success, sets state="ready".  On init failure, sets state="error"
+        and triggers chip-health recovery.  Cancellation is tolerated.
+        """
+        try:
+            ok = await self._restart_inner(transport, width, height)
+        except asyncio.CancelledError:
+            self.state = "idle"
+            self.pending_transport = None
+            raise
+        except Exception as e:  # noqa: BLE001
+            self.state = "error"
+            self.last_error = f"restart exception: {e!r}"
+            self.pending_transport = None
+            print(f"[supervisor] restart task failed: {e!r}", flush=True)
+            ok = False
+        finally:
+            self.pending_transport = None
+
+        if ok:
+            self.state = "ready"
+            self._consecutive_failures = 0
+            self._pending_retry = None
+        else:
+            self.state = "error"
+            self._consecutive_failures += 1
+            print(
+                f"[supervisor] restart FAILED (consecutive={self._consecutive_failures}): " f"{self.last_error}",
+                flush=True,
+            )
+            # Auto-recover + retry on the FIRST init failure only — most
+            # commonly a leftover hugepage/lock from the prior process.  If
+            # the retry ALSO fails, leave state="error" with an informative
+            # last_error so the launch page shows the failure to the user
+            # instead of looping forever.
+            if self._consecutive_failures == 1 and (self._recover_task is None or self._recover_task.done()):
+                self._pending_retry = (transport, width, height)
+                print(
+                    f"[supervisor] auto-triggering chip recovery + retry of " f"transport={transport}",
+                    flush=True,
+                )
+                self._recover_task = asyncio.create_task(self._recover_chips())
+            else:
+                self._pending_retry = None
+                self.last_error = (
+                    f"{self.last_error or 'init failed'} " f"(retry also failed; click ↻ Reset Chips and try again)"
+                )
+                print(
+                    f"[supervisor] giving up after {self._consecutive_failures} " f"consecutive failures — state=error",
+                    flush=True,
+                )
+
+    async def _restart_inner(self, transport: str, width: int, height: int) -> bool:
         async with self._lock:
             fps = 0.0
             n_frames = 0
@@ -360,56 +499,11 @@ class Supervisor:
                 w, h, fps, n_frames = _peek_video_meta(self.video_multi_path)
                 width, height = MULTI_STREAM_W, MULTI_STREAM_H
             else:
-                return {"ok": False, "error": f"unknown transport {transport}"}
+                self.last_error = f"unknown transport {transport}"
+                return False
 
-            # Idempotency check: if the pipeline is already running the
-            # requested transport+dims, skip the kill/spawn. Otherwise a page
-            # reload triggers an unnecessary restart and the TT chip lock
-            # races (old process still holds 'CHIP_IN_USE_*_PCIe' when the
-            # new one tries to open the mesh, producing a 60 s warm-reset).
-            alive = self.proc is not None and self.proc.poll() is None
-            port_up = _port_busy(self.pipeline_host, self.pipeline_port)
-            if (
-                alive
-                and port_up
-                and self.transport == transport
-                and self.frame_w == int(width)
-                and self.frame_h == int(height)
-            ):
-                print(
-                    f"[supervisor] restart no-op: already running transport={transport} "
-                    f"{width}x{height} (pid={self.proc.pid})",
-                    flush=True,
-                )
-                if transport == "multi":
-                    self.tiles = {
-                        "tiles_x": 2,
-                        "tiles_y": 2,
-                        "n_tiles": MULTI_N_STREAMS * MULTI_TILES_PER_STREAM,
-                    }
-                else:
-                    self.tiles = _grid_for(width, height)
-                # Refresh fps/n_frames from the file — these may not have been
-                # populated on a previous restart (older builds) even though the
-                # transport+dims match.
-                if transport in ("video", "multi"):
-                    self.fps = fps
-                    self.n_frames = n_frames
-                return {
-                    "ok": True,
-                    "url": f"http://{_connect_host(self.pipeline_host)}:{self.pipeline_port}/",
-                    "kind": "webrtc",
-                    "transport": transport,
-                    "frame_w": self.frame_w,
-                    "frame_h": self.frame_h,
-                    "tiles_x": self.tiles["tiles_x"],
-                    "tiles_y": self.tiles["tiles_y"],
-                    "n_tiles": self.tiles["n_tiles"],
-                    "fps": self.fps,
-                    "n_frames": self.n_frames,
-                    "n_streams": self.n_streams,
-                    "tiles_per_stream": self.tiles_per_stream,
-                }
+            # Idempotency check is now done in request_restart() before we
+            # ever reach this code path; the inner restart always spawns.
 
             if transport == "multi":
                 # Fixed topology for the multi-stream demo -- the launch page
@@ -459,46 +553,122 @@ class Supervisor:
                 self.tiles_per_stream = 0
             self.start_t = time.time()
 
-        ready = await _await_pipeline_ready(self.pipeline_host, self.pipeline_port, 90.0)
-        return {
-            "ok": bool(ready),
-            "url": f"http://{_connect_host(self.pipeline_host)}:{self.pipeline_port}/",
-            "kind": "webrtc",
-            "transport": transport,
-            "frame_w": self.frame_w,
-            "frame_h": self.frame_h,
-            "tiles_x": self.tiles["tiles_x"],
-            "tiles_y": self.tiles["tiles_y"],
-            "n_tiles": self.tiles["n_tiles"],
-            "fps": self.fps,
-            "n_frames": self.n_frames,
-            "n_streams": self.n_streams,
-            "tiles_per_stream": self.tiles_per_stream,
-        }
+        # Bump readiness timeout for the multi-stream pipeline — 32-chip init
+        # + model load + trace capture is comfortably 60 s on a cold start.
+        ready_budget = 150.0 if transport == "multi" else 90.0
+        ready = await _await_pipeline_ready(self.pipeline_host, self.pipeline_port, ready_budget)
+        if not ready:
+            # Distinguish "subprocess died" from "process alive but didn't bind".
+            poll = self.proc.poll() if self.proc else 0
+            if poll is not None:
+                self.last_error = f"pipeline subprocess exited rc={poll} during init"
+            else:
+                self.last_error = (
+                    f"pipeline did not bind {self.pipeline_host}:{self.pipeline_port} within {ready_budget:.0f}s"
+                )
+        return bool(ready)
+
+    async def _recover_chips(self) -> None:
+        """Stop the pipeline and run `tt-smi -glx_reset_auto` in a worker.
+
+        Triggered automatically after a pipeline init failure (most common
+        cause: leftover hugepage mappings or chip locks from a prior
+        unclean shutdown), or manually via POST /api/reset.  Sets state
+        to "recovering" while running, then "idle" on success or "error"
+        on failure.
+        """
+        async with self._lock:
+            self.state = "recovering"
+            self.last_error = None
+        print("[supervisor] chip recovery: stopping pipeline + running tt-smi reset", flush=True)
+        try:
+            await self.stop(timeout=10.0)
+        except Exception as e:  # noqa: BLE001
+            print(f"[supervisor] stop during recovery raised: {e!r}", flush=True)
+
+        # tt-smi -glx_reset_auto blocks for ~30 s while the trays power-cycle.
+        # Run as a non-blocking subprocess so we don't peg the event loop.
+        cmd = [self._python(), "-m", "tt_smi", "-glx_reset_auto"]
+        # Fall back to the bare CLI if -m doesn't work in this env.
+        smi_bin = TT_METAL_DIR / "python_env/bin/tt-smi"
+        if smi_bin.exists():
+            cmd = [str(smi_bin), "-glx_reset_auto"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(TT_METAL_DIR),
+                env=self._env(),
+            )
+            try:
+                rc = await asyncio.wait_for(proc.wait(), timeout=180.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                self.state = "error"
+                self.last_error = "tt-smi reset timed out after 180s"
+                print(f"[supervisor] {self.last_error}", flush=True)
+                return
+            if rc != 0:
+                self.state = "error"
+                self.last_error = f"tt-smi reset returned rc={rc}"
+                print(f"[supervisor] {self.last_error}", flush=True)
+                return
+        except FileNotFoundError as e:
+            self.state = "error"
+            self.last_error = f"tt-smi not found: {e}"
+            return
+
+        # Recovery succeeded.  Two paths from here:
+        #   1) A transport request triggered this recovery and saved a retry
+        #      tuple.  Auto-re-issue that request so the launch page sees the
+        #      cycle complete (state goes recovering -> switching -> ready).
+        #   2) No retry pending (manual /api/reset, or 2nd consecutive
+        #      failure where we gave up).  Settle at idle so the user can
+        #      pick a transport from the launch page.
+        retry = self._pending_retry
+        self._pending_retry = None
+        async with self._lock:
+            self._consecutive_failures = 0
+            self.transport = "idle"
+            self.frame_w = 0
+            self.frame_h = 0
+            self.tiles = {"tiles_x": 0, "tiles_y": 0, "n_tiles": 0}
+            self.start_t = 0.0
+            if retry:
+                # Stay in 'switching' so the launch page's awaitState() loop
+                # doesn't briefly observe 'idle' and prematurely give up.
+                self.state = "switching"
+                self.pending_transport = retry[0]
+            else:
+                self.state = "idle"
+        if retry:
+            t, w, h = retry
+            print(
+                f"[supervisor] chip recovery complete; auto-retrying " f"transport={t} ({w}x{h})",
+                flush=True,
+            )
+            # Cancel any stale task before kicking off a fresh _do_restart.
+            if self._restart_task and not self._restart_task.done():
+                self._restart_task.cancel()
+            self._restart_task = asyncio.create_task(self._do_restart(t, w, h))
+        else:
+            print("[supervisor] chip recovery complete; state=idle", flush=True)
 
 
 async def _api_status(req: web.Request) -> web.Response:
     sup: Supervisor = req.app["sup"]
     alive = sup.proc is not None and sup.proc.poll() is None
     listening = _port_busy(sup.pipeline_host, sup.pipeline_port)
-    return web.json_response(
+    payload = sup._status_payload()
+    payload.update(
         {
-            "transport": sup.transport,
-            "ready": bool(alive and listening),
             "alive": alive,
-            "frame_w": sup.frame_w,
-            "frame_h": sup.frame_h,
-            "tiles_x": sup.tiles.get("tiles_x", 0),
-            "tiles_y": sup.tiles.get("tiles_y", 0),
-            "n_tiles": sup.tiles.get("n_tiles", 0),
-            "n_streams": sup.n_streams,
-            "tiles_per_stream": sup.tiles_per_stream,
-            "fps": sup.fps,
-            "n_frames": sup.n_frames,
-            "uptime_s": (time.time() - sup.start_t) if sup.start_t else 0.0,
-            "pipeline_url": f"http://{_connect_host(sup.pipeline_host)}:{sup.pipeline_port}/",
+            "listening": listening,
+            "pipeline_url": payload["url"],
         }
     )
+    return web.json_response(payload)
 
 
 def _strip_charset(ct: str) -> str:
@@ -648,9 +818,33 @@ async def _api_source(req: web.Request) -> web.Response:
     width = int(body.get("width") or 0)
     height = int(body.get("height") or 0)
     sup: Supervisor = req.app["sup"]
-    out = await sup.restart(transport, width, height)
-    code = 200 if out.get("ok") else 504
+    out = await sup.request_restart(transport, width, height)
+    # 202 Accepted while switching, 200 if the no-op idempotency path
+    # returned an already-ready state, 409 if busy.
+    if out.get("state") == "ready":
+        code = 200
+    elif out.get("state") == "switching":
+        code = 202
+    elif out.get("state") in ("recovering",):
+        code = 409
+    else:
+        code = 200 if out.get("ok") else 503
     return web.json_response(out, status=code)
+
+
+async def _api_reset(_req: web.Request) -> web.Response:
+    """Manually trigger a chip reset (kills pipeline, runs tt-smi)."""
+    sup: Supervisor = _req.app["sup"]
+    if sup._recover_task and not sup._recover_task.done():
+        return web.json_response(
+            {"ok": False, "state": sup.state, "error": "recovery already in progress"},
+            status=409,
+        )
+    sup._recover_task = asyncio.create_task(sup._recover_chips())
+    return web.json_response(
+        {"ok": True, "state": "recovering"},
+        status=202,
+    )
 
 
 async def _index(_req: web.Request) -> web.Response:
@@ -678,6 +872,7 @@ def build_app(sup: Supervisor) -> web.Application:
     app.router.add_get("/", _index)
     app.router.add_get("/api/status", _api_status)
     app.router.add_post("/api/source", _api_source)
+    app.router.add_post("/api/reset", _api_reset)
     app.router.add_post("/offer", _proxy_offer)
     app.router.add_get("/stream", _proxy_stream)
     app.router.add_get("/source.mp4", _proxy_source_mp4)
@@ -761,7 +956,7 @@ def main() -> None:
     async def _bootstrap(app: web.Application) -> None:
         if args.auto_start in ("video", "camera", "multi"):
             print(f"[supervisor] auto-starting transport={args.auto_start}", flush=True)
-            asyncio.create_task(sup.restart(args.auto_start, 0, 0))
+            await sup.request_restart(args.auto_start, 0, 0)
 
     app = build_app(sup)
     app.on_startup.append(_bootstrap)
