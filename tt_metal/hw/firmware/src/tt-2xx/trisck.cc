@@ -60,17 +60,22 @@ uint32_t _start() {
     // if (hartid == /* leading core */ 0) {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
+    uint32_t neo_id = csr_read<CSR::NEO_ID>();
+    uint32_t trisc_id = csr_read<ckernel::CSR::TRISC_ID>();
 
     // Obtain launch message from mailbox.
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
 
-    do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-    // }
+    if (neo_id == 0 && trisc_id == 0) {
+        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+        (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[NUM_DM_CORES + 1] = SHARED_GLOBALS_READY_GO;
+    }
     do_thread_crt1(__tdata_lma);
+    // Wait until first thread in the group has set its slot to GO.
+    while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[NUM_DM_CORES + 1] != SHARED_GLOBALS_READY_GO);
 
     // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
-    uint32_t neo_id = csr_read<CSR::NEO_ID>();
     uint32_t config_index = MaxDMProcessorsPerCoreType + neo_id;
     num_sw_threads = launch_msg->kernel_config.num_sw_threads[config_index];
     my_thread_id = launch_msg->kernel_config.kernel_thread_id[config_index];

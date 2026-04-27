@@ -288,8 +288,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     }
 
     constexpr CoreCoord core = {0, 0};
+    const uint32_t signal_address = 100 * 1024;
     constexpr uint32_t l1_result_addr = 200 * 1024;
     constexpr uint32_t total_result_bytes = NUM_COMPUTE_SLOTS * TLS_CHECK_RESULT_SLOT_BYTES;
+
+    std::vector<uint32_t> init_signal = {QUASAR_FIRST_COMPUTE_HARTID};
+    tt_metal::detail::WriteToDeviceL1(
+        device,
+        core,
+        signal_address,
+        std::span(reinterpret_cast<const uint8_t*>(init_signal.data()), sizeof(uint32_t)),
+        CoreType::WORKER);
 
     std::vector<uint32_t> init_data(total_result_bytes / sizeof(uint32_t), 0);
     tt_metal::detail::WriteToDeviceL1(
@@ -333,9 +342,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = {{node, {{"l1_result_addr", l1_result_addr}}}},
+    params.kernel_run_args = {{
+        .kernel_spec_name = COMPUTE_KERNEL,
+        .named_runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}, {"signal_address", signal_address}}}},
     }};
     experimental::SetProgramRunArgs(program, params);
 
@@ -346,12 +355,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     std::vector<uint32_t> l1_data;
     tt_metal::detail::ReadFromDeviceL1(device, core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);
 
+    auto slot_global_addr = [&l1_data](uint32_t slot) {
+        const uint32_t offset = slot * TLS_CHECK_RESULT_SLOT_WORDS;
+        return (uint64_t)l1_data[offset + TLS_CHECK_GLOBAL_ADDR_LO] |
+               ((uint64_t)l1_data[offset + TLS_CHECK_GLOBAL_ADDR_HI] << 32);
+    };
+
     for (uint32_t slot = 0; slot < NUM_COMPUTE_SLOTS; slot++) {
         const uint32_t offset = slot * TLS_CHECK_RESULT_SLOT_WORDS;
         uint32_t kernel_id = l1_data[offset + TLS_CHECK_KERNEL_ID];
         uint32_t num_sw_threads = l1_data[offset + TLS_CHECK_NUM_THREADS];
         uint32_t my_thread_id = l1_data[offset + TLS_CHECK_MY_THREAD_ID];
         uint32_t hartid = l1_data[offset + TLS_CHECK_HART_ID];
+        uint32_t thread_0_hartid = l1_data[offset + TLS_CHECK_THREAD_0_HART_ID];
+        uint32_t global_start = l1_data[offset + TLS_CHECK_GLOBAL_START];
+        uint32_t global_end = l1_data[offset + TLS_CHECK_GLOBAL_END];
+        uint64_t global_addr = slot_global_addr(slot);
+        uint32_t uninitialized_global_start = l1_data[offset + TLS_CHECK_UNINITIALIZED_GLOBAL_START];
+        uint32_t uninitialized_global_end = l1_data[offset + TLS_CHECK_UNINITIALIZED_GLOBAL_END];
+        uint64_t thread_local_start = l1_data[offset + TLS_CHECK_THREAD_LOCAL_START];
+        uint64_t thread_local_end = l1_data[offset + TLS_CHECK_THREAD_LOCAL_END];
+        uint32_t uninitialized_thread_local_start = l1_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_START];
+        uint32_t uninitialized_thread_local_end = l1_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END];
 
         // 1. Single kernel: all slots run kernel_id 1
         EXPECT_EQ(kernel_id, 1u) << "slot=" << slot;
@@ -363,5 +388,70 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
 
         // 3. hartid: slot 0 -> 8, slot 1 -> 9, ..., slot 15 -> 23
         EXPECT_EQ(hartid, QUASAR_FIRST_COMPUTE_HARTID + slot) << "slot=" << slot;
+
+        // 4. Verify that the core is pointing to the correct binary. The specific
+        // check here is the lowest hartid with the same kernel ID.
+        const uint32_t lane = slot % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
+        if (is_legacy_kernel) {
+            EXPECT_EQ(thread_0_hartid, hartid) << "slot=" << slot << " (legacy)";
+        } else {
+            EXPECT_EQ(thread_0_hartid, QUASAR_FIRST_COMPUTE_HARTID + lane) << "slot=" << slot << " (shared)";
+        }
+
+        // 5. Check that initialized global variables have the correct start and end values.
+        // Initialized globals are set to 5, then incremented by 1 for each core in sequence.
+        if (is_legacy_kernel) {
+            // For legacy kernels, globals are not shared.
+            EXPECT_EQ(global_start, 5u) << "slot=" << slot << " (legacy)";
+            EXPECT_EQ(global_end, 6u) << "slot=" << slot << " (legacy)";
+        } else {
+            // For threaded kernels, globals are shared between cores in the same set, so values
+            // start at 5 with the first core in the lane and increment by 1 for each core in sequence.
+            EXPECT_EQ(global_start, 5u + slot) << "slot=" << slot;
+            EXPECT_EQ(global_end, 6u + slot) << "slot=" << slot;
+        }
+
+        // 6. For threaded kernels, check that the global variable address is shared between slots.
+        if (!is_legacy_kernel) {
+            EXPECT_EQ(global_addr, slot_global_addr(0)) << "slot=" << slot;
+        }
+
+        // 7. Check that uninitialized global variables have the correct start and end values.
+        // Uninitialized globals are cleared to 0, then incremented by 1 for each slot in sequence.
+        if (is_legacy_kernel) {
+            EXPECT_EQ(uninitialized_global_start, 0u) << "slot=" << slot;
+            EXPECT_EQ(uninitialized_global_end, 1u) << "slot=" << slot;
+        } else {
+            EXPECT_EQ(uninitialized_global_start, 0u + slot) << "slot=" << slot;
+            EXPECT_EQ(uninitialized_global_end, 1u + slot) << "slot=" << slot;
+        }
+
+        // 8. Check that initialized thread local variables have the correct value.
+        // I.e. incrementing the variable in one DM does not affect the value in another DM.
+        // TODO: Initializing thread local variables does not work yet. Once they work,
+        // update this check with the correct values.
+        EXPECT_EQ(thread_local_start, 10u) << "slot=" << slot;
+        EXPECT_EQ(thread_local_end, 11u) << "slot=" << slot;
+
+        // 9. Check that uninitialized thread local variables have the correct value.
+        // Same as #8, but variables are cleared to 0 at the start.
+        EXPECT_EQ(uninitialized_thread_local_start, 0u) << "slot=" << slot;
+        EXPECT_EQ(uninitialized_thread_local_end, 1u) << "slot=" << slot;
+    }
+
+    if (!is_legacy_kernel) {
+        for (uint32_t lane = 0; lane < QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE; lane++) {
+            const uint64_t ref = slot_global_addr(lane);
+            for (uint32_t neo = 0; neo < QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER; neo++) {
+                const uint32_t slot = neo * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE + lane;
+                EXPECT_EQ(slot_global_addr(slot), ref) << "lane=" << lane << " neo=" << neo;
+            }
+        }
+    } else {
+        std::set<uint64_t> addrs;
+        for (uint32_t slot = 0; slot < NUM_COMPUTE_SLOTS; slot++) {
+            addrs.insert(slot_global_addr(slot));
+        }
+        EXPECT_EQ(addrs.size(), NUM_COMPUTE_SLOTS) << "Legacy: global addresses should be unique per slot";
     }
 }

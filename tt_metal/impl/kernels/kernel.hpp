@@ -505,6 +505,11 @@ private:
 
 namespace experimental::quasar {
 
+// Quasar compute "threaded" kernels (is_legacy_kernel == false) share one JIT
+// ELF per TRISC lane index (QuasarComputeProcessor enum % 4) across all reserved
+// NEOs for that lane, analogous to shared DM binaries. Legacy mode keeps one
+// binary per reserved processor with per-NEO global slices in the linker.
+
 static constexpr uint32_t QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE = 4;
 
 enum class QuasarComputeProcessor : uint8_t {
@@ -646,6 +651,7 @@ public:
     ~QuasarComputeKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
@@ -667,6 +673,12 @@ public:
 private:
     const QuasarComputeConfig config_;
     const std::vector<QuasarComputeProcessor> compute_processors_;
+    // Each inner vector is one JIT binary: legacy mode uses singletons in
+    // processor order; shared mode groups processors with the same lane index
+    // (uint8_t(processor) % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE).
+    std::vector<std::vector<QuasarComputeProcessor>> compute_lane_binary_groups_;
+
+    void init_compute_lane_binary_groups();
 
     uint8_t expected_num_binaries() const override;
 

@@ -339,7 +339,7 @@ public:
                         return fmt::format(
                             "runtime/hw/toolchain/quasar/{}_trisc{}.ld",
                             params.is_fw ? "firmware" : "kernel",
-                            params.is_fw ? "" : "_lgc");
+                            params.is_fw ? "" : "");
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
