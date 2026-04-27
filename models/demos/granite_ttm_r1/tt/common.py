@@ -14,7 +14,7 @@ from models.demos.granite_ttm_r1.reference.model import extract_prediction_tenso
 from models.demos.granite_ttm_r1.reference.preprocess import build_reference_inputs
 
 
-def preprocess_parameters(hf_model: torch.nn.Module, device) -> Any:
+def preprocess_parameters(hf_model: torch.nn.Module, device, model_name: str | None = None) -> Any:
     """Pre-process all model weights for TTNN.
 
     Returns a nested attribute-dict compatible with ttnn.model_preprocessing's
@@ -26,6 +26,7 @@ def preprocess_parameters(hf_model: torch.nn.Module, device) -> Any:
         initialize_model=lambda: hf_model,
         custom_preprocessor=custom_preprocessor,
         device=device,
+        model_name=model_name,
     )
 
 
