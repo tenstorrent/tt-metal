@@ -278,7 +278,7 @@ class TtPrefillTransformer(LightweightModule):
             intermediates["norm"] = self._to_host(h)
 
         # LM Head: extract logits for last real token
-        logits_host, first_token_logits = self._extract(h, number_of_non_padded_tokens)
+        logits_host, first_token_logits = self._lm_head_and_extract(h, number_of_non_padded_tokens)
 
         if return_intermediates:
             intermediates["lm_head"] = logits_host
@@ -302,7 +302,7 @@ class TtPrefillTransformer(LightweightModule):
 
         return first_token_id, first_token_prob, intermediates
 
-    def _extract(
+    def _lm_head_and_extract(
         self,
         h: ttnn.Tensor,
         number_of_non_padded_tokens: int,
