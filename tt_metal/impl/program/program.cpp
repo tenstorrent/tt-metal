@@ -1429,6 +1429,48 @@ void detail::ProgramImpl::add_semaphore(
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
+uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
+    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
+    TT_FATAL(
+        MetalContext::instance().is_coord_in_range(crs.ranges().back().end_coord, core_type),
+        "Coordinates out of range");
+
+    // The allocated ID must be free on every core in crs. Find the max ID that's free on each
+    // range (they each return the smallest free ID on their cores) and use that everywhere.
+    std::optional<uint32_t> semaphore_id;
+    for (const auto& core_range : crs.ranges()) {
+        std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                CoreCoord logical_core(x, y);
+                auto existing = this->semaphores_on_core(logical_core, core_type);
+                if (existing.size() == NUM_SEMAPHORES) {
+                    TT_THROW(
+                        "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
+                        logical_core.str(),
+                        NUM_SEMAPHORES);
+                }
+                for (const auto& semaphore : existing) {
+                    semaphore_histogram[semaphore.get().id()]++;
+                }
+            }
+        }
+        std::optional<uint32_t> candidate;
+        for (uint32_t sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
+            if (semaphore_histogram[sem_id] == 0) {
+                candidate = sem_id;
+                break;
+            }
+        }
+        TT_FATAL(candidate.has_value(), "Unable to initialize semaphores on core range {}", core_range.str());
+        semaphore_id = semaphore_id.has_value() ? std::max(*semaphore_id, *candidate) : candidate;
+    }
+    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
+
+    this->add_semaphore(crs, *semaphore_id, initial_value, core_type);
+    return *semaphore_id;
+}
+
 std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
     std::vector<std::vector<CoreCoord>> cores_in_program;
     std::vector<std::set<CoreCoord>> unique_cores;
