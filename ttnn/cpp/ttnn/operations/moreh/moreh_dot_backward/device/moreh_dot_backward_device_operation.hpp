@@ -5,7 +5,7 @@
 #pragma once
 
 #include <optional>
-#include <variant>
+#include <vector>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
