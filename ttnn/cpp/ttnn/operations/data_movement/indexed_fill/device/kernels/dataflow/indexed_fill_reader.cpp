@@ -6,6 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 
 #include "api/debug/dprint.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t batch_ids_addr = get_arg_val<uint32_t>(0);
@@ -29,6 +32,10 @@ void kernel_main() {
     // program cache hits.
     const auto batchAddr = TensorAccessor(batch_ids_args, batch_ids_addr, batch_id_size << 2);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer batch_cb(batch_cb_id);
+
     bool replace_batch = false;
     uint32_t batch_to_replace_id = 0;
     // first go through batch id
@@ -36,10 +43,12 @@ void kernel_main() {
     volatile tt_l1_ptr int* addr_ptr;
 
     if (batch_id_size > 0) {
-        uint64_t src_noc_addr = get_noc_addr(0, batchAddr);
-        uint32_t l1_write_addr = get_write_ptr(batch_cb_id);
-        noc_async_read(src_noc_addr, l1_write_addr, (batch_id_size << 2));
-        noc_async_read_barrier();
+        // Reserve CB space before reading into it
+        batch_cb.reserve_back(1);
+        uint32_t l1_write_addr = batch_cb.get_write_ptr();
+        noc.async_read(batchAddr, batch_cb, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        batch_cb.push_back(1);
         addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
     }
     for (uint32_t i = 0; i < batch_id_size; i++) {
@@ -59,16 +68,13 @@ void kernel_main() {
 
     uint32_t end_id = start_id + batch_size_in_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        uint64_t src_noc_addr;
+        cb_in0.reserve_back(1);
         if (replace_batch) {
-            src_noc_addr = get_noc_addr(i, s1);
+            noc.async_read(s1, cb_in0, stick_size, {.page_id = i}, {.offset_bytes = 0});
         } else {
-            src_noc_addr = get_noc_addr(i, s0);
+            noc.async_read(s0, cb_in0, stick_size, {.page_id = i}, {.offset_bytes = 0});
         }
-        noc_async_read(src_noc_addr, l1_write_addr, stick_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+        noc.async_read_barrier();
+        cb_in0.push_back(1);
     }
 }

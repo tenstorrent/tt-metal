@@ -13,6 +13,28 @@ import ttnn
 from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec, _core_list, _greedy_place
 
 
+def assert_uniform_per_core_addresses(tensor: ttnn.Tensor, cores: list[tuple[int, int]]) -> None:
+    """Assert that a per-core allocated tensor has the same L1 address on every core.
+
+    Per-core allocation bypasses lockstep, giving each core an independent L1
+    address.  The overlap system relies on CB setup broadcasting a single base
+    address to all cores, so addresses *must* be uniform.  This holds when the
+    tensor is the first per-core allocation on the device.
+    """
+    if not cores:
+        return
+    first = ttnn.CoreCoord(*cores[0])
+    addr0 = tensor.experimental_per_core_buffer_address(first)
+    for x, y in cores[1:]:
+        cc = ttnn.CoreCoord(x, y)
+        addr = tensor.experimental_per_core_buffer_address(cc)
+        assert addr == addr0, (
+            f"Per-core overlap buffer has non-uniform L1 addresses: "
+            f"core ({first.x},{first.y})=0x{addr0:x} vs core ({x},{y})=0x{addr:x}. "
+            f"Ensure this is the first per-core allocation on the device."
+        )
+
+
 def tilize_and_pack(data_2d: torch.Tensor, spec: OverlappedTensorSpec) -> bytes:
     match spec.dtype:
         case ttnn.bfloat8_b:
@@ -43,6 +65,7 @@ def overlap_tensors(
     entries: list[OverlapEntry],
     device: ttnn.Device,
     move_to_device: bool = True,
+    per_core: bool = False,
 ) -> dict[str, OverlappedTensor]:
     """Overlap a list of tensors into a single fused tensor.
 
@@ -66,6 +89,12 @@ def overlap_tensors(
         entries: A flat list of ``OverlapEntry`` items.
         device: The mesh device to place the fused tensor on.
         move_to_device: If True (default), place the result on device.
+        per_core: If True, use per-core L1 allocation instead of lockstep.
+            Eliminates the lockstep memory tax on cores outside the fused
+            buffer.  Requires ``TT_METAL_ALLOCATOR_MODE_HYBRID=1`` be
+            exported before device open (allocation TT_FATALs otherwise)
+            and the tensor be the first per-core allocation on the
+            device so all cores receive the same L1 address.
 
     Returns:
         A dict of ``OverlappedTensor`` views, keyed by tensor name.
@@ -153,6 +182,8 @@ def overlap_tensors(
         ttnn.BufferType.L1,
         shard_spec,
     )
+    if per_core:
+        mem_config.experimental_set_per_core_allocation(True)
 
     if num_devices == 1:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
@@ -168,6 +199,9 @@ def overlap_tensors(
         memory_config=mem_config,
         mesh_mapper=mesh_mapper,
     )
+
+    if per_core and move_to_device:
+        assert_uniform_per_core_addresses(fused, all_cores_deduped)
 
     result = {}
     for eidx, entry in enumerate(entries):

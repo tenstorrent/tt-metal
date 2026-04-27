@@ -103,7 +103,7 @@ Tensor minimum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::detail::unary_impl(
+            return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)}},
                 memory_config,
@@ -147,7 +147,7 @@ Tensor maximum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::detail::unary_impl(
+            return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)}},
                 memory_config,

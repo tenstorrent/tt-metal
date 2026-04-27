@@ -213,7 +213,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
     xt::xarray<float> Out = xt::xarray<float>::from_shape({B, std::size_t(1), S, qD});
     std::fill(Out.begin(), Out.end(), 0.0F);
 
-    // Intermediates: (B, q_heads, S, 1) - reciprocal of sum of exponentials per head per sequence position
+    // Intermediates: (B, q_heads, S, 1) - logsumexp per head per sequence position
     xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, std::size_t(1)});
     std::fill(Intermediates.begin(), Intermediates.end(), 0.0F);
 
@@ -250,8 +250,8 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
                 for (std::size_t j = 0; j < S; ++j) denom += std::exp(scores_row[j] - rmax);
                 denom = std::max(denom, 1e-20F);
 
-                // Store intermediate: 1/denom (reciprocal of sum of exponentials)
-                Intermediates(b, h, i, 0) = 1.0F / denom;
+                // Store intermediate: logsumexp = max + log(sum_exp)
+                Intermediates(b, h, i, 0) = rmax + std::log(denom);
 
                 // out_i[h] = sum_j softmax_ij * V[j]
                 for (std::size_t t = 0; t < Dh; ++t) {
@@ -285,8 +285,8 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     xt::xarray<float> Out = xt::xarray<float>::from_shape({B, q_heads, S, Dh});
     std::fill(Out.begin(), Out.end(), 0.0F);
 
-    // Intermediates: (B, q_heads, S, 64) - max_val at col 0, recip_sum_exp at col 32
-    constexpr std::size_t kIntermediateWidth = 64U;
+    // Intermediates: (B, q_heads, S, 32) - logsumexp at col 0, rest zero-padded
+    constexpr std::size_t kIntermediateWidth = 32U;
     xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, kIntermediateWidth});
     std::fill(Intermediates.begin(), Intermediates.end(), 0.0F);
 
@@ -321,9 +321,8 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 for (std::size_t j = 0; j < S; ++j) denom += std::exp(scores_row[j] - rmax);
                 denom = std::max(denom, 1e-20F);
 
-                // Store intermediates: max_val at col 0, recip_sum_exp at col 32
-                Intermediates(b, h, i, 0) = rmax;           // max_val at position 0
-                Intermediates(b, h, i, 32) = 1.0F / denom;  // recip_sum_exp at position 32
+                // Store intermediate: logsumexp = max + log(sum_exp)
+                Intermediates(b, h, i, 0) = rmax + std::log(denom);
 
                 // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh)
                 for (std::size_t t = 0; t < Dh; ++t) {
@@ -444,19 +443,13 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
     auto qk_scaled_sub_max = ttnn::subtract(qk_scaled, max_value);
     auto exp_qk_scaled = ttnn::exp(qk_scaled_sub_max);
     auto sum_exp = ttnn::sum(exp_qk_scaled, /* dim */ 3, /* keepdim */ true);
-    auto recip_sum_exp = ttnn::reciprocal(sum_exp);  // (B, H, S, 1)
 
-    // Build intermediates tensor with shape (B, H, S, 64)
-    // Format: max_value at col 0, recip_sum_exp at col 32
+    // Build intermediates tensor with shape (B, H, S, 32)
+    // Format: logsumexp = max + log(sum_exp) at col 0, rest zero-padded
     auto* device = query.device();
-    auto padded_zeros = core::zeros(ttnn::Shape{batch_num, heads, seq_len, 31U}, device, ttnn::DataType::BFLOAT16);
-
-    // Pad max_value: (B, H, S, 1) -> (B, H, S, 32) with zeros
-    auto max_value_padded = ttnn::concat(std::vector<ttnn::Tensor>{max_value, padded_zeros}, 3);
-    // Pad recip_sum_exp: (B, H, S, 1) -> (B, H, S, 32) with zeros
-    auto recip_sum_exp_padded = ttnn::concat(std::vector<ttnn::Tensor>{recip_sum_exp, padded_zeros}, 3);
-    // Concat to get (B, H, S, 64)
-    auto intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value_padded, recip_sum_exp_padded}, 3);
+    auto lse = ttnn::add(max_value, ttnn::log(sum_exp));  // (B, H, S, 1)
+    auto padded_zeros = core::zeros(ttnn::Shape{batch_num, heads, seq_len, 31U}, device, lse.dtype());
+    auto intermediates = ttnn::concat(std::vector<ttnn::Tensor>{lse, padded_zeros}, 3);
 
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
 
@@ -851,19 +844,17 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         std::vector<size_t> expected_shape = {B, num_heads, S, head_dim};
         EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in split format (B, H, S, Dh)";
 
-        // Check intermediate shape: (B, num_query_heads, S, 64)
-        constexpr size_t kIntermediateWidth = 64U;
+        // Check intermediate shape: (B, num_query_heads, S, 32)
+        constexpr size_t kIntermediateWidth = 32U;
         std::vector<size_t> expected_interm_shape = {B, num_heads, S, kIntermediateWidth};
-        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 64)";
+        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 32)";
 
-        // Verify intermediate values at position 32 are reasonable (should be positive reciprocals)
-        // Note: position 0 contains max_val (can be any value), position 32 contains recip_sum_exp
+        // Verify logsumexp values at position 0 are finite
         for (size_t b_idx = 0; b_idx < B; ++b_idx) {
             for (size_t h_idx = 0; h_idx < num_heads; ++h_idx) {
                 for (size_t s_idx = 0; s_idx < S; ++s_idx) {
-                    float recip_sum_exp = interm_xtensor(b_idx, h_idx, s_idx, 32);
-                    EXPECT_GT(recip_sum_exp, 0.0f) << "recip_sum_exp should be positive";
-                    EXPECT_LE(recip_sum_exp, 1.0f) << "recip_sum_exp should be <= 1.0";
+                    float lse = interm_xtensor(b_idx, h_idx, s_idx, 0);
+                    EXPECT_TRUE(std::isfinite(lse)) << "logsumexp should be finite";
                 }
             }
         }

@@ -78,6 +78,10 @@ GENERATE_PROTO_FILES(
 )
 list(APPEND IMPL_SRC ${PROTO_SRCS})
 
+if(TT_METAL_USE_EMULE)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
+endif()
+
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
@@ -119,6 +123,28 @@ target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/experi
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
+if(TT_METAL_USE_EMULE)
+    get_target_property(_EMULE_JIT_DIR tt_emule_headers TT_EMULE_JIT_INCLUDE_DIR)
+    get_target_property(_EMULE_INC_DIR tt_emule_headers TT_EMULE_INCLUDE_DIR)
+
+    target_compile_definitions(
+        impl
+        PRIVATE
+            TT_METAL_USE_EMULE=1
+            TT_EMULE_JIT_INCLUDE_DIR="${_EMULE_JIT_DIR}"
+            TT_EMULE_INCLUDE_DIR="${_EMULE_INC_DIR}"
+            TT_EMULE_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            TT_EMULE_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+            TT_EMULE_CXX_STANDARD="${CMAKE_CXX_STANDARD}"
+    )
+    target_link_libraries(
+        impl
+        PRIVATE
+            tt-emule::headers
+            dl
+    )
+endif()
 
 # Generate Inspector RPC stub file
 set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)

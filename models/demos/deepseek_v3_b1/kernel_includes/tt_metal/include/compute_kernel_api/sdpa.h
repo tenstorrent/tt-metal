@@ -422,7 +422,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
  */
 template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C, bool final_norm = false>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, vector_mode, scale_bf16);
 }
 #endif

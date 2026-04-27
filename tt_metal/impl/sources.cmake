@@ -1,4 +1,6 @@
 set(IMPL_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/mesh_command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
@@ -59,10 +61,14 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_rpc_client.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_service.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_server_controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/remote_compile_coordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_state_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/memory_stats_shm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/shm_tracking_processor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/update_allocator_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp

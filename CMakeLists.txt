@@ -290,10 +290,10 @@ endif()
 
 include(helper_functions)
 add_subdirectory(tt_stl)
+
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
-
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()

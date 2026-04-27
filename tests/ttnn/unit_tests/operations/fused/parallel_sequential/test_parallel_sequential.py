@@ -16,6 +16,7 @@ Integration tests for Sequential/Parallel kernel fusion.
   - Cross-op compilation (10 kernel pairs)
 """
 
+import functools
 import os
 import re
 
@@ -24,7 +25,50 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
+
+
+def stress_test_program_cache(fn):
+    """Decorator (#41622): run test 5x to exercise both program cache paths.
+
+    Run 1:   normal (program cache miss — builds and caches the program).
+    Runs 2-3: program cache enabled (hit — C++ patches the cached Program via
+              override_runtime_arguments with fresh tensor addresses).
+    Runs 4-5: program cache cleared then re-enabled (miss — Program{descriptor}
+              is reconstructed from the cached descriptor with stale addresses,
+              exercising patch_stale_descriptor).
+
+    The fusion build cache persists across all runs (same device), so runs 2-5
+    hit it with stale CBDescriptor.buffer pointers and runtime arg addresses.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        # Run 1: normal (program cache miss — builds and caches)
+        fn(*args, **kwargs)
+
+        device = kwargs.get("device")
+        if device is None:
+            for arg in args:
+                if hasattr(arg, "disable_and_clear_program_cache"):
+                    device = arg
+                    break
+        if device is None:
+            return
+
+        # Runs 2-3: program cache hits (C++ patches cached Program)
+        for _ in range(2):
+            fn(*args, **kwargs)
+
+        # Runs 4-5: program cache misses (Program rebuilt from stale descriptor)
+        device.disable_and_clear_program_cache()
+        try:
+            for _ in range(2):
+                fn(*args, **kwargs)
+        finally:
+            device.enable_program_cache()
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +172,7 @@ def make_multi_norm_tensors(device):
 class TestInfrastructure:
     """Build-time infrastructure tests (CB extraction, source structure, named args)."""
 
+    @stress_test_program_cache
     def test_cb_extraction(self, device):
         """extract_cb_info on LN descriptor, check c_0/c_16."""
         from models.experimental.ops.descriptors.fusion import extract_cb_info
@@ -142,6 +187,7 @@ class TestInfrastructure:
         assert 0 in cb_info, "Should have input CB (c_0)"
         assert 16 in cb_info, "Should have output CB (c_16)"
 
+    @stress_test_program_cache
     def test_fused_source_structure(self, device):
         """2-phase LN->LN: verify phase namespaces and barrier code in fused source."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -162,6 +208,7 @@ class TestInfrastructure:
         # At least one kernel should have both phases
         assert False, "No kernel contained both phase_0 and phase_1 namespaces"
 
+    @stress_test_program_cache
     def test_named_args_phase_prefix(self, device):
         """2-phase fused: verify phase_1_ prefix on named CT args."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -199,6 +246,7 @@ class TestSequentialExecution:
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_phases", [2, 3, 4])
+    @stress_test_program_cache
     def test_norm_chain(self, device, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -232,6 +280,7 @@ class TestSequentialExecution:
         check_pcc(golden, out, pcc=0.97, label=f"{num_phases}-phase chain")
 
     @pytest.mark.parametrize("core_x", [3, 5, 7])
+    @stress_test_program_cache
     def test_chain_on_nonzero_core(self, device, core_x):
         """2-phase LN->RMS on non-origin single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -266,6 +315,7 @@ class TestSequentialExecution:
             pytest.param((1, 1, 0, 0), id="2D_2x2"),
         ],
     )
+    @stress_test_program_cache
     def test_multicore_chain(self, device, grid):
         """2-phase LN->RMS on multi-core grid (row or 2D)."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -296,6 +346,7 @@ class TestSequentialExecution:
         golden = torch_rms_norm(torch_layer_norm(torch_input.float(), torch_w.float()), torch_w.float())
         check_pcc(golden, out, label="multicore chain")
 
+    @stress_test_program_cache
     def test_repeated_execution(self, device):
         """Same fused op launched 3x — verify no stale state."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -314,9 +365,10 @@ class TestSequentialExecution:
         )
 
         for i in range(3):
-            fused.run()
-            check_pcc(golden, rms2.output_tensors[0], label=f"run {i}")
+            [out] = fused.run()
+            check_pcc(golden, out, label=f"run {i}")
 
+    @stress_test_program_cache
     def test_single_op_passthrough(self, device):
         """Single op in Sequential — verify pass-through."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -348,6 +400,7 @@ class TestShardedExecution:
             pytest.param("width", id="width"),
         ],
     )
+    @stress_test_program_cache
     def test_sharded_chain(self, device, shard_type):
         """2-phase LN->RMS with block or width sharding."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -395,7 +448,9 @@ class TestShardedExecution:
         golden = rms_norm_golden(sh_ln_golden(torch_input, weight=torch_w), torch_w)
         check_pcc(golden, out, label=f"sharded {shard_type}")
 
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
+    @stress_test_program_cache
     def test_sharded_three_phase(self, device):
         """3-phase LN->RMS->LN block-sharded on 4x4 grid."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -447,6 +502,7 @@ class TestShardedExecution:
         check_pcc(golden, out, label="sharded 3-phase")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
+    @stress_test_program_cache
     def test_sharded_with_bias_residual(self, device):
         """LN(bias+residual)->RMS block-sharded, single-stage."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -530,6 +586,7 @@ class TestMatmulFusion:
             fp32_dest_acc_en=fp32,
         )
 
+    @stress_test_program_cache
     def test_matmul_standalone(self, device):
         """Single matmul via descriptor API."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
@@ -552,6 +609,7 @@ class TestMatmulFusion:
             pytest.param("ln_mm", id="ln_mm"),
         ],
     )
+    @stress_test_program_cache
     def test_matmul_norm_chain(self, device, ordering):
         """All matmul+norm orderings on single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -623,6 +681,7 @@ class TestMatmulFusion:
 
         check_pcc(g, out, pcc=0.97, label=ordering)
 
+    @stress_test_program_cache
     def test_multicore_matmul_chain(self, device):
         """RMS->MM->RMS on 4x2 grid (8 cores)."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -653,8 +712,10 @@ class TestMatmulFusion:
         golden = torch_rms_norm(torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float(), torch_w.float())
         check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_rms", [2, 3, 4])
+    @stress_test_program_cache
     def test_matmul_followed_by_n_rms(self, device, num_rms):
         """MM then N consecutive RMS norms."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -691,6 +752,7 @@ class TestMatmulFusion:
             g = torch_rms_norm(g, torch_w.float())
         check_pcc(g, out, pcc=0.97, label=f"MM->{num_rms}xRMS")
 
+    @stress_test_program_cache
     def test_fp32_mismatch_error(self, device):
         """MM(fp32=off) + LN(fp32=on) should raise."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -731,6 +793,7 @@ class TestMatmulFusion:
 class TestBranchingTopology:
     """Branching (tree) topology tests, including slice ops."""
 
+    @stress_test_program_cache
     def test_two_branch_split(self, device):
         """Stem(8c) -> 2 branches(4c each)."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -754,6 +817,7 @@ class TestBranchingTopology:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_three_way_split_with_slice(self, device):
         """Stem RMS(6c) -> 3 branches(2c each), using slice in one branch.
 
@@ -783,13 +847,14 @@ class TestBranchingTopology:
         )
 
         fused = Sequential(stem, Parallel(branch_a, branch_b, branch_c))
-        fused.run()
+        [out_a, out_b, out_c] = fused.run()
 
         g_stem = torch_rms_norm(torch_input.float(), torch_w.float())
-        check_pcc(torch_rms_norm(g_stem, torch_w.float()), branch_a.output_tensors[0], pcc=0.97, label="A (RMS)")
-        check_pcc(g_stem[:, :, :, :64], branch_b.output_tensors[0], pcc=0.97, label="B (slice)")
-        check_pcc(torch_rms_norm(g_stem, torch_w.float()), branch_c.output_tensors[0], pcc=0.97, label="C (RMS)")
+        check_pcc(torch_rms_norm(g_stem, torch_w.float()), out_a, pcc=0.97, label="A (RMS)")
+        check_pcc(g_stem[:, :, :, :64], out_b, pcc=0.97, label="B (slice)")
+        check_pcc(torch_rms_norm(g_stem, torch_w.float()), out_c, pcc=0.97, label="C (RMS)")
 
+    @stress_test_program_cache
     def test_nested_split_with_slice(self, device):
         """Stem -> Parallel(Sequential(A, Parallel(A1, A2_slice)), B).
 
@@ -825,14 +890,15 @@ class TestBranchingTopology:
                 b,
             ),
         )
-        fused.run()
+        [out_a1, out_a2, out_b] = fused.run()
 
         g_stem = torch_rms_norm(torch_input.float(), ws[0].float())
         g_a = torch_rms_norm(g_stem, ws[1].float())
-        check_pcc(torch_rms_norm(g_a, ws[2].float()), a1.output_tensors[0], pcc=0.97, label="A1 (RMS)")
-        check_pcc(g_a[:, :, :, :64], a2_slice.output_tensors[0], pcc=0.97, label="A2 (slice)")
-        check_pcc(torch_rms_norm(g_stem, ws[3].float()), b.output_tensors[0], pcc=0.97, label="B (RMS)")
+        check_pcc(torch_rms_norm(g_a, ws[2].float()), out_a1, pcc=0.97, label="A1 (RMS)")
+        check_pcc(g_a[:, :, :, :64], out_a2, pcc=0.97, label="A2 (slice)")
+        check_pcc(torch_rms_norm(g_stem, ws[3].float()), out_b, pcc=0.97, label="B (RMS)")
 
+    @stress_test_program_cache
     def test_symmetric_binary_tree(self, device):
         """Stem -> 2 mid -> 4 leaves.
 
@@ -864,13 +930,12 @@ class TestBranchingTopology:
                 Sequential(right, Parallel(rl, rr)),
             ),
         )
-        fused.run()
+        outs = fused.run()
 
         ws = t["torch_weights"]
         g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
         g_right = torch_rms_norm(g_root, ws[2].float())
-        leaves = [ll, lr, rl, rr]
         goldens = [
             torch_rms_norm(g_left, ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
@@ -878,9 +943,10 @@ class TestBranchingTopology:
             torch_rms_norm(g_right, ws[6].float()),
         ]
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
-            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
+            check_pcc(goldens[i], outs[i], label=label)
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
+    @stress_test_program_cache
     def test_asymmetric_deep_left(self, device):
         """Deep left + shallow right.
 
@@ -912,20 +978,20 @@ class TestBranchingTopology:
                 right,
             ),
         )
-        fused.run()
+        outs = fused.run()
 
         ws = t["torch_weights"]
         g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
-        leaves = [ll_deep, lr, right]
         goldens = [
             torch_rms_norm(torch_rms_norm(g_left, ws[2].float()), ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
             torch_rms_norm(g_root, ws[5].float()),
         ]
         for i, label in enumerate(["LL(deep)", "LR", "Right"]):
-            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
+            check_pcc(goldens[i], outs[i], label=label)
 
+    @stress_test_program_cache
     def test_overlapping_branches_error(self, device):
         """Overlapping branch core ranges should raise ValueError."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -956,6 +1022,7 @@ class TestParallelExecution:
     """Independent parallel execution tests."""
 
     @pytest.mark.parametrize("n_chains", [2, 4])
+    @stress_test_program_cache
     def test_parallel_chains(self, device, n_chains):
         """N independent fused LN->RMS chains on separate single cores."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -982,17 +1049,19 @@ class TestParallelExecution:
             rms_tails.append(rms)
             chains.append(Sequential(ln, rms))
 
+        chain_outs = []
         for ch in chains:
-            ch.run()
+            chain_outs.append(ch.run())
 
         for i in range(n_chains):
             golden = torch_rms_norm(
                 torch_layer_norm(torch_inputs[i].float(), t["torch_weights"][0].float()),
                 t["torch_weights"][1].float(),
             )
-            check_pcc(golden, rms_tails[i].output_tensors[0], label=f"chain {i}")
+            check_pcc(golden, chain_outs[i][0], label=f"chain {i}")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
+    @stress_test_program_cache
     def test_matmul_plus_fused_chain(self, device):
         """Matmul + 3-phase norm chain on disjoint cores."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -1026,15 +1095,16 @@ class TestParallelExecution:
         fused = Sequential(ln1, rms, ln2)
 
         mm.launch()
-        fused.run()
+        [out_ln2] = fused.run()
 
         check_pcc(torch_a @ torch_b, mm.output_tensors[0], pcc=0.99, label="matmul")
 
         g = torch_layer_norm(t["torch_input"].float(), t["torch_weights"][0].float(), t["torch_biases"][0].float())
         g = torch_rms_norm(g, t["torch_weights"][1].float())
         golden = torch_layer_norm(g, t["torch_weights"][2].float(), t["torch_biases"][1].float())
-        check_pcc(golden, ln2.output_tensors[0], label="3-phase chain")
+        check_pcc(golden, out_ln2, label="3-phase chain")
 
+    @stress_test_program_cache
     def test_two_disjoint_trees_parallel(self, device):
         """Two independent branching trees launched in parallel on disjoint cores.
 
@@ -1076,20 +1146,18 @@ class TestParallelExecution:
         b_right = slice_desc(stem_b.output_tensors[0], [0, 0, 0, 0], [1, 1, 128, 64], core_range_set=cores(6, 0, 7, 0))
         tree_b = Sequential(stem_b, Parallel(b_left, b_right))
 
-        # Launch both in parallel
-        tree_a.run()
-        tree_b.run()
+        [out_a_left, out_a_right] = tree_a.run()
+        [out_b_left, out_b_right] = tree_b.run()
 
-        # Verify tree A (read from individual leaf ops)
         g_stem_a = torch_rms_norm(torch_input_a.float(), torch_w.float())
-        check_pcc(g_stem_a[:, :, :, :64], a_left.output_tensors[0], pcc=0.97, label="tree_a slice")
-        check_pcc(torch_rms_norm(g_stem_a, torch_w.float()), a_right.output_tensors[0], pcc=0.97, label="tree_a RMS")
+        check_pcc(g_stem_a[:, :, :, :64], out_a_left, pcc=0.97, label="tree_a slice")
+        check_pcc(torch_rms_norm(g_stem_a, torch_w.float()), out_a_right, pcc=0.97, label="tree_a RMS")
 
-        # Verify tree B (read from individual leaf ops)
         g_stem_b = torch_rms_norm(torch_input_b.float(), torch_w.float())
-        check_pcc(torch_rms_norm(g_stem_b, torch_w.float()), b_left.output_tensors[0], pcc=0.97, label="tree_b RMS")
-        check_pcc(g_stem_b[:, :, :, :64], b_right.output_tensors[0], pcc=0.97, label="tree_b slice")
+        check_pcc(torch_rms_norm(g_stem_b, torch_w.float()), out_b_left, pcc=0.97, label="tree_b RMS")
+        check_pcc(g_stem_b[:, :, :, :64], out_b_right, pcc=0.97, label="tree_b slice")
 
+    @stress_test_program_cache
     def test_full_grid_stress(self, device):
         """7 items on full 8x8 grid: matmuls, chains, tree, single op.
 
@@ -1209,30 +1277,26 @@ class TestParallelExecution:
 
         # Launch all 7
         mm1.launch()
-        chain1.run()
-        chain2.run()
-        chain3.run()
-        tree.run()
+        [out_rms1] = chain1.run()
+        [out_ln2] = chain2.run()
+        [out_rms3c] = chain3.run()
+        [out_br_a, out_br_b] = tree.run()
         mm2.launch()
         single.launch()
 
         w, b = torch_w.float(), torch_b.float()
         check_pcc(torch_mm1_a @ torch_mm1_b, mm1.output_tensors[0], pcc=0.99, label="MM1")
-        check_pcc(
-            torch_rms_norm(torch_layer_norm(torch_norms[0].float(), w), w), rms1.output_tensors[0], label="LN->RMS"
-        )
-        check_pcc(
-            torch_layer_norm(torch_rms_norm(torch_norms[1].float(), w), w, b), ln2.output_tensors[0], label="RMS->LN"
-        )
+        check_pcc(torch_rms_norm(torch_layer_norm(torch_norms[0].float(), w), w), out_rms1, label="LN->RMS")
+        check_pcc(torch_layer_norm(torch_rms_norm(torch_norms[1].float(), w), w, b), out_ln2, label="RMS->LN")
         check_pcc(
             torch_rms_norm(torch_rms_norm(torch_norms[2].float(), w) @ torch_mm3_b.float(), w),
-            rms3c.output_tensors[0],
+            out_rms3c,
             label="RMS->MM->RMS",
         )
 
         g_stem = torch_rms_norm(torch_stem_in.float(), w)
-        check_pcc(torch_rms_norm(g_stem, w), br_a.output_tensors[0], label="tree A")
-        check_pcc(torch_rms_norm(g_stem, w), br_b.output_tensors[0], label="tree B")
+        check_pcc(torch_rms_norm(g_stem, w), out_br_a, label="tree A")
+        check_pcc(torch_rms_norm(g_stem, w), out_br_b, label="tree B")
 
         check_pcc(torch_mm2_a @ torch_mm2_b, mm2.output_tensors[0], pcc=0.99, label="MM2")
         check_pcc(torch_rms_norm(torch_norms[3].float(), w), single.output_tensors[0], pcc=0.99, label="single RMS")
@@ -1246,6 +1310,7 @@ class TestParallelExecution:
 class TestSequentialParallelAPI:
     """API surface tests for Sequential/Parallel."""
 
+    @stress_test_program_cache
     def test_sequential_inline(self, device):
         """Sequential(rms, rms).run()."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -1265,6 +1330,7 @@ class TestSequentialParallelAPI:
         )
         check_pcc(golden, out, pcc=0.99, label="inline")
 
+    @stress_test_program_cache
     def test_sequential_add_method(self, device):
         """s.add(op) matches inline construction."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -1285,6 +1351,7 @@ class TestSequentialParallelAPI:
         )
         check_pcc(golden, out, pcc=0.99, label="add method")
 
+    @stress_test_program_cache
     def test_sequential_branching(self, device):
         """Sequential(stem, Parallel(a, b)).run() — API-level branching."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -1431,6 +1498,7 @@ class TestCrossOpCompilation:
             pytest.param(("matmul", "layernorm", "batchnorm", "untilize"), id="4phase_max"),
         ],
     )
+    @stress_test_program_cache
     def test_cross_op_compilation(self, device, pair):
         """Parametrized cross-op compilation test."""
         phases = []
@@ -1449,6 +1517,7 @@ class TestCrossOpCompilation:
 class TestDocExample:
     """Integration test matching the example in op_fusion.md."""
 
+    @stress_test_program_cache
     def test_matmul_slice_ln_rms_tree(self, device):
         """Doc-example: matmul -> Parallel(slice->Parallel(matmul, LN), slice->RMS).
 
@@ -1518,21 +1587,20 @@ class TestDocExample:
                 Sequential(op3, op6),
             ),
         )
-        fused.run()
+        [out_op4, out_op5, out_op6] = fused.run()
 
-        # Golden
         g1 = torch.matmul(torch_a.float(), torch_b1.float())
         g_left = g1[:, :, :, :128]
         g_right = g1[:, :, :, 128:]
 
-        check_pcc(torch.matmul(g_left, torch_b4.float()), op4.output_tensors[0], pcc=0.97, label="op4 matmul")
+        check_pcc(torch.matmul(g_left, torch_b4.float()), out_op4, pcc=0.97, label="op4 matmul")
         check_pcc(
             torch_layer_norm(g_left, torch_ln_w.float(), torch_ln_bias.float()),
-            op5.output_tensors[0],
+            out_op5,
             pcc=0.97,
             label="op5 LN",
         )
-        check_pcc(torch_rms_norm(g_right, torch_rms_w.float()), op6.output_tensors[0], pcc=0.97, label="op6 RMS")
+        check_pcc(torch_rms_norm(g_right, torch_rms_w.float()), out_op6, pcc=0.97, label="op6 RMS")
 
 
 # ===========================================================================
@@ -1541,32 +1609,312 @@ class TestDocExample:
 
 
 class TestDeepSeekV3:
-    """DeepSeek V3 MLA block patterns using Parallel fusion."""
+    """DeepSeek V3 MLA Q/KV RMS norms — inline and persistent modes.
 
-    def test_q_kv_rms_norm(self, device):
-        """Parallel Q/KV RMS norms from the DeepSeek V3 MLA block.
+    Both tests use the same shapes/configs as MLA1D decode:
+      Q:  [1,1,32,1536] width-sharded 4×4 (0,0)-(3,3), shard [32,96]
+      KV: [1,1,32,512]  width-sharded 2×8 (5,0)-(6,7), shard [32,32]
+    """
 
-        Q norm: 16 cores (0,0)-(3,3), width-sharded, shard [32, 96], total width 1536
-        KV norm: 16 cores (5,0)-(6,7), width-sharded, shard [32, 32], total width 512
+    @staticmethod
+    def _setup_mla_norm_configs(device):
+        """Shared setup: DeepSeek V3 MLA decode shapes, sharding, weights, configs."""
+        from models.demos.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
+        from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC
+
+        q_lora_rank = 1536
+        kv_lora_rank = 512
+        bsz = 32
+        shard_height = ttnn.core.roundup(bsz, ttnn.TILE_SIZE)
+        cc = COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC
+
+        q_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        q_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(q_cores, [shard_height, q_lora_rank // 16], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        q_pc = RMSNormBase._get_pc(q_mem)
+
+        kv_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7))})
+        kv_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(kv_cores, [shard_height, kv_lora_rank // 16], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        kv_pc = RMSNormBase._get_pc(kv_mem)
+
+        torch_q_w = torch.rand(1, 1, 1, q_lora_rank, dtype=torch.bfloat16)
+        torch_kv_w = torch.rand(1, 1, 1, kv_lora_rank, dtype=torch.bfloat16)
+        tt_q_w = ttnn.from_torch(torch_q_w, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_kv_w = ttnn.from_torch(torch_kv_w, device=device, layout=ttnn.TILE_LAYOUT)
+
+        return dict(
+            q_lora_rank=q_lora_rank,
+            kv_lora_rank=kv_lora_rank,
+            bsz=bsz,
+            q_cores=q_cores,
+            kv_cores=kv_cores,
+            q_mem=q_mem,
+            kv_mem=kv_mem,
+            q_pc=q_pc,
+            kv_pc=kv_pc,
+            cc=cc,
+            torch_q_w=torch_q_w,
+            torch_kv_w=torch_kv_w,
+            tt_q_w=tt_q_w,
+            tt_kv_w=tt_kv_w,
+        )
+
+    @stress_test_program_cache
+    def test_q_kv_rms_norm_inline(self, device):
+        """Inline mode: fresh descriptors + Parallel each iteration."""
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        s = self._setup_mla_norm_configs(device)
+
+        for iteration in range(3):
+            torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
+            torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)
+            tt_q = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["q_mem"])
+            tt_kv = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["kv_mem"])
+
+            q_desc = rms_norm.rms_norm(
+                tt_q,
+                epsilon=1e-6,
+                weight=s["tt_q_w"],
+                memory_config=s["q_mem"],
+                core_range_set=s["q_cores"],
+                program_config=s["q_pc"],
+                compute_kernel_config=s["cc"],
+            )
+            kv_desc = rms_norm.rms_norm(
+                tt_kv,
+                epsilon=1e-6,
+                weight=s["tt_kv_w"],
+                memory_config=s["kv_mem"],
+                core_range_set=s["kv_cores"],
+                program_config=s["kv_pc"],
+                compute_kernel_config=s["cc"],
+            )
+
+            out_q, out_kv = Parallel(q=q_desc, kv=kv_desc).run()
+
+            check_pcc(
+                torch_rms_norm(torch_q_in.float(), s["torch_q_w"].float(), eps=1e-6),
+                out_q,
+                pcc=0.98,
+                label=f"Q inline iter {iteration}",
+            )
+            check_pcc(
+                torch_rms_norm(torch_kv_in.float(), s["torch_kv_w"].float(), eps=1e-6),
+                out_kv,
+                pcc=0.98,
+                label=f"KV inline iter {iteration}",
+            )
+
+    @stress_test_program_cache
+    def test_q_kv_rms_norm_persistent(self, device):
+        """Persistent mode: lazy-init Parallel, update() + run() each iteration.
+
+        Matches MLA1D decode: reuse branch :class:`OpDescriptor` objects with
+        :meth:`~OpDescriptor.update`. Fusion program reuse comes from ``_BUILD_CACHE``;
+        no ``FusedOp`` is retained on the container between calls.
         """
         from models.experimental.ops.descriptors.fusion import Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        torch.manual_seed(42)
+        s = self._setup_mla_norm_configs(device)
 
-        # --- Q norm setup ---
-        q_cores = cores(0, 0, 3, 3)  # 4x4 = 16 cores
-        q_shard_w = 96
-        q_total_w = 16 * q_shard_w  # 1536
+        cfg = {
+            "q_norm": dict(epsilon=1e-6, weight=s["tt_q_w"], compute_kernel_config=s["cc"]),
+            "kv_norm": dict(epsilon=1e-6, weight=s["tt_kv_w"], compute_kernel_config=s["cc"]),
+            "fused_qkv_norm": None,
+        }
 
-        torch_q_input = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
-        torch_q_weight = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
+        for i in range(10):
+            torch.manual_seed(i)
+            torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
+            torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)
+            tt_q = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["q_mem"])
+            tt_kv = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["kv_mem"])
 
-        q_shard_spec = ttnn.ShardSpec(q_cores, [32, q_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+            fused = cfg["fused_qkv_norm"]
+            if fused is None:
+                fused = Parallel(
+                    q=rms_norm.rms_norm(program_config=s["q_pc"], **cfg["q_norm"]),
+                    kv=rms_norm.rms_norm(program_config=s["kv_pc"], **cfg["kv_norm"]),
+                )
+                cfg["fused_qkv_norm"] = fused
+            fused.q.update(input_tensor=tt_q)
+            fused.kv.update(input_tensor=tt_kv)
+            out_q, out_kv = fused.run()
+
+            check_pcc(
+                torch_rms_norm(torch_q_in.float(), s["torch_q_w"].float(), eps=1e-6),
+                out_q,
+                pcc=0.98,
+                label=f"Q persistent iter {i}",
+            )
+            check_pcc(
+                torch_rms_norm(torch_kv_in.float(), s["torch_kv_w"].float(), eps=1e-6),
+                out_kv,
+                pcc=0.98,
+                label=f"KV persistent iter {i}",
+            )
+
+    def test_q_kv_rms_norm_profile(self, device):
+        """Profile fused-inline vs fused-persistent vs unfused (n trials × n iters)."""
+        import statistics
+        import time
+
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        s = self._setup_mla_norm_configs(device)
+        # Number of trials and iterations reduced to 1 for CI efficiency.
+        # For reasonable perf estimates, increase these to e.g. 100.
+        N_TRIALS = 1
+        N_ITERS = 1
+
+        torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
+        torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)
+        tt_q_base = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["q_mem"])
+        tt_kv_base = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["kv_mem"])
+
+        q_norm_kw = dict(epsilon=1e-6, weight=s["tt_q_w"], compute_kernel_config=s["cc"])
+        kv_norm_kw = dict(epsilon=1e-6, weight=s["tt_kv_w"], compute_kernel_config=s["cc"])
+
+        # --- warmup all three paths (2 iters each) so caches are hot ---
+        for _ in range(2):
+            q_d = rms_norm.rms_norm(tt_q_base, program_config=s["q_pc"], **q_norm_kw)
+            kv_d = rms_norm.rms_norm(tt_kv_base, program_config=s["kv_pc"], **kv_norm_kw)
+            Parallel(q=q_d, kv=kv_d).run()
+
+        fused_persistent = Parallel(
+            q=rms_norm.rms_norm(program_config=s["q_pc"], **q_norm_kw),
+            kv=rms_norm.rms_norm(program_config=s["kv_pc"], **kv_norm_kw),
+        )
+        for _ in range(2):
+            fused_persistent.q.update(tt_q_base)
+            fused_persistent.kv.update(tt_kv_base)
+            fused_persistent.run()
+
+        for _ in range(2):
+            ttnn.rms_norm(
+                tt_q_base,
+                weight=s["tt_q_w"],
+                epsilon=1e-6,
+                program_config=s["q_pc"],
+                compute_kernel_config=s["cc"],
+                memory_config=s["q_mem"],
+            )
+            ttnn.rms_norm(
+                tt_kv_base,
+                weight=s["tt_kv_w"],
+                epsilon=1e-6,
+                program_config=s["kv_pc"],
+                compute_kernel_config=s["cc"],
+                memory_config=s["kv_mem"],
+            )
+        ttnn.synchronize_device(device)
+
+        # --- fused inline ---
+        inline_times = []
+        for _ in range(N_TRIALS):
+            t0 = time.perf_counter()
+            for _ in range(N_ITERS):
+                q_d = rms_norm.rms_norm(tt_q_base, program_config=s["q_pc"], **q_norm_kw)
+                kv_d = rms_norm.rms_norm(tt_kv_base, program_config=s["kv_pc"], **kv_norm_kw)
+                Parallel(q=q_d, kv=kv_d).run()
+            ttnn.synchronize_device(device)
+            inline_times.append(time.perf_counter() - t0)
+
+        # --- fused persistent (positional update to match real model usage) ---
+        persistent_times = []
+        for _ in range(N_TRIALS):
+            t0 = time.perf_counter()
+            for _ in range(N_ITERS):
+                fused_persistent.q.update(tt_q_base)
+                fused_persistent.kv.update(tt_kv_base)
+                fused_persistent.run()
+            ttnn.synchronize_device(device)
+            persistent_times.append(time.perf_counter() - t0)
+
+        # --- unfused (two consecutive ttnn.rms_norm) ---
+        unfused_times = []
+        for _ in range(N_TRIALS):
+            t0 = time.perf_counter()
+            for _ in range(N_ITERS):
+                ttnn.rms_norm(
+                    tt_q_base,
+                    weight=s["tt_q_w"],
+                    epsilon=1e-6,
+                    program_config=s["q_pc"],
+                    compute_kernel_config=s["cc"],
+                    memory_config=s["q_mem"],
+                )
+                ttnn.rms_norm(
+                    tt_kv_base,
+                    weight=s["tt_kv_w"],
+                    epsilon=1e-6,
+                    program_config=s["kv_pc"],
+                    compute_kernel_config=s["cc"],
+                    memory_config=s["kv_mem"],
+                )
+            ttnn.synchronize_device(device)
+            unfused_times.append(time.perf_counter() - t0)
+
+        med_inline = statistics.median(inline_times)
+        med_persistent = statistics.median(persistent_times)
+        med_unfused = statistics.median(unfused_times)
+        per_iter_inline_us = med_inline / N_ITERS * 1e6
+        per_iter_persistent_us = med_persistent / N_ITERS * 1e6
+        per_iter_unfused_us = med_unfused / N_ITERS * 1e6
+
+        print(f"\n{'='*70}")
+        print(f"  Q/KV RMS Norm Profile: {N_TRIALS} trials × {N_ITERS} iterations")
+        print(f"{'='*70}")
+        print(f"  {'Mode':<22} {'Median (s)':<14} {'Per-iter (µs)':<16} {'vs unfused':<12}")
+        print(f"  {'-'*22} {'-'*14} {'-'*16} {'-'*12}")
+        print(
+            f"  {'Fused inline':<22} {med_inline:<14.4f} {per_iter_inline_us:<16.1f} {med_unfused/med_inline:<12.2f}x"
+        )
+        print(
+            f"  {'Fused persistent':<22} {med_persistent:<14.4f} {per_iter_persistent_us:<16.1f} {med_unfused/med_persistent:<12.2f}x"
+        )
+        print(f"  {'Unfused (2× rms_norm)':<22} {med_unfused:<14.4f} {per_iter_unfused_us:<16.1f} {'1.00x':<12}")
+        print(f"{'='*70}\n")
+
+
+# ===========================================================================
+# TestPersistentMode
+# ===========================================================================
+
+
+class TestPersistentMode:
+    """End-to-end persistent mode: build once, update() inputs, run() repeatedly."""
+
+    @stress_test_program_cache
+    def test_persistent_parallel_pcc(self, device):
+        """Persistent Parallel Q/KV norms: 20 iterations with different random data.
+
+        Uses the full persistent API: descriptors created without activation,
+        named kwargs on Parallel, update() + run() each iteration.
+        """
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        q_cores = cores(0, 0, 3, 3)
+        kv_cores = cores(5, 0, 6, 7)
+        q_shard_w, kv_shard_w = 96, 32
+        q_total_w, kv_total_w = 16 * q_shard_w, 16 * kv_shard_w
+
         q_mem = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=q_shard_spec,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(q_cores, [32, q_shard_w], ttnn.ShardOrientation.ROW_MAJOR),
         )
         q_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(4, 4),
@@ -1575,33 +1923,10 @@ class TestDeepSeekV3:
             block_w=q_shard_w // 32,
             inplace=False,
         )
-
-        tt_q_input = ttnn.from_torch(torch_q_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
-        tt_q_weight = ttnn.from_torch(torch_q_weight, device=device, layout=ttnn.TILE_LAYOUT)
-
-        q_branch = rms_norm.rms_norm(
-            tt_q_input,
-            epsilon=1e-5,
-            weight=tt_q_weight,
-            memory_config=q_mem,
-            core_range_set=q_cores,
-            program_config=q_pc,
-        )
-
-        # --- KV norm setup ---
-        kv_cores = cores(5, 0, 6, 7)  # 2x8 = 16 cores
-        kv_shard_w = 32
-        kv_total_w = 16 * kv_shard_w  # 512
-
-        torch.manual_seed(123)
-        torch_kv_input = torch.rand(1, 1, 32, kv_total_w, dtype=torch.bfloat16)
-        torch_kv_weight = torch.rand(1, 1, 1, kv_total_w, dtype=torch.bfloat16)
-
-        kv_shard_spec = ttnn.ShardSpec(kv_cores, [32, kv_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
         kv_mem = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=kv_shard_spec,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(kv_cores, [32, kv_shard_w], ttnn.ShardOrientation.ROW_MAJOR),
         )
         kv_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(2, 8),
@@ -1611,34 +1936,321 @@ class TestDeepSeekV3:
             inplace=False,
         )
 
-        tt_kv_input = ttnn.from_torch(torch_kv_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
-        tt_kv_weight = ttnn.from_torch(torch_kv_weight, device=device, layout=ttnn.TILE_LAYOUT)
+        # Persistent setup: weights + descriptors created once (no activation)
+        torch_q_w = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
+        torch_kv_w = torch.rand(1, 1, 1, kv_total_w, dtype=torch.bfloat16)
+        tt_q_w = ttnn.from_torch(torch_q_w, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_kv_w = ttnn.from_torch(torch_kv_w, device=device, layout=ttnn.TILE_LAYOUT)
 
-        kv_branch = rms_norm.rms_norm(
-            tt_kv_input,
+        fused = Parallel(
+            q=rms_norm.rms_norm(
+                weight=tt_q_w,
+                epsilon=1e-5,
+                memory_config=q_mem,
+                core_range_set=q_cores,
+                program_config=q_pc,
+            ),
+            kv=rms_norm.rms_norm(
+                weight=tt_kv_w,
+                epsilon=1e-5,
+                memory_config=kv_mem,
+                core_range_set=kv_cores,
+                program_config=kv_pc,
+            ),
+        )
+
+        # 20 iterations with different random activations
+        for i in range(20):
+            torch.manual_seed(i)
+            torch_q_in = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
+            torch_kv_in = torch.rand(1, 1, 32, kv_total_w, dtype=torch.bfloat16)
+            tt_q_in = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
+            tt_kv_in = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
+
+            fused.q.update(tt_q_in)
+            fused.kv.update(tt_kv_in)
+            [out_q, out_kv] = fused.run()
+
+            check_pcc(
+                torch_rms_norm(torch_q_in.float(), torch_q_w.float()),
+                out_q,
+                pcc=0.98,
+                label=f"Q persistent iter {i}",
+            )
+            check_pcc(
+                torch_rms_norm(torch_kv_in.float(), torch_kv_w.float()),
+                out_kv,
+                pcc=0.98,
+                label=f"KV persistent iter {i}",
+            )
+
+    @stress_test_program_cache
+    def test_persistent_sequential_pcc(self, device):
+        """Persistent Sequential LN→RMS: 10 iterations with different random data.
+
+        Only the first op's activation is updated — the intermediate tensor
+        (LN output → RMS input) is auto-wired via _Placeholder identity.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+
+        cr = cores(0, 0)
+        cc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=False,
+        )
+
+        torch.manual_seed(42)
+        hidden = 128
+        torch_w0 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w1 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        tt_w0 = tt(torch_w0, device)
+        tt_w1 = tt(torch_w1, device)
+
+        # Persistent setup: wire topology via _Placeholder identity
+        ln_desc = layer_norm.layer_norm(
+            weight=tt_w0,
             epsilon=1e-5,
-            weight=tt_kv_weight,
-            memory_config=kv_mem,
-            core_range_set=kv_cores,
-            program_config=kv_pc,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        rms_desc = rms_norm.rms_norm(
+            ln_desc.output_tensors[0],  # _Placeholder — auto-wired by Sequential
+            weight=tt_w1,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        fused = Sequential(ln=ln_desc, rms=rms_desc)
+
+        for i in range(10):
+            torch.manual_seed(i + 100)
+            torch_in = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+            tt_in = tt(torch_in, device)
+
+            # Only update the external input — internal wire handled automatically
+            fused.ln.update(tt_in)
+            [out] = fused.run(results=[rms_desc])
+
+            golden = torch_rms_norm(
+                torch_layer_norm(torch_in.float(), torch_w0.float()),
+                torch_w1.float(),
+            )
+            check_pcc(golden, out, pcc=0.97, label=f"Sequential persistent iter {i}")
+
+    @stress_test_program_cache
+    def test_persistent_binary_tree_inline(self, device):
+        """3-level binary tree (stem→2 mid→4 leaves) using inline descriptors
+        with named kwargs, exercised through stress_test_program_cache.
+
+        Tree (8 cores):
+            RMS [0-7] → RMS [0-3] → RMS [0-1] / RMS [2-3]
+                      → RMS [4-7] → RMS [4-5] / RMS [6-7]
+
+        Uses named kwargs at every level so names are hoisted to top.
+        Verifies PCC on all 4 leaf outputs.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = make_multi_norm_tensors(device)
+        wt = t["tt_weights"]
+
+        def rms(inp, cr, wi):
+            return rms_norm.rms_norm(inp, core_range_set=cr, weight=wt[wi], epsilon=1e-5)
+
+        root = rms(t["tt_input"], cores(0, 0, 7, 0), 0)
+        left = rms(root.output_tensors[0], cores(0, 0, 3, 0), 1)
+        right = rms(root.output_tensors[0], cores(4, 0, 7, 0), 2)
+        ll = rms(left.output_tensors[0], cores(0, 0, 1, 0), 3)
+        lr = rms(left.output_tensors[0], cores(2, 0, 3, 0), 4)
+        rl = rms(right.output_tensors[0], cores(4, 0, 5, 0), 5)
+        rr = rms(right.output_tensors[0], cores(6, 0, 7, 0), 6)
+
+        # Compose topology — matches the doc example pattern
+        fused = Sequential(
+            root=root,
+            branches=Parallel(
+                left_path=Sequential(left=left, leaves=Parallel(ll=ll, lr=lr)),
+                right_path=Sequential(right=right, rms=Parallel(rl=rl, rr=rr)),
+            ),
         )
 
-        # --- Fused parallel norms ---
-        [out_q, out_kv] = Parallel(q_branch, kv_branch).run(results=[q_branch, kv_branch])
+        # Verify all names are hoisted to top level
+        assert hasattr(fused, "root")
+        assert hasattr(fused, "ll")
+        assert hasattr(fused, "rr")
 
-        # --- Verify ---
-        check_pcc(
-            torch_rms_norm(torch_q_input.float(), torch_q_weight.float()),
-            out_q,
-            pcc=0.98,
-            label="Q norm",
+        # Run with explicit results — same as doc example
+        out_ll, out_lr, out_rl, out_rr = fused.run(results=[ll, lr, rl, rr])
+
+        ws = t["torch_weights"]
+        g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
+        g_left = torch_rms_norm(g_root, ws[1].float())
+        g_right = torch_rms_norm(g_root, ws[2].float())
+        goldens = [
+            torch_rms_norm(g_left, ws[3].float()),
+            torch_rms_norm(g_left, ws[4].float()),
+            torch_rms_norm(g_right, ws[5].float()),
+            torch_rms_norm(g_right, ws[6].float()),
+        ]
+        for out, golden, label in zip([out_ll, out_lr, out_rl, out_rr], goldens, ["LL", "LR", "RL", "RR"]):
+            check_pcc(golden, out, label=f"tree {label}")
+
+    @stress_test_program_cache
+    def test_persistent_matmul_deferred(self, device):
+        """Matmul with deferred inputs: build once, update both inputs, run."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        M, K, N = 32, 64, 32
+        torch_a = torch.rand(1, 1, M, K, dtype=torch.bfloat16)
+        torch_b = torch.rand(1, 1, K, N, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT)
+
+        # Inline matmul first (for reference)
+        inline_desc = matmul_desc(tt_a, tt_b)
+        inline_desc.launch()
+        ref_out = ttnn.to_torch(inline_desc.output_tensors[0])
+
+        # Deferred matmul
+        deferred = matmul_desc()
+        assert deferred.program_cache_key is None
+        deferred.update(tt_a, tt_b)
+        assert deferred.program_cache_key is not None
+        deferred.launch()
+        deferred_out = ttnn.to_torch(deferred.output_tensors[0])
+
+        golden = torch_a.float() @ torch_b.float()
+        _, pcc_inline = comp_pcc(golden, ref_out, pcc=0.98)
+        _, pcc_deferred = comp_pcc(golden, deferred_out, pcc=0.98)
+        assert pcc_inline > 0.98, f"Inline matmul PCC: {pcc_inline}"
+        assert pcc_deferred > 0.98, f"Deferred matmul PCC: {pcc_deferred}"
+
+    @stress_test_program_cache
+    def test_persistent_sequential_3chain_update_weight(self, device):
+        """3-phase Sequential LN→RMS→LN with weight update on the middle op.
+
+        Tests updating a non-first input (weight at index 1) on an intermediate
+        op in a persistent Sequential chain.
+
+        Wiring:
+            ln1.input  = external (user updates)
+            rms.input  = ln1.output (auto-wired via _Placeholder)
+            rms.weight = external (user updates each iteration)
+            ln2.input  = rms.output (auto-wired via _Placeholder)
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+
+        cr = cores(0, 0)
+        cc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=False,
         )
-        check_pcc(
-            torch_rms_norm(torch_kv_input.float(), torch_kv_weight.float()),
-            out_kv,
-            pcc=0.98,
-            label="KV norm",
+        hidden = 128
+        torch_w0 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w2 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        tt_w0 = tt(torch_w0, device)
+        tt_w2 = tt(torch_w2, device)
+
+        # Persistent setup: wire internal connections via _Placeholder.
+        # Pass an initial weight to rms — it gets replaced each iteration.
+        torch_w1_init = torch.rand(1, 1, 1, hidden, dtype=torch.bfloat16) + 0.5
+        tt_w1_init = tt(torch_w1_init, device)
+
+        ln1 = layer_norm.layer_norm(
+            weight=tt_w0,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
         )
+        rms_op = rms_norm.rms_norm(
+            ln1.output_tensors[0],  # auto-wired from ln1
+            weight=tt_w1_init,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms_op.output_tensors[0],  # auto-wired from rms
+            weight=tt_w2,
+            epsilon=1e-5,
+            core_range_set=cr,
+            compute_kernel_config=cc,
+        )
+        fused = Sequential(ln1=ln1, rms=rms_op, ln2=ln2)
+
+        for i in range(5):
+            torch.manual_seed(i + 200)
+            torch_in = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+            # Different weight each iteration for the middle op
+            torch_w1 = torch.rand(1, 1, 1, hidden, dtype=torch.bfloat16) + 0.5
+            tt_in = tt(torch_in, device)
+            tt_w1 = tt(torch_w1, device)
+
+            fused.ln1.update(tt_in)
+            fused.rms.update(weight=tt_w1)  # update non-first input (index 1) by name
+            [out] = fused.run(results=[ln2])
+
+            g = torch_layer_norm(torch_in.float(), torch_w0.float())
+            g = torch_rms_norm(g, torch_w1.float())
+            g = torch_layer_norm(g, torch_w2.float())
+            check_pcc(g, out, pcc=0.97, label=f"3chain weight-update iter {i}")
+
+    @stress_test_program_cache
+    def test_persistent_stem_parallel_branches(self, device):
+        """Persistent Sequential(stem, Parallel(a, b)) with auto-wired branches.
+
+        Wiring:
+            stem.input = external (user updates)
+            a.input    = stem.output (auto-wired via _Placeholder)
+            b.input    = stem.output (auto-wired via _Placeholder)
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = make_multi_norm_tensors(device)
+        wt = t["tt_weights"]
+        ws = t["torch_weights"]
+
+        # Persistent: stem deferred, branches auto-wired
+        stem = rms_norm.rms_norm(
+            core_range_set=cores(0, 0, 7, 0),
+            weight=wt[0],
+            epsilon=1e-5,
+        )
+        branch_a = rms_norm.rms_norm(
+            stem.output_tensors[0],  # auto-wired from stem
+            core_range_set=cores(0, 0, 3, 0),
+            weight=wt[1],
+            epsilon=1e-5,
+        )
+        branch_b = rms_norm.rms_norm(
+            stem.output_tensors[0],  # auto-wired from stem (same _Placeholder)
+            core_range_set=cores(4, 0, 7, 0),
+            weight=wt[2],
+            epsilon=1e-5,
+        )
+        fused = Sequential(
+            stem=stem,
+            branches=Parallel(a=branch_a, b=branch_b),
+        )
+
+        for i in range(5):
+            torch.manual_seed(i + 300)
+            torch_in = torch.randn_like(t["torch_input"])
+            tt_in = ttnn.from_torch(torch_in, device=device, layout=ttnn.TILE_LAYOUT)
+
+            fused.stem.update(tt_in)
+            [out_a, out_b] = fused.run()
+
+            g_stem = torch_rms_norm(torch_in.float(), ws[0].float())
+            g_a = torch_rms_norm(g_stem, ws[1].float())
+            g_b = torch_rms_norm(g_stem, ws[2].float())
+            check_pcc(g_a, out_a, pcc=0.98, label=f"branch_a iter {i}")
+            check_pcc(g_b, out_b, pcc=0.98, label=f"branch_b iter {i}")
 
 
 # ===========================================================================
@@ -1655,6 +2267,7 @@ class TestAsymmetricBarrier:
     if the arrive threshold or sync mode dispatch is wrong.
     """
 
+    @stress_test_program_cache
     def test_narrow_stem_wide_branches(self, device):
         """Narrow stem (2 cores) → wide branches (4+4 cores).
 
@@ -1685,6 +2298,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_single_core_stem_wide_branches(self, device):
         """Extreme asymmetry: 1-core stem → 4+4 core branches.
 
@@ -1710,6 +2324,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_narrow_wide_repeated_execution(self, device):
         """Narrow→wide with repeated execution to catch stale semaphores.
 
@@ -1736,18 +2351,19 @@ class TestAsymmetricBarrier:
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
 
         for run in range(5):
-            fused.run()
+            [out_a, out_b] = fused.run()
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][1].float()),
-                a.output_tensors[0],
+                out_a,
                 label=f"branch A run {run}",
             )
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][2].float()),
-                b.output_tensors[0],
+                out_b,
                 label=f"branch B run {run}",
             )
 
+    @stress_test_program_cache
     def test_multi_level_narrow_wide(self, device):
         """Narrow stem → mid-width → wide leaves.  Different arrive counts at each transition.
 
@@ -1787,13 +2403,12 @@ class TestAsymmetricBarrier:
                 Sequential(right, Parallel(rl, rr)),
             ),
         )
-        fused.run()
+        outs = fused.run()
 
         ws = t["torch_weights"]
         g_stem = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_stem, ws[1].float())
         g_right = torch_rms_norm(g_stem, ws[2].float())
-        leaves = [ll, lr, rl, rr]
         goldens = [
             torch_rms_norm(g_left, ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
@@ -1801,8 +2416,9 @@ class TestAsymmetricBarrier:
             torch_rms_norm(g_right, ws[6].float()),
         ]
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
-            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
+            check_pcc(goldens[i], outs[i], label=label)
 
+    @stress_test_program_cache
     def test_narrow_deep_left_wide_right(self, device):
         """Narrow stem with asymmetric depth AND width.
 
@@ -1847,6 +2463,7 @@ class TestAsymmetricBarrier:
         )
         check_pcc(torch_rms_norm(g_stem, ws[3].float()), out_right, label="wide right")
 
+    @stress_test_program_cache
     def test_narrow_wide_with_slice(self, device):
         """Narrow stem → wide branches with slice op in one branch.
 
@@ -1883,6 +2500,7 @@ class TestAsymmetricBarrier:
         check_pcc(g_stem[:, :, :, :64], out_a, pcc=0.97, label="A (slice)")
         check_pcc(torch_rms_norm(g_stem, torch_w1.float()), out_b, label="B (RMS)")
 
+    @stress_test_program_cache
     def test_fully_disjoint_parent_children(self, device):
         """Fully disjoint: parent {0,1} → children {2-3, 4-7}.
 
@@ -1912,6 +2530,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_partial_disjoint_one_core_exits(self, device):
         """Partial disjoint: parent {0,1} → child {1-7}.
 
@@ -1940,6 +2559,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
+    @stress_test_program_cache
     def test_disjoint_repeated_execution(self, device):
         """Fully disjoint with repeated execution to catch stale semaphores."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -1961,14 +2581,14 @@ class TestAsymmetricBarrier:
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
 
         for run in range(5):
-            fused.run()
+            [out_a, out_b] = fused.run()
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][1].float()),
-                a.output_tensors[0],
+                out_a,
                 label=f"branch A run {run}",
             )
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][2].float()),
-                b.output_tensors[0],
+                out_b,
                 label=f"branch B run {run}",
             )

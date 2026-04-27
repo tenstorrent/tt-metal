@@ -4,23 +4,36 @@
 #
 # Field descriptions (per model entry):
 #   name:     Display name of model
-#   filename: Prefix for output files
-#   binary:   Name of folder/binary under build directory
-#   args:     List of args passed to model binary
+#   filename: Prefix for output files. Unique identifier. Changing this might affect dashboard.
+#   binary:   Absolute path to the executable or Python script to run
+#   args:     List of arguments passed to the configured executable or script
 
 models:
+# Python Models
   - name: "NanoGPT Shakespeare"
-    filename: "nanogpt"
-    binary: "nano_gpt"
+    filename: "nanogpt_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
-      - "-c"
-      - "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
       - "--track_memory"
 
   - name: "NanoLlama3 Shakespeare"
-    filename: "nanollama"
-    binary: "nano_gpt"
+    filename: "nanollama_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
-      - "-c"
-      - "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
       - "--track_memory"
+
+  - name: "TinyLlama Shakespeare"
+    filename: "tinyllama_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
+      - "--track_memory"
+
+  - name: "Linear Regression"
+    filename: "linear_regression"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"
+    args:
+      - "--track_memory"
+      - "--verbose"
