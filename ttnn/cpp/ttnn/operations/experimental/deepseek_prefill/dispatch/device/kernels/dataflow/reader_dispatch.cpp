@@ -351,7 +351,7 @@ void kernel_main() {
                     uint32_t effective_offset = offsets[routed_expert] + local_offset_delta[routed_expert];
                     local_offset_delta[routed_expert]++;
 
-                    if (effective_offset >= max_dispatched_tokens_per_expert) {
+                    if (effective_offset >= max_dispatch_buffer_token_size) {
                         continue;
                     }
                     auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
@@ -359,8 +359,7 @@ void kernel_main() {
                         has_non_local = true;
                         continue;  // cross-device: sender handles in main routing loop
                     }
-                    auto expert_index_within_chip = (uint32_t)routed_expert % experts_per_chip;
-                    auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + effective_offset;
+                    auto page_idx = effective_offset;
 
                     uint32_t base = 1 + entry_count * 6;
                     rt[base + 0] = t;
