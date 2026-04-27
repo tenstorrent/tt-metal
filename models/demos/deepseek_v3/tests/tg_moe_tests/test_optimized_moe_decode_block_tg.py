@@ -15,10 +15,10 @@ import random
 import pytest
 import torch
 from loguru import logger
+from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -105,12 +105,14 @@ def create_torch_prepared_compute_matmul_weight_tensors(
     torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
 ):
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(
+    torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
         torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
     )
 
     # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
+    torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+        torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+    )
 
     return torch_w0_w1_reordered, torch_w2_reordered
 
