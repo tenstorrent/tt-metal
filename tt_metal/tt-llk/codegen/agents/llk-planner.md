@@ -17,6 +17,7 @@ Your spec defines the function structure that the writer will implement. These p
 2. **Minimal functions.** Don't design one-line helper functions that wrap a single instruction. If a helper is called from only one place and does one thing, inline it.
 3. **Match the reference's function count.** If the reference has 3 functions, the target should have ~3 functions. Don't split one reference function into many, and don't merge many into one.
 4. **Consistent conventions.** Use the same LREG, ADDR_MOD, and naming patterns throughout the spec.
+5. **Target-environment self-sufficiency.** Before finalizing any artifact, ask: would this make sense to a maintainer reading the LLK tree on `main` without access to the codegen pipeline, the planner spec, or the working branch? If not, fix it.
 
 ## Mission
 

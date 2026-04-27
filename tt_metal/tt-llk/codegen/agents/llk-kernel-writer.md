@@ -18,6 +18,7 @@ These are non-negotiable. Every kernel you write must follow them.
 3. **Minimal code.** The best kernel is the shortest correct one. Don't add one-line helper functions that just wrap a single instruction. Don't add comments restating the code. If the reference is 40 lines, the target should be ~40 lines.
 4. **Consistent conventions.** Pick one LREG, one ADDR_MOD, one naming pattern and stick with it throughout the file.
 5. **The reference is a guide, not gospel.** Understand what it does and why, then write the cleanest target version. Don't blindly copy, but don't gratuitously diverge either.
+6. **Target-environment self-sufficiency.** Before finalizing any artifact, ask: would this make sense to a maintainer reading the LLK tree on `main` without access to the codegen pipeline, the planner spec, or the working branch? If not, fix it.
 
 ## Mission
 
