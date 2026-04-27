@@ -161,7 +161,8 @@ ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
     });  // input_grad
 
     // Intermediate CBs (c_24 through c_31)
-    for (uint32_t cb_idx = tt::CBIndex::c_24; cb_idx <= tt::CBIndex::c_31; ++cb_idx) {
+    for (uint8_t cb_idx = static_cast<uint8_t>(tt::CBIndex::c_24); cb_idx <= static_cast<uint8_t>(tt::CBIndex::c_31);
+         ++cb_idx) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = 1 * intermed_tile_size,
             .core_ranges = all_cores,
