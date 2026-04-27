@@ -230,6 +230,132 @@ def get_excluded_arg_keys():
     }
 
 
+# ---------------------------------------------------------------------------
+# Argument normalization — ensure sweep and master traces produce identical
+# argument dicts so that validate_sweep_trace.py can match them directly.
+# ---------------------------------------------------------------------------
+
+# Keys inside tensor descriptors that are topology-dependent or redundant
+# and should be stripped so traces from different mesh configurations compare
+# as equal.
+_TENSOR_NOISE_KEYS = frozenset(
+    {"tensor_placement", "storage_type", "dtype", "shape", "shard_spec"}
+)
+
+# Top-level argument keys that are CCL infrastructure (not part of the
+# mathematical operation configuration) or API-version-specific.
+_INFRA_ARG_KEYS = frozenset(
+    {
+        "multi_device_global_semaphore",
+        "persistent_output_buffer",
+        "subdevice_id",
+        "barrier_semaphore",
+        "chunks_per_sync",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+    }
+)
+
+# Paged SDPA keys that may be present in only one side (master vs sweep)
+# depending on API version.
+_PAGED_SDPA_STRIP_KEYS = frozenset({"attention_sink", "is_causal"})
+
+# Positional-to-keyword remappings for ops whose API changed.
+# All positional args are mapped to their semantic names so that
+# infra keys (persistent_output_buffer, multi_device_global_semaphore)
+# can be stripped by _INFRA_ARG_KEYS after remapping.
+# {op_name: {positional_key: named_key}}
+_POSITIONAL_REMAP = {
+    "ttnn.experimental.all_gather_async": {
+        "arg1": "persistent_output_buffer",
+        "arg2": "dim",
+        "arg3": "multi_device_global_semaphore",
+    },
+    "ttnn.experimental.reduce_scatter_async": {
+        "arg1": "persistent_output_buffer",
+        "arg2": "dim",
+        "arg3": "multi_device_global_semaphore",
+    },
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode": {
+        "arg3": "page_table_tensor",
+    },
+}
+
+# Ops for which API-version-specific keys should be stripped.
+_PAGED_SDPA_OPS = frozenset({
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+})
+
+
+def _is_tensor_descriptor(obj):
+    """Return True if *obj* looks like a serialized tensor descriptor."""
+    if not isinstance(obj, dict):
+        return False
+    return obj.get("type") == "ttnn.Tensor" or (
+        "original_dtype" in obj and "original_shape" in obj
+    )
+
+
+def _strip_tensor_noise(obj):
+    """Recursively strip topology-dependent noise keys from tensor descriptors."""
+    if isinstance(obj, list):
+        return [_strip_tensor_noise(item) for item in obj]
+    if not isinstance(obj, dict):
+        return obj
+    is_tensor = _is_tensor_descriptor(obj)
+    result = {}
+    for k, v in obj.items():
+        # Strip noise keys from tensor descriptors
+        if is_tensor and k in _TENSOR_NOISE_KEYS:
+            continue
+        # Strip "None" string values (json.dump(default=str) converts None→"None")
+        if v == "None":
+            continue
+        # Strip actual None values
+        if v is None:
+            continue
+        result[k] = _strip_tensor_noise(v)
+    return result
+
+
+def normalize_arguments_for_comparison(arguments, op_name):
+    """Normalize operation arguments so master and sweep traces are directly comparable.
+
+    This is called by both the sweep trace generator (generic_ops_tracer.py)
+    and the master trace reconstructor (load_ttnn_ops_data_v2.py) to ensure
+    both sides produce identical argument dicts.
+
+    Normalization steps:
+    1. Remap positional args to named kwargs (so infra keys can be stripped by name)
+    2. Strip CCL infrastructure keys and API-version-specific keys
+    3. Strip None and "None" valued top-level keys
+    4. Strip topology-dependent noise from tensor descriptors
+    """
+    # Step 1: remap positional args → named kwargs FIRST
+    args = dict(arguments)
+    remap = _POSITIONAL_REMAP.get(op_name)
+    if remap:
+        for pos_key, named_key in remap.items():
+            if pos_key in args and named_key not in args:
+                args[named_key] = args.pop(pos_key)
+
+    # Step 2+3+4: filter and clean
+    result = {}
+    for k, v in args.items():
+        # Strip CCL infrastructure keys (now includes remapped positional args)
+        if k in _INFRA_ARG_KEYS:
+            continue
+        # Strip paged SDPA API-version keys
+        if op_name in _PAGED_SDPA_OPS and k in _PAGED_SDPA_STRIP_KEYS:
+            continue
+        # Strip None / "None" top-level values
+        if v is None or v == "None":
+            continue
+        result[k] = _strip_tensor_noise(v)
+
+    return result
+
+
 def get_excluded_operations():
     """Operations to exclude from tracing.
 
@@ -431,6 +557,10 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # Strip Python object memory addresses (e.g. global_semaphore at 0x...)
         # from argument values so they don't pollute deduplication or storage
         _sanitize_object_addresses(arguments)
+
+        # Normalize arguments so sweep traces are directly comparable to
+        # master traces reconstructed from the DB.
+        arguments = normalize_arguments_for_comparison(arguments, operation_name)
 
         result = {
             "operation": operation_name,
