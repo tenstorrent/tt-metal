@@ -654,14 +654,17 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         skip_activation_mcast,
         input_channels_padded);
 
-    // For very narrow output images (small output_width), row-boundary discontinuities in the reader
-    // indices can produce more entries than per_core_out_matrix_height_ntile * TILE_HEIGHT * 2 predicts.
-    // Take the max of the formula (used for L1 estimation) and the actual buffer size so the CB is
-    // always large enough.
-    access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
-        std::max(
+    if (config_tensors_in_dram) {
+        TT_FATAL(
+            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
+                conv_reader_indices_storage.get_buffer()->page_size(),
+            "CB page size {} should be greater than the config tensor page size {}",
             access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
-            static_cast<uint32_t>(conv_reader_indices_storage.get_buffer()->page_size()));
+            conv_reader_indices_storage.get_buffer()->page_size());
+    } else {
+        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
+            conv_reader_indices_storage.get_buffer()->page_size();
+    }
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
 

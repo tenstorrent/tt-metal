@@ -293,12 +293,19 @@ std::vector<CBInfo> get_cb_info(
         .data_format = output_df});
 
     // Reader indices CB
-    cb_info.emplace_back(CBInfo{
-        .name = Conv2dCb::READER_INDICES,
-        .num_pages = 1,
-        .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
-        .is_globally_allocated = !conv_config.config_tensors_in_dram,
-        .data_format = tt::DataFormat::UInt16});
+    // Each block has 2 header entries plus 2 entries per segment; worst case is all output positions in
+    // separate segments → max entries per core = 2*num_blocks + 2*n_positions (always even).
+    {
+        const uint32_t num_act_blocks =
+            pconfig.per_core_out_matrix_height_ntile / block_config.act_block_h_ntiles;
+        const uint32_t n_positions = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
+        cb_info.emplace_back(CBInfo{
+            .name = Conv2dCb::READER_INDICES,
+            .num_pages = 1,
+            .page_size = (2 * num_act_blocks + 2 * n_positions) * sizeof(uint16_t),
+            .is_globally_allocated = !conv_config.config_tensors_in_dram,
+            .data_format = tt::DataFormat::UInt16});
+    }
 
     // L1 scratchpad CB
     cb_info.emplace_back(CBInfo{
