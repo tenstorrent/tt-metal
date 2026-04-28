@@ -24,7 +24,6 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
-from ...utils.tracing import Tracer
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
@@ -152,8 +151,6 @@ class Flux2Pipeline:
                 is_fsdp=self.is_fsdp,
             )
             self.transformers.append(tt_transformer)
-
-        self._step_inner_tracers = [Tracer(self._step_inner, device=device) for device in self._submesh_devices]
 
         self._pos_embed = self._torch_transformer.pos_embed
 
@@ -422,29 +419,24 @@ class Flux2Pipeline:
 
                     tt_timestep_list = []
                     for submesh_device in self._submesh_devices:
-                        tt_timestep = ttnn.full(
-                            [1, 1],
-                            fill_value=t,
-                            layout=ttnn.TILE_LAYOUT,
-                            dtype=ttnn.float32,
-                            device=submesh_device,
+                        tt_timestep = tensor.float32_tensor(
+                            torch.full([1, 1], fill_value=float(t)),
+                            device=None if traced else submesh_device,
                         )
                         tt_timestep_list.append(tt_timestep)
 
-                    reuse_tensors = i > 0 and traced
-
                     tt_latents_step_list = self._step(
                         timestep=tt_timestep_list,
-                        guidance=None if reuse_tensors else tt_guidance_list,
-                        latents=None if reuse_tensors else tt_latents_step_list,
+                        guidance=tt_guidance_list,
+                        latents=tt_latents_step_list,
                         cfg_enabled=False,
-                        prompt_embeds=None if reuse_tensors else tt_prompt_embeds_list,
+                        prompt_embeds=tt_prompt_embeds_list,
                         cfg_scale=1.0,
                         sigma_difference=sigma_difference,
-                        spatial_rope_cos=None if reuse_tensors else tt_spatial_rope_cos_list,
-                        spatial_rope_sin=None if reuse_tensors else tt_spatial_rope_sin_list,
-                        prompt_rope_cos=None if reuse_tensors else tt_prompt_rope_cos_list,
-                        prompt_rope_sin=None if reuse_tensors else tt_prompt_rope_sin_list,
+                        spatial_rope_cos=tt_spatial_rope_cos_list,
+                        spatial_rope_sin=tt_spatial_rope_sin_list,
+                        prompt_rope_cos=tt_prompt_rope_cos_list,
+                        prompt_rope_sin=tt_prompt_rope_sin_list,
                         spatial_sequence_length=spatial_sequence_length,
                         prompt_sequence_length=prompt_sequence_length,
                         traced=traced,
@@ -529,6 +521,7 @@ class Flux2Pipeline:
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         submesh_id: int,
+        traced: bool,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if cfg_enabled and self._parallel_config.cfg_parallel.factor == 1:
             latent = ttnn.concat([latent, latent])
@@ -542,10 +535,9 @@ class Flux2Pipeline:
             prompt_rope=(prompt_rope_cos, prompt_rope_sin),
             spatial_sequence_length=spatial_sequence_length,
             prompt_sequence_length=prompt_sequence_length,
+            traced=traced,
         )
 
-        # Make latents an output, because inputs are copied to the trace region before executing a
-        # trace and might be overwritten during execution.
         return latent, noise_pred
 
     def _step(
@@ -554,14 +546,14 @@ class Flux2Pipeline:
         cfg_enabled: bool,
         cfg_scale: float,
         sigma_difference: float,
-        latents: list[ttnn.Tensor] | None,
+        latents: list[ttnn.Tensor],
         timestep: list[ttnn.Tensor],
-        guidance: list[ttnn.Tensor] | None,
-        prompt_embeds: list[ttnn.Tensor] | None,
-        spatial_rope_cos: list[ttnn.Tensor] | None,
-        spatial_rope_sin: list[ttnn.Tensor] | None,
-        prompt_rope_cos: list[ttnn.Tensor] | None,
-        prompt_rope_sin: list[ttnn.Tensor] | None,
+        guidance: list[ttnn.Tensor],
+        prompt_embeds: list[ttnn.Tensor],
+        spatial_rope_cos: list[ttnn.Tensor],
+        spatial_rope_sin: list[ttnn.Tensor],
+        prompt_rope_cos: list[ttnn.Tensor],
+        prompt_rope_sin: list[ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         traced: bool,
@@ -572,21 +564,20 @@ class Flux2Pipeline:
         noise_pred_list = []
 
         for submesh_id in range(len(self._submesh_devices)):
-            inner = self._step_inner_tracers[submesh_id] if traced else self._step_inner
-
-            latent, noise_pred = inner(
+            latent, noise_pred = self._step_inner(
                 cfg_enabled=cfg_enabled,
-                latent=latents[submesh_id] if latents is not None else None,
-                prompt=prompt_embeds[submesh_id] if prompt_embeds is not None else None,
+                latent=latents[submesh_id],
+                prompt=prompt_embeds[submesh_id],
                 timestep=timestep[submesh_id],
-                guidance=guidance[submesh_id] if guidance is not None else None,
-                spatial_rope_cos=spatial_rope_cos[submesh_id] if spatial_rope_cos is not None else None,
-                spatial_rope_sin=spatial_rope_sin[submesh_id] if spatial_rope_sin is not None else None,
-                prompt_rope_cos=prompt_rope_cos[submesh_id] if prompt_rope_cos is not None else None,
-                prompt_rope_sin=prompt_rope_sin[submesh_id] if prompt_rope_sin is not None else None,
+                guidance=guidance[submesh_id],
+                spatial_rope_cos=spatial_rope_cos[submesh_id],
+                spatial_rope_sin=spatial_rope_sin[submesh_id],
+                prompt_rope_cos=prompt_rope_cos[submesh_id],
+                prompt_rope_sin=prompt_rope_sin[submesh_id],
                 spatial_sequence_length=spatial_sequence_length,
                 prompt_sequence_length=prompt_sequence_length,
                 submesh_id=submesh_id,
+                traced=traced,
             )
 
             latents_out.append(latent)
