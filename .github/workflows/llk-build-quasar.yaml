@@ -107,5 +107,6 @@ jobs:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
           check_name: Quasar Compile Tests
           detailed_summary: true
+          job_summary: false
           include_passed: true
           fail_on_failure: false
