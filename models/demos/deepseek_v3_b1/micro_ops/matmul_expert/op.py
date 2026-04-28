@@ -360,13 +360,20 @@ def _build_program_for_device(
     # [num_active_experts * dram_per_core_n, tile_w] so the silu post-pass can
     # treat all expert outputs as ONE tile (single copy_tile / silu / pack_tile).
     cb_out_silu = 7
+    # cb_internal_acc: aliases cb_out's L1 region. The kernel routes per-expert
+    # cb_reserve_back/cb_push_back/cb_wait_front/cb_pop_front through this CB so
+    # the wraparound bookkeeping doesn't update cb_out's metadata. Consumers of
+    # cb_out (eltwise_add downstream) only see a single cb_push_back at the very
+    # end (after the gather sync) and so cannot observe transient state.
+    cb_internal_acc = 8
 
     # CB descriptors.
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
     cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_tensor)
     cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_tensor)
-    cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc]
+    cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_internal_acc, out_tensor)
+    cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc, cb_internal_acc_desc]
     if sram_out_tensor is not None:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(cb_out_sram, sram_out_tensor))
 
@@ -508,6 +515,9 @@ def _build_program_for_device(
         # TRISC inc(1) once after the per-expert accum loop, NCRISC spins on
         # load >= 1 then dec(1). See kernel hpp for full rationale.
         ("gather_sync_sem_addr", gather_sync_sem_addr),
+        # cb_internal_acc: aliases cb_out's L1; per-expert push/pop bookkeeping
+        # routes through it so cb_out's metadata only updates once at the end.
+        ("cb_internal_acc", cb_internal_acc),
     ]
 
     # Per-core descriptors.

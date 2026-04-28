@@ -193,6 +193,10 @@ class _MoeRoutedExpertContext:
     down_proj_cb_in1: int
     down_proj_cb_out: int
     down_proj_cb_fmt: int
+    # down_proj internal accumulation CB (aliases down_proj_cb_out's L1 region).
+    # Per-expert push/pop bookkeeping routes through this so cb_out's metadata
+    # only updates once at end. Used only by down_proj (the accum-experts proj).
+    down_proj_cb_internal_acc: int
     add_cb_in0: int
     add_cb_in1: int
     add_cb_out: int
@@ -1151,6 +1155,13 @@ class MoeRoutedExpertOp:
         down_proj_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         down_proj_cb_out = cb_id_context.get_cb_id(data_format, TD_1x32)
         residual_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # down_proj internal accumulation CB. Aliases down_proj_cb_out's L1 region;
+        # the kernel routes per-expert push/pop through it so cb_out's metadata only
+        # updates once at the end (after the gather sync). Eltwise_add waits on
+        # cb_out → cannot observe transient per-expert state. Gate/up don't accum so
+        # they reuse their cb_out for the kernel template's cb_internal_acc CT arg
+        # slot (constexpr-eliminated, never accessed).
+        down_proj_cb_internal_acc = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # EltwiseMul uses 1x32 CBs directly (no 16x16 alias needed).
         # mul_cb_in0/in1 reuse the existing up_proj/gate_proj output CBs so their
@@ -1842,6 +1853,7 @@ class MoeRoutedExpertOp:
             down_proj_mcast_dst_cb=down_proj_mcast_dst_cb,
             down_proj_cb_in1=down_proj_cb_in1,
             down_proj_cb_out=down_proj_cb_out,
+            down_proj_cb_internal_acc=down_proj_cb_internal_acc,
             add_cb_in0=add_cb_in0,
             add_cb_in1=add_cb_in1,
             add_cb_out=add_cb_out,
@@ -2036,6 +2048,9 @@ class MoeRoutedExpertOp:
             ("gate_proj_index_offset", 0),
             ("gate_proj_gather_to_next", ctx.gate_proj_params["gather_to_next"]),
             ("gate_proj_gather_sync_sem_addr", ctx.gate_proj_params["gather_sync_sem_addr"]),
+            # gate_proj is non-accum — kernel constexpr-eliminates the cb_internal_acc
+            # access, so we just pass cb_out's id to satisfy the template.
+            ("gate_proj_cb_internal_acc", ctx.gate_proj_cb_out),
             # Physical CB base address — used as CBIn1ResetAddr template param so the
             # kernel's software write-pointer wrap aligns with the HW CB's physical
             # wrap boundary across sequential matmuls sharing cb_in1 (GP → UP).
@@ -2072,6 +2087,8 @@ class MoeRoutedExpertOp:
             ("up_proj_index_offset", 0),
             ("up_proj_gather_to_next", ctx.up_proj_params["gather_to_next"]),
             ("up_proj_gather_sync_sem_addr", ctx.up_proj_params["gather_sync_sem_addr"]),
+            # up_proj is non-accum — same as gate_proj, pass cb_out as a placeholder.
+            ("up_proj_cb_internal_acc", ctx.up_proj_cb_mm_out),
             # down_proj MatmulExpertCompressedDRAM reader
             ("down_proj_cb_in0", ctx.down_proj_cb_in0),
             ("down_proj_cb_in1", ctx.down_proj_cb_in1),
@@ -2103,6 +2120,7 @@ class MoeRoutedExpertOp:
             ("down_proj_index_offset", 0),
             ("down_proj_gather_to_next", ctx.down_proj_params["gather_to_next"]),
             ("down_proj_gather_sync_sem_addr", ctx.down_proj_params["gather_sync_sem_addr"]),
+            ("down_proj_cb_internal_acc", ctx.down_proj_cb_internal_acc),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -2284,6 +2302,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_cores_per_bank", ctx.gate_proj_params["cores_per_bank"]),
             ("gate_proj_gather_to_next", ctx.gate_proj_params["gather_to_next"]),
             ("gate_proj_gather_sync_sem_addr", ctx.gate_proj_params["gather_sync_sem_addr"]),
+            ("gate_proj_cb_internal_acc", ctx.gate_proj_cb_out),
             # Required for MatmulExpertCompressedDRAM ResetCBIn1 template param (referenced in moe_kernel.cpp outer scope)
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             # up_proj MatmulExpertCompressedDRAM compute — shares weight CB with gate_proj
@@ -2318,6 +2337,7 @@ class MoeRoutedExpertOp:
             ("up_proj_cores_per_bank", ctx.up_proj_params["cores_per_bank"]),
             ("up_proj_gather_to_next", ctx.up_proj_params["gather_to_next"]),
             ("up_proj_gather_sync_sem_addr", ctx.up_proj_params["gather_sync_sem_addr"]),
+            ("up_proj_cb_internal_acc", ctx.up_proj_cb_mm_out),
             # Mul compute
             ("mul_cb_in0", ctx.mul_cb_in0),
             ("mul_cb_in1", ctx.mul_cb_in1),
@@ -2358,6 +2378,7 @@ class MoeRoutedExpertOp:
             ("down_proj_cores_per_bank", ctx.down_proj_params["cores_per_bank"]),
             ("down_proj_gather_to_next", ctx.down_proj_params["gather_to_next"]),
             ("down_proj_gather_sync_sem_addr", ctx.down_proj_params["gather_sync_sem_addr"]),
+            ("down_proj_cb_internal_acc", ctx.down_proj_cb_internal_acc),
             # Required by decoder_block_kernel.cpp's DRAMStreamingMatmul CBIn1ResetAddr template param
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Shared matmul-expert compute args (index_offset: 0 for TP8 all-device broadcast)
@@ -2436,6 +2457,7 @@ class MoeRoutedExpertOp:
             ctx.down_proj_mcast_params["dst_cb_descriptor"],
             ctx.down_proj_params["cb_in1_descriptor"],
             ctx.down_proj_params["cb_out_descriptor"],
+            ctx.down_proj_params["cb_internal_acc_descriptor"],
             ctx.add_params["cb_in0_descriptor"],
             ctx.add_params["cb_in1_descriptor"],
             ctx.add_params["cb_out_descriptor"],
@@ -4150,6 +4172,25 @@ class MoeOp:
         cb19_desc.format_descriptors = [cb19_fmt]
         routed_ctx.down_proj_params["cb_out_descriptor"] = cb19_desc
         kv_offset += cb19_total_size
+
+        # down_proj_cb_internal_acc: aliases CB 19's L1 region (no offset advance —
+        # same physical L1 as down_proj_cb_out). The kernel routes per-expert
+        # push/pop bookkeeping through this CB so cb_out's metadata only updates
+        # once at the end (after the gather sync), eliminating the eltwise_add race.
+        cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            routed_ctx.down_proj_cb_internal_acc,
+            kv_buf,
+            address_offset=cb19_offset,
+            total_size=cb19_total_size,
+        )
+        cb_internal_acc_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=routed_ctx.down_proj_cb_internal_acc,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        cb_internal_acc_desc.format_descriptors = [cb_internal_acc_fmt]
+        routed_ctx.down_proj_params["cb_internal_acc_descriptor"] = cb_internal_acc_desc
 
         # Routing-only CBs (expert_scale, scalar working buffer)
         if routed_ctx.enable_routing:
