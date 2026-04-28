@@ -14,20 +14,21 @@ import torch
 import ttnn
 
 
+# Shapes to test - includes edge cases that trigger padding bugs
+TEST_SHAPES = [
+    [32, 32],  # Simple tile-aligned
+    [8, 1, 32],  # Bug case: middle dim < tile height
+    [1, 8, 32],  # Batch = 1, height < tile
+    [1, 1, 32, 64],  # 4D with small batch/channel
+    [64, 64],  # Multiple tiles
+    [33, 33],  # Non-tile-aligned (will be padded)
+]
+
+
 class TestTensorRepr:
     """Tests for tensor repr/to_string functionality."""
 
-    @pytest.mark.parametrize(
-        "shape",
-        [
-            [32, 32],  # Simple tile-aligned
-            [8, 1, 32],  # Bug case: middle dim < tile height
-            [1, 8, 32],  # Batch = 1, height < tile
-            [1, 1, 32, 64],  # 4D with small batch/channel
-            [64, 64],  # Multiple tiles
-            [33, 33],  # Non-tile-aligned (will be padded)
-        ],
-    )
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
     @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
     @pytest.mark.parametrize("on_device", [False, True])
     def test_repr_no_spurious_zeros(self, device, shape, layout, on_device):
@@ -73,14 +74,7 @@ class TestTensorRepr:
             f"repr:\n{repr_str[:500]}"
         )
 
-    @pytest.mark.parametrize(
-        "shape",
-        [
-            [32, 32],  # Simple tile-aligned
-            [8, 1, 32],  # Bug case: middle dim < tile height
-            [1, 1, 32, 64],  # 4D with small batch/channel
-        ],
-    )
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
     @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
     def test_repr_different_dtypes(self, device, shape, dtype):
         """Test repr works for different data types."""
@@ -104,14 +98,7 @@ class TestTensorRepr:
         assert torch.allclose(result, data, rtol=0.01, atol=0.01)
         assert "0.0000" not in repr_str
 
-    @pytest.mark.parametrize(
-        "shape",
-        [
-            [32, 32],  # Simple tile-aligned
-            [8, 1, 32],  # Bug case: middle dim < tile height
-            [1, 8, 32],  # Batch = 1, height < tile
-        ],
-    )
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
     @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
     def test_repr_cpu_tensor(self, shape, layout):
         """Test repr for CPU-only tensor (no device)."""
@@ -127,14 +114,7 @@ class TestTensorRepr:
         assert torch.allclose(result, data, rtol=0.01, atol=0.01)
         assert "0.0000" not in repr_str
 
-    @pytest.mark.parametrize(
-        "shape",
-        [
-            [32, 32],  # Simple tile-aligned
-            [8, 1, 32],  # Bug case: middle dim < tile height
-            [1, 1, 32, 64],  # 4D with small batch/channel
-        ],
-    )
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
     @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
     def test_repr_different_memory_configs(self, device, shape, memory_config):
         """Test repr works for different memory configurations."""
