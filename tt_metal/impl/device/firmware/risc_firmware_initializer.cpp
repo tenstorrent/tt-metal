@@ -378,6 +378,100 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             }
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channels rebooted; relay should be restored.");
 
+            // FIX AQ (#42429): Secondary poll of edm_status_address after the FIX AR heartbeat
+            // poll — closes the race between "heartbeat incrementing" and "UMD relay has written
+            // its sentinel (0x49706550) to edm_status_address (0x18070)".
+            //
+            // Root cause: the BRISC hardware reset ROM writes 0x49705180 to L1 address 0x18070
+            // (edm_status_address) as a postcode during power-on init.  The FIX AR heartbeat
+            // poll (at address 0x1F80) exits as soon as the heartbeat counter changes — which
+            // can happen a few milliseconds BEFORE the UMD relay firmware overwrites 0x18070
+            // with its "ready" sentinel 0x49706550.  If the NEXT process's
+            // terminate_stale_erisc_routers() reads 0x18070 during this narrow window it sees
+            // 0x49705180, classifies ALL channels as corrupt, and initializes fabric in degraded
+            // mode — cascading into a 45-second test timeout.
+            //
+            // Fix: poll each MMIO active ETH channel's edm_status_address until the value is
+            // no longer 0x49705180 (ROM postcode).  0x49706550 (UMD relay sentinel) and
+            // 0x00000000 (clean) are both safe values for the next session.  Any other non-zero
+            // value is also fine (e.g. EDMStatus enum values from a prior session).  The
+            // timeout is kept short (1 s) since the heartbeat poll already waited up to 5 s —
+            // this is just waiting for the final few ms of UMD relay startup.
+            if (get_control_plane_) {
+                try {
+                    const auto& fabric_ctx = this->get_control_plane_().get_fabric_context();
+                    const auto& builder_ctx = fabric_ctx.get_builder_context();
+                    const auto edm_status_addr_aq =
+                        builder_ctx.get_fabric_router_sync_address_and_status().first;
+                    constexpr uint32_t kRomPostcode = 0x49705180u;
+                    constexpr int kEdmStatusPollMs = 1000;
+                    constexpr auto kEdmStatusPollInterval = std::chrono::milliseconds(5);
+                    struct EdmPollState {
+                        tt_cxy_pair target;
+                        bool ready = false;
+                    };
+                    std::vector<EdmPollState> edm_states;
+                    for (const tt::ChipId aq_mmio_id : mmio_ids_set) {
+                        for (const auto& aq_logical_core :
+                             this->get_control_plane_().get_active_ethernet_cores(aq_mmio_id)) {
+                            CoreCoord aq_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                aq_mmio_id, aq_logical_core, CoreType::ETH);
+                            edm_states.push_back({tt_cxy_pair(aq_mmio_id, aq_virt), false});
+                        }
+                    }
+                    const auto aq_start = std::chrono::steady_clock::now();
+                    while (true) {
+                        bool all_clear = true;
+                        for (auto& es : edm_states) {
+                            if (es.ready) continue;
+                            uint32_t edm_val = 0;
+                            try {
+                                cluster_.read_reg(&edm_val, es.target, edm_status_addr_aq);
+                            } catch (...) {
+                                es.ready = true;  // read failed — treat as clear
+                                continue;
+                            }
+                            if (edm_val != kRomPostcode) {
+                                es.ready = true;
+                            } else {
+                                all_clear = false;
+                            }
+                        }
+                        if (all_clear) break;
+                        const auto aq_elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - aq_start)
+                                .count();
+                        if (aq_elapsed_ms >= kEdmStatusPollMs) break;
+                        std::this_thread::sleep_for(kEdmStatusPollInterval);
+                    }
+                    for (const auto& es : edm_states) {
+                        if (!es.ready) {
+                            uint32_t final_val = 0;
+                            try { cluster_.read_reg(&final_val, es.target, edm_status_addr_aq); } catch (...) {}
+                            log_warning(
+                                tt::LogAlways,
+                                "teardown: FIX AQ — ETH core {} edm_status_address still 0x{:08x} "
+                                "(ROM postcode 0x49705180) after {}ms; next session may see corrupt L1. "
+                                "(#42429 FIX AQ)",
+                                es.target.str(),
+                                final_val,
+                                kEdmStatusPollMs);
+                        }
+                    }
+                    log_info(
+                        tt::LogAlways,
+                        "teardown: FIX AQ — edm_status_address sentinel poll complete (Step 2 path).");
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AQ — edm_status_address poll threw: {}; proceeding.",
+                        e.what());
+                } catch (...) {
+                    log_warning(tt::LogAlways, "teardown: FIX AQ — edm_status_address poll threw unknown; proceeding.");
+                }
+            }
+
             // FIX AY (#42429): Deferred non-MMIO ETH ERISC reset via restored relay.
             //
             // Root cause of second-session hang (run 25040706453):
@@ -708,6 +802,83 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 }
             }
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channel reset complete.");
+
+            // FIX AQ (#42429): Secondary edm_status_address sentinel poll — same race as in
+            // Step 2 (see comment above), applied to the Step 5 (timeout-only) path.
+            if (get_control_plane_) {
+                try {
+                    const auto& fabric_ctx5 = this->get_control_plane_().get_fabric_context();
+                    const auto& builder_ctx5 = fabric_ctx5.get_builder_context();
+                    const auto edm_status_addr_aq5 =
+                        builder_ctx5.get_fabric_router_sync_address_and_status().first;
+                    constexpr uint32_t kRomPostcode5 = 0x49705180u;
+                    constexpr int kEdmStatusPollMs5 = 1000;
+                    constexpr auto kEdmStatusPollInterval5 = std::chrono::milliseconds(5);
+                    struct EdmPollState5 {
+                        tt_cxy_pair target;
+                        bool ready = false;
+                    };
+                    std::vector<EdmPollState5> edm_states5;
+                    for (const tt::ChipId aq5_mmio_id : mmio_ids_set) {
+                        for (const auto& aq5_logical_core :
+                             this->get_control_plane_().get_active_ethernet_cores(aq5_mmio_id)) {
+                            CoreCoord aq5_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                aq5_mmio_id, aq5_logical_core, CoreType::ETH);
+                            edm_states5.push_back({tt_cxy_pair(aq5_mmio_id, aq5_virt), false});
+                        }
+                    }
+                    const auto aq5_start = std::chrono::steady_clock::now();
+                    while (true) {
+                        bool all_clear5 = true;
+                        for (auto& es5 : edm_states5) {
+                            if (es5.ready) continue;
+                            uint32_t edm_val5 = 0;
+                            try {
+                                cluster_.read_reg(&edm_val5, es5.target, edm_status_addr_aq5);
+                            } catch (...) {
+                                es5.ready = true;
+                                continue;
+                            }
+                            if (edm_val5 != kRomPostcode5) {
+                                es5.ready = true;
+                            } else {
+                                all_clear5 = false;
+                            }
+                        }
+                        if (all_clear5) break;
+                        const auto aq5_elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - aq5_start)
+                                .count();
+                        if (aq5_elapsed_ms >= kEdmStatusPollMs5) break;
+                        std::this_thread::sleep_for(kEdmStatusPollInterval5);
+                    }
+                    for (const auto& es5 : edm_states5) {
+                        if (!es5.ready) {
+                            uint32_t final_val5 = 0;
+                            try { cluster_.read_reg(&final_val5, es5.target, edm_status_addr_aq5); } catch (...) {}
+                            log_warning(
+                                tt::LogAlways,
+                                "teardown: FIX AQ — ETH core {} edm_status_address still 0x{:08x} "
+                                "(ROM postcode 0x49705180) after {}ms; next session may see corrupt L1. "
+                                "(#42429 FIX AQ)",
+                                es5.target.str(),
+                                final_val5,
+                                kEdmStatusPollMs5);
+                        }
+                    }
+                    log_info(
+                        tt::LogAlways,
+                        "teardown: FIX AQ — edm_status_address sentinel poll complete (Step 5 path).");
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AQ — edm_status_address poll (Step 5) threw: {}; proceeding.",
+                        e.what());
+                } catch (...) {
+                    log_warning(tt::LogAlways, "teardown: FIX AQ — edm_status_address poll (Step 5) threw unknown; proceeding.");
+                }
+            }
         }
     }
 

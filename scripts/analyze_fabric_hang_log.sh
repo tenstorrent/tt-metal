@@ -729,6 +729,9 @@ FIX_AX_FIRES=$(grep -cE 'FIX AX|relay confirmed dead.*skipping assert_risc_reset
 FIX_AJ_FIRES=$(grep -cE 'FIX AJ|relay path confirmed dead during force-reset' "$CLEAN" 2>/dev/null || echo 0)
 # FIX AK (FabricFirmware): transitive relay guard — skipping l1_barrier for ALL non-MMIO
 FIX_AK_FIRES=$(grep -cE 'relay-dead device.*confirmed.*skipping l1_barrier.*FIX AK|FIX AK.*skipping l1_barrier' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AQ: secondary edm_status_address sentinel poll after FIX AR heartbeat poll
+FIX_AQ_FIRES=$(grep -cE 'FIX AQ' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AQ_TIMEOUT=$(grep -cE 'FIX AQ.*ROM postcode.*after.*ms' "$CLEAN" 2>/dev/null || echo 0)
 # FIX AY: deferred non-MMIO ETH ERISC reset via restored MMIO relay
 FIX_AY_FIRES=$(grep -cE 'FIX AY' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AY_SUCCEEDED=$(grep -cE 'FIX AY.*all.*reset to base firmware|FIX AY.*succeeded' "$CLEAN" 2>/dev/null || echo 0)
@@ -813,6 +816,13 @@ if [ "${FIX_AJ_FIRES:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_AK_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AK] transitive relay guard: l1_barrier skipped for ALL non-MMIO devices (${FIX_AK_FIRES} event(s)) — relay-dead device(s) present"
+fi
+if [ "${FIX_AQ_FIRES:-0}" -gt 0 ]; then
+    if [ "${FIX_AQ_TIMEOUT:-0}" -eq 0 ]; then
+        echo "  => [FIX AQ] edm_status_address sentinel poll complete (${FIX_AQ_FIRES} event(s)) — UMD relay wrote 0x49706550 before next session started"
+    else
+        echo "  => [FIX AQ] edm_status_address sentinel poll TIMED OUT (${FIX_AQ_TIMEOUT} channel(s)) — 0x49705180 ROM postcode persisted; next session may still see corrupt L1"
+    fi
 fi
 if [ "${FIX_AY_FIRES:-0}" -gt 0 ]; then
     if [ "${FIX_AY_FAILED:-0}" -eq 0 ]; then
