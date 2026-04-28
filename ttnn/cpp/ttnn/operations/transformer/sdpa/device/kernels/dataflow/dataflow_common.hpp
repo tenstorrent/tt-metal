@@ -1115,6 +1115,81 @@ void write_block(
     cb_pop_front(cb_out, out_chunk_tiles);
 }
 
+// Row-grouped drain skeleton: iterates total_rows in groups of sbh rows (last group is a
+// smaller remainder if not divisible). Per-group cb_wait_front + flush-before-pop lets
+// cb_out be sized to a few groups instead of the full chunk. The callback is invoked for
+// every (row, col) tile with the L1 read address; it decides whether to issue a NoC write
+// (e.g. to skip padding rows).
+//
+// flush_trid: TRID the caller stamped writes with via noc_async_write_set_trid (0 = default
+// trid, i.e. caller never set a non-zero trid). The per-group flush uses
+// noc_async_write_flushed_with_trid(flush_trid) so it waits exactly for THIS drain's writes
+// to be source-L1-acked, not for unrelated trids that may be in flight from elsewhere.
+//
+// Caller is responsible for any final NoC barrier (DRAM-arrival).
+template <typename WriteTileFn>
+void drain_cb_row_grouped(
+    const uint32_t cb_out,
+    const uint32_t total_rows,
+    const uint32_t cols,
+    const uint32_t tile_bytes,
+    const uint32_t sbh,
+    const uint32_t flush_trid,
+    WriteTileFn write_tile) {
+    const uint32_t num_full_groups = total_rows / sbh;
+    const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
+    const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
+
+    for (uint32_t rg = 0; rg < num_groups; ++rg) {
+        const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
+        const uint32_t tiles_this_group = rows_this_group * cols;
+        cb_wait_front(cb_out, tiles_this_group);
+        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        for (uint32_t r = 0; r < rows_this_group; ++r) {
+            const uint32_t row = rg * sbh + r;
+            for (uint32_t col = 0; col < cols; ++col) {
+                write_tile(row, col, l1_read_addr + col * tile_bytes);
+            }
+            l1_read_addr += cols * tile_bytes;
+        }
+        // Flush THIS drain's writes (by trid) before pop so compute can safely reuse the L1 slot.
+        noc_async_write_flushed_with_trid(flush_trid);
+        cb_pop_front(cb_out, tiles_this_group);
+    }
+}
+
+// Single-chip linear-tile-id drain. Rows in [write_rows, total_rows) are padding —
+// popped but not written. Periodic barrier_threshold flushes guard the NoC ack queue;
+// final noc_async_write_barrier ensures DRAM arrival before return. Single-chip never
+// sets a non-zero trid → drain flushes trid 0 (the default trid all writes here carry).
+template <typename TensorAccessorType>
+void write_block_row_grouped(
+    const TensorAccessorType& out_writer,
+    const uint32_t cb_out,
+    const uint32_t total_rows,
+    const uint32_t write_rows,
+    const uint32_t cols,
+    const uint32_t out_tile_id,
+    const uint32_t tile_bytes,
+    const uint32_t sbh,
+    const uint32_t barrier_threshold) {
+    constexpr uint32_t default_trid = 0;
+    uint32_t tile_id = out_tile_id;
+    uint32_t barrier_count = 0;
+    drain_cb_row_grouped(
+        cb_out, total_rows, cols, tile_bytes, sbh, default_trid, [&](uint32_t row, uint32_t /*col*/, uint32_t l1_addr) {
+            if (row < write_rows) {
+                noc_async_write_tile(tile_id, out_writer, l1_addr);
+                ++tile_id;
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_write_flushed_with_trid(default_trid);
+                    barrier_count = 0;
+                }
+            }
+        });
+    noc_async_write_barrier();
+}
+
 template <uint32_t tile_bytes>
 void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t source_tile_addr) {
     /*
