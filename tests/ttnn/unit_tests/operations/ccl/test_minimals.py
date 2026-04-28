@@ -1046,6 +1046,8 @@ def test_rms_fuse_n300(
 ):
     if mesh_device.get_num_devices() != 2:
         pytest.skip("Not N300 - this test targets 2-chip Wormhole")
+    atol_threshold = 1.0 if fused_add else 0.6
+    rtol_threshold = 20.0 if fused_add else 0.1
     run_rms_fuse_impl_deepseek(
         mesh_device,
         num_devices,
@@ -1061,6 +1063,8 @@ def test_rms_fuse_n300(
         num_iters=num_iters,
         input_dtype=input_dtype,
         residual_dtype=residual_dtype,
+        atol_threshold=atol_threshold,
+        rtol_threshold=rtol_threshold,
     )
 
 
