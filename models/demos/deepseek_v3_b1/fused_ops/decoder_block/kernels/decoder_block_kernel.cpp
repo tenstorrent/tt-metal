@@ -3035,8 +3035,6 @@ void kernel_main() {
 #endif
 #endif
 
-    constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
-    constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
     constexpr uint32_t termination_semaphore_addr = get_named_compile_time_arg_val("termination_semaphore_addr");
     deepseek_b1_ops::PersistentLoop<persistent_mode == 1> loop(termination_semaphore_addr, num_iterations);
     while (loop.next()) {
