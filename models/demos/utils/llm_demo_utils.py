@@ -142,7 +142,8 @@ def verify_perf(
         lower_is_better_metrics: set of metric names where lower values are better (e.g., TTFT)
     """
     if expected_perf_metrics is None:
-        assert model_name and sku, "model_name and sku are required when expected_perf_metrics is not provided"
+        if not model_name or not sku:
+            raise ValueError("model_name and sku are required when expected_perf_metrics is not provided")
         expected_perf_metrics = resolve_perf_targets(
             model_name=model_name,
             sku=sku,
