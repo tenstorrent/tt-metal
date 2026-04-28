@@ -261,20 +261,13 @@ std::string to_string_impl(const Tensor& tensor) {
         return buffers;
     };
 
-    // Compute simple row-major strides for logical shape (no padding alignment)
-    auto compute_logical_strides = [](const tt::tt_metal::Shape& logical_shape) -> Strides {
-        const int rank = static_cast<int>(logical_shape.rank());
-        Strides strides(rank, 1);
-        for (int i = rank - 2; i >= 0; i--) {
-            strides[i] = strides[i + 1] * logical_shape[i + 1];
-        }
-        return strides;
-    };
+    // Use simple row-major strides for logical shape (no padding alignment)
+    const auto logical_strides = tt::tt_metal::compute_strides(shape);
+    const Strides strides(logical_strides.begin(), logical_strides.end());
 
     if (is_cpu_tensor(tensor)) {
         const auto& tensor_spec = tensor.tensor_spec();
         const std::vector<HostBuffer> buffers = get_host_buffers(tensor.host_storage());
-        const auto strides = compute_logical_strides(shape);
         std::stringstream ss;
         for (size_t i = 0; i < buffers.size(); i++) {
             // Use decode_tensor_data to properly convert physical data to logical (removes padding)
@@ -301,7 +294,6 @@ std::string to_string_impl(const Tensor& tensor) {
     // }
 
     const auto& tensor_spec = cpu_tensor.tensor_spec();
-    const auto strides = compute_logical_strides(shape);
     const auto coords = storage.get_coords();
     auto coords_it = coords.begin();
     const std::vector<HostBuffer> buffers = get_host_buffers(cpu_tensor.host_storage());
