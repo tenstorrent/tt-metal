@@ -366,7 +366,10 @@ class Attention(LightweightModule):
 
         # QKV projection
         xqkv = ttnn.linear(
-            x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
+            x,
+            self.wqkv,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
@@ -621,7 +624,10 @@ class Attention(LightweightModule):
         q_seq = q_f32.shape[2]
         k_t = ttnn.transpose(k_exp, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         scores = ttnn.matmul(
-            q_f32, k_t, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
+            q_f32,
+            k_t,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(k_t)
         ttnn.deallocate(q_f32)

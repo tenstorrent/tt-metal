@@ -156,8 +156,14 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Use L1 for decode mode (small tensors fit in L1), DRAM for prefill
-        mem_cfg = ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        # Stage-1 memory-layout tuning for matmuls:
+        # - Decode is always L1.
+        # - Prefill with small/medium sequence lengths also benefits from L1.
+        # - Fall back to DRAM for longer prefill sequences to avoid L1 pressure.
+        if mode == "decode" or seq_len <= 256:
+            mem_cfg = ttnn.L1_MEMORY_CONFIG
+        else:
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
         # Reshape for large sequences to fit on device
         if seq_len >= 1024:
