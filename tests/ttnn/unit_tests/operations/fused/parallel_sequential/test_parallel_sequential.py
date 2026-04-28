@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_watcher
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 
 
 def stress_test_program_cache(fn):
@@ -447,6 +447,7 @@ class TestShardedExecution:
         check_pcc(golden, out, label=f"sharded {shard_type}")
 
     @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
+    @skip_with_llk_assert("Program too large for kernel config buffer. Will not fix.")
     @stress_test_program_cache
     def test_sharded_three_phase(self, device):
         """3-phase LN->RMS->LN block-sharded on 4x4 grid."""
