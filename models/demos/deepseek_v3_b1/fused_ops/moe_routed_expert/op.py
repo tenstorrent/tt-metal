@@ -846,6 +846,7 @@ class MoeRoutedExpert:
         reduce_semaphores: Optional[list] = None,  # 4 semaphores for reduce synchronization
         reduce_root_coord: Optional[ttnn.MeshCoordinate] = None,  # Root device coordinate (row 1 or 2)
         use_hardcoded_expert_index=False,  # For testing: always use expert index 0
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
     ):
         """
         Execute the full MoE routed expert fused operation with optional reduce-to-one:
@@ -880,6 +881,7 @@ class MoeRoutedExpert:
             reduce_output_tensor: (Optional) Final reduced output tensor on ROOT1 device
             reduce_semaphores: (Optional) List of 4 global semaphores for reduce synchronization
             reduce_root_coord: (Optional) MeshCoordinate of ROOT1 device (must be row 1 or 2)
+            noc_mode: NOC mode for the fused kernel data-movement paths
 
         Returns:
             Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor or reduce_output_tensor)
@@ -2034,6 +2036,7 @@ class MoeRoutedExpert:
                     per_core_compile_time_descriptors=device_per_core_ct_descs,
                     per_core_runtime_args_descriptor=device_runtime_args_descriptor,
                     defines=kernel_defines,
+                    noc_mode=noc_mode,
                 )
 
                 kernel_result = chip_unified_kernel.get_kernel_descriptors()

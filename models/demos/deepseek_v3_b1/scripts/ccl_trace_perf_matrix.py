@@ -12,8 +12,8 @@ Op time definition:
   across all devices; op time is the max of those per-bucket averages.
 - reduce_to_one uses a fixed rotated fresh-trace benchmark: capture one
   single-iteration trace per root per sample, replay once with blocking=True,
-  interleave roots across samples, then report the average of interleaved
-  cycle means.
+  interleave roots across samples, then report the trimmed mean of the
+  interleaved cycle means after dropping the single highest and lowest means.
 """
 
 import argparse
@@ -46,9 +46,6 @@ TRACE_ID = 1
 CHIP_FREQ_RE = re.compile(r"CHIP_FREQ\[MHz\]:\s*(\d+(?:\.\d+)?)")
 REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES_ENV = "CCL_REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES"
 REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES_ENV = "CCL_REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES"
-REDUCE_TO_ONE_TRACE_MODE = "single_trace_fresh_replay"
-REDUCE_TO_ONE_ROOT_MODE = "rotate_interleaved"
-REDUCE_TO_ONE_TRACE_BLOCKING = True
 REDUCE_TO_ONE_ROTATED_ROOTS = ((1, 0), (1, 1), (2, 0), (2, 1))
 DEFAULT_REDUCE_TO_ONE_NUM_WARMUP_SAMPLES = 15
 DEFAULT_REDUCE_TO_ONE_NUM_PERF_SAMPLES = 30
@@ -355,9 +352,9 @@ def build_reduce_to_one_trace_config(args: argparse.Namespace) -> ReduceToOneTra
 
 def reduce_to_one_setup_details(trace_config: ReduceToOneTraceConfig) -> tuple[str, ...]:
     return (
-        f"Reduce-to-one trace mode: {REDUCE_TO_ONE_TRACE_MODE}",
-        f"Reduce-to-one root mode: {REDUCE_TO_ONE_ROOT_MODE}",
-        f"Reduce-to-one blocking replay: {'true' if REDUCE_TO_ONE_TRACE_BLOCKING else 'false'}",
+        "Reduce-to-one trace mode: single_trace_fresh_replay",
+        "Reduce-to-one root mode: rotate_interleaved",
+        "Reduce-to-one blocking replay: true",
         f"Reduce-to-one warmup samples per root: {trace_config.num_warmup_samples}",
         f"Reduce-to-one perf samples per root: {trace_config.num_perf_samples}",
     )
@@ -895,12 +892,6 @@ def build_reduce_to_one_run_result(
         f"Perf replay samples analyzed: {len(sample_op_stats)}",
     ]
 
-    op_cycles = base_result.op_cycles
-    op_bucket = base_result.op_bucket
-    op_device = base_result.op_device
-    analysis_description = None
-    root_spread_cycles = None
-
     per_root_values: dict[str, list[float]] = defaultdict(list)
     for sample in sample_op_stats:
         if sample.root_label is None:
@@ -925,8 +916,6 @@ def build_reduce_to_one_run_result(
         )
     )
 
-    op_bucket = None
-    op_device = None
     ordered_root_sequences = [per_root_values[label] for label in expected_root_labels]
     cycle_count = min(len(sequence) for sequence in ordered_root_sequences)
     if cycle_count <= 0:
@@ -938,7 +927,6 @@ def build_reduce_to_one_run_result(
     cycle_stat = make_bucket_stat(cycle_means)
     trimmed_cycle_means = drop_extrema(cycle_means, count_per_side=1)
     trimmed_cycle_stat = make_bucket_stat(trimmed_cycle_means)
-    op_cycles = trimmed_cycle_stat.avg_cycles
     analysis_description = (
         "Op time = trimmed mean of per-cycle means across interleaved roots, dropping the single highest and "
         "single lowest cycle mean and averaging the remainder, using per-replay slowest-device buckets."
@@ -956,9 +944,9 @@ def build_reduce_to_one_run_result(
 
     return replace(
         base_result,
-        op_bucket=op_bucket,
-        op_cycles=op_cycles,
-        op_device=op_device,
+        op_bucket=None,
+        op_cycles=trimmed_cycle_stat.avg_cycles,
+        op_device=None,
         setup_details=setup_details,
         analysis_description=analysis_description,
         sample_count=len(sample_op_stats),
@@ -1619,6 +1607,8 @@ def main() -> int:
     if len(selected_ccls) > 1 and args.test_target is not None:
         raise RuntimeError("--test-target requires --ccl when profiling multiple CCLs")
     reduce_to_one_trace_config = build_reduce_to_one_trace_config(args)
+    reduce_to_one_perf_trace_map = resolve_reduce_to_one_perf_trace_map(reduce_to_one_trace_config)
+    reduce_to_one_perf_trace_ids = set(reduce_to_one_perf_trace_map)
 
     max_payload_sizes = parse_int_list(args.max_payload_sizes)
     if not max_payload_sizes:
@@ -1766,16 +1756,8 @@ def main() -> int:
                         ) = summarize_profile_log(
                             profile_log,
                             config,
-                            trace_ids=(
-                                set(resolve_reduce_to_one_perf_trace_map(reduce_to_one_trace_config))
-                                if ccl == "reduce_to_one"
-                                else None
-                            ),
-                            trace_id_to_root_label=(
-                                resolve_reduce_to_one_perf_trace_map(reduce_to_one_trace_config)
-                                if ccl == "reduce_to_one"
-                                else None
-                            ),
+                            trace_ids=(reduce_to_one_perf_trace_ids if ccl == "reduce_to_one" else None),
+                            trace_id_to_root_label=(reduce_to_one_perf_trace_map if ccl == "reduce_to_one" else None),
                         )
                         tiles_per_l_chunk = None
                         block_size = None

@@ -404,7 +404,7 @@ def run_reduce_to_one_with_trace(
     output_tensor = None
     logger.info("Compiling reduce_to_one trace variants for roots={}", root_coords_to_verify)
     for root in root_coords_to_verify:
-        output_tensor = compile_trace_op(submesh_device, ops_by_root[root])
+        compile_trace_op(submesh_device, ops_by_root[root])
 
     warmup_trace_sets, output_tensor = _capture_rotated_trace_sets(
         submesh_device,

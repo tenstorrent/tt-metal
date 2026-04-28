@@ -113,7 +113,7 @@ def run_trace_benchmark(
     cq_id: int = 0,
 ):
     profiler = BenchmarkProfiler()
-    result = compile_trace_op(mesh_device, op)
+    compile_trace_op(mesh_device, op)
     logger.info("Capturing warmup trace")
     warmup_trace_id, result = capture_trace(
         mesh_device,
