@@ -129,17 +129,22 @@ CAPITALS_SYSTEM_PROMPT = (
 
 
 @pytest.fixture(autouse=True)
-def _close_device_after_test():
-    """Close the device after each test so the next ``LlamaGRPOCompleter``
-    construction doesn't trip ``open_device was called after the device was
-    created``. ``LlamaGRPOCompleter.__init__`` opens the device unconditionally
-    (see ``utils/llama_completer.py``), so we have to balance that here.
+def _reuse_open_device(monkeypatch):
+    """Override ``LlamaGRPOCompleter.setup_device`` to reuse the already-open
+    AutoContext device instead of calling ``open_device`` again.
+
+    Other tests in ``tests/python/`` lazily open the AutoContext device on
+    first tensor use and never close it. When pytest collects this file
+    alongside them, the device is already open by the time we get here, so
+    the default ``setup_device`` would trip ``open_device was called after
+    the device was created``. Reusing the live device sidesteps the issue
+    without leaking device-management code into the test body.
     """
-    yield
-    try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:
-        pass
+    monkeypatch.setattr(
+        LlamaGRPOCompleter,
+        "setup_device",
+        lambda self, device_config: ttml.autograd.AutoContext.get_instance().get_device(),
+    )
 
 
 class _RecordingCallback(TrainerCallback):

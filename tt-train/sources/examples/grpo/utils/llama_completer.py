@@ -117,11 +117,31 @@ class LlamaGRPOCompleter(GRPOCompleter):
             built via ``get_model_config``).
         device_config: Device mesh config (a
             :class:`ttml.common.config.DeviceConfig` instance). Device
-            initialisation (``enable_fabric``, ``open_device``) is performed
-            inside this constructor.
+            initialisation (``enable_fabric``, ``open_device``) is delegated
+            to :meth:`setup_device`, which the constructor calls. Subclasses
+            and tests may override ``setup_device`` to swap that behaviour
+            (e.g. reuse an already-open device).
         model_source: HuggingFace model ID or path to a local directory
             containing ``model.safetensors``.
     """
+
+    def setup_device(self, device_config: DeviceConfig) -> Any:
+        """Enable fabric (multi-device) and open the AutoContext mesh device.
+
+        Returns the resulting ``ttnn.MeshDevice``. Tests may override this
+        method (e.g. via ``monkeypatch.setattr``) to reuse a device that was
+        already opened earlier in the process by returning
+        ``ttml.autograd.AutoContext.get_instance().get_device()`` without
+        calling ``open_device`` again. Overrides must return a mesh whose
+        topology matches ``device_config``; otherwise the cached
+        ``_mesh_device``/``_num_devices`` will be inconsistent with the rest
+        of the completer.
+        """
+        if device_config.total_devices() > 1:
+            ttml.core.distributed.enable_fabric(device_config.total_devices())
+        autograd_ctx = ttml.autograd.AutoContext.get_instance()
+        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
+        return autograd_ctx.get_device()
 
     def __init__(
         self,
@@ -133,16 +153,12 @@ class LlamaGRPOCompleter(GRPOCompleter):
         tf_config = transformer_config
         dev_config = device_config
 
-        if dev_config.total_devices() > 1:
-            ttml.core.distributed.enable_fabric(dev_config.total_devices())
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        autograd_ctx.open_device(dev_config.mesh_shape, dev_config.device_ids)
-
         # Cache the device + parallelism state on ``self`` rather than going
         # through ``AutoContext`` on every tensor upload. The completer (and
         # the trainer that drives it) only handles single-device or DDP today;
         # tensor parallelism is intentionally not supported here.
-        mesh_device: Any = autograd_ctx.get_device()
+        mesh_device: Any = self.setup_device(dev_config)
+        autograd_ctx = ttml.autograd.AutoContext.get_instance()
         self._mesh_device: Any = mesh_device
         self._num_devices: int = mesh_device.get_num_devices()
 
