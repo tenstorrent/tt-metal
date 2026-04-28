@@ -229,6 +229,11 @@ run_t3000_ttnn_tests() {
   timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
   # GAP-27: FIX AV — non-MMIO sysmem_manager reset prevents stale in-flight counter
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap27_fixav_nonmmio_sysmem_reset.py::test_gap27_fixav_nonmmio_sysmem_reset ; record_test
+  # GAP-30: FIX AL — STARTED early-exit timing (kStartedTimeoutMs=3000ms) bounds quiesce wait
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap30_fixal_started_early_exit_timing.py::test_gap30_fixal_started_early_exit_timing ; record_test
+  # GAP-34: FIX AM — Phase 5b skipped when master chan at STARTED (out-of-mesh peer);
+  #   saves ~2s per device vs FIX AL alone; caught TestMeshWidthShardedCopy3D timeout in CI run 25048641877
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
 
   # Record the end time
   end_time=$(date +%s)
