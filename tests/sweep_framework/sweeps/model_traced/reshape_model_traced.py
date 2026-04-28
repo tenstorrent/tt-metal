@@ -176,9 +176,9 @@ def run(
 
     start_time = start_measuring_time()
     if tgt_numel != input_numel and arg2 is not None:
-        output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+        output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     else:
-        output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+        output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

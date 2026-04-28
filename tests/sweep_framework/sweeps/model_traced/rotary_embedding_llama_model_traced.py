@@ -351,6 +351,9 @@ def run(
 
     is_mesh_device = hasattr(device, "get_num_devices")
     input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -588,13 +591,16 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config,
+                input_b_tensor_placement or input_a_tensor_placement,
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config,
+                input_c_tensor_placement or input_a_tensor_placement,
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config,
+                input_d_tensor_placement or input_a_tensor_placement,
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -629,16 +635,9 @@ def run(
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()
 
-    # Re-inject memory_config from kwargs (build_op_kwargs strips it by default)
-    mc_raw = _kwargs.get("memory_config")
-    if mc_raw is not None and "memory_config" not in op_kwargs:
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
-
-        parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
-    elif output_memory_config is not None and "memory_config" not in op_kwargs:
-        op_kwargs["memory_config"] = output_memory_config
+    # Do NOT inject memory_config — the master trace only has it when the model
+    # explicitly passed it.  Injecting from the vector's output_memory_config or
+    # memory_config metadata causes extra_key diffs in validation.
 
     rope_call_kwargs = {"is_decode_mode": is_decode_mode}
     rope_call_kwargs.update(op_kwargs)
