@@ -280,7 +280,9 @@ class CCLManager:
         self.barrier_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.barrier_semaphores[mesh_axis][cur_idx]
 
-    def get_np_ping_pong_buffer(self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0):
+    def get_np_ping_pong_buffer(
+        self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0
+    ):
         """
         Get or create ping pong buffers for neighbor pad operations.
         Caches buffers based on output shape and dtype.
