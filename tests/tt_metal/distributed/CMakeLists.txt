@@ -37,6 +37,7 @@ target_sources(
         test_gap28_fixav_relay_broken_sysmem_guard.cpp
         test_gap29_cluster_teardown_hang_relay_broken.cpp
         test_gap31_fixay_deferred_nonmmio_reset.cpp
+        test_gap32_fixaz_l1barrier_skip_no_prior_fabric.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
