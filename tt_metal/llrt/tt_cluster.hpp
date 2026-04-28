@@ -88,9 +88,16 @@ public:
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    umd::ClusterDescriptor* get_cluster_desc() const { return this->driver_->get_cluster_description(); }
+    umd::ClusterDescriptor* get_cluster_desc() const {
+        TT_FATAL(this->driver_ != nullptr, "UMD driver is not initialized.");
+        return this->driver_->get_cluster_description();
+    }
 
     const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
+    tt::umd::Cluster& get_driver_mut() const;
+
+    // WH B0 unconditionally, BH with ETH FW >= 1.9.0.
+    bool supports_ethernet_link_retraining() const;
 
     // Sets the HAL to be used for this Cluster
     void set_hal(const tt_metal::Hal* hal);

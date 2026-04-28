@@ -1729,17 +1729,12 @@ void perform_link_reset(
     uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const bool link_retrain_supported =
-        (cluster.arch() == tt::ARCH::WORMHOLE_B0 ||
-         (cluster.arch() == tt::ARCH::BLACKHOLE &&
-          cluster.get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0)));
+    const auto eth_fw = cluster.get_ethernet_firmware_version();
     TT_FATAL(
-        link_retrain_supported,
+        cluster.supports_ethernet_link_retraining(),
         "Link reset is only supported on WORMHOLE_B0 or BLACKHOLE with ETH FW >= 1.9.0 (detected arch: {}, FW: {})",
         cluster.arch(),
-        cluster.get_ethernet_firmware_version().has_value()
-            ? cluster.get_ethernet_firmware_version()->to_string()
-            : "unknown");
+        eth_fw.has_value() ? eth_fw->to_string() : "unknown");
 
     tt::tt_metal::AsicTopology reset_topology =
         build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);

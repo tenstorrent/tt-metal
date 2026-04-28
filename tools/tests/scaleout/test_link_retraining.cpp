@@ -14,6 +14,8 @@
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 #include <fmt/format.h>
+#include <cstddef>
+#include <type_traits>
 
 namespace tt::scaleout_tools {
 
@@ -26,6 +28,7 @@ namespace tt::scaleout_tools {
         return tt::umd::wormhole::ETH_TRAIN_STATUS_ADDR;
     }
     if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+        static_assert(std::is_standard_layout_v<tt::umd::blackhole::eth_status_t>);
         return tt::umd::blackhole::BOOT_RESULTS_ADDR +
                static_cast<uint32_t>(offsetof(tt::umd::blackhole::eth_status_t, port_status));
     }
@@ -57,7 +60,6 @@ class DirectedRetrainingFixture : public ::testing::Test {
 protected:
     tt::tt_metal::MetalContext* context_{};
     const tt::Cluster* cluster_{};
-    const std::unique_ptr<tt::umd::Cluster>* driver_{};
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id_;
@@ -65,22 +67,15 @@ protected:
     void SetUp() override {
         context_ = &tt::tt_metal::MetalContext::instance();
         cluster_ = &context_->get_cluster();
-        driver_ = &cluster_->get_driver();
         distributed_context_ = context_->get_distributed_context_ptr();
 
-        const bool link_retrain_supported =
-            cluster_->arch() == tt::ARCH::WORMHOLE_B0 ||
-            (cluster_->arch() == tt::ARCH::BLACKHOLE &&
-             cluster_->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0));
-        if (!link_retrain_supported) {
+        if (!cluster_->supports_ethernet_link_retraining()) {
             GTEST_SKIP() << "Link retraining not supported on this system (requires WH or BH with ETH FW >= 1.9.0)";
         }
 
         // Initialize physical system descriptor
         auto psd = tt::tt_metal::run_physical_system_discovery(
-            *(*driver_)->get_cluster_description(),
-            distributed_context_,
-            context_->rtoptions().get_target_device());
+            cluster_->get_driver_mut(), distributed_context_, context_->rtoptions().get_target_device());
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
         // Populate asic_id_to_chip_id map
@@ -91,7 +86,6 @@ protected:
 
 public:
     const tt::Cluster& get_cluster() const { return *cluster_; }
-    const std::unique_ptr<tt::umd::Cluster>& get_driver() const { return *driver_; }
     tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() { return *physical_system_descriptor_; }
     const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const {
         return *physical_system_descriptor_;
@@ -137,25 +131,22 @@ void process_ethernet_connections(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     const tt::Cluster& cluster,
-    const std::unique_ptr<tt::umd::Cluster>& driver,
+    const tt::umd::ClusterDescriptor& cluster_desc,
     Operation&& operation) {
-    auto* const cluster_desc = driver->get_cluster_description();
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
-    auto&& callable = std::forward<Operation>(operation);
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
             const auto src_chip_id = asic_id_to_chip_id.at(*asic_id);
             const auto dst_chip_id = asic_id_to_chip_id.at(*dst_asic_id);
 
             const bool both_mmio =
-                cluster_desc->is_chip_mmio_capable(src_chip_id) && cluster_desc->is_chip_mmio_capable(dst_chip_id);
+                cluster_desc.is_chip_mmio_capable(src_chip_id) && cluster_desc.is_chip_mmio_capable(dst_chip_id);
             const bool both_non_mmio =
-                !cluster_desc->is_chip_mmio_capable(src_chip_id) && !cluster_desc->is_chip_mmio_capable(dst_chip_id);
+                !cluster_desc.is_chip_mmio_capable(src_chip_id) && !cluster_desc.is_chip_mmio_capable(dst_chip_id);
 
             if (both_mmio || both_non_mmio) {
                 for (const auto& eth_connection : eth_connections) {
-                    callable(
-                        src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
+                    operation(src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
                 }
             }
         }
@@ -170,7 +161,7 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
         get_physical_system_descriptor(),
         get_asic_id_to_chip_id(),
         get_cluster(),
-        get_driver(),
+        *get_cluster().get_cluster_desc(),
         [&](ChipId chip_id, const tt_xy_pair& coord) { set_link_training_status(get_cluster(), chip_id, coord, 0); });
 
     reset_ethernet_links(
@@ -181,7 +172,7 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
         get_physical_system_descriptor(),
         get_asic_id_to_chip_id(),
         get_cluster(),
-        get_driver(),
+        *get_cluster().get_cluster_desc(),
         [&](ChipId chip_id, const tt_xy_pair& coord) {
             EXPECT_EQ(get_link_training_status(get_cluster(), chip_id, coord), 1);
         });
@@ -189,7 +180,7 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
     // Re-run discovery
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        *get_driver()->get_cluster_description(),
+        get_cluster().get_driver_mut(),
         distributed_context_,
         context_->rtoptions().get_target_device(),
         true,
@@ -242,7 +233,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
     // Re-run discovery
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        *get_driver()->get_cluster_description(),
+        get_cluster().get_driver_mut(),
         distributed_context_,
         context_->rtoptions().get_target_device(),
         true,
@@ -254,7 +245,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
     const DirectedRetrainingFixture& fixture, const tt::tt_metal::AsicTopology& asic_topology) {
     constexpr size_t MAX_LINKS_TO_RESET = 4;
 
-    auto* const cluster_desc = fixture.get_driver()->get_cluster_description();
+    auto* const cluster_desc = fixture.get_cluster().get_cluster_desc();
     const auto& asic_descriptors = fixture.get_physical_system_descriptor().get_asic_descriptors();
 
     std::vector<LinkDescriptors> local_links;
@@ -352,7 +343,7 @@ TEST_F(DirectedRetrainingFixture, TestLinkRetrainingWithDescriptorRefresh) {
         get_physical_system_descriptor(),
         get_asic_id_to_chip_id(),
         get_cluster(),
-        get_driver(),
+        *get_cluster().get_cluster_desc(),
         [&](ChipId chip_id, const tt_xy_pair& coord) { set_link_training_status(get_cluster(), chip_id, coord, 0); });
 
     // Retrain all downed links
@@ -365,7 +356,7 @@ TEST_F(DirectedRetrainingFixture, TestLinkRetrainingWithDescriptorRefresh) {
         get_physical_system_descriptor(),
         get_asic_id_to_chip_id(),
         get_cluster(),
-        get_driver(),
+        *get_cluster().get_cluster_desc(),
         [&](ChipId chip_id, const tt_xy_pair& coord) {
             EXPECT_EQ(get_link_training_status(get_cluster(), chip_id, coord), 1);
         });
@@ -375,10 +366,13 @@ TEST_F(DirectedRetrainingFixture, TestLinkRetrainingWithDescriptorRefresh) {
     cluster.rediscover_ethernet_links();
 
     // Re-run physical system discovery with the refreshed descriptor
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        driver_ref, distributed_context_, context_->rtoptions().get_target_device(), true, true);
+        get_cluster().get_driver_mut(),
+        distributed_context_,
+        context_->rtoptions().get_target_device(),
+        true,
+        true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 
     // Validate that the refreshed topology matches the expected cabling

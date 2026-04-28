@@ -1152,10 +1152,13 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 void Cluster::rediscover_ethernet_links() {
     this->driver_->refresh_cluster_description();
 
-    this->initialize_ethernet_cores_router_mode();
-
+    // initialize_ethernet_cores_router_mode is insert-only; clear first so stale entries
+    // (gone chips/cores, prior fabric router reservations) don't survive the refresh.
+    this->device_eth_routing_info_.clear();
     this->ethernet_sockets_.clear();
     this->frequent_retrain_cores_.clear();
+
+    this->initialize_ethernet_cores_router_mode();
     this->disable_ethernet_cores_with_retrain();
     this->initialize_ethernet_sockets();
 }
@@ -1524,6 +1527,21 @@ uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_by
 const std::unique_ptr<tt::umd::Cluster>& Cluster::get_driver() const {
     TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
     return driver_;
+}
+
+tt::umd::Cluster& Cluster::get_driver_mut() const {
+    TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+    return *driver_;
+}
+
+bool Cluster::supports_ethernet_link_retraining() const {
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+        return true;
+    }
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        return this->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0);
+    }
+    return false;
 }
 
 }  // namespace tt
