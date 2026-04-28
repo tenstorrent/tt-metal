@@ -69,38 +69,60 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     // SHARD SPEC VALIDATION
     if (a.is_sharded()) {
         const auto& shard_spec = a.shard_spec().value();
-
-        // shard spec
-        std::cout << "Shard shape: H=" << shard_spec.shape[0] << " W=" << shard_spec.shape[1] << std::endl;
-
-        std::cout << "Shard orientation: " << (int)shard_spec.orientation << std::endl;
-
+        const auto& shard_shape = shard_spec.shape;
         const auto& shard_grid = shard_spec.grid;
 
-        // shard grid
-        std::cout << "Shard grid num cores: " << shard_grid.num_cores() << std::endl;
-
-        // device grid
-        auto device_grid = a.device()->compute_with_storage_grid_size();
-        std::cout << "Device grid: x=" << device_grid.x << " y=" << device_grid.y << std::endl;
-
-        // program grid
-        auto program_grid =
+        const auto device_grid = a.device()->compute_with_storage_grid_size();
+        const auto program_grid =
             std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
 
-        std::cout << "Program grid: x=" << program_grid.x << " y=" << program_grid.y << std::endl;
-
-        // validation
+        // 1. Grid hierarchy: shard_spec.grid ⊆ program_config.grid ⊆ device.grid
         TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
 
+        const CoreRange device_range(CoreCoord{0, 0}, CoreCoord{device_grid.x - 1, device_grid.y - 1});
+        const CoreRange program_range(CoreCoord{0, 0}, CoreCoord{program_grid.x - 1, program_grid.y - 1});
         TT_FATAL(
-            program_grid.x <= device_grid.x && program_grid.y <= device_grid.y,
-            "Program grid must be within device grid");
+            device_range.contains(program_range),
+            "program_config grid ({}x{}) must be contained within device grid ({}x{})",
+            program_grid.x,
+            program_grid.y,
+            device_grid.x,
+            device_grid.y);
+        TT_FATAL(
+            program_range.contains(shard_grid),
+            "shard_spec.grid is not contained within program_config grid ({}x{})",
+            program_grid.x,
+            program_grid.y);
 
-        CoreCoord end(program_grid.x - 1, program_grid.y - 1);
-        CoreRange program_range(CoreCoord(0, 0), end);
+        // 2. Shard shape must be non-zero
+        TT_FATAL(
+            shard_shape[0] > 0 && shard_shape[1] > 0,
+            "shard shape must be non-zero, got H={} W={}",
+            shard_shape[0],
+            shard_shape[1]);
 
-        TT_FATAL(program_range.contains(shard_grid), "Shard grid must be within program grid");
+        // 3. Tile alignment.
+        //    Shard height (per_core_M) MUST be tile-aligned; the kernel divides exactly by tile_height.
+        //    Shard width  (per_core_N) is intentionally NOT enforced here: groupnorm_sharded_program_factory
+        //    handles non-tile-aligned widths via per_core_Nt = ceil(per_core_N / tile_width) and the
+        //    `reader_repack_output` path. Other normalization ops without that path must enforce it.
+        TT_FATAL(
+            shard_shape[0] % tile_height == 0,
+            "shard height {} must be divisible by tile height {}",
+            shard_shape[0],
+            tile_height);
+
+        // 4. Total elements: num_cores * per-shard elements == physical tensor volume
+        const auto num_cores = shard_grid.num_cores();
+        const auto total_from_shards = static_cast<uint64_t>(num_cores) * shard_shape[0] * shard_shape[1];
+        TT_FATAL(
+            total_from_shards == a.physical_volume(),
+            "Total elements from shards ({} cores * {}x{}) = {} does not match tensor physical volume {}",
+            num_cores,
+            shard_shape[0],
+            shard_shape[1],
+            total_from_shards,
+            a.physical_volume());
     }
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
