@@ -296,6 +296,11 @@ ALWI void reduce(
                     }
                 }
             }
+
+            // Call post-reduce operation on the single accumulated DST register.
+            // No-op when PostReduceOp is the default NoOp.
+            post_reduce_op(dst_idx);
+
             // Pop modes: reserve per-batch
             if constexpr (should_pop(input_policy)) {
                 output_cb.reserve_back(onetile);
