@@ -1417,6 +1417,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // would make quiesce skip router readiness on an MMIO device that may be healthy now.
     dead_relay_devices_.clear();
     mmio_dead_peer_devices_.clear();
+    mmio_dead_master_chan_devices_.clear();
     for (auto* dev : compiled_devices) {
         if (dev) {
             dev->set_fabric_is_mmio_dead_peer_device(false);
@@ -1670,6 +1671,38 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             }
         }
     }
+
+    // FIX AN (#42429): Identify MMIO devices whose own master router ETH channel was excluded
+    // from configure_fabric_cores() (was in probe_dead_channels — L1 corrupt or channel
+    // unresponsive). This is independent of dead_relay_devices_: the fault is local to the MMIO
+    // device itself, not a peer relay. No firmware was loaded on that master channel, so
+    // wait_for_fabric_router_sync() would spin for the full timeout (10s per device) with no
+    // chance of success. Track them here so sync can be skipped.
+    for (auto* dev : compiled_devices) {
+        if (!dev) {
+            continue;
+        }
+        // Only MMIO devices — non-MMIO are already handled via dead_relay_devices_.
+        if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
+            continue;
+        }
+        // Already in dead_relay_devices_ — sync is already skipped via FIX G.
+        if (dead_relay_devices_.count(dev->id()) > 0) {
+            continue;
+        }
+        const auto master_chan = builder_context.get_fabric_master_router_chan(dev->id());
+        if (probe_dead_channels_map.count(dev->id()) > 0 &&
+            probe_dead_channels_map.at(dev->id()).count(master_chan) > 0) {
+            mmio_dead_master_chan_devices_.insert(dev->id());
+            log_warning(
+                tt::LogMetal,
+                "compile_and_configure_fabric: Device {} MMIO master router chan={} is pre-dead "
+                "(excluded from configure_fabric — L1 corrupt or unresponsive). "
+                "Sync will be skipped. (#42429 FIX AN)",
+                dev->id(),
+                master_chan);
+        }
+    }
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
@@ -1710,6 +1743,18 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                 "wait_for_fabric_router_sync: Device {} MMIO master router connects to dead-relay "
                 "peer — skipping router sync (firmware loaded but peer handshake will never "
                 "complete). (#42429 FIX I)",
+                dev->id());
+            return;
+        }
+        // FIX AN (#42429): skip MMIO devices whose own master router channel was excluded
+        // from configure_fabric (pre-dead — L1 corrupt). No firmware on the local master
+        // channel → sync value will never appear → avoid the 10s per-device timeout.
+        if (mmio_dead_master_chan_devices_.count(dev->id()) > 0) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_router_sync: Device {} own master router chan is pre-dead "
+                "(no fabric firmware loaded on it — L1 was corrupt at init). "
+                "Skipping router sync. (#42429 FIX AN)",
                 dev->id());
             return;
         }
@@ -1878,6 +1923,18 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
                 "verify_all_fabric_channels_healthy: Device {} MMIO master router connects to "
                 "dead-relay peer — skipping health check (peer firmware never started). "
                 "(#42429 FIX I)",
+                dev->id());
+            continue;
+        }
+        // FIX AN (#42429): skip MMIO devices whose own master router channel was excluded from
+        // configure_fabric (pre-dead — L1 corrupt). No firmware was loaded on that channel, so
+        // the channel will never be at READY_FOR_TRAFFIC.
+        if (mmio_dead_master_chan_devices_.count(dev->id()) > 0) {
+            log_warning(
+                tt::LogMetal,
+                "verify_all_fabric_channels_healthy: Device {} own master router chan is pre-dead "
+                "(no fabric firmware loaded — L1 was corrupt at init). "
+                "Skipping health check. (#42429 FIX AN)",
                 dev->id());
             continue;
         }

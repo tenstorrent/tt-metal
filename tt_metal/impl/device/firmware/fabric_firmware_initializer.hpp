@@ -146,6 +146,13 @@ private:
     // MMIO dispatch goes through PCIe, not ETH relay, and must proceed normally.
     std::unordered_set<ChipId> mmio_dead_peer_devices_;
 
+    // FIX AN (#42429): MMIO devices whose own master router ETH channel was excluded
+    // from configure_fabric_cores() (was in probe_dead_channels — L1 corrupt or
+    // channel unresponsive). No firmware was loaded on the master chan, so the sync
+    // value 0xa2b2c2d2 will never be written. Skip sync for these devices to avoid
+    // the 10s-per-device timeout.
+    std::unordered_set<ChipId> mmio_dead_master_chan_devices_;
+
     // GAP 5: Track channels that were force-reset during teardown.
     // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset
     // in a previous session are expected to fail — log them as "degraded" rather than
