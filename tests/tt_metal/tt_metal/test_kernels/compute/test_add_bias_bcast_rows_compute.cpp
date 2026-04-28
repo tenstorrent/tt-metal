@@ -53,6 +53,10 @@ void kernel_main() {
     constexpr uint32_t bias_cb = tt::CBIndex::c_2;
     constexpr uint32_t out_cb = tt::CBIndex::c_16;
 
+    experimental::CircularBuffer partials_buf(partials_cb);
+    experimental::CircularBuffer bias_buf(bias_cb);
+    experimental::CircularBuffer out_buf(out_cb);
+
     // init_bcast expects all three CBs — mm_init style is insufficient because
     // the helper uses add_tiles_bcast_rows via add_bcast_rows_init_short().
     // init_bcast sets the global data formats correctly for the row-bcast add.
@@ -62,29 +66,26 @@ void kernel_main() {
 #if defined(BIAS_ONE_TIME_FRONT)
         // Production path A (num_blocks_w_dim==1): wait on first iter only, never pop.
         if (iter == 0) {
-            cb_wait_front(bias_cb, bias_ntiles);
+            bias_buf.wait_front(bias_ntiles);
         }
 #elif defined(BIAS_PER_ITER_PUSH)
         // Production path B (num_blocks_w_dim>1): wait + pop every iter.
-        cb_wait_front(bias_cb, bias_ntiles);
+        bias_buf.wait_front(bias_ntiles);
 #endif
 
         const auto bias_shape =
             compute_kernel_lib::BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w);
 #ifdef HELPER_POST_BIAS_RELU
         compute_kernel_lib::add_bias_bcast_rows<
-            partials_cb,
-            bias_cb,
-            out_cb,
             compute_kernel_lib::BiasBroadcast::RowBroadcast,
             compute_kernel_lib::OutputLayout::SubblockMajor,
-            ReluPostBias>(bias_shape, ReluPostBias{});
+            ReluPostBias>(partials_buf, bias_buf, out_buf, bias_shape, ReluPostBias{});
 #else
-        compute_kernel_lib::add_bias_bcast_rows<partials_cb, bias_cb, out_cb>(bias_shape);
+        compute_kernel_lib::add_bias_bcast_rows(partials_buf, bias_buf, out_buf, bias_shape);
 #endif
 
 #ifdef BIAS_PER_ITER_PUSH
-        cb_pop_front(bias_cb, bias_ntiles);
+        bias_buf.pop_front(bias_ntiles);
 #endif
     }
 }

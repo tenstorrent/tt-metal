@@ -8,6 +8,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
+#include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 namespace compute_kernel_lib {
@@ -39,7 +40,7 @@ enum class OutputLayout { SubblockMajor, RowMajor };
  *
  * Usage:
  *   matmul_block<...>(
- *       in0_cb, in1_cb, out_cb, interm_cb,
+ *       in0_buf, in1_buf, out_buf, interm_buf,
  *       MatmulBlockShape::of(in0_sb, in1_sb, h, w, in0_block_w, num_k_blocks),
  *       ...);
  */
@@ -124,10 +125,16 @@ struct NoPreKBlock {
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   in0_cb_id, in1_cb_id  Input CBs for matrices A and B.
- *   out_cb_id          Output CB for the final result.
- *   interm_cb_id       Intermediate CB for K-blocking spill/reload or L1-ACC FIFO.
- *                      When num_k_blocks == 1 it is never read; pass any non-output CB.
+ *   in0_buf, in1_buf   Input buffers for matrices A and B (CircularBuffer or
+ *                      DataflowBuffer — pass an experimental::CircularBuffer
+ *                      object on legacy CB-backed kernels, or an
+ *                      experimental::DataflowBuffer object on Metal-2.0 / DFB
+ *                      kernels).
+ *   out_buf            Output buffer for the final result.
+ *   interm_buf         Intermediate buffer for K-blocking spill/reload or
+ *                      L1-ACC FIFO. When num_k_blocks == 1 it is never read;
+ *                      pass any non-output buffer (typically the same buffer
+ *                      type as the others).
  *   shape              MatmulBlockShape (see above) — subblock counts, subblock size,
  *                      K-blocking, batch. Build with MatmulBlockShape::of(...).
  *   post_compute       PostComputeFn instance (default: {}).
@@ -149,9 +156,15 @@ struct NoPreKBlock {
  *
  * @example
  *   // Simple K=1 non-blocked matmul, defaults everywhere (SubblockMajor pack).
- *   // MatmulBlockShape::of arg order is (in0_sb, in1_sb, h, w, in0_block_w, num_k_blocks, batch).
+ *   // Caller constructs experimental::CircularBuffer (or DataflowBuffer) once and
+ *   // passes the object; the helper wraps sync calls (wait_front / pop_front /
+ *   // reserve_back / push_back) on it.
+ *   experimental::CircularBuffer in0_buf(cb_in0);
+ *   experimental::CircularBuffer in1_buf(cb_in1);
+ *   experimental::CircularBuffer out_buf(cb_out);
+ *   experimental::CircularBuffer interm_buf(cb_intermed0);
  *   mm_block_init(cb_in0, cb_in1, cb_intermed0, false, out_subblock_w, out_subblock_h, in0_block_w);
- *   matmul_block<>(cb_in0, cb_in1, cb_out, cb_intermed0,
+ *   matmul_block<>(in0_buf, in1_buf, out_buf, interm_buf,
  *                  MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                                        out_subblock_h, out_subblock_w,
  *                                        in0_block_w, 1));
@@ -159,8 +172,9 @@ struct NoPreKBlock {
  * @example
  *   // Row-major output + packer-L1 accumulation across K, no fused bias.
  *   // Template order: transpose, packer_l1_acc, pack_last_to_interm, pack_relu, layout.
+ *   // Buf is deduced from the buffer-object arguments.
  *   matmul_block<false, true, false, false, OutputLayout::RowMajor>(
- *       cb_in0, cb_in1, cb_out, cb_intermed0,
+ *       in0_buf, in1_buf, out_buf, interm_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
  *                             in0_block_w, num_k_blocks));
@@ -169,7 +183,7 @@ struct NoPreKBlock {
  *   // SDPA-style: row-major pack, retain_in0 to reuse Q across K chunks, masked post-compute.
  *   matmul_block<transpose, false, false, false, OutputLayout::RowMajor,
  *                OptionalMaskPostCompute>(
- *       in0_cb, in1_cb, out_cb, in0_cb,  // interm_cb unused when num_k_blocks==1
+ *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             subblock_h, subblock_w, in0_block_w, num_blocks),
  *       OptionalMaskPostCompute{...},
@@ -177,12 +191,12 @@ struct NoPreKBlock {
  *       true);  // retain_in0
  *
  * @example
- *   // FUSE_BIAS path: last K-block packs to interm_cb so add_bias_bcast_rows reads it.
+ *   // FUSE_BIAS path: last K-block packs to interm_buf so add_bias_bcast_rows reads it.
  *   // DRAM-sharded passes explicit in1_per_core_w (shard width) and
  *   // out_row_width (padded pack width).
  *   matmul_block<in1_transpose_tile, l1_acc, true, false,
  *                output_layout, PostFn, PreFn>(
- *       in0_cb, in1_cb, out_cb, mm_partials_cb,
+ *       in0_buf, in1_buf, out_buf, mm_partials_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
  *                             in0_block_w, num_blocks_inner_dim),
@@ -198,12 +212,13 @@ template <
     bool pack_relu = false,
     OutputLayout layout = OutputLayout::SubblockMajor,
     typename PostComputeFn = NoPostCompute,
-    typename PreKBlockFn = NoPreKBlock>
+    typename PreKBlockFn = NoPreKBlock,
+    typename Buf = ::experimental::CircularBuffer>
 ALWI void matmul_block(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t out_cb_id,
-    uint32_t interm_cb_id,
+    Buf& in0_buf,
+    Buf& in1_buf,
+    Buf& out_buf,
+    Buf& interm_buf,
     MatmulBlockShape shape,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
@@ -226,23 +241,24 @@ ALWI void matmul_block(
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   in_out_cb_id    CB serving as both input and output (in-place).
- *   in1_cb_id       CB with the single column-identity tile (kept fronted, not popped).
+ *   in_out_buf      Buffer serving as both input and output (in-place).
+ *   in1_buf         Buffer with the single column-identity tile (kept
+ *                   fronted, not popped).
  *   num_subblocks   Number of subblock iterations (= rows / subblock_h).
  *   subblock_h      Subblock height in tiles (matmul rt_dim).
  *   subblock_w      Subblock width in tiles (matmul ct_dim; typically 1).
  *   block_kt        K dimension in tiles for each matmul call (typically 1 = subblock_w).
  *
  * @example
- *   // SDPA fold M partial-sums using a column-identity tile in in1_cb.
- *   // Before: cb_out_accum has (STATS_GRANULARITY * Wt) tiles;
- *   // After:  cb_out_accum has Wt tiles (one reduced row).
- *   // Args: (in_out_cb_id, in1_cb_id, num_subblocks, subblock_h, subblock_w=1, block_kt=1).
- *   matmul_reduce_inplace(cb_out_accum, cb_col_identity, Wt, STATS_GRANULARITY);
+ *   // SDPA fold M partial-sums using a column-identity tile in in1_buf.
+ *   // Before: out_accum_buf has (STATS_GRANULARITY * Wt) tiles;
+ *   // After:  out_accum_buf has Wt tiles (one reduced row).
+ *   matmul_reduce_inplace(out_accum_buf, col_identity_buf, Wt, STATS_GRANULARITY);
  */
+template <typename Buf = ::experimental::CircularBuffer>
 ALWI void matmul_reduce_inplace(
-    uint32_t in_out_cb_id,
-    uint32_t in1_cb_id,
+    Buf& in_out_buf,
+    Buf& in1_buf,
     uint32_t num_subblocks,
     uint32_t subblock_h,
     uint32_t subblock_w = 1,

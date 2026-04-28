@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
 
 /**
  * @file bias_add_helpers.inl
@@ -17,21 +17,25 @@
 namespace compute_kernel_lib {
 
 template <
-    uint32_t partials_cb_id,
-    uint32_t bias_cb_id,
-    uint32_t out_cb_id,
     BiasBroadcast broadcast,
     OutputLayout output_layout,
-    typename PostBiasFn>
-ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias) {
+    typename PostBiasFn,
+    typename Buf>
+ALWI void add_bias_bcast_rows(
+    Buf& partials_buf,
+    Buf& bias_buf,
+    Buf& out_buf,
+    BiasAddShape shape,
+    PostBiasFn post_bias) {
 
-    // Compile-time validation
-    static_assert(partials_cb_id < 32, "add_bias_bcast_rows: partials_cb_id must be less than 32");
-    static_assert(bias_cb_id < 32, "add_bias_bcast_rows: bias_cb_id must be less than 32");
-    static_assert(out_cb_id < 32, "add_bias_bcast_rows: out_cb_id must be less than 32");
+    const uint32_t partials_cb_id = buf_id(partials_buf);
+    const uint32_t bias_cb_id = buf_id(bias_buf);
+    const uint32_t out_cb_id = buf_id(out_buf);
 
-    ::experimental::CircularBuffer partials_cb(partials_cb_id);
-    ::experimental::CircularBuffer out_cb(out_cb_id);
+    // Runtime CB-ID validation (was static_assert when CB IDs were template params).
+    ASSERT(partials_cb_id < 32);
+    ASSERT(bias_cb_id < 32);
+    ASSERT(out_cb_id < 32);
 
     // Hoist shape fields so the existing body reads unchanged.
     const uint32_t in0_num_subblocks = shape.in0_num_subblocks;
@@ -49,7 +53,7 @@ ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias) {
     ASSERT(out_subblock_w > 0);
     ASSERT(out_num_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
 
-    // Format reconfig + init. Caller owns bias_cb wait/pop lifecycle (reader may push
+    // Format reconfig + init. Caller owns bias_buf wait/pop lifecycle (reader may push
     // bias only once across multiple iterations).
     reconfig_data_format_srca(partials_cb_id);
     reconfig_data_format_srcb(bias_cb_id);
@@ -65,15 +69,15 @@ ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias) {
         // (out_subblock_h × out_row_width tiles) per in0_subblock. Tile at row r, column
         // sbw*out_subblock_w + c sits at front+r*out_row_width + sbw*out_subblock_w + c.
         // Bias reads at those absolute positions, computes DST for one N-subblock at a
-        // time, and packs back to the output CB at the same row-major positions.
+        // time, and packs back to the output buffer at the same row-major positions.
         if (out_row_width == 0) {
             out_row_width = out_subblock_w * in1_num_subblocks;
         }
         const uint32_t row_group_tiles = out_subblock_h * out_row_width;
 
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-            partials_cb.wait_front(row_group_tiles);
-            out_cb.reserve_back(row_group_tiles);
+            partials_buf.wait_front(row_group_tiles);
+            out_buf.reserve_back(row_group_tiles);
 
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                 const uint32_t col_base = in1_subblock * out_subblock_w;
@@ -108,7 +112,7 @@ ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias) {
                 tile_regs_commit();
                 tile_regs_wait();
 
-                // Pack DST back to out_cb at the same row-major positions. For h=1 the
+                // Pack DST back to out_buf at the same row-major positions. For h=1 the
                 // absolute-offset form collapses to a sequential column run within the
                 // row-group.
                 if (out_subblock_h == 1) {
@@ -128,14 +132,14 @@ ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias) {
                 tile_regs_release();
             }
 
-            partials_cb.pop_front(row_group_tiles);
-            out_cb.push_back(row_group_tiles);
+            partials_buf.pop_front(row_group_tiles);
+            out_buf.push_back(row_group_tiles);
         }
     } else {
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                partials_cb.wait_front(out_num_tiles);
+                partials_buf.wait_front(out_num_tiles);
                 tile_regs_acquire();
 
                 // Bias addition: row-broadcast (one bias row per column, broadcast across M)
@@ -156,23 +160,23 @@ ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias) {
                 post_bias(out_num_tiles);
 
                 tile_regs_commit();
-                partials_cb.pop_front(out_num_tiles);
+                partials_buf.pop_front(out_num_tiles);
 
                 // Pack out to output buffer
-                out_cb.reserve_back(out_num_tiles);
+                out_buf.reserve_back(out_num_tiles);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < out_num_tiles; i++) {
                     pack_tile(i, out_cb_id);
                 }
                 tile_regs_release();
-                out_cb.push_back(out_num_tiles);
+                out_buf.push_back(out_num_tiles);
 
                 in1_index_subblock_offset += out_subblock_w;
             }
         }
     }
 
-    // NOTE: does NOT pop bias_cb. Caller manages bias tile lifetime.
+    // NOTE: does NOT pop bias_buf. Caller manages bias tile lifetime.
 }
 
 }  // namespace compute_kernel_lib

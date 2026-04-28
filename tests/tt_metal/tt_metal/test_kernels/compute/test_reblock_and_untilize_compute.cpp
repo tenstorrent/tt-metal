@@ -39,6 +39,9 @@ void kernel_main() {
     constexpr uint32_t interm_cb = tt::CBIndex::c_24;
     constexpr uint32_t out_cb = tt::CBIndex::c_16;
 
+    experimental::CircularBuffer interm_buf(interm_cb);
+    experimental::CircularBuffer out_buf(out_cb);
+
     // Bootstrap compute infrastructure for the untilize-only pipeline.
     compute_kernel_hw_startup(interm_cb, out_cb);
 
@@ -50,7 +53,7 @@ void kernel_main() {
 
     for (uint32_t g = 0; g < num_row_groups; g++) {
         compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
-            num_subblocks_w, out_subblock_num_tiles, out_subblock_h, interm_cb, out_cb);
+            num_subblocks_w, out_subblock_num_tiles, out_subblock_h, interm_buf, out_buf);
     }
 
     pack_untilize_uninit(interm_cb);

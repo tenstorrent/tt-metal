@@ -78,6 +78,11 @@ void kernel_main() {
     constexpr uint32_t out_cb = tt::CBIndex::c_16;
     constexpr uint32_t interm_cb = tt::CBIndex::c_24;
 
+    experimental::CircularBuffer in0_buf(in0_cb);
+    experimental::CircularBuffer in1_buf(in1_cb);
+    experimental::CircularBuffer out_buf(out_cb);
+    experimental::CircularBuffer interm_buf(interm_cb);
+
 #ifdef HELPER_TRANSPOSE
     constexpr bool transpose = true;
 #else
@@ -115,9 +120,9 @@ void kernel_main() {
 #ifdef HELPER_POST_COMPUTE_RELU
     compute_kernel_lib::
         matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, output_layout, ReluPostCompute>(
-            in0_cb, in1_cb, out_cb, interm_cb, shape, ReluPostCompute{});
+            in0_buf, in1_buf, out_buf, interm_buf, shape, ReluPostCompute{});
 #else
     compute_kernel_lib::matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, output_layout>(
-        in0_cb, in1_cb, out_cb, interm_cb, shape);
+        in0_buf, in1_buf, out_buf, interm_buf, shape);
 #endif
 }

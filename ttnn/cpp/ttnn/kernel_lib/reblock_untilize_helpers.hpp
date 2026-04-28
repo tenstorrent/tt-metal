@@ -7,6 +7,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/cb_api.h"
 #include "internal/mod_div_lib.h"
+#include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 namespace compute_kernel_lib {
@@ -34,16 +35,12 @@ namespace compute_kernel_lib {
  *   num_subblocks_w          Number of subblocks along the N dimension.
  *   out_subblock_num_tiles   Tiles per subblock (= out_subblock_h * out_subblock_w).
  *   out_subblock_h           Subblock height in tiles.
- *   interm_cb_id             Input CB (tiled, subblock-major order).
- *   out_cb_id                Output CB (untilized row-major).
+ *   interm_buf               Input buffer (tiled, subblock-major order).
+ *   out_buf                  Output buffer (untilized row-major).
  */
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename Buf = ::experimental::CircularBuffer>
 inline void reblock_and_untilize(
-    uint32_t num_subblocks_w,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_h,
-    uint32_t interm_cb_id,
-    uint32_t out_cb_id);
+    uint32_t num_subblocks_w, uint32_t out_subblock_num_tiles, uint32_t out_subblock_h, Buf& interm_buf, Buf& out_buf);
 
 }  // namespace compute_kernel_lib
 

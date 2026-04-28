@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
+#include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"  // OutputLayout
 
@@ -97,10 +98,6 @@ struct NoPostBias {
  *
  * ── Template Parameters ────────────────────────────────────────────────────
  *
- *   partials_cb_id    CB containing matmul output (= interm_cb from matmul_block).
- *   bias_cb_id        CB containing bias tiles. RowBroadcast: one tile per output column.
- *                     Elementwise: multiple M rows per column.
- *   out_cb_id         Output CB for biased result.
  *   broadcast         BiasBroadcast::RowBroadcast (default, add_tiles_bcast_rows) or
  *                     BiasBroadcast::Elementwise (add_tiles).
  *   output_layout     OutputLayout::SubblockMajor (default, legacy) or OutputLayout::RowMajor.
@@ -110,13 +107,17 @@ struct NoPostBias {
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   shape      BiasAddShape — subblock counts, subblock size, row stride.
- *              Build with BiasAddShape::of(...).
- *   post_bias  PostBiasFn instance (default: {}).
+ *   partials_buf  Buffer containing matmul output (= interm buffer from matmul_block).
+ *   bias_buf      Buffer containing bias tiles. RowBroadcast: one tile per output column.
+ *                 Elementwise: multiple M rows per column.
+ *   out_buf       Output buffer for biased result.
+ *   shape         BiasAddShape — subblock counts, subblock size, row stride.
+ *                 Build with BiasAddShape::of(...).
+ *   post_bias     PostBiasFn instance (default: {}).
  *
  * @example
  *   // Simple row-broadcast bias, subblock-major output, no activation.
- *   add_bias_bcast_rows<partials_cb, bias_cb, out_cb>(
+ *   add_bias_bcast_rows(partials_buf, bias_buf, out_buf,
  *       BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
  *                         out_subblock_h, out_subblock_w));
  *
@@ -124,35 +125,35 @@ struct NoPostBias {
  *   // Row-major output (must match upstream matmul_block layout).
  *   // The last BiasAddShape::of arg is out_row_width.
  *   add_bias_bcast_rows<
- *       partials_cb, bias_cb, out_cb,
  *       BiasBroadcast::RowBroadcast,
  *       OutputLayout::RowMajor>(
+ *       partials_buf, bias_buf, out_buf,
  *       BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
  *                         out_subblock_h, out_subblock_w,
  *                         out_block_w));
  *
  * @example
  *   // Elementwise bias (multiple M rows) — required when bias is not row-broadcast.
- *   add_bias_bcast_rows<partials_cb, bias_cb, out_cb, BiasBroadcast::Elementwise>(
+ *   add_bias_bcast_rows<BiasBroadcast::Elementwise>(
+ *       partials_buf, bias_buf, out_buf,
  *       BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
  *                         out_subblock_h, out_subblock_w));
  *
  * @example
  *   // Fused SFPU activation after bias via PostBiasFn functor.
  *   add_bias_bcast_rows<
- *       partials_cb, bias_cb, out_cb,
  *       BiasBroadcast::RowBroadcast,
  *       OutputLayout::SubblockMajor,
- *       SFPUPostBias>(BiasAddShape::of(...), SFPUPostBias{});
+ *       SFPUPostBias>(partials_buf, bias_buf, out_buf,
+ *                      BiasAddShape::of(...), SFPUPostBias{});
  */
 template <
-    uint32_t partials_cb_id,
-    uint32_t bias_cb_id,
-    uint32_t out_cb_id,
     BiasBroadcast broadcast = BiasBroadcast::RowBroadcast,
     OutputLayout output_layout = OutputLayout::SubblockMajor,
-    typename PostBiasFn = bias_add_config::NoPostBias>
-ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias = {});
+    typename PostBiasFn = bias_add_config::NoPostBias,
+    typename Buf = ::experimental::CircularBuffer>
+ALWI void add_bias_bcast_rows(
+    Buf& partials_buf, Buf& bias_buf, Buf& out_buf, BiasAddShape shape, PostBiasFn post_bias = {});
 
 }  // namespace compute_kernel_lib
 

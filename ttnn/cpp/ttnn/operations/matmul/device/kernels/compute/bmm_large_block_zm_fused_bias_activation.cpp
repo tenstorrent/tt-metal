@@ -39,7 +39,6 @@
 
 #ifdef FUSE_BIAS
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
-#include "experimental/circular_buffer.h"
 #endif
 
 #include "api/compute/eltwise_binary.h"
@@ -106,15 +105,19 @@ void kernel_main() {
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
     constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
+    experimental::CircularBuffer in0_buf(in0_cb_id);
+    experimental::CircularBuffer in1_buf(in1_cb_id);
+    experimental::CircularBuffer out_buf(out_cb_id);
+    experimental::CircularBuffer mm_partials_buf(mm_partials_cb_id);
+    experimental::CircularBuffer untilize_mode_out_buf(untilize_mode_out_cb_id);
+    experimental::CircularBuffer in0_transpose_buf(in0_transpose_cb_id);
+
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t bias_ntiles = get_named_compile_time_arg_val("bias_ntiles");
-    constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
-    experimental::CircularBuffer bias_cb(bias_cb_id);
-#else
-    constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
+    experimental::CircularBuffer bias_buf(bias_cb_id);
 #endif
 
     // ── Feature flags ───────────────────────────────────────────────────
@@ -158,17 +161,8 @@ void kernel_main() {
 #endif
 
     // ── Callback type aliases ───────────────────────────────────────────
-    using XposeFn = TransposePreKBlock<
-        in0_block_num_tiles,
-        in0_transpose_cb_id,
-        in0_cb_id,
-        in1_cb_id,
-        in1_transpose_tile,
-        out_subblock_w,
-        out_subblock_h,
-        in0_block_w,
-        mm_partials_cb_id>;
-    using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, NoPreKBlock>;
+    using XposeFn =
+        TransposePreKBlock<in0_block_num_tiles, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w>;
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     using PostFn = std::conditional_t<pack_last_to_interm, NoPostCompute, SFPUPostCompute>;
@@ -209,36 +203,70 @@ void kernel_main() {
                 }
 
                 // ── Phase 1: K-loop matmul ──────────────────────────────
-                constexpr uint32_t phase1_out_cb =
 #ifdef FUSE_BIAS
-                    out_cb_id;
+                auto& phase1_out_buf = out_buf;
 #else
-                    mm_out_cb_id;
+                auto& phase1_out_buf = untilize_mode_out_buf;
 #endif
-                matmul_block<in1_transpose_tile, l1_acc, pack_last_to_interm, do_relu, output_layout, PostFn, PreFn>(
-                    in0_cb_id,
-                    in1_cb_id,
-                    phase1_out_cb,
-                    mm_partials_cb_id,
-                    MatmulBlockShape::of(
-                        in0_num_subblocks,
-                        in1_num_subblocks,
-                        out_subblock_h,
-                        out_subblock_w,
-                        in0_block_w,
-                        num_blocks_inner_dim,
-                        /*batch=*/1),
-                    PostFn{},
-                    PreFn{},
-                    /*retain_in0=*/false,
-                    // in1_block_w is the in1 CB read stride (= per_core_N_in1_sender on
-                    // DRAM-sharded, possibly smaller than the output pack width). out_block_w
-                    // = out_subblock_w * in1_num_subblocks is the row stride the compute
-                    // actually packs into — on DRAM-sharded this is the padded
-                    // per_core_N_compute, so row-major reserve/push and multi-row
-                    // absolute-offset pack need it, not in1_block_w.
-                    /*in1_per_core_w=*/in1_block_w,
-                    /*out_row_width=*/out_block_w);
+                const auto shape = MatmulBlockShape::of(
+                    in0_num_subblocks,
+                    in1_num_subblocks,
+                    out_subblock_h,
+                    out_subblock_w,
+                    in0_block_w,
+                    num_blocks_inner_dim,
+                    /*batch=*/1);
+                // in1_block_w is the in1 CB read stride (= per_core_N_in1_sender on
+                // DRAM-sharded, possibly smaller than the output pack width). out_block_w
+                // = out_subblock_w * in1_num_subblocks is the row stride the compute
+                // actually packs into — on DRAM-sharded this is the padded
+                // per_core_N_compute, so row-major reserve/push and multi-row
+                // absolute-offset pack need it, not in1_block_w.
+                //
+                // Two branches: XposeFn holds buffer references (no default ctor) so it
+                // can't be passed through a single PreFn alias. kernel_main isn't a
+                // template, so if-constexpr doesn't discard the unused branch's
+                // construction — keep the type local to each branch.
+                if constexpr (in0_transpose_tile) {
+                    XposeFn xpose{in0_transpose_buf, in0_buf, in1_buf, mm_partials_buf};
+                    matmul_block<
+                        in1_transpose_tile,
+                        l1_acc,
+                        pack_last_to_interm,
+                        do_relu,
+                        output_layout,
+                        PostFn,
+                        XposeFn>(
+                        in0_buf,
+                        in1_buf,
+                        phase1_out_buf,
+                        mm_partials_buf,
+                        shape,
+                        PostFn{},
+                        xpose,
+                        /*retain_in0=*/false,
+                        /*in1_per_core_w=*/in1_block_w,
+                        /*out_row_width=*/out_block_w);
+                } else {
+                    matmul_block<
+                        in1_transpose_tile,
+                        l1_acc,
+                        pack_last_to_interm,
+                        do_relu,
+                        output_layout,
+                        PostFn,
+                        NoPreKBlock>(
+                        in0_buf,
+                        in1_buf,
+                        phase1_out_buf,
+                        mm_partials_buf,
+                        shape,
+                        PostFn{},
+                        NoPreKBlock{},
+                        /*retain_in0=*/false,
+                        /*in1_per_core_w=*/in1_block_w,
+                        /*out_row_width=*/out_block_w);
+                }
 
                 // ── Phase 2: Bias addition ──────────────────────────────
 #ifdef FUSE_BIAS
@@ -256,7 +284,7 @@ void kernel_main() {
                 // (tiles stay fronted across all bh/batch iterations) and pushes per-iter
                 // when num_blocks_w_dim > 1. Wait on first fronting; pop only when consumed.
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
-                    cb_wait_front(bias_cb_id, bias_ntiles);
+                    bias_buf.wait_front(bias_ntiles);
                 }
 
                 constexpr BiasBroadcast bias_broadcast =
@@ -268,24 +296,15 @@ void kernel_main() {
                     out_subblock_w,
                     /*out_row_width=*/out_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
-                add_bias_bcast_rows<
-                    mm_partials_cb_id,
-                    bias_cb_id,
-                    untilize_mode_out_cb_id,
-                    bias_broadcast,
-                    output_layout,
-                    SFPUPostCompute>(bias_shape, SFPUPostCompute{});
+                add_bias_bcast_rows<bias_broadcast, output_layout, SFPUPostCompute>(
+                    mm_partials_buf, bias_buf, untilize_mode_out_buf, bias_shape, SFPUPostCompute{});
 #else
-                add_bias_bcast_rows<
-                    mm_partials_cb_id,
-                    bias_cb_id,
-                    untilize_mode_out_cb_id,
-                    bias_broadcast,
-                    output_layout>(bias_shape);
+                add_bias_bcast_rows<bias_broadcast, output_layout>(
+                    mm_partials_buf, bias_buf, untilize_mode_out_buf, bias_shape);
 #endif
 
                 if constexpr (num_blocks_w_dim > 1) {
-                    cb_pop_front(bias_cb_id, bias_ntiles);
+                    bias_buf.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
 
@@ -307,7 +326,7 @@ void kernel_main() {
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
                     for (uint32_t i = 0; i < in0_num_subblocks; ++i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);
+                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_buf, out_buf);
                     }
                     pack_untilize_uninit(mm_partials_cb_id);
                 }

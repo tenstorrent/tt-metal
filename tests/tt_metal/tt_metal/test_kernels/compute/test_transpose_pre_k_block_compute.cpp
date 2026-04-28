@@ -53,18 +53,21 @@ void kernel_main() {
     constexpr uint32_t out_cb = tt::CBIndex::c_16;
     constexpr uint32_t interm_cb = tt::CBIndex::c_24;
 
-    // TransposePreKBlock functor: transposes in0_transpose_cb → in0_cb
+    experimental::CircularBuffer in0_buf(in0_cb);
+    experimental::CircularBuffer in0_transpose_buf(in0_transpose_cb);
+    experimental::CircularBuffer in1_buf(in1_cb);
+    experimental::CircularBuffer out_buf(out_cb);
+    experimental::CircularBuffer interm_buf(interm_cb);
+
+    // TransposePreKBlock functor: transposes in0_transpose_buf → in0_buf
     // at the start of every K-block iteration before matmul_block waits on in0.
     using XposeFn = compute_kernel_lib::TransposePreKBlock<
         in0_block_num_tiles,
-        /*in0_transpose_cb_id=*/in0_transpose_cb,
-        /*in0_cb_id=*/in0_cb,
-        /*in1_cb_id=*/in1_cb,
         /*in1_transpose_tile=*/false,
         out_subblock_w,
         out_subblock_h,
-        in0_block_w,
-        /*mm_partials_cb_id=*/interm_cb>;
+        in0_block_w>;
+    XposeFn xpose{in0_transpose_buf, in0_buf, in1_buf, interm_buf};
 
     mm_block_init(in0_cb, in1_cb, interm_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
 
@@ -76,12 +79,12 @@ void kernel_main() {
         compute_kernel_lib::OutputLayout::SubblockMajor,
         compute_kernel_lib::NoPostCompute,
         XposeFn>(
-        in0_cb,
-        in1_cb,
-        out_cb,
-        interm_cb,
+        in0_buf,
+        in1_buf,
+        out_buf,
+        interm_buf,
         compute_kernel_lib::MatmulBlockShape::of(
             in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_w, num_k_blocks, batch),
         compute_kernel_lib::NoPostCompute{},
-        XposeFn{});
+        xpose);
 }

@@ -48,16 +48,21 @@ void kernel_main() {
     constexpr uint32_t col_ident_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_copy_cb = tt::CBIndex::c_16;
 
-    // Phase 1: copy staging → in_out_cb to establish compute ownership of c_0.
+    experimental::CircularBuffer staging_buf(staging_cb);
+    experimental::CircularBuffer in_out_buf(in_out_cb);
+    experimental::CircularBuffer col_ident_buf(col_ident_cb);
+    experimental::CircularBuffer out_copy_buf(out_copy_cb);
+
+    // Phase 1: copy staging → in_out_buf to establish compute ownership of c_0.
     // After this, T2's tiles_received shadow for c_0 correctly reflects the
-    // total_in_tiles pushes, so matmul_reduce_inplace's cb_push_back will
+    // total_in_tiles pushes, so matmul_reduce_inplace's push_back will
     // write the right value to L1.
     mm_init(in_out_cb, col_ident_cb, in_out_cb);
     copy_tile_to_dst_init_short(staging_cb);
     PACK((pack_reconfig_data_format(in_out_cb)));
 
-    cb_wait_front(staging_cb, total_in_tiles);
-    cb_reserve_back(in_out_cb, total_in_tiles);
+    staging_buf.wait_front(total_in_tiles);
+    in_out_buf.reserve_back(total_in_tiles);
     for (uint32_t i = 0; i < total_in_tiles; i++) {
         tile_regs_acquire();
         copy_tile(staging_cb, i, 0);
@@ -66,13 +71,14 @@ void kernel_main() {
         pack_tile(0, in_out_cb);
         tile_regs_release();
     }
-    cb_pop_front(staging_cb, total_in_tiles);
-    cb_push_back(in_out_cb, total_in_tiles);
+    staging_buf.pop_front(total_in_tiles);
+    in_out_buf.push_back(total_in_tiles);
 
     // Phase 2: in-place reduce — c_0 is now compute-owned, so T2's counter
     // is in sync with L1. The helper will correctly push-back to c_0 and
-    // T0's subsequent cb_wait_front will see the updated L1 counter.
-    compute_kernel_lib::matmul_reduce_inplace(in_out_cb, col_ident_cb, num_subblocks, subblock_h, subblock_w, block_kt);
+    // T0's subsequent wait_front will see the updated L1 counter.
+    compute_kernel_lib::matmul_reduce_inplace(
+        in_out_buf, col_ident_buf, num_subblocks, subblock_h, subblock_w, block_kt);
 
     // Phase 3: copy reduced result from c_0 to c_16 for the writer to drain.
     // Helper ended with srcA configured for in_out_cb (via its internal
@@ -83,19 +89,19 @@ void kernel_main() {
     // Wait for the reduced-in-place tiles. Counts must match the original
     // input population. If matmul_reduce_inplace left the CB in an unexpected
     // state this wait will hang — that's the in-place regression check.
-    cb_wait_front(in_out_cb, total_in_tiles);
+    in_out_buf.wait_front(total_in_tiles);
 
     for (uint32_t i = 0; i < total_in_tiles; i++) {
         tile_regs_acquire();
         copy_tile(in_out_cb, i, 0);
         tile_regs_commit();
 
-        cb_reserve_back(out_copy_cb, 1);
+        out_copy_buf.reserve_back(1);
         tile_regs_wait();
         pack_tile(0, out_copy_cb);
         tile_regs_release();
-        cb_push_back(out_copy_cb, 1);
+        out_copy_buf.push_back(1);
     }
 
-    cb_pop_front(in_out_cb, total_in_tiles);
+    in_out_buf.pop_front(total_in_tiles);
 }

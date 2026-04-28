@@ -20,6 +20,11 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_interm = tt::CBIndex::c_24;
 
+    experimental::CircularBuffer in0_buf(cb_in0);
+    experimental::CircularBuffer in1_buf(cb_in1);
+    experimental::CircularBuffer out_buf(cb_out);
+    experimental::CircularBuffer interm_buf(cb_interm);
+
     mm_block_init(cb_in0, cb_in1, cb_interm, false, out_subblock_w, out_subblock_h, in0_block_w);
 
     for (uint32_t b = 0; b < batch; b++) {
@@ -29,10 +34,10 @@ void kernel_main() {
             /*pack_last_to_interm=*/false,
             /*pack_relu=*/false,
             compute_kernel_lib::OutputLayout::SubblockMajor>(
-            cb_in0,
-            cb_in1,
-            cb_out,
-            cb_interm,
+            in0_buf,
+            in1_buf,
+            out_buf,
+            interm_buf,
             compute_kernel_lib::MatmulBlockShape::of(
                 in0_num_subblocks,
                 in1_num_subblocks,

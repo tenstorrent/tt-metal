@@ -1238,6 +1238,10 @@ ALWI void matmul_blocks(
     mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
     reconfig_data_format(in1_cb, in0_cb);
 
+    experimental::CircularBuffer in0_buf(in0_cb);
+    experimental::CircularBuffer in1_buf(in1_cb);
+    experimental::CircularBuffer out_buf(out_cb);
+
     compute_kernel_lib::matmul_block<
         transpose,
         /*packer_l1_acc=*/false,
@@ -1246,10 +1250,10 @@ ALWI void matmul_blocks(
         compute_kernel_lib::OutputLayout::RowMajor,
         OptionalMaskPostCompute,
         compute_kernel_lib::NoPreKBlock>(
-        in0_cb,
-        in1_cb,
-        out_cb,
-        in0_cb,
+        in0_buf,
+        in1_buf,
+        out_buf,
+        in0_buf,
         compute_kernel_lib::MatmulBlockShape::of(
             in0_num_subblocks, in1_num_subblocks, subblock_h, subblock_w, in0_block_w, num_blocks, /*batch=*/1),
         OptionalMaskPostCompute{
@@ -1270,7 +1274,9 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t subblock_h = 1;
     constexpr uint32_t in0_num_subblocks = M;
 #endif
-    compute_kernel_lib::matmul_reduce_inplace(out_cb, in1_cb, in0_num_subblocks, subblock_h);
+    experimental::CircularBuffer in_out_buf(out_cb);
+    experimental::CircularBuffer in1_buf(in1_cb);
+    compute_kernel_lib::matmul_reduce_inplace(in_out_buf, in1_buf, in0_num_subblocks, subblock_h);
 }
 
 /**
