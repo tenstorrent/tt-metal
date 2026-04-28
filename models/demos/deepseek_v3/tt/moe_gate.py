@@ -9,7 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub
+from models.demos.deepseek_v3.utils.config_dataclass import BinaryOpConfig, FromWeightConfig, MeshDeviceStub
 from models.demos.deepseek_v3.utils.config_helpers import get_dequantized_tensor, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -95,10 +95,12 @@ class MoEGate(AbstractModule):
         score_correction_bias = get_dequantized_tensor(
             state_dict, f"{prefix}e_score_correction_bias", dtype=torch.bfloat16
         ).unsqueeze(0)
+        """
         with torch.no_grad():
             score_correction_bias -= torch.mean(score_correction_bias)
         gate_weight *= 10
         score_correction_bias *= 10
+        """
         # maybe divide weight's mean here
 
         def prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores):
@@ -236,6 +238,17 @@ class MoEGate(AbstractModule):
                     layout=ttnn.TILE_LAYOUT,
                 )
             },
+            "add_score_correction_bias": {
+                "input_tensor_b": shard_and_save(
+                    output_path / f"e_score_correction_bias.input_tensor_b",
+                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.float32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+            },
         }
 
     @classmethod
@@ -299,6 +312,11 @@ class MoEGate(AbstractModule):
                 "weights": {
                     "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 },
+                "add_score_correction_bias": BinaryOpConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    dtype=ttnn.bfloat16,
+                ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
@@ -315,6 +333,11 @@ class MoEGate(AbstractModule):
                 "weights": {
                     "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 },
+                "add_score_correction_bias": BinaryOpConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    dtype=ttnn.bfloat16,
+                ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
@@ -406,24 +429,6 @@ class MoEGate(AbstractModule):
 
         output_tensor = ttnn.view(output_tensor, (-1, batch_size_per_iter, output_tensor.shape[-1]))
         assert SEND_CORES == (0, 3, 6, 9), "SEND_CORES should be (0, 3, 6, 9)"
-        # here is said to just get the matmul results
-        """
-        weight_tensor = ttnn.reshape(output_tensor, (output_tensor.shape[0], batch_size_per_iter, 4, -1))
-        valid_indices = weight_tensor.shape[-1] // 3
-        weight_tensor = weight_tensor[:, :, :, valid_indices:]
-        f1_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], weight_tensor.shape[1], -1, ttnn.TILE_SIZE))[
-            :, 3, :, :16
-        ]
-        f2_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], weight_tensor.shape[1], -1, ttnn.TILE_SIZE))[
-            :, 4, :, :16
-        ]
-        topk_experts_weights = ttnn.concat(
-            [f1_scores, f2_scores],
-            dim=-1,
-            memory_config=ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
-        )
-        topk_experts_weights = ttnn.transpose(topk_experts_weights, -1, -2)
-        """
         topk_experts_indices = ttnn.transpose(output_tensor[:, 8:16, -32:], -1, -2)
         topk_experts_indices = ttnn.bitcast(topk_experts_indices, dtype=ttnn.uint16)
         topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, -1, topk_experts_indices.shape[-1]))
@@ -433,12 +438,38 @@ class MoEGate(AbstractModule):
         # Otherwise, it will be all-zeros
         topk_experts_weights = ttnn.transpose(output_tensor[:, :8, -32:], -1, -2)
         topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, -1, topk_experts_weights.shape[-1]))
-        breakpoint()
+
         if padding_shape > 0:
             topk_experts_indices = topk_experts_indices[:, :, :-padding_shape, :]
             topk_experts_weights = topk_experts_weights[:, :, :-padding_shape, :]
+
+        # moe_gate_mm returns sigmoid(logits) + score_correction_bias per expert; gather bias by
+        # top-k expert id and subtract to recover pre-bias scores (still post-sigmoid).
+        score_bias_cfg = cfg["add_score_correction_bias"]
+        bias_tensor = (
+            score_bias_cfg.input_tensor_b
+            if hasattr(score_bias_cfg, "input_tensor_b")
+            else score_bias_cfg["input_tensor_b"]
+        )
+        bias_tensor = ttnn.to_layout(bias_tensor, ttnn.TILE_LAYOUT)
+        n_experts = bias_tensor.shape[-1]
+        seq_len = topk_experts_indices.shape[2]
+        # Repeat bias along seq so bias_table matches indices for ttnn.gather (broadcast like torch.gather).
+        bias_table = ttnn.reshape(bias_tensor, (1, 1, 1, n_experts))
+        bias_table = ttnn.repeat(bias_table, (1, 1, seq_len, 1))
+        idx_gather = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
+        gathered_bias = ttnn.gather(bias_table, 3, index=idx_gather)
+        gathered_bias = ttnn.typecast(gathered_bias, dtype=topk_experts_weights.dtype)
+        topk_experts_weights = ttnn.subtract(topk_experts_weights, gathered_bias)
+
+        # Match test_moe_mm: torch_weights_scaled = 2.5 * (weights / weights.sum(dim=-1, keepdim=True))
+        weight_row_sums = ttnn.sum(topk_experts_weights, dim=-1, keepdim=True)
+        topk_experts_weights = ttnn.div(topk_experts_weights, weight_row_sums)
+        topk_experts_weights = ttnn.multiply(topk_experts_weights, 2.5)
+
         if mode == "prefill":
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, ttnn.DRAM_MEMORY_CONFIG)
+            topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, ttnn.DRAM_MEMORY_CONFIG)
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
         return topk_experts_weights, topk_experts_indices
 

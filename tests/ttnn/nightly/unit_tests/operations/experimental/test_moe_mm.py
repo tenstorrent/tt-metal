@@ -38,6 +38,7 @@ def create_torch_input(L, in0_num_cores, M, K):
     """
     torch_input = torch.rand((L, 1, M, K), dtype=torch.bfloat16) - 0.5
     # torch_input *= 8
+    torch_input = torch.load("/home/ronnie/x.pt").unsqueeze(0).unsqueeze(0)
     torch_input = torch_input.repeat(1, in0_num_cores, 1, 1)
     return torch_input
 
@@ -56,6 +57,7 @@ def create_torch_w(L, K, N):
     """
     torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
     # torch_w /= 2
+    torch_w = torch.load("/home/ronnie/weight.pt").unsqueeze(0).transpose(1, 2)
     return torch_w
 
 
@@ -73,6 +75,7 @@ def create_torch_bias(L, N):
     torch_bias = torch.rand((L, N), dtype=torch.bfloat16)
     # torch_bias *= 0.03
     # torch_bias += 0.5
+    torch_bias = torch.load("/home/ronnie/scores_correction_bias.pt").unsqueeze(0)
     return torch_bias
 
 
@@ -91,6 +94,7 @@ def prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores):
     Returns:
         torch_w: Tensor of shape (L, K, N)
     """
+    breakpoint()
     Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
     # 8 cores get 2/3rd of K tiles and 1 N tile -> Type 1 (send flag is 0)
     # 4 cores get 1/3rd of K tiles and 2 N tiles -> Type 2 (send flag is 1)
@@ -178,6 +182,7 @@ def prepare_output_tensor(tt_output, ring2cores):
     output = torch.cat(each_shard, dim=1)
 
     # # Get the 32 scores values from each tile.
+    breakpoint()
     f1_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[3, :, :16]
     f2_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[4, :, :16]
 
@@ -194,7 +199,7 @@ def prepare_output_tensor(tt_output, ring2cores):
     tt_indices = torch.empty(tt_as_bf16_indices.shape, dtype=torch.uint16)
     for m, k in itertools.product(range(tt_as_bf16_indices.shape[0]), range(tt_as_bf16_indices.shape[1])):
         tt_indices[m, k] = tt_as_bf16_indices[m, k].item() >> 7
-    # breakpoint()
+    breakpoint()
 
     return tt_values, tt_indices
 
@@ -410,6 +415,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
             torch_top8_values, torch_top8_indices = torch.topk(torch_masked_scores, k=8, dim=-1)
 
             # 11. Gather original scores: weights = original_scores.gather(1, indices)
+            breakpoint()
             torch_weights = torch_original_scores.gather(-1, torch_top8_indices)
 
             # 12. Normalize weights: weights = weights / weights.sum(dim=-1, keepdim=True)

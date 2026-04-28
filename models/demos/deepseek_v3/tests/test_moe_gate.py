@@ -195,8 +195,18 @@ def test_forward_pass(
 
     topk_indices_accuracy_required = 0.93 if mode == "decode" else 0.84
     accuracy = tt_sorted_indices.eq(ref_sorted_indices).float().mean()
-    breakpoint()
 
+    def count_set_difference(tensor_a, tensor_b):
+        eq = tensor_a.unsqueeze(-1) == tensor_b.unsqueeze(1)
+
+        found_in_b = eq.any(dim=-1)  # (128, 8)
+
+        diff_count = (~found_in_b).sum(dim=-1)
+        return diff_count
+
+    diff = count_set_difference(tt_sorted_indices, ref_sorted_indices)
+
+    breakpoint()
     logger.info(f"TopK experts weights PCC: {pcc_message}")
     logger.info(f"TopK experts indices accuracy: {accuracy}")
     assert (
