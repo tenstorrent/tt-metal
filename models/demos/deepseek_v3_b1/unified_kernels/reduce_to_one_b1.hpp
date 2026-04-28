@@ -191,6 +191,12 @@ struct ReduceToOneB1 {
         static constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
         static constexpr uint32_t slot_size_bytes = packet_header_size_bytes + CTArgs::payload_size_bytes;
         static constexpr bool use_posted_transport_writes = true;
+        static constexpr uint8_t worker_to_forwarder_noc = 0;
+        static constexpr uint8_t forwarder_to_fabric_noc = 0;
+        static_assert(
+            noc_mode == DM_DYNAMIC_NOC || worker_to_forwarder_noc == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
+        static_assert(
+            noc_mode == DM_DYNAMIC_NOC || forwarder_to_fabric_noc == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
 
         template <typename FabricConnection>
         static FORCE_INLINE uint32_t process_ready_slots(
@@ -214,7 +220,7 @@ struct ReduceToOneB1 {
                 uint32_t slot_addr = buffer_base + slot * slot_size_bytes;
 
                 conn.template send_current_slot_stateful_non_blocking_from_address<use_posted_transport_writes>(
-                    slot_addr, slot_size_bytes);
+                    slot_addr, slot_size_bytes, forwarder_to_fabric_noc);
 
                 sent_mask |= (1u << slot);
                 cached_free_write_slots--;
@@ -239,8 +245,8 @@ struct ReduceToOneB1 {
         // and use the single-hop fast path when the worker send contract allows it.
         template <typename packet_header_t>
         static FORCE_INLINE void set_unicast_route(volatile tt_l1_ptr packet_header_t* header) {
-            [[maybe_unused]] constexpr uint16_t dst_dev_id = static_cast<uint16_t>(CTArgs::dst_fabric_node_chip_id);
-            [[maybe_unused]] constexpr uint16_t dst_mesh_id = static_cast<uint16_t>(CTArgs::dst_fabric_node_mesh_id);
+            constexpr uint16_t dst_dev_id = static_cast<uint16_t>(CTArgs::dst_fabric_node_chip_id);
+            constexpr uint16_t dst_mesh_id = static_cast<uint16_t>(CTArgs::dst_fabric_node_mesh_id);
 
             if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
                 if constexpr (CTArgs::num_hops == 1) {
@@ -360,7 +366,8 @@ struct ReduceToOneB1 {
                 const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
                 fabric_sender.open_finish();
 
-                fabric_sender.template setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
+                fabric_sender.template setup_stateful_send_cmd_bufs<use_posted_transport_writes>(
+                    forwarder_to_fabric_noc);
 
                 volatile tt_l1_ptr uint32_t* ready_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem_addr);
@@ -374,9 +381,9 @@ struct ReduceToOneB1 {
                 } while (sent_mask != CTArgs::all_sent_mask);
 
                 if constexpr (use_posted_transport_writes) {
-                    noc_async_posted_writes_flushed();
+                    noc_async_posted_writes_flushed(forwarder_to_fabric_noc);
                 } else {
-                    noc_async_writes_flushed();
+                    noc_async_writes_flushed(forwarder_to_fabric_noc);
                 }
 
                 noc_semaphore_set(ready_sem_ptr, 0);
@@ -489,10 +496,12 @@ struct ReduceToOneB1 {
             uint32_t header_dest_addr = packet_buffer_addr + slot_offset;
             uint32_t payload_dest_addr = header_dest_addr + packet_header_size_bytes;
 
-            uint64_t header_noc_addr = get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, header_dest_addr);
-            uint64_t payload_noc_addr = get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, payload_dest_addr);
+            uint64_t header_noc_addr =
+                get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, header_dest_addr, worker_to_forwarder_noc);
+            uint64_t payload_noc_addr = get_noc_addr(
+                args.fabric_core_noc_x, args.fabric_core_noc_y, payload_dest_addr, worker_to_forwarder_noc);
             uint64_t arrival_sem_noc_addr =
-                get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
+                get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr, worker_to_forwarder_noc);
 
             // Source CB: LEAF uses local_cb, others use scratch_cb
             constexpr uint32_t source_cb = (CTArgs::device_role == MESH_LEAF) ? CTArgs::local_cb : CTArgs::scratch_cb;
@@ -511,14 +520,17 @@ struct ReduceToOneB1 {
             uint32_t data_addr = get_read_ptr(source_cb);
 
             // Send header and payload to fabric core
-            noc_async_write<packet_header_size_bytes, true, /*posted=*/true>(
-                reinterpret_cast<uint32_t>(packet_header), header_noc_addr, packet_header_size_bytes);
-            noc_async_write<CTArgs::payload_size_bytes, true, /*posted=*/true>(
-                data_addr, payload_noc_addr, CTArgs::payload_size_bytes);
+            noc_async_write<packet_header_size_bytes, /*enable_noc_tracing=*/false, /*posted=*/true>(
+                reinterpret_cast<uint32_t>(packet_header),
+                header_noc_addr,
+                packet_header_size_bytes,
+                worker_to_forwarder_noc);
+            noc_async_write<CTArgs::payload_size_bytes, /*enable_noc_tracing=*/false, /*posted=*/true>(
+                data_addr, payload_noc_addr, CTArgs::payload_size_bytes, worker_to_forwarder_noc);
 
             // Ensure the staged packet is visible before advertising the slot as ready.
-            noc_async_posted_writes_flushed();
-            noc_semaphore_inc(arrival_sem_noc_addr, 1u << args.my_slot_idx);
+            noc_async_posted_writes_flushed(worker_to_forwarder_noc);
+            noc_semaphore_inc(arrival_sem_noc_addr, 1u << args.my_slot_idx, worker_to_forwarder_noc);
             noc_async_atomic_barrier();
 
             // Pop source_cb to free it for the next iteration.
