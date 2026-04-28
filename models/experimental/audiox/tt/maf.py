@@ -1,56 +1,16 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
 
-
-def _to_tt(t: torch.Tensor, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
-    return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh_device)
-
-
-def _split_in_proj(in_proj_weight: torch.Tensor, in_proj_bias: torch.Tensor):
-    """nn.MultiheadAttention packs Q/K/V into a single in_proj_weight of shape [3*dim, dim]."""
-    dim = in_proj_weight.shape[1]
-    qw, kw, vw = in_proj_weight.split(dim, dim=0)
-    qb, kb, vb = in_proj_bias.split(dim, dim=0) if in_proj_bias is not None else (None, None, None)
-    return qw, kw, vw, qb, kb, vb
-
-
-def _linear_weight(w: torch.Tensor) -> torch.Tensor:
-    """ttnn.linear expects weight in [in, out] order; PyTorch stores [out, in]."""
-    return w.transpose(0, 1).contiguous()
-
-
-def _attention(query, key, value, qw, kw, vw, qb, kb, vb, ow, ob, num_heads):
-    """Multi-head attention. query/key/value are ttnn tensors of shape [B, S, D]."""
-    q = ttnn.linear(query, qw, bias=qb)
-    k = ttnn.linear(key, kw, bias=kb)
-    v = ttnn.linear(value, vw, bias=vb)
-
-    batch, sq, dim = q.shape
-    sk = k.shape[1]
-    head_dim = dim // num_heads
-
-    q = ttnn.reshape(q, (batch, sq, num_heads, head_dim))
-    k = ttnn.reshape(k, (batch, sk, num_heads, head_dim))
-    v = ttnn.reshape(v, (batch, sk, num_heads, head_dim))
-
-    q = ttnn.transpose(q, 1, 2)
-    k = ttnn.transpose(k, 1, 2)
-    v = ttnn.transpose(v, 1, 2)
-
-    out = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
-    out = ttnn.transpose(out, 1, 2)
-    out = ttnn.reshape(out, (batch, sq, dim))
-    return ttnn.linear(out, ow, bias=ob)
+from models.experimental.audiox.tt.common import attention, linear_weight, split_in_proj, to_tt
 
 
 def _transformer_encoder_layer(x, layer_weights, num_heads):
     """A single nn.TransformerEncoderLayer with norm_first=True, gelu activation."""
     norm_x = ttnn.layer_norm(x, weight=layer_weights["ln1_w"], bias=layer_weights["ln1_b"])
-    attn_out = _attention(
+    attn_out = attention(
         norm_x,
         norm_x,
         norm_x,
@@ -88,59 +48,59 @@ class TtMAFBlock:
 
         sd = state_dict
 
-        self.gating_w1 = _to_tt(_linear_weight(sd["gating_network.0.weight"]), mesh_device)
-        self.gating_b1 = _to_tt(sd["gating_network.0.bias"], mesh_device)
-        self.gating_w2 = _to_tt(_linear_weight(sd["gating_network.2.weight"]), mesh_device)
-        self.gating_b2 = _to_tt(sd["gating_network.2.bias"], mesh_device)
+        self.gating_w1 = to_tt(linear_weight(sd["gating_network.0.weight"]), mesh_device)
+        self.gating_b1 = to_tt(sd["gating_network.0.bias"], mesh_device)
+        self.gating_w2 = to_tt(linear_weight(sd["gating_network.2.weight"]), mesh_device)
+        self.gating_b2 = to_tt(sd["gating_network.2.bias"], mesh_device)
 
-        self.unified_experts = _to_tt(sd["unified_experts"], mesh_device)
+        self.unified_experts = to_tt(sd["unified_experts"], mesh_device)
 
-        cqw, ckw, cvw, cqb, ckb, cvb = _split_in_proj(sd["cross_attn.in_proj_weight"], sd["cross_attn.in_proj_bias"])
-        self.ca_qw = _to_tt(_linear_weight(cqw), mesh_device)
-        self.ca_kw = _to_tt(_linear_weight(ckw), mesh_device)
-        self.ca_vw = _to_tt(_linear_weight(cvw), mesh_device)
-        self.ca_qb = _to_tt(cqb, mesh_device)
-        self.ca_kb = _to_tt(ckb, mesh_device)
-        self.ca_vb = _to_tt(cvb, mesh_device)
-        self.ca_ow = _to_tt(_linear_weight(sd["cross_attn.out_proj.weight"]), mesh_device)
-        self.ca_ob = _to_tt(sd["cross_attn.out_proj.bias"], mesh_device)
+        cqw, ckw, cvw, cqb, ckb, cvb = split_in_proj(sd["cross_attn.in_proj_weight"], sd["cross_attn.in_proj_bias"])
+        self.ca_qw = to_tt(linear_weight(cqw), mesh_device)
+        self.ca_kw = to_tt(linear_weight(ckw), mesh_device)
+        self.ca_vw = to_tt(linear_weight(cvw), mesh_device)
+        self.ca_qb = to_tt(cqb, mesh_device)
+        self.ca_kb = to_tt(ckb, mesh_device)
+        self.ca_vb = to_tt(cvb, mesh_device)
+        self.ca_ow = to_tt(linear_weight(sd["cross_attn.out_proj.weight"]), mesh_device)
+        self.ca_ob = to_tt(sd["cross_attn.out_proj.bias"], mesh_device)
 
-        self.norm1_w = _to_tt(sd["norm1.weight"], mesh_device)
-        self.norm1_b = _to_tt(sd["norm1.bias"], mesh_device)
+        self.norm1_w = to_tt(sd["norm1.weight"], mesh_device)
+        self.norm1_b = to_tt(sd["norm1.bias"], mesh_device)
 
         self.fusion_layers = []
         for i in range(num_fusion_layers):
             p = f"fusion_transformer.layers.{i}"
-            qw, kw, vw, qb, kb, vb = _split_in_proj(
+            qw, kw, vw, qb, kb, vb = split_in_proj(
                 sd[f"{p}.self_attn.in_proj_weight"], sd[f"{p}.self_attn.in_proj_bias"]
             )
             self.fusion_layers.append(
                 {
-                    "q_w": _to_tt(_linear_weight(qw), mesh_device),
-                    "k_w": _to_tt(_linear_weight(kw), mesh_device),
-                    "v_w": _to_tt(_linear_weight(vw), mesh_device),
-                    "q_b": _to_tt(qb, mesh_device),
-                    "k_b": _to_tt(kb, mesh_device),
-                    "v_b": _to_tt(vb, mesh_device),
-                    "o_w": _to_tt(_linear_weight(sd[f"{p}.self_attn.out_proj.weight"]), mesh_device),
-                    "o_b": _to_tt(sd[f"{p}.self_attn.out_proj.bias"], mesh_device),
-                    "ff1_w": _to_tt(_linear_weight(sd[f"{p}.linear1.weight"]), mesh_device),
-                    "ff1_b": _to_tt(sd[f"{p}.linear1.bias"], mesh_device),
-                    "ff2_w": _to_tt(_linear_weight(sd[f"{p}.linear2.weight"]), mesh_device),
-                    "ff2_b": _to_tt(sd[f"{p}.linear2.bias"], mesh_device),
-                    "ln1_w": _to_tt(sd[f"{p}.norm1.weight"], mesh_device),
-                    "ln1_b": _to_tt(sd[f"{p}.norm1.bias"], mesh_device),
-                    "ln2_w": _to_tt(sd[f"{p}.norm2.weight"], mesh_device),
-                    "ln2_b": _to_tt(sd[f"{p}.norm2.bias"], mesh_device),
+                    "q_w": to_tt(linear_weight(qw), mesh_device),
+                    "k_w": to_tt(linear_weight(kw), mesh_device),
+                    "v_w": to_tt(linear_weight(vw), mesh_device),
+                    "q_b": to_tt(qb, mesh_device),
+                    "k_b": to_tt(kb, mesh_device),
+                    "v_b": to_tt(vb, mesh_device),
+                    "o_w": to_tt(linear_weight(sd[f"{p}.self_attn.out_proj.weight"]), mesh_device),
+                    "o_b": to_tt(sd[f"{p}.self_attn.out_proj.bias"], mesh_device),
+                    "ff1_w": to_tt(linear_weight(sd[f"{p}.linear1.weight"]), mesh_device),
+                    "ff1_b": to_tt(sd[f"{p}.linear1.bias"], mesh_device),
+                    "ff2_w": to_tt(linear_weight(sd[f"{p}.linear2.weight"]), mesh_device),
+                    "ff2_b": to_tt(sd[f"{p}.linear2.bias"], mesh_device),
+                    "ln1_w": to_tt(sd[f"{p}.norm1.weight"], mesh_device),
+                    "ln1_b": to_tt(sd[f"{p}.norm1.bias"], mesh_device),
+                    "ln2_w": to_tt(sd[f"{p}.norm2.weight"], mesh_device),
+                    "ln2_b": to_tt(sd[f"{p}.norm2.bias"], mesh_device),
                 }
             )
 
-        self.norm_v2_w = _to_tt(sd["norm_v2.weight"], mesh_device)
-        self.norm_v2_b = _to_tt(sd["norm_v2.bias"], mesh_device)
-        self.norm_t2_w = _to_tt(sd["norm_t2.weight"], mesh_device)
-        self.norm_t2_b = _to_tt(sd["norm_t2.bias"], mesh_device)
-        self.norm_a2_w = _to_tt(sd["norm_a2.weight"], mesh_device)
-        self.norm_a2_b = _to_tt(sd["norm_a2.bias"], mesh_device)
+        self.norm_v2_w = to_tt(sd["norm_v2.weight"], mesh_device)
+        self.norm_v2_b = to_tt(sd["norm_v2.bias"], mesh_device)
+        self.norm_t2_w = to_tt(sd["norm_t2.weight"], mesh_device)
+        self.norm_t2_b = to_tt(sd["norm_t2.bias"], mesh_device)
+        self.norm_a2_w = to_tt(sd["norm_a2.weight"], mesh_device)
+        self.norm_a2_b = to_tt(sd["norm_a2.bias"], mesh_device)
 
         self.bypass_v = float(torch.sigmoid(sd["bypass_gate_v"]).item())
         self.bypass_t = float(torch.sigmoid(sd["bypass_gate_t"]).item())
@@ -172,7 +132,7 @@ class TtMAFBlock:
         experts = ttnn.unsqueeze(self.unified_experts, 0)
         experts = ttnn.repeat(experts, ttnn.Shape([batch, 1, 1]))
 
-        info = _attention(
+        info = attention(
             experts,
             full_context,
             full_context,

@@ -1,10 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Reference PyTorch implementation of the AudioX Multimodal Adaptive Fusion
-# (MAF) block, copied verbatim from the upstream AudioX repository
-# (https://github.com/ZeyueT/AudioX, audiox/models/MAF.py) for parity testing.
 
 import torch
 import torch.nn as nn

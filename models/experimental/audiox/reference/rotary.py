@@ -1,11 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-#
-# PyTorch reference for AudioX rotary positional embeddings, lifted from
-# audiox/models/transformer.py (RotaryEmbedding, rotate_half,
-# apply_rotary_pos_emb). Trimmed to the use_xpos=False path that AudioX DiT
-# actually exercises (the partial-rotary variant where rot_dim <= head_dim).
 
 import torch
 import torch.nn as nn

@@ -1,19 +1,11 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import math
 
-import torch
 import ttnn
 
-
-def _to_tt(t: torch.Tensor, mesh_device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-    return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device)
-
-
-def _linear_weight(w: torch.Tensor) -> torch.Tensor:
-    return w.transpose(0, 1).contiguous()
+from models.experimental.audiox.tt.common import linear_weight, to_tt
 
 
 class TtTimestepEmbedding:
@@ -24,12 +16,12 @@ class TtTimestepEmbedding:
         # FourierFeatures stores its weight as [fourier_dim/2, 1]. The forward pass
         # does `t @ weight.T`, so we precompute the transposed weight (shape [1, fourier_dim/2])
         # and use it directly with ttnn.linear.
-        self.fourier_weight = _to_tt(sd["fourier.weight"].transpose(0, 1).contiguous(), mesh_device)
+        self.fourier_weight = to_tt(sd["fourier.weight"].transpose(0, 1).contiguous(), mesh_device)
 
-        self.l1_w = _to_tt(_linear_weight(sd["linear1.weight"]), mesh_device)
-        self.l1_b = _to_tt(sd["linear1.bias"], mesh_device)
-        self.l2_w = _to_tt(_linear_weight(sd["linear2.weight"]), mesh_device)
-        self.l2_b = _to_tt(sd["linear2.bias"], mesh_device)
+        self.l1_w = to_tt(linear_weight(sd["linear1.weight"]), mesh_device)
+        self.l1_b = to_tt(sd["linear1.bias"], mesh_device)
+        self.l2_w = to_tt(linear_weight(sd["linear2.weight"]), mesh_device)
+        self.l2_b = to_tt(sd["linear2.bias"], mesh_device)
 
     def __call__(self, t: ttnn.Tensor) -> ttnn.Tensor:
         # Ensure trailing feature dim of 1.
