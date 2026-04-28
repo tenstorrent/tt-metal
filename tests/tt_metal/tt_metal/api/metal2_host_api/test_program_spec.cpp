@@ -7,7 +7,7 @@
 // Test categories:
 //   1. ProgramSpec "structural" validation (CollectSpecData)
 //   2. ProgramSpec semantic validation (ValidateProgramSpec)
-//   3. WorkerSpec validation
+//   3. WorkUnitSpec validation
 //   4. DFB validation
 //   5. Program creation (using Quasar mock device)
 //   6. Aggregate type enforcement (designated initializers)
@@ -35,7 +35,7 @@ using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
-using test_helpers::MakeMinimalWorker;
+using test_helpers::MakeMinimalWorkUnit;
 
 // ============================================================================
 // Test Fixtures
@@ -97,7 +97,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSemaphoreNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, DuplicateWorkerNameFails) {
+TEST_F(ProgramSpecTestQuasar, DuplicateWorkUnitNameFails) {
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
 
@@ -109,10 +109,10 @@ TEST_F(ProgramSpecTestQuasar, DuplicateWorkerNameFails) {
     auto kernel1 = MakeMinimalDMKernel("kernel1");
     spec.kernels = {kernel0, kernel1};
 
-    // Two workers with the same unique_id!
-    auto worker0 = MakeMinimalWorker("same_name", node0, {"kernel0"});
-    auto worker1 = MakeMinimalWorker("same_name", node1, {"kernel1"});  // Duplicate!
-    spec.workers = std::vector<WorkerSpec>{worker0, worker1};
+    // Two work_units with the same unique_id!
+    auto work_unit0 = MakeMinimalWorkUnit("same_name", node0, {"kernel0"});
+    auto work_unit1 = MakeMinimalWorkUnit("same_name", node1, {"kernel1"});  // Duplicate!
+    spec.work_units = std::vector<WorkUnitSpec>{work_unit0, work_unit1};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -133,7 +133,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb0, dfb1};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -166,7 +166,7 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
 
         spec.kernels = {kernel};
         spec.dataflow_buffers = {dfb};
-        spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
         EXPECT_ANY_THROW(MakeProgramFromSpec(spec)) << "Expected rejection for name: '" << bad_name << "'";
     }
@@ -183,7 +183,7 @@ TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     BindDFBToKernel(kernel, "nonexistent_dfb", "accessor", KernelSpec::DFBEndpointType::PRODUCER);
 
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -202,7 +202,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithNoBindingsFails) {
     auto orphan_dfb = MakeMinimalDFB("orphan_dfb");
     spec.dataflow_buffers = {orphan_dfb};
 
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -221,7 +221,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyProducerFails) {
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -240,7 +240,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -265,7 +265,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersFails) {
 
     spec.kernels = {producer1, producer2, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer1", "producer2", "consumer"})};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -290,7 +291,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
 
     spec.kernels = {producer, consumer1, consumer2};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer1", "consumer2"})};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer1", "consumer2"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -302,7 +304,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
 TEST_F(ProgramSpecTestQuasar, EmptyKernelsFails) {
     ProgramSpec spec;
     spec.program_id = "empty_program";
-    spec.workers = std::vector<WorkerSpec>{};  // Empty workers too
+    spec.work_units = std::vector<WorkUnitSpec>{};  // Empty work_units too
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -315,7 +317,7 @@ TEST_F(ProgramSpecTestQuasar, KernelWithZeroThreadsFails) {
 
     auto kernel = MakeMinimalDMKernel("kernel", 0);  // 0 threads!
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -329,7 +331,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelExceedingMaxThreadsFails) {
     // Quasar has 8 DM cores per node (we reserve 2 for internal use)
     auto kernel = MakeMinimalDMKernel("kernel", 9);  // Too many threads!
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -343,7 +345,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
     // Quasar has 4 Tensix cores per node
     auto kernel = MakeMinimalComputeKernel("kernel", 5);  // Too many threads!
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -367,7 +369,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     };
 
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -385,7 +387,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
     dm_config.gen2_data_movement_config = std::nullopt;
 
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -409,9 +411,9 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
         .dfb_spec = MakeMinimalDFB("dfb"),
         .producer_consumer_map = {{producer_node, consumer_node}},
     }};
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("producer_worker", producer_node, {"producer"}),
-        MakeMinimalWorker("consumer_worker", consumer_node, {"consumer"}),
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("producer_work_unit", producer_node, {"producer"}),
+        MakeMinimalWorkUnit("consumer_work_unit", consumer_node, {"consumer"}),
     };
 
     EXPECT_THAT(
@@ -422,9 +424,9 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
 TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameNodeProducerConsumerPairFails) {
     // A remote DFB's producer_consumer_map must have p_node != c_node for every entry.
     // Same-node communication is structurally local and should use a DataflowBufferSpec.
-    // (Note: producer-worker and consumer-worker target_nodes ARE allowed to overlap —
-    //  the cross-node-ness is established per-pair, not per-worker. E.g. A↔B would have
-    //  producer-worker = consumer-worker = {A, B} and is legal.)
+    // (Note: producer-work_unit and consumer-work_unit target_nodes ARE allowed to overlap —
+    //  the cross-node-ness is established per-pair, not per-work_unit. E.g. A↔B would have
+    //  producer-work_unit = consumer-work_unit = {A, B} and is legal.)
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
 
@@ -443,9 +445,9 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameNodeProducerConsumerPairFails) {
         // Degenerate map: node_a → node_a is structurally local.
         .producer_consumer_map = {{node_a, node_b}, {node_b, node_b}},
     }};
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker_a", node_a, {"producer"}),
-        MakeMinimalWorker("worker_b", node_b, {"producer", "consumer"}),
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit_a", node_a, {"producer"}),
+        MakeMinimalWorkUnit("work_unit_b", node_b, {"producer", "consumer"}),
     };
 
     EXPECT_THAT(
@@ -454,7 +456,7 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameNodeProducerConsumerPairFails) {
             ::testing::HasSubstr("producer node and the consumer node are the same")));
 }
 
-TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameWorkerNodeSetSucceedsAtValidation) {
+TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameWorkUnitNodeSetSucceedsAtValidation) {
     // A↔B pattern: producer and consumer kernels both run on {A, B}, communicating
     // exclusively cross-node. Validation should accept this; the runtime gate then
     // reports "not yet supported."
@@ -476,8 +478,8 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameWorkerNodeSetSucceedsAtValidation
         .dfb_spec = MakeMinimalDFB("dfb"),
         .producer_consumer_map = {{node_a, node_b}, {node_b, node_a}},
     }};
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker", both, {"producer", "consumer"}),
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit", both, {"producer", "consumer"}),
     };
 
     // Validation passes; the unsupported-at-runtime gate fires last.
@@ -504,7 +506,7 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBFails) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -527,7 +529,7 @@ TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -726,7 +728,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -752,7 +754,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnknownDFBF
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
@@ -775,27 +777,27 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
 // ============================================================================
-// SECTION 3: WorkerSpec Validation Tests
+// SECTION 3: WorkUnitSpec Validation Tests
 // ============================================================================
 
-TEST_F(ProgramSpecTestQuasar, EmptyWorkerSpecsFails) {
+TEST_F(ProgramSpecTestQuasar, EmptyWorkUnitSpecsFails) {
     ProgramSpec spec;
     spec.program_id = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{};  // Empty!
+    spec.work_units = std::vector<WorkUnitSpec>{};  // Empty!
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, WorkerSpecWithNoKernelsFails) {
+TEST_F(ProgramSpecTestQuasar, WorkUnitSpecWithNoKernelsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -804,16 +806,16 @@ TEST_F(ProgramSpecTestQuasar, WorkerSpecWithNoKernelsFails) {
     auto kernel = MakeMinimalDMKernel("kernel");
     spec.kernels = {kernel};
 
-    WorkerSpec worker;
-    worker.unique_id = "worker";
-    worker.target_nodes = node;
-    worker.kernels = {};  // No kernels!
-    spec.workers = std::vector<WorkerSpec>{worker};
+    WorkUnitSpec work_unit;
+    work_unit.unique_id = "work_unit";
+    work_unit.target_nodes = node;
+    work_unit.kernels = {};  // No kernels!
+    spec.work_units = std::vector<WorkUnitSpec>{work_unit};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, WorkerSpecReferencesUnknownKernelFails) {
+TEST_F(ProgramSpecTestQuasar, WorkUnitSpecReferencesUnknownKernelFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -822,14 +824,14 @@ TEST_F(ProgramSpecTestQuasar, WorkerSpecReferencesUnknownKernelFails) {
     auto kernel = MakeMinimalDMKernel("real_kernel");
     spec.kernels = {kernel};
 
-    // Worker references a kernel that doesn't exist
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"nonexistent_kernel"})};
+    // WorkUnit references a kernel that doesn't exist
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"nonexistent_kernel"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, OverlappingWorkerSpecsFails) {
-    // Two workers cannot target overlapping nodes
+TEST_F(ProgramSpecTestQuasar, OverlappingWorkUnitSpecsFails) {
+    // Two work_units cannot target overlapping nodes
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -839,29 +841,29 @@ TEST_F(ProgramSpecTestQuasar, OverlappingWorkerSpecsFails) {
     auto kernel2 = MakeMinimalDMKernel("kernel2");
     spec.kernels = {kernel1, kernel2};
 
-    // Both workers target the same node
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker1", node, {"kernel1"}), MakeMinimalWorker("worker2", node, {"kernel2"})};
+    // Both work_units target the same node
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit1", node, {"kernel1"}), MakeMinimalWorkUnit("work_unit2", node, {"kernel2"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, KernelNotInAnyWorkerSpecFails) {
+TEST_F(ProgramSpecTestQuasar, KernelNotInAnyWorkUnitSpecFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
 
     auto kernel1 = MakeMinimalDMKernel("kernel1");
-    auto kernel2 = MakeMinimalDMKernel("kernel2");  // Not in any worker!
+    auto kernel2 = MakeMinimalDMKernel("kernel2");  // Not in any work_unit!
     spec.kernels = {kernel1, kernel2};
 
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel1"})};  // Only kernel1
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel1"})};  // Only kernel1
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, WorkerExceedsDMCoreBudgetFails) {
+TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsDMCoreBudgetFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -873,12 +875,12 @@ TEST_F(ProgramSpecTestQuasar, WorkerExceedsDMCoreBudgetFails) {
     auto kernel3 = MakeMinimalDMKernel("dm3", 3);  // Total: 9 > 8
 
     spec.kernels = {kernel1, kernel2, kernel3};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm1", "dm2", "dm3"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm1", "dm2", "dm3"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, WorkerExceedsComputeCoreBudgetFails) {
+TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsComputeCoreBudgetFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -889,13 +891,13 @@ TEST_F(ProgramSpecTestQuasar, WorkerExceedsComputeCoreBudgetFails) {
     auto kernel2 = MakeMinimalComputeKernel("compute2", 3);  // Total: 5 > 4
 
     spec.kernels = {kernel1, kernel2};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"compute1", "compute2"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute1", "compute2"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, WorkerWithMultipleComputeKernelsFails) {
-    // A worker can have at most one compute kernel
+TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
+    // A work_unit can have at most one compute kernel
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -905,14 +907,14 @@ TEST_F(ProgramSpecTestQuasar, WorkerWithMultipleComputeKernelsFails) {
     auto compute2 = MakeMinimalComputeKernel("compute2");
 
     spec.kernels = {compute1, compute2};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"compute1", "compute2"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute1", "compute2"})};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkerMembershipMismatchFails) {
+TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatchFails) {
     // A local DFB requires its producer and consumer kernels to share IDENTICAL
-    // WorkerSpec membership.
+    // WorkUnitSpec membership.
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
 
@@ -928,10 +930,10 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkerMembershipMismatchFa
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    // Producer is on worker_0 only; consumer is on both workers — membership doesn't match.
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker_0", node0, {"producer", "consumer"}),
-        MakeMinimalWorker("worker_1", node1, {"consumer"}),
+    // Producer is on work_unit_0 only; consumer is on both work_units — membership doesn't match.
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit_0", node0, {"producer", "consumer"}),
+        MakeMinimalWorkUnit("work_unit_1", node1, {"consumer"}),
     };
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
@@ -968,7 +970,7 @@ TEST_F(ProgramSpecTestQuasar, DMOnlyProgramSucceeds) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -989,27 +991,27 @@ TEST_F(ProgramSpecTestQuasar, MultiNodeProgramSucceeds) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", nodes, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", nodes, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, MultipleWorkersOnDifferentNodesSucceeds) {
-    // Multiple workers on non-overlapping nodes
+TEST_F(ProgramSpecTestQuasar, MultipleWorkUnitsOnDifferentNodesSucceeds) {
+    // Multiple work_units on non-overlapping nodes
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
     NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
 
     ProgramSpec spec;
-    spec.program_id = "multi_worker_program";
+    spec.program_id = "multi_work_unit_program";
 
     // Kernels span both nodes
     auto kernel = MakeMinimalDMKernel("kernel");
     spec.kernels = {kernel};
 
-    // Two workers, each on a different node
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker0", node0, {"kernel"}), MakeMinimalWorker("worker1", node1, {"kernel"})};
+    // Two work_units, each on a different node
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit0", node0, {"kernel"}), MakeMinimalWorkUnit("work_unit1", node1, {"kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1031,7 +1033,7 @@ TEST_F(ProgramSpecTestQuasar, MaxDMThreadsSucceeds) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1055,7 +1057,7 @@ TEST_F(ProgramSpecTestQuasar, MaxComputeThreadsSucceeds) {
 
     spec.kernels = {dm, compute};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm", "compute"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm", "compute"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1081,7 +1083,7 @@ TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb1, dfb2};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1128,7 +1130,7 @@ TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
         NumVarargsPerNode{{both, 3}, {node_a, 3}};  // node_a listed twice
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", both, {"dm_kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
@@ -1155,7 +1157,7 @@ TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", nodes, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", nodes, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1206,7 +1208,7 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
 //
 // A) ALGORITHM FAILURE
 //    The original naive greedy algorithm could either pass or fail on logically
-//    equivalent ProgramSpecs, depending on the order of kernels and workers.
+//    equivalent ProgramSpecs, depending on the order of kernels and work_units.
 //    The ProgramSpec was legal and solvable (under the simplifying assumption),
 //    but the algorithm failed to find a solution.
 //    This class of failure should not occur with the backtracking solver.
@@ -1220,12 +1222,12 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
 
 // Category A: Order-Independence Test
 // This test verifies that the backtracking solver finds valid assignments,
-// regardless of kernel and worker orderings.
+// regardless of kernel and work_unit orderings.
 TEST_F(ProgramSpecTestQuasar, BacktrackingSolverFindsAssignment_RegardlessOfOrder) {
     // This test verifies that semantically identical ProgramSpecs succeed
     // regardless of the order of:
-    //  - workers in spec.workers
-    //  - kernels within each worker
+    //  - work_units in spec.work_units
+    //  - kernels within each work_unit
     //  - kernel order within the ProgramSpec
     //
     // Scenario:
@@ -1264,18 +1266,18 @@ TEST_F(ProgramSpecTestQuasar, BacktrackingSolverFindsAssignment_RegardlessOfOrde
     auto k_bc = MakeMinimalDMKernel("k_bc", 3);
     auto k_c = MakeMinimalDMKernel("k_c", 3);
 
-    auto worker_a1 = MakeMinimalWorker("worker_a1", node_a, {"k_a", "k_ab"});
-    auto worker_b1 = MakeMinimalWorker("worker_b1", node_b, {"k_ab", "k_bc"});
-    auto worker_c1 = MakeMinimalWorker("worker_c1", node_c, {"k_bc", "k_c"});
-    auto worker_c2 = MakeMinimalWorker("worker_c2", node_c, {"k_c", "k_bc"});
+    auto work_unit_a1 = MakeMinimalWorkUnit("work_unit_a1", node_a, {"k_a", "k_ab"});
+    auto work_unit_b1 = MakeMinimalWorkUnit("work_unit_b1", node_b, {"k_ab", "k_bc"});
+    auto work_unit_c1 = MakeMinimalWorkUnit("work_unit_c1", node_c, {"k_bc", "k_c"});
+    auto work_unit_c2 = MakeMinimalWorkUnit("work_unit_c2", node_c, {"k_c", "k_bc"});
 
-    // Helper to create a ProgramSpec with a given id and worker ordering
+    // Helper to create a ProgramSpec with a given id and work_unit ordering
     auto make_spec =
-        [&](const std::string& id, std::vector<KernelSpec> kernels, const std::vector<WorkerSpec>& workers) {
+        [&](const std::string& id, std::vector<KernelSpec> kernels, const std::vector<WorkUnitSpec>& work_units) {
             ProgramSpec spec;
             spec.program_id = id;
             spec.kernels = std::move(kernels);
-            spec.workers = workers;
+            spec.work_units = work_units;
             return spec;
         };
 
@@ -1293,33 +1295,33 @@ TEST_F(ProgramSpecTestQuasar, BacktrackingSolverFindsAssignment_RegardlessOfOrde
         {k_c, k_a, k_ab, k_bc}, {k_c, k_a, k_bc, k_ab}, {k_c, k_ab, k_a, k_bc},
         {k_c, k_ab, k_bc, k_a}, {k_c, k_bc, k_a, k_ab}, {k_c, k_bc, k_ab, k_a}};
 
-    // All 6 possible permutations of worker orderings (using c1)
-    std::vector<std::vector<WorkerSpec>> worker_permutations1 = {
-        {worker_a1, worker_b1, worker_c1},
-        {worker_a1, worker_c1, worker_b1},
-        {worker_b1, worker_c1, worker_a1},
-        {worker_b1, worker_a1, worker_c1},
-        {worker_c1, worker_a1, worker_b1},
-        {worker_c1, worker_b1, worker_a1}};
+    // All 6 possible permutations of work_unit orderings (using c1)
+    std::vector<std::vector<WorkUnitSpec>> work_unit_permutations1 = {
+        {work_unit_a1, work_unit_b1, work_unit_c1},
+        {work_unit_a1, work_unit_c1, work_unit_b1},
+        {work_unit_b1, work_unit_c1, work_unit_a1},
+        {work_unit_b1, work_unit_a1, work_unit_c1},
+        {work_unit_c1, work_unit_a1, work_unit_b1},
+        {work_unit_c1, work_unit_b1, work_unit_a1}};
 
-    // All 6 possible permutations of worker orderings (using c2)
-    std::vector<std::vector<WorkerSpec>> worker_permutations2 = {
-        {worker_a1, worker_b1, worker_c2},
-        {worker_a1, worker_c2, worker_b1},
-        {worker_b1, worker_c2, worker_a1},
-        {worker_b1, worker_a1, worker_c2},
-        {worker_c2, worker_a1, worker_b1},
-        {worker_c2, worker_b1, worker_a1}};
+    // All 6 possible permutations of work_unit orderings (using c2)
+    std::vector<std::vector<WorkUnitSpec>> work_unit_permutations2 = {
+        {work_unit_a1, work_unit_b1, work_unit_c2},
+        {work_unit_a1, work_unit_c2, work_unit_b1},
+        {work_unit_b1, work_unit_c2, work_unit_a1},
+        {work_unit_b1, work_unit_a1, work_unit_c2},
+        {work_unit_c2, work_unit_a1, work_unit_b1},
+        {work_unit_c2, work_unit_b1, work_unit_a1}};
 
-    // All kernel permutations should succeed with all worker permutations.
+    // All kernel permutations should succeed with all work_unit permutations.
     for (const auto& kernel_perm : kernel_permutations) {
-        for (const auto& worker_perm : worker_permutations1) {
-            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_perm, worker_perm)));
+        for (const auto& work_unit_perm : work_unit_permutations1) {
+            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_perm, work_unit_perm)));
         }
     }
     for (const auto& kernel_perm : kernel_permutations) {
-        for (const auto& worker_perm : worker_permutations2) {
-            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_perm, worker_perm)));
+        for (const auto& work_unit_perm : work_unit_permutations2) {
+            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_perm, work_unit_perm)));
         }
     }
 }
@@ -1370,10 +1372,10 @@ TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNod
 
     spec.kernels = {kernel_a, kernel_b, kernel_c};
 
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker("worker_00", node_00, {"kernel_a", "kernel_b"}),
-        MakeMinimalWorker("worker_01", node_01, {"kernel_a", "kernel_c"}),
-        MakeMinimalWorker("worker_02", node_02, {"kernel_b", "kernel_c"}),
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work_unit_00", node_00, {"kernel_a", "kernel_b"}),
+        MakeMinimalWorkUnit("work_unit_01", node_01, {"kernel_a", "kernel_c"}),
+        MakeMinimalWorkUnit("work_unit_02", node_02, {"kernel_b", "kernel_c"}),
     };
 
     // EXPECTED BEHAVIOR: FAILS due to simplifying assumption violation.
@@ -1404,7 +1406,7 @@ TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNod
 static_assert(
     std::is_aggregate_v<ProgramSpec>, "ProgramSpec must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<WorkerSpec>, "WorkerSpec must remain an aggregate to support designated initializers");
+    std::is_aggregate_v<WorkUnitSpec>, "WorkUnitSpec must remain an aggregate to support designated initializers");
 static_assert(
     std::is_aggregate_v<KernelSpec>, "KernelSpec must remain an aggregate to support designated initializers");
 static_assert(
@@ -1505,16 +1507,16 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
     EXPECT_TRUE(borrowed_dfb.disable_implicit_sync);
 }
 
-TEST(AggregateSpecTypes, WorkerSpecDesignatedInitializers) {
-    // Demonstrates constructing WorkerSpec with designated initializers
-    WorkerSpec worker{
-        .unique_id = "my_worker",
+TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
+    // Demonstrates constructing WorkUnitSpec with designated initializers
+    WorkUnitSpec work_unit{
+        .unique_id = "my_work_unit",
         .kernels = {"kernel1", "kernel2"},
         .target_nodes = NodeCoord{0, 0},
     };
 
-    EXPECT_EQ(worker.unique_id, "my_worker");
-    EXPECT_EQ(worker.kernels.size(), 2u);
+    EXPECT_EQ(work_unit.unique_id, "my_work_unit");
+    EXPECT_EQ(work_unit.kernels.size(), 2u);
 }
 
 TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
@@ -1620,10 +1622,10 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                     .data_format_metadata = tt::DataFormat::Float16_b,
                 },
             },
-        .workers =
+        .work_units =
             {
-                WorkerSpec{
-                    .unique_id = "worker",
+                WorkUnitSpec{
+                    .unique_id = "work_unit",
                     .kernels = {"producer", "consumer"},
                     .target_nodes = NodeCoord{0, 0},
                 },
@@ -1633,7 +1635,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
     EXPECT_EQ(spec.program_id, "my_program");
     EXPECT_EQ(spec.kernels.size(), 2u);
     EXPECT_EQ(spec.dataflow_buffers.size(), 1u);
-    EXPECT_EQ(spec.workers.size(), 1u);
+    EXPECT_EQ(spec.work_units.size(), 1u);
 }
 
 TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
@@ -1711,7 +1713,7 @@ TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1727,7 +1729,7 @@ TEST_F(ProgramSpecTestGen1, TwoDMKernelsDifferentProcessorsSucceeds) {
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
 
     spec.kernels = {k0, k1};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"k0", "k1"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1742,7 +1744,7 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedDMKernelFails) {
     kernel.num_threads = 2;
 
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
@@ -1759,7 +1761,7 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
     kernel.num_threads = 2;
 
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"compute_kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
@@ -1777,7 +1779,7 @@ TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
     auto kernel = MakeMinimalDMKernel("dm_kernel");
 
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
@@ -1795,7 +1797,7 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
     auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_0);  // conflict
 
     spec.kernels = {k0, k1};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"k0", "k1"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
@@ -1820,7 +1822,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
 
     auto kernel = MakeMinimalGen1DMKernel("dm_kernel");
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", oob_node, {"dm_kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", oob_node, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
@@ -1836,7 +1838,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
 
     auto kernel = MakeMinimalGen1DMKernel("dm_kernel");
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", oob_node, {"dm_kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", oob_node, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
@@ -1908,7 +1910,7 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
     auto k1 = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_1);  // duplicate name
 
     spec.kernels = {k0, k1};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },

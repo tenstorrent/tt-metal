@@ -83,7 +83,7 @@ struct KernelSpec {
     std::variant<SourceFilePath, SourceCode> source;
 
     // NOTE: The kernel's target node set is a DERIVED property, based on the
-    //       WorkerSpec(s) that include this kernel.
+    //       WorkUnitSpec(s) that include this kernel.
 
     // Kernel threading:
     // Number of kernel threads

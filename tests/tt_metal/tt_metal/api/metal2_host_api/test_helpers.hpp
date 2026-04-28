@@ -30,7 +30,7 @@ inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 // ============================================================================
 //
 // Note: KernelSpec and DataflowBufferSpec no longer carry target_nodes.
-// Placement is stated on WorkerSpec; pass node sets to MakeMinimalWorker instead.
+// Placement is stated on WorkUnitSpec; pass node sets to MakeMinimalWorkUnit instead.
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen2/Quasar)
 inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint8_t num_threads = 1) {
@@ -83,12 +83,12 @@ inline DataflowBufferSpec MakeMinimalDFB(
     };
 }
 
-// Helper to create a minimal valid WorkerSpec
-inline WorkerSpec MakeMinimalWorker(
+// Helper to create a minimal valid WorkUnitSpec
+inline WorkUnitSpec MakeMinimalWorkUnit(
     const std::string& name,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
     const std::vector<KernelSpecName>& kernels) {
-    return WorkerSpec{
+    return WorkUnitSpec{
         .unique_id = name,
         .kernels = kernels,
         .target_nodes = nodes,
@@ -128,7 +128,7 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
-    spec.workers = {MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"})};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_kernel", "compute_kernel"})};
 
     return spec;
 }
@@ -155,8 +155,8 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
 
-    // Create a WorkerSpec
-    spec.workers = {MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"})};
+    // Create a WorkUnitSpec
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_kernel", "compute_kernel"})};
 
     return spec;
 }
