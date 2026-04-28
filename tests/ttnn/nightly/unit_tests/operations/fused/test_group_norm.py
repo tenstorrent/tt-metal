@@ -66,10 +66,10 @@ def test_group_norm_large_ex_external_cb(device, specify_grid):
 
 
 @pytest.mark.parametrize("specify_grid", [True, False])
-def test_group_norm_sharded_ex_external_cb_zero_fill(device, specify_grid):
+def test_group_norm_sharded_ex_external_cb_gap_zeroing(device, specify_grid):
     """Sharded analog of test_group_norm_large_ex_external_cb (regression for #41690).
 
-    Stresses the cb_ex_external zero-fill on the sharded reader path
+    Stresses cb_ex_external gap-byte zeroing on the sharded reader path
     (reader_mcast_sender_unary_sharded_gn_v2.cpp). cb_ex_external is sized as
     a single tile, into which each per-core slot writes only datum_size_bytes
     at a 16-byte pitch; the rest of the tile is read by the downstream
@@ -82,11 +82,17 @@ def test_group_norm_sharded_ex_external_cb_zero_fill(device, specify_grid):
           slots span 4 * 16 == 64 bytes, leaving 2048 - 64 == 1984 bytes of
           unused tile tail.
 
-    Multiple groups-per-core × the n=0,1 sub-passes cycle the producer through
-    the cb_ex_external L1 region many times, so any per-iter zero-fill bug
-    (or removal of the kernel-startup zero_whole_cb) compounds across
-    iterations and corrupts the per-group mean/var reduction enough to fail
-    the tight numeric tolerances below.
+    The sharded reader currently relies on the documented packer-zeroing
+    contract of `reduce<…, REDUCE_SCALAR>` (see reduce.h's reduce_init doc)
+    to keep those gap bytes zero -- the SELF read from cb_ex_partial is a
+    full single_tile_size_bytes copy that uses cb_ex_partial's
+    packer-zeroed non-result datums as a free zero-init for cb_ex_external.
+    Multiple groups-per-core × the n=0,1 sub-passes cycle the producer
+    through the cb_ex_external L1 region many times, so any breakage of
+    that zeroing (e.g. switching the cb_ex_partial producer to a
+    non-REDUCE_SCALAR pack without updating the reader) would corrupt the
+    per-group mean/var reduction enough to fail the tight numeric
+    tolerances below.
     """
     torch.manual_seed(0)
 

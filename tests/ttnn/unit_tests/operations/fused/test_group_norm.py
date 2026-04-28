@@ -372,7 +372,10 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     ],
 )
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, W, num_groups, use_welford):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(
+    device, N, C, H, W, num_groups, use_welford, specify_grid
+):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -439,7 +442,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         inplace=False,
         use_welford=use_welford,
     )
@@ -522,7 +525,9 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
-def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode=False):
+def run_sdxl_base_group_norm_test(
+    device, N, C, H, W, use_welford, layout, inplace, specify_grid=True, perf_test_mode=False
+):
     num_groups = 32  #  always 32 for SDXL Base
     if layout == ttnn.TILE_LAYOUT and inplace:
         pytest.skip("Tile layout requires non-inplace tensors.")
@@ -565,7 +570,7 @@ def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inpla
         num_groups=num_groups,
         input_mask=input_mask_tensor,
         memory_config=tt_input_tensor.memory_config(),
-        core_grid=core_grid,
+        core_grid=core_grid if specify_grid else None,
         inplace=inplace,
         use_welford=use_welford,
     )
@@ -598,28 +603,30 @@ def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inpla
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+@pytest.mark.parametrize("specify_grid", [True, False])
 # Paramemeters need to stay consistent with usage in
 # models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
-def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid, perf_test_mode=False):
     # Only one test case has C == 512, which has TILE_LAYOUT and inplace False
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
     N, C, H, W = input_shape
     layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
     inplace = layout != ttnn.TILE_LAYOUT
-    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, specify_grid, perf_test_mode)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+@pytest.mark.parametrize("specify_grid", [True, False])
 # Oppositive of previous test in terms of inplace, for full coverage purposes.
-def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_test_mode=False):
+def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, specify_grid, perf_test_mode=False):
     # Only one test case has C == 512, which has TILE_LAYOUT and inplace True
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace False
     N, C, H, W = input_shape
     layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
     inplace = layout != ttnn.TILE_LAYOUT
-    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, specify_grid, perf_test_mode)
 
 
 @pytest.mark.parametrize(
@@ -641,8 +648,9 @@ def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("specify_grid", [True, False])
 @run_for_blackhole("blackhole specific tests")
-def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
+def test_sdxl_base_group_norm_bh(device, input_shape, specify_grid, perf_test_mode=False):
     torch.manual_seed(0)
 
     num_groups = 32  #  always 32 for SDXL Base
@@ -685,7 +693,7 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
         num_groups=num_groups,
         input_mask=input_mask_tensor,
         memory_config=tt_input_tensor.memory_config(),
-        core_grid=core_grid,
+        core_grid=core_grid if specify_grid else None,
         inplace=inplace,
         use_welford=False,
     )
@@ -719,7 +727,8 @@ def generate_sdxl_test_inputs_neg_mask():
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs_neg_mask())
-def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=False):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)
@@ -794,7 +803,7 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
         input_mask=input_mask_tensor,
         negative_mask=input_negative_mask_tensor,
         memory_config=sharded_mem_config,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         weight=gamma_t,
         bias=beta_t,
     )
@@ -824,7 +833,8 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
 @pytest.mark.parametrize("H", [64])
 @pytest.mark.parametrize("W", [64])
 @pytest.mark.parametrize("num_groups", [32])
-def test_group_norm_compute_config(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_compute_config(device, N, C, H, W, num_groups, specify_grid):
     """
     Test that a high-accuracy compute kernel config produces a higher PCC with torch
     than a lower-accuracy compute kernel config.
@@ -871,7 +881,7 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
             num_groups=num_groups,
             input_mask=tt_input_mask_tensor,
             memory_config=sharded_mem_config,
-            core_grid=grid_size,
+            core_grid=grid_size if specify_grid else None,
             compute_kernel_config=compute_config,
         )
         tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
@@ -923,8 +933,9 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("specify_grid", [True, False])
 @run_for_blackhole("blackhole specific tests")
-def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative_mask):
+def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative_mask, specify_grid):
     assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
 
     skip_if_not_blackhole_20_cores(device)
@@ -1006,7 +1017,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         epsilon=eps,
     )
     output_tensor = ttnn.to_torch(output_tensor)
@@ -1030,7 +1041,8 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
 @pytest.mark.parametrize("H", [64])
 @pytest.mark.parametrize("W", [64])
 @pytest.mark.parametrize("num_groups", [32])
-def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
     """
     Test that a group norm without an input mask produces the same result as torch.
     """
@@ -1067,7 +1079,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
             tt_input_tensor,
             num_groups=num_groups,
             memory_config=sharded_mem_config,
-            core_grid=grid_size,
+            core_grid=grid_size if specify_grid else None,
             compute_kernel_config=compute_config,
         )
         tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
@@ -1222,7 +1234,10 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
     ],
     ids=["no_affine", "weight_only", "bias_only"],
 )
-def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_welford, has_weight, has_bias):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_optional_weight_bias(
+    device, N, C, H, W, num_groups, use_welford, has_weight, has_bias, specify_grid
+):
     """Verify group_norm with all combinations of optional weight/bias, for both welford and legacy."""
     torch.manual_seed(0)
 
@@ -1292,7 +1307,7 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
         weight=gamma_t,
         bias=beta_t,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         inplace=False,
         use_welford=use_welford,
     )
@@ -1304,7 +1319,10 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
         pcc_threshold = 0.99
         rtol = 0.14
         atol = 0.3
-        frobenius_threshold = 0.06
+        if specify_grid:
+            frobenius_threshold = 0.06
+        else:
+            frobenius_threshold = 0.065
     else:
         pcc_threshold = 0.9999
         rtol = 0.065

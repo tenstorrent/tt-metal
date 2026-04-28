@@ -253,28 +253,40 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external_tiles_required = (cb_ex_external_data_bytes / single_tile_size_bytes) +
                                                        ((cb_ex_external_data_bytes % single_tile_size_bytes) != 0);
 
-    // Whether the cb_ex_external buffer needs to be zero-filled. Two
-    // independent sources of stale CB contents:
-    //   (A) intra-slot gap: each per-core slot is 16 bytes wide but the NOC
-    //       read writes only the first datum_size_bytes; bytes
-    //       [datum_size_bytes, 16) of every used slot need to be zero.
-    //       Required iff datum_size_bytes < 16 (compile-time check).
-    //   (B) trailing tile gap: when the meaningful data does not fill the last
-    //       tile exactly, the tail bytes need to be zero.
+    // Two independent sources of stale L1 contents in cb_ex_external that the
+    // downstream `reduce_tile` SUM consumer would otherwise sum into the
+    // global reduction:
+    //   (A) intra-slot gap: each per-core slot is 16 bytes wide (see the
+    //       hardcoded `l1_write_addr_external += 16` increments below) but
+    //       the NOC read writes only the first datum_size_bytes; bytes
+    //       [datum_size_bytes, 16) of every used slot are never written.
+    //       Present iff datum_size_bytes < 16 (compile-time check).
+    //   (B) trailing tile gap: when the total meaningful data
+    //       (cb_ex_external_data_bytes) does not exactly fill the integer
+    //       number of reserved tiles (cb_ex_external_tiles_required), the
+    //       bytes past the last used slot in the last tile are never written.
+    //
+    // Fix: zero-fill cb_ex_external once at kernel startup. The per-iteration
+    // writes below only touch the per-core slot data positions (first
+    // datum_size_bytes of every 16-byte slot); the gap bytes are never
+    // written by this kernel, and the consumer (compute kernel's reduce_tile)
+    // is read-only on this CB. So the gap bytes stay zero across every
+    // iteration.
+    //
+    // Note: this mcast reader cannot use the "single-tile-overwrite trick" that the
+    // non-welford sharded reader (reader_mcast_sender_unary_sharded_gn_v2.cpp) uses.
+    // The sharded reader reserves a single tile per iteration and uses a
+    // full-tile SELF read from cb_ex_partial as a free zero-init, which works
+    // because cb_ex_partial there is `reduce<…, REDUCE_SCALAR>`-packed and
+    // therefore documented to have exact zeros at every non-result datum.
+    // This mcast reader instead reserves cb_ex_external_tiles_required tiles
+    // per cur_read_iteration and writes per-core scalars across all of them
+    // at a 16-byte slot pitch -- when num_mcast_cores * 16 does not divide
+    // single_tile_size_bytes, slot writes straddle tile boundaries and the
+    // 2nd-and-later tiles never get a full-tile overwrite to clear their gap
+    // bytes.
     constexpr bool needs_cb_ex_external_zero_fill =
         (datum_size_bytes < 16) || (cb_ex_external_data_bytes < cb_ex_external_tiles_required * single_tile_size_bytes);
-
-    // Zero-fill cb_ex_external ONCE at kernel startup. The per-iteration
-    // writes below only touch the per-core slot data positions (the first
-    // datum_size_bytes of every slot at offset out_block_index * num_mcast_cores * 16
-    // + core_index * 16); the gap bytes are never written by this kernel,
-    // and the consumer (compute kernel's reduce_tile) is read-only on this
-    // CB. So the gap bytes stay zero across every iteration, with no
-    // per-iter NOC traffic. This relies on the program factory sizing
-    // cb_ex_external such that the producer reservations cycle back to the
-    // same L1 region on every iteration; the helper sizes itself from the
-    // runtime CB interface so it remains correct even if the CB is later
-    // resized.
     if constexpr (needs_cb_ex_external_zero_fill) {
         zero_whole_cb(cb_ex_external_id, noc, noc_coord_x[0], noc_coord_y[0]);
     }
@@ -335,14 +347,9 @@ void kernel_main() {
 
                             // read self Ex partial - this slot is treated the same as every
                             // other core's slot (datum_size_bytes wide, advancing by 16).
-                            // Bytes [datum_size_bytes, 16) of the slot, plus any trailing tile
-                            // bytes past the last used slot, must read as zero so they don't
-                            // pollute the downstream reduce_tile sum. Either the kernel-startup
-                            // zero_whole_cb above (when needs_cb_ex_external_zero_fill is true)
-                            // has already cleared them and per-iter writes only touch slot data
-                            // positions so they remain zero, or the slot pitch (16) equals the
-                            // per-write size (datum_size_bytes == 16) AND the used slots tile
-                            // exactly, so there are no untouched bytes to worry about.
+                            // Gap bytes inside cb_ex_external are kept zero by the
+                            // kernel-startup zero_whole_cb call above (or are statically absent
+                            // when datum_size_bytes == 16 and the slots tile exactly).
                             uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? cb_ex_partial.get_read_ptr() : cb_ex2_partial.get_read_ptr();
                             experimental::UnicastEndpoint remote_ep;

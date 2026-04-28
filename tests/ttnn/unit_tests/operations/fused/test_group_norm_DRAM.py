@@ -311,7 +311,8 @@ def test_group_norm_no_input_mask_DRAM(
         # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
     ],
 )
-def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -413,8 +414,9 @@ def _nearest_32_per_core(x, core):
         (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
     ],
 )
+@pytest.mark.parametrize("specify_grid", [True, False])
 @run_for_blackhole("blackhole specific tests")
-def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps):
+def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid):
     skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(0)
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)

@@ -33,17 +33,23 @@ def test_dram_group_norm_welford_reciprocal_vae(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-def test_block_sharded_group_norm_sdxl(device):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_block_sharded_group_norm_sdxl(device, specify_grid):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm
 
-    test_sdxl_base_group_norm(device, (1, 1920, 32, 32), use_welford=False, perf_test_mode=USE_PERF_TEST_MODE)
+    test_sdxl_base_group_norm(
+        device, (1, 1920, 32, 32), use_welford=False, specify_grid=specify_grid, perf_test_mode=USE_PERF_TEST_MODE
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
-def test_block_sharded_group_norm_negative_mask_sdxl(device):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_block_sharded_group_norm_negative_mask_sdxl(device, specify_grid):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm_negative_mask
 
-    test_sdxl_base_group_norm_negative_mask(device, (1, 640, 128, 128), perf_test_mode=USE_PERF_TEST_MODE)
+    test_sdxl_base_group_norm_negative_mask(
+        device, (1, 640, 128, 128), specify_grid=specify_grid, perf_test_mode=USE_PERF_TEST_MODE
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
