@@ -352,8 +352,9 @@ public:
 #endif
         DPRINT << "release_pages: sem_addr: " << (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id)
                << "sem id: " << downstream_sem_id << ENDL();
-        noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+        volatile tt_l1_ptr uint32_t* local_sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sem_id));
+        *local_sem_addr += n;
     }
 
     uint32_t additional_count{0};
