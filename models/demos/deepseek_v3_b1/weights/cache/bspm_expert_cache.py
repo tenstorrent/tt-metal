@@ -128,6 +128,7 @@ def get_or_create_bspm_expert_tp8(
     shard_dim: int,
     K_per_device: int,
     N_padded_per_device: int,
+    subblock_k: int | None = None,
     subblock_n: int = 1,
     move_to_device: bool = True,
 ) -> "CompressedTensor":
@@ -199,6 +200,7 @@ def get_or_create_bspm_expert_tp8(
             num_banks,
             mesh_shape,
             shard_dim,
+            subblock_k=subblock_k,
             subblock_n=subblock_n,
         )
         # Flatten 4D (mesh_rows, mesh_cols, K_per_device, N_padded_per_device) to 2D for storage.

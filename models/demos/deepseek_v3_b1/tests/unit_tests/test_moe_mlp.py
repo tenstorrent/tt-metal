@@ -1068,7 +1068,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     # ── Run fused MoE op with reduce (looping inside kernel) ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
-    num_iterations = 1
+    num_iterations = 100
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r.ttnn_residual_mcast_src,
         r.ttnn_gate_mm_weights,

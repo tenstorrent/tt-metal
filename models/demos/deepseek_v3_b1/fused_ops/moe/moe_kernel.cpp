@@ -74,7 +74,13 @@ struct Core {
     struct Routed {
         static constexpr bool is_gate_mm_core = get_named_compile_time_arg_val("is_gate_mm_core") == 1;
         static constexpr bool is_gate_proj_core = get_named_compile_time_arg_val("is_gate_proj_core") == 1;
-        // 16-core down_proj grid (8 primaries + 8 secondaries) when gather_to_next=True;
+        // 16-core gate_proj grid (8 primaries + 8 secondaries) when K-split is on for
+        // gate_proj (cores_per_dram_bank=2, k_parallel_per_bank=2). Both senders (= K-slice 0)
+        // and the K-reducer (= primary, K-slice 1) must be active so partials reduce on the
+        // primary. Falls back to is_gate_proj_core (8 cores) when K-split is off.
+        static constexpr bool is_gate_proj_streamer_core =
+            get_named_compile_time_arg_val("is_gate_proj_streamer_core") == 1;
+        // 16-core down_proj grid (8 primaries + 8 secondaries) when primary_at_last_offset=True;
         // 8 cores otherwise. Senders (post-swap = secondaries) MUST be active so they
         // NOC-write their accum onto the receiver/primary.
         static constexpr bool is_down_proj_streamer_core =
@@ -88,9 +94,11 @@ struct Core {
         static constexpr bool is_mcast_receiver_core =
             get_named_compile_time_arg_val("is_shared_mcast_receiver_core") == 1;
     };
-    // Combined: cores that receive the input mcast
+    // Combined: cores that receive the input mcast. is_gate_proj_streamer_core is a
+    // superset of is_gate_proj_core (16 cores vs 8 in K-split mode) so it must consume
+    // the input mcast for matmul to have its activation.
     static constexpr bool is_input_mcast_receiver =
-        Routed::is_gate_mm_core || Routed::is_gate_proj_core || Shared::is_compute_core;
+        Routed::is_gate_mm_core || Routed::is_gate_proj_streamer_core || Shared::is_compute_core;
 
     // Reduce-to-one core roles
     static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
@@ -185,7 +193,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
-                get_named_compile_time_arg_val("gate_proj_gather_to_next"),
+                get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_internal_acc")>;
 
@@ -227,7 +235,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
-                get_named_compile_time_arg_val("up_proj_gather_to_next"),
+                get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_internal_acc")>;
 
@@ -285,7 +293,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
-                get_named_compile_time_arg_val("down_proj_gather_to_next"),
+                get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_internal_acc")>;
 
@@ -872,7 +880,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_core_in_bank_idx"),
                 get_named_compile_time_arg_val("gate_proj_next_core_noc_x"),
                 get_named_compile_time_arg_val("gate_proj_next_core_noc_y"),
-                get_named_compile_time_arg_val("gate_proj_gather_to_next"),
+                get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_internal_acc")>;
 
@@ -910,7 +918,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_core_in_bank_idx"),
                 get_named_compile_time_arg_val("up_proj_next_core_noc_x"),
                 get_named_compile_time_arg_val("up_proj_next_core_noc_y"),
-                get_named_compile_time_arg_val("up_proj_gather_to_next"),
+                get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_internal_acc")>;
 
@@ -969,7 +977,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_core_in_bank_idx"),
                 get_named_compile_time_arg_val("down_proj_next_core_noc_x"),
                 get_named_compile_time_arg_val("down_proj_next_core_noc_y"),
-                get_named_compile_time_arg_val("down_proj_gather_to_next"),
+                get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_internal_acc")>;
 
@@ -1252,15 +1260,18 @@ void kernel_main() {
 #endif  // ENABLE_ROUTING
 
         // 3. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
-        //     CB 1 (act) is shared: on gate_proj cores it is also consumed by gate_proj (step 6)
-        //     and up_proj (step 7, which pops it). So we only pop here on non-gate_proj cores.
+        //     CB 1 (act) is shared: on gate_proj_streamer cores (16 in K-split: primaries +
+        //     K-senders) it is also consumed by gate_proj (step 6) and up_proj (step 7,
+        //     which pops it on all streamers). So we only pop here on non-streamer cores.
+        //     Using is_gate_proj_streamer_core (not is_gate_proj_core) — otherwise K-senders
+        //     pop cb_in0 here, leaving gate_proj_mm's cb_wait_front waiting on empty CB.
         {
             DeviceZoneScopedN("SHARED_GU_MATMUL");
             deepseek_b1_ops::KNSlicedMatmul::Op<
                 Moe::Shared::GUMatmulCTArgs,
                 Core::Shared::is_compute_core,
-                !Core::Routed::is_gate_proj_core,  // pop_act
-                false>                             // pop_weights
+                !Core::Routed::is_gate_proj_streamer_core,  // pop_act
+                false>                                      // pop_weights
                 shared_gu_matmul;
             shared_gu_matmul(moe.shared.gu_matmul_args);
         }
@@ -1294,8 +1305,11 @@ void kernel_main() {
         }
 
         // 5. Mcast Index: Broadcast expert indices to all matmul-streamer cores.
-        // IsReceiverCore=is_down_proj_streamer_core (16 cores in gather mode, 8 otherwise);
-        // it's a superset of is_gate_proj_core so gate/up still get cb_index pushed.
+        // IsReceiverCore=is_down_proj_streamer_core (16 cores in down gather mode, 8 otherwise).
+        // Invariant: down gather and gate K-split are configured together (both use the same
+        // primary_worker_cores + cores_per_dram_bank=2), so is_down_proj_streamer_core's
+        // 16-core set IS the same set as is_gate_proj_streamer_core. Both gate/up matmul
+        // (16 cores in K-split) and down (16 cores in gather) need the index for weight reads.
         // Other grid cores just drain the semaphore (no CB ops).
         {
             DeviceZoneScopedN("MCAST_INDEX");
@@ -1349,23 +1363,56 @@ void kernel_main() {
         // 6. gate_proj: DRAM Matmul Expert Compressed + SiLU (PopIn0=false: keep input for up_proj).
         //    ResetCBIn1=true so the kernel's SW write-ptr wrap aligns with the CB's
         //    physical wrap — required because GP and UP share cb_in1 back-to-back.
+        //    IsActiveCore = is_gate_proj_streamer_core (16 cores in K-split mode = both
+        //    K-senders and the K-reducer/primary; 8 cores = primaries only otherwise).
         {
             DeviceZoneScopedN("GATE_PROJ");
             constexpr uint32_t gp_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-            deepseek_b1_ops::MatmulExpertCompressedDRAM::
-                Op<Moe::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, false, true, gp_cb_in1_addr>
-                    gate_proj_mm;
+            // pop_out=true on secondary streamer cores only (= streamer && !primary).
+            // Senders' cb_out is internal (their NCRISC NOC-wrote real bytes to the
+            // primary; no downstream op reads sender's cb_out), so they must drain
+            // for multi-iter. Primaries' cb_out is consumed by mul → don't pop.
+            constexpr bool gp_secondary_pop =
+                Core::Routed::is_gate_proj_streamer_core && !Core::Routed::is_gate_proj_core;
+            deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+                Moe::Routed::GateProjCTArgs,
+                Core::Routed::is_gate_proj_streamer_core,
+                /*pop_in0=*/false,
+                /*pop_index=*/false,
+                /*ResetCBIn1=*/true,
+                gp_cb_in1_addr,
+                /*pop_out=*/gp_secondary_pop>
+                gate_proj_mm;
             gate_proj_mm();
         }
 
         // 7. up_proj: DRAM Matmul Expert Compressed (PopIn0=true: last consumer of gate input; PopIndex=false).
         //    Same cb_in1 as gate_proj → use gate_proj_in1_buf_addr as CBIn1ResetAddr.
+        //    SkipNocTridReset=true: gate's leftover NCRISC writes (incl. atomic
+        //    sem_inc on dynamic NOC where atomic shares cmd buf with reads) carry
+        //    a non-zero trid; calling reset_noc_trid_barrier_counter at up's entry
+        //    would clear those counters mid-flight and the late ack would wrap them,
+        //    making up's read barriers hang. Skip the reset → counters drain naturally.
         {
             DeviceZoneScopedN("UP_PROJ");
             constexpr uint32_t up_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-            deepseek_b1_ops::MatmulExpertCompressedDRAM::
-                Op<Moe::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, false, true, up_cb_in1_addr>
-                    up_proj;
+            // IsActiveCore = is_gate_proj_streamer_core (matches gate_proj). Up_proj
+            // shares cb_in1 with gate_proj (same L1 buf addr) so it must run on the same
+            // 16-core grid in K-split mode. pop_in0=true fires on all 16 cores → cb_in0
+            // (activation) is freed so the next iter's mcast can land.
+            // pop_out: same rationale as gate_proj — drain secondary streamer cores' cb_out.
+            constexpr bool up_secondary_pop =
+                Core::Routed::is_gate_proj_streamer_core && !Core::Routed::is_gate_proj_core;
+            deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+                Moe::Routed::UpProjCTArgs,
+                Core::Routed::is_gate_proj_streamer_core,
+                /*pop_in0=*/true,
+                /*pop_index=*/false,
+                /*ResetCBIn1=*/true,
+                up_cb_in1_addr,
+                /*pop_out=*/up_secondary_pop,
+                /*SkipNocTridReset=*/true>
+                up_proj;
             up_proj();
         }
 
@@ -1471,14 +1518,34 @@ void kernel_main() {
         }
 
         // 12. down_proj: DRAM Matmul Expert Compressed (PopIndex=true: last consumer of expert index)
-        //     Active on `is_down_proj_streamer_core` (16 cores when gather_to_next=True,
+        //     Active on `is_down_proj_streamer_core` (16 cores when primary_at_last_offset=True,
         //     8 cores otherwise) so senders (= secondaries post-swap) NOC-write their
         //     accum onto the receiver/primary.
+        //     SkipNocTridReset=true: same rationale as up_proj — up's leftover NCRISC
+        //     writes (incl. atomic sem_inc) carry trid from earlier reads; resetting
+        //     trid counters here would wrap them when late acks arrive.
+        //     ResetCBIn1=true: required for multi-iter — without it, kernel-managed
+        //     l1_write_addr_in1 wraps at (drifted_wr_ptr + size) while framework wr_ptr
+        //     wraps at the CB's physical end, so iter 2's writes land at a different
+        //     L1 region than the framework's tracked rd_ptr → UNPACK reads stale bytes.
         {
             DeviceZoneScopedN("DOWN_PROJ");
-            deepseek_b1_ops::MatmulExpertCompressedDRAM::
-                Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_down_proj_streamer_core, true, true>
-                    down_proj;
+            constexpr uint32_t dp_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
+            // pop_out=true on secondary streamer cores only. Senders' cb_out is
+            // internal (their gather NOC write went to the primary's cb_out slot 0);
+            // primaries' cb_out is consumed by eltwise_add → don't pop on primary.
+            constexpr bool dp_secondary_pop =
+                Core::Routed::is_down_proj_streamer_core && !Core::Routed::is_gate_proj_core;
+            deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+                Moe::Routed::DownProjCTArgs,
+                Core::Routed::is_down_proj_streamer_core,
+                /*pop_in0=*/true,
+                /*pop_index=*/true,
+                /*ResetCBIn1=*/true,
+                dp_cb_in1_addr,
+                /*pop_out=*/dp_secondary_pop,
+                /*SkipNocTridReset=*/true>
+                down_proj;
             down_proj();
         }
 

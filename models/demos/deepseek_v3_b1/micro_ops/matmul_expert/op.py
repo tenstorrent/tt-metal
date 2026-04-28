@@ -328,7 +328,7 @@ def _build_program_for_device(
     partial_sem_addr: int = 0,
     pipeline_sem_addr: int = 0,
     num_loop_iters: int = 1,
-    gather_to_next: bool = False,
+    primary_at_last_offset: bool = False,
     gather_sync_sem_addr: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
@@ -506,11 +506,11 @@ def _build_program_for_device(
         # Ops also drain their own cb_out pushes via a pop_out template flag.
         ("num_loop_iters", num_loop_iters),
         ("cb_in1_dram_buf_addr", in1_backing_tensor.buffer_address()),
-        # gather_to_next (accum mode only): when 1, sender NOC-writes its accum
+        # primary_at_last_offset (accum mode only): when 1, sender NOC-writes its accum
         # result onto the next core in the bank so the bank's full N output ends
         # up on the receiver (last core in bank). Output tensor's per-core shard
         # must be sized cores_per_dram_bank * per_core_n when this is enabled.
-        ("gather_to_next", 1 if gather_to_next else 0),
+        ("primary_at_last_offset", 1 if primary_at_last_offset else 0),
         # Global L1 sem for sender TRISC → NCRISC sync (gather mode only).
         # TRISC inc(1) once after the per-expert accum loop, NCRISC spins on
         # load >= 1 then dec(1). See kernel hpp for full rationale.
@@ -929,7 +929,7 @@ def create_dram_expert_tensors_multi_device(
     k_parallel_per_bank: int = 1,
     allocate_in1_backing: bool = True,
     primary_worker_cores=None,
-    gather_to_next: bool = False,
+    primary_at_last_offset: bool = False,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
@@ -938,9 +938,9 @@ def create_dram_expert_tensors_multi_device(
     ``primary_worker_cores`` can override the canonical bank-worker order; callers
     that pass per-core bank IDs must use the same order here.
 
-    ``gather_to_next``: when True, place the primary core at the LAST in-bank
+    ``primary_at_last_offset``: when True, place the primary core at the LAST in-bank
     offset of compute_cores_list so it gets ``core_in_bank_idx = cores_per_bank-1``
-    and matches the kernel's ``is_gather_receiver`` derivation. The bank's
+    and matches the kernel's ``is_in_bank_primary`` derivation. The bank's
     gathered N output then lands on the primary's L1 — invisible to downstream
     consumers, which still see ``primary_cores_list`` unchanged.
 
@@ -969,9 +969,9 @@ def create_dram_expert_tensors_multi_device(
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):
-            # gather_to_next: reverse the in-bank offset so the primary lands at
+            # primary_at_last_offset: reverse the in-bank offset so the primary lands at
             # the LAST position (= core_in_bank_idx cores_per_bank-1 = receiver).
-            x_offset = (cores_per_dram_bank - 1) - offset if gather_to_next else offset
+            x_offset = (cores_per_dram_bank - 1) - offset if primary_at_last_offset else offset
             compute_cores_list.append(ttnn.CoreCoord(primary_core.x + x_offset, primary_core.y))
     compute_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores_list]
@@ -1039,7 +1039,7 @@ def create_dram_expert_tensors_multi_device(
     # Pipeline ring sem (per-core, cores_per_bank > 1) — global so we pass L1 addr.
     pipeline_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     pipeline_sem_addr = ttnn.get_global_semaphore_address(pipeline_sem)
-    # Gather TRISC → NCRISC sync (sender side, gather_to_next mode only). Replaces
+    # Gather TRISC → NCRISC sync (sender side, primary_at_last_offset mode only). Replaces
     # the 1-page cb_gather_sync; same protocol shape but a raw L1 sem.
     gather_sync_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     gather_sync_sem_addr = ttnn.get_global_semaphore_address(gather_sync_sem)
@@ -1209,7 +1209,7 @@ class ExpertKernel:
         tp_expert: bool = True,
         subblock_n: int = 1,
         num_loop_iters: int = 1,
-        gather_to_next: bool = False,
+        primary_at_last_offset: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -1356,7 +1356,7 @@ class ExpertKernel:
                     partial_sem_addr=partial_sem_addr,
                     pipeline_sem_addr=pipeline_sem_addr,
                     num_loop_iters=num_loop_iters,
-                    gather_to_next=gather_to_next,
+                    primary_at_last_offset=primary_at_last_offset,
                     gather_sync_sem_addr=gather_sync_sem_addr,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
