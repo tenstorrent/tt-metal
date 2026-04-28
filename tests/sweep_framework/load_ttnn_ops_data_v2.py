@@ -58,6 +58,12 @@ _CCL_INFRASTRUCTURE_DEFAULTS = {
     },
 }
 
+_STRIP_WHEN_NONE = frozenset(
+    {
+        "compute_kernel_config",
+    }
+)
+
 # Default manifest path (relative to repo root)
 _DEFAULT_MANIFEST = "model_tracer/trace_selection_registry.yaml"
 
@@ -1485,11 +1491,9 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
 
             if "arguments" in config_dict:
                 args = config_dict["arguments"]
-                none_keys = [
-                    k for k, v in args.items() if v is None and not (isinstance(k, str) and k.startswith("arg"))
-                ]
-                for k in none_keys:
-                    del args[k]
+                for k in _STRIP_WHEN_NONE:
+                    if k in args and args[k] is None:
+                        del args[k]
 
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
