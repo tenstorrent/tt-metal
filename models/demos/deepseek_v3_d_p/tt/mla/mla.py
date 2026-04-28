@@ -568,7 +568,7 @@ class ttMLA:
             tt_q_nope,
             self.wkv_b1_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b1", seq_len_local),
+            # **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(

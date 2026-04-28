@@ -261,6 +261,7 @@ class TtMoERoutingSetup(LightweightModule):
             num_links=self.num_links,
             experts_per_chip=self.experts_per_chip,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            use_l1_small_for_semaphores=True,
         )
         signpost(header="moe_gate_calculate_global_dispatch_offsets")
 

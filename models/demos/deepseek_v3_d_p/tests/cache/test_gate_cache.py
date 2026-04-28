@@ -10,6 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import QB_DEVICE_CONFIGS, select
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_gate_weights, get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
@@ -50,14 +51,7 @@ def create_gate_input(config, mesh_device):
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [
-        pytest.param(
-            (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
-            id="linear-2x2",
-        ),
-    ],
+    select(QB_DEVICE_CONFIGS, "linear-2x2"),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(

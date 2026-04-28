@@ -15,6 +15,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla.utils import reverse_reorder_tensor_chunks
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     create_kv_chunk_address_table,
@@ -35,9 +36,11 @@ from tests.ttnn.utils_for_testing import assert_equal
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         },
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         },
     ],
     ids=["line", "ring"],

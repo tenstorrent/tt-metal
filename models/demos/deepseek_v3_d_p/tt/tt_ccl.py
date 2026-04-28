@@ -51,7 +51,10 @@ def clear_tt_ccl_cache():
 
 def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, cores, initial_value, buffer_type=ttnn.BufferType.L1_SMALL)
+        for _ in range(2)
+    ]
     return ccl_semaphore_handles
 
 
@@ -107,15 +110,27 @@ class TT_CCL:
             # double buffered semaphores
             for _ in range(2):
                 self.barrier_semaphore_handles[i].append(
-                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                    ttnn.create_global_semaphore(
+                        self.mesh_device, self.sub_device_crs, 0, buffer_type=ttnn.BufferType.L1_SMALL
+                    )
                 )
 
                 self.ag_semaphore_handles[i].append(
-                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
+                    [
+                        ttnn.create_global_semaphore(
+                            self.mesh_device, self.sub_device_crs, 0, buffer_type=ttnn.BufferType.L1_SMALL
+                        )
+                        for _ in range(2)
+                    ]
                 )
 
                 self.rs_semaphore_handles[i].append(
-                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
+                    [
+                        ttnn.create_global_semaphore(
+                            self.mesh_device, self.sub_device_crs, 0, buffer_type=ttnn.BufferType.L1_SMALL
+                        )
+                        for _ in range(3)
+                    ]
                 )
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):

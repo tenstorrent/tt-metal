@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 
 PCC_REQUIRED = 0.99
 
@@ -31,6 +32,7 @@ PCC_REQUIRED = 0.99
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         }
     ],
     indirect=True,

@@ -13,6 +13,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     create_kv_chunk_address_table,
@@ -31,6 +32,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         }
     ],
     indirect=True,
@@ -103,6 +105,7 @@ def test_kv_cache_address_table(mesh_device, seq_len):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
         }
     ],
     indirect=True,

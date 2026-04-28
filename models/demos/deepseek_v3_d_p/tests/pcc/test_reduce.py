@@ -18,6 +18,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import LB_DEVICE_CONFIGS, QB_DEVICE_CONFIGS, select
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_sparse_combine_output,
     extract_mesh_config,
@@ -38,20 +39,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [
-        pytest.param(
-            (4, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (4, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-    ],
+    select(QB_DEVICE_CONFIGS, "linear-4") + select(LB_DEVICE_CONFIGS, "mesh-4x2"),
     indirect=["mesh_device", "device_params"],
 )
 def test_ttnn_reduce(

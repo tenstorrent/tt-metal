@@ -15,6 +15,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import SINGLE_DEVICE_CONFIG
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -32,13 +33,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [
-        pytest.param(
-            1,
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            id="single-chip",
-        ),
-    ],
+    SINGLE_DEVICE_CONFIG,
     indirect=["mesh_device", "device_params"],
 )
 def test_single_routed_expert(

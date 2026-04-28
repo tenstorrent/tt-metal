@@ -14,6 +14,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
@@ -50,7 +51,10 @@ def load_cached_tensor(cache_path, name, dtype, layout, device, memory_config):
 
 def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, cores, initial_value, buffer_type=ttnn.BufferType.L1_SMALL)
+        for _ in range(2)
+    ]
     return ccl_semaphore_handles
 
 
@@ -488,6 +492,7 @@ def run_ring_joint_sdpa(
                 "trace_region_size": 1000000,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             ttnn.Topology.Linear,
         ),
@@ -858,6 +863,7 @@ def run_ring_joint_sdpa_perf(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             ttnn.Topology.Linear,
         ),
@@ -865,6 +871,7 @@ def run_ring_joint_sdpa_perf(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             ttnn.Topology.Ring,
         ),

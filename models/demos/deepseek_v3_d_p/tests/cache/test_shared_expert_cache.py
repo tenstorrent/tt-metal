@@ -10,6 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import QB_DEVICE_CONFIGS, select
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -28,14 +29,7 @@ def cleanup_cache():
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [
-        pytest.param(
-            (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
-            id="linear-2x2",
-        ),
-    ],
+    select(QB_DEVICE_CONFIGS, "linear-2x2"),
     indirect=["mesh_device", "device_params"],
 )
 def test_shared_expert_weights_cold_warm_cache(mesh_device, device_params):
