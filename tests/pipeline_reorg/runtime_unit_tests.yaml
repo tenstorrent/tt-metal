@@ -76,16 +76,16 @@
   team: runtime
 
 # --- Integration Tests ---
-# NOTE: unit_tests_integration disabled (matmul JIT + SFPU device hang).
-- name: runtime_integration
-  cmd: echo "unit_tests_integration disabled"
-  skus:
-    wh_n150_civ2:
-      timeout: 1
-    bh_p150b_civ2:
-      timeout: 1
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
+# NOTE: unit_tests_integration disabled (matmul JIT + SFPU device hang). Re-add when fixed.
+# - name: runtime_integration
+#   cmd: ./build/test/tt_metal/unit_tests_integration
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 8
+#     bh_p150b_civ2:
+#       timeout: 8
+#   owner_id: U099A7FMKL2 # Manish Sudumbrekar
+#   team: runtime
 
 # --- LLK + SFPI Tests ---
 - name: runtime_llk
