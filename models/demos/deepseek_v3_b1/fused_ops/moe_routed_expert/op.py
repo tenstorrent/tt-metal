@@ -1244,7 +1244,7 @@ class MoeRoutedExpert:
             )
 
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
-            reduce_packet_header_size = 96
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # Worker cores from final_output_tensor shard grid (same as gate_proj cores)
@@ -1323,13 +1323,10 @@ class MoeRoutedExpert:
             reduce_worker_fabric_sem_cores = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
             )
-            reduce_worker_fabric_global_sems = [
-                ttnn.create_global_semaphore(mesh_device, reduce_worker_fabric_sem_cores, 0)
-                for _ in range(reduce_params["num_workers_per_column"])
-            ]
-            reduce_worker_fabric_sem_addrs = [
-                ttnn.get_global_semaphore_address(s) for s in reduce_worker_fabric_global_sems
-            ]
+            reduce_worker_fabric_ready_sem = ttnn.create_global_semaphore(
+                mesh_device, reduce_worker_fabric_sem_cores, 0
+            )
+            reduce_worker_fabric_ready_sem_addr = ttnn.get_global_semaphore_address(reduce_worker_fabric_ready_sem)
 
         # Helper to create NCRISC compile-time args with chip-specific mesh_chip_id
         def create_ncrisc_compile_time_args(mesh_chip_id: int) -> list:
@@ -1954,7 +1951,6 @@ class MoeRoutedExpert:
                         ("reduce_output_core_noc_x", output_core_phys.x),
                         ("reduce_output_core_noc_y", output_core_phys.y),
                         ("reduce_num_workers", reduce_params["num_workers_per_column"]),
-                        ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                         ("reduce_packet_cb", reduce_packet_cb),
                     ]
                     brisc_ct_args.extend(reduce_brisc_ct_args)
@@ -1990,7 +1986,7 @@ class MoeRoutedExpert:
                             fabric_core_phys.x,  # fabric_core_noc_x
                             fabric_core_phys.y,  # fabric_core_noc_y
                             slot_idx,  # my_slot_idx
-                            reduce_worker_fabric_sem_addrs[slot_idx],  # worker_sem_addr
+                            reduce_worker_fabric_ready_sem_addr,  # worker_sem_addr
                             dst_l1_addr,  # dst_l1_addr
                             dst_sem_addr,  # dst_sem_addr
                             out_tensor.buffer_address(),  # output_base_addr
@@ -1998,9 +1994,9 @@ class MoeRoutedExpert:
                         ]
                         reduce_brisc_per_core_args.append((core, worker_args))
 
-                    # Fabric cores BRISC args: worker semaphore addresses
+                    # Fabric cores BRISC args: shared ready semaphore address
                     for fc in reduce_params["fabric_cores"]:
-                        reduce_brisc_per_core_args.append((fc, list(reduce_worker_fabric_sem_addrs)))
+                        reduce_brisc_per_core_args.append((fc, [reduce_worker_fabric_ready_sem_addr]))
 
                     device_runtime_args_descriptor = PerCoreRuntimeArgsDescriptor(
                         brisc_args=reduce_brisc_per_core_args,
