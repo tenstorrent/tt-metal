@@ -100,6 +100,11 @@ class Attention(nn.Module):
             k = apply_rotary_pos_emb(k.to(torch.float32), freqs.to(torch.float32))
             q, k = q.to(q_dtype), k.to(k_dtype)
 
+        if h != kv_h:
+            repeats = h // kv_h
+            k = k.repeat_interleave(repeats, dim=1)
+            v = v.repeat_interleave(repeats, dim=1)
+
         out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
