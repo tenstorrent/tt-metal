@@ -41,6 +41,9 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(tensor_args.device() != nullptr, "Reduce input tensor must have a valid device");
 
+    using namespace tt::tt_metal;
+    const auto strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
+
     switch (operation_attributes.dim) {
         case ReduceOpDim::H:
             TT_FATAL(
