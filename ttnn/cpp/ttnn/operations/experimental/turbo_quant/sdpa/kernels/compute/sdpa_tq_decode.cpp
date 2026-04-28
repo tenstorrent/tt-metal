@@ -595,9 +595,26 @@ void kernel_main() {
                 const uint32_t valid_k_chunks_raw = (cur_pos_nb + k_chunk_size_tokens) / k_chunk_size_tokens;
                 const uint32_t valid_k_chunks = valid_k_chunks_raw < k_num_chunks ? valid_k_chunks_raw : k_num_chunks;
 
+                // ── Tier 2A scaffolding: per-core chunk slice ──
+                // Phase 1 (current): both constants are hard-wired so this core
+                // processes the full chunk range — behaviour identical to before.
+                // Phase 2 will promote these to runtime args and route different
+                // (core_idx_in_group) values to different cores within a (B, NQH)
+                // group; partial (max, sum, out) state is then merged across
+                // workers via NoC + semaphore in a separate reduce phase.
+                // See turbo_quant/TIER_2A_DESIGN.md for the full plan.
+                constexpr uint32_t core_idx_in_group = 0;
+                constexpr uint32_t cores_per_head_runtime = 1;
+                const uint32_t chunks_per_worker =
+                    (valid_k_chunks + cores_per_head_runtime - 1) / cores_per_head_runtime;
+                const uint32_t k_chunk_start_for_core = core_idx_in_group * chunks_per_worker;
+                const uint32_t k_chunk_end_for_core = (k_chunk_start_for_core + chunks_per_worker < valid_k_chunks)
+                                                          ? k_chunk_start_for_core + chunks_per_worker
+                                                          : valid_k_chunks;
+
                 {
                     DeviceZoneScopedN("TQ_CHUNK_LOOP");
-                    for (uint32_t k_chunk = 0; k_chunk < valid_k_chunks; ++k_chunk) {
+                    for (uint32_t k_chunk = k_chunk_start_for_core; k_chunk < k_chunk_end_for_core; ++k_chunk) {
                         DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
                         // ── Step 0: Typecast BFP8 norms → BF16 (when stored as BFP8) ──
                         if constexpr (norms_are_bfp8) {
@@ -643,7 +660,7 @@ void kernel_main() {
                                 cb_qk_im,
                                 cb_identity_scale_in,
                                 Sq_chunk_t,
-                                Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
+                                Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > k_chunk_start_for_core);
 
                             // QK = exp((QK - cur_max) * scale); partial reduce_sum into cur_sum
                             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
@@ -684,8 +701,8 @@ void kernel_main() {
                             reconfig_data_format(alias_prev_max, alias_cur_max);
                         }
 
-                        // ── Step 6: Lazy softmax correction (from chunk 2 onward) ──
-                        if (k_chunk > 0) {
+                        // ── Step 6: Lazy softmax correction (from second chunk in this core's slice onward) ──
+                        if (k_chunk > k_chunk_start_for_core) {
                             // DeviceZoneScopedN("TQ_SOFTMAX_CORRECTION");
                             // exp_max_diff = exp((prev_max - cur_max) * scale)
                             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
