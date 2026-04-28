@@ -122,33 +122,7 @@ TEST(DispatchContext, DoubleInitWithoutTerminateShouldThrow) {
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 }
 
-// Note: Multiple init/terminate cycles within a single test (or on the same MeshDevice) are not
-// supported. The hardware state cannot be properly reset between cycles. The DispatchContext
-// singleton allows sequential tests (each with their own MeshDevice) to each do one init/terminate
-// cycle, but not multiple cycles per test.
-TEST(DispatchContext, DISABLED_ReInitAfterTerminateShouldFail) {
-    const auto& rt_options = MetalContext::instance().rtoptions();
-    if (rt_options.get_fast_dispatch()) {
-        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
-    }
-    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
-    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
-
-    const auto& cluster = MetalContext::instance().get_cluster();
-    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP()
-            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
-    }
-
-    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
-    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
-
-    // Unsupported path: re-initializing after terminate on the same MeshDevice currently fails and
-    // can leave the device in an unrecoverable state during teardown, so keep this test disabled.
-    EXPECT_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get()), std::runtime_error);
-}
-
-// Verify NOC/L1 bank tables and sysmem state survive repeated SD<->FD round-trips
+// Stress test repeated SD <-> FD round-trips: verify buffer I/O and workload dispatch remain correct across cycles
 TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (rt_options.get_fast_dispatch()) {
