@@ -466,10 +466,12 @@ class MoeRoutedExpertOp:
     def setup_matmul_expert_dram(
         mesh_device,
         cts_list,
-        num_subblocks_k=4,
+        num_subblocks_k,
+        subblock_n,
+        cores_per_dram_bank,
+        gather_to_next,
         num_active_experts=8,
         num_total_experts=None,
-        cores_per_dram_bank=1,
         accum_experts=0,
         primary_worker_cores=None,
     ):
@@ -534,6 +536,7 @@ class MoeRoutedExpertOp:
         ), f"per_device_tiles_w ({ct0._per_device_tiles_w}) must divide num_banks*cores_per_bank ({num_banks * cores_per_dram_bank})"
         assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks_k ({num_subblocks_k})"
         subblock_k = Kt // num_subblocks_k
+        assert per_core_n % subblock_n == 0, f"per_core_n ({per_core_n}) must be divisible by subblock_n ({subblock_n})"
 
         is_dram_flags = [1] * num_total_experts
 
@@ -547,6 +550,8 @@ class MoeRoutedExpertOp:
             num_total_experts=num_total_experts,
             is_dram_flags=is_dram_flags,
             primary_worker_cores=primary_worker_cores,
+            gather_to_next=gather_to_next,
+            subblock_n=subblock_n,
         )
 
         # dram_results layout (one entry per mesh coordinate) — 17-element tuple:
@@ -589,9 +594,8 @@ class MoeRoutedExpertOp:
         compute_cores_list = [c for (c, _) in per_core_values_per_device[first_coord_for_cores]["bank_id"]]
 
         # Fmt DRAM sizing: recompute here (matches helper's internals).
-        # Phase 1C: k_parallel_per_bank=1, subblock_n=1 (matches setup), so
-        # num_subblocks_k_local == num_subblocks_k and fmt describes full K × N.
-        subblock_n = 1
+        # Phase 1C: k_parallel_per_bank=1, so num_subblocks_k_local ==
+        # num_subblocks_k and fmt describes full K × N.
         k_parallel_per_bank = 1
         num_subblocks_k_local = num_subblocks_k // k_parallel_per_bank
         _DRAM_ALIGNMENT = ttnn._ttnn.bfp_utils.get_dram_alignment()
@@ -625,8 +629,10 @@ class MoeRoutedExpertOp:
 
         # Legacy fields that _overlap_cbs_with_sdpa_buffer consumes (total size + tile
         # metadata to rebuild cb_in1 pointed at the SDPA backing buffer instead of the
-        # in1_backing_tensor we just allocated in L1 locally).
-        in1_block_size_bytes = subblock_k * max_tile_size
+        # in1_backing_tensor we just allocated in L1 locally). MUST include subblock_n
+        # so the L1 region matches cb_in1_dram_total_bytes — otherwise the kernel's
+        # pack of subblock_k×subblock_n tiles overflows the SDPA-overlay region.
+        in1_block_size_bytes = subblock_k * subblock_n * max_tile_size
         in1_total_size = num_in1_buffers * in1_block_size_bytes
 
         # Subblock width for compute kernel — mirrors setup_dram_matmul (fp32_dest_acc_en=False for MoE).
@@ -659,11 +665,9 @@ class MoeRoutedExpertOp:
             "fmt_sem_addr_1": fmt_sem_addr_1,
             "partial_sem_addr": partial_sem_addr,
             "pipeline_sem_addr": pipeline_sem_addr,
-            # gather_to_next is unused in MoE today (gate/up/down don't gather).
-            # Pass 0 + the sem addr so the kernel's CTArgs template instantiates
-            # cleanly; the sem is allocated regardless and the kernel skips all
-            # gather logic when gather_to_next == 0.
-            "gather_to_next": 0,
+            # down_proj uses gather_to_next=1 (2-core bank → primary receives the
+            # full bank N); gate/up keep 0 and the kernel skips all gather logic.
+            "gather_to_next": 1 if gather_to_next else 0,
             "gather_sync_sem_addr": gather_sync_sem_addr,
             "dram_meta_words_per_block": dram_meta_words_per_block,
             "in0_page_size": in0_page_size,
@@ -1416,6 +1420,9 @@ class MoeRoutedExpertOp:
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=gate_proj_weights_tensor,
                 num_subblocks_k=8,
+                subblock_n=1,
+                cores_per_dram_bank=1,
+                gather_to_next=False,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )
@@ -1438,6 +1445,9 @@ class MoeRoutedExpertOp:
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=up_proj_weights_tensor,
                 num_subblocks_k=8,
+                subblock_n=1,
+                cores_per_dram_bank=1,
+                gather_to_next=False,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )
@@ -1523,7 +1533,14 @@ class MoeRoutedExpertOp:
             down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=down_proj_weights_tensor,
-                num_subblocks_k=2,
+                num_subblocks_k=1,
+                # 16 streamer cores (2 per bank): each bank's two cores split N
+                # (per_core_n=14 halves to 7 per core), then sender NOC-writes
+                # its accum onto the primary so downstream sees the same per-bank
+                # N output as the 1-core layout — invisible to gate/up.
+                subblock_n=7,
+                cores_per_dram_bank=2,
+                gather_to_next=True,
                 num_active_experts=8,
                 accum_experts=1,
                 primary_worker_cores=gate_proj_worker_cores,
@@ -1587,7 +1604,11 @@ class MoeRoutedExpertOp:
         # Dimensions derived from down_proj params — no separate tensors needed.
         # per_core width = down_proj per_core_n tiles * 32 elements, total = per_core * num_cores
         # ==================================================================
-        down_proj_width_per_core = down_proj_params["per_core_n"] * 32
+        # Full per-primary N width after gather: per_core_n × cores_per_bank tiles.
+        # In gather mode the receiver's L1 holds the bank's full N (sender's slice
+        # via NOC + receiver's slice via PACK). cores_per_bank=1 for gate/up keeps
+        # this equal to per_core_n × 32 (no behavior change).
+        down_proj_width_per_core = down_proj_params["per_core_n"] * down_proj_params["cores_per_bank"] * 32
         down_proj_total_width = down_proj_width_per_core * num_gate_proj_cores
         # When reduce is enabled, CB 24 is a working buffer (backed by SDPA overlap).
         # When reduce is disabled, CB 24 is the final output (backed by final_output_tensor).
@@ -2460,6 +2481,18 @@ class MoeRoutedExpertOp:
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_gate_proj_core",
                 core_range=ctx.gate_proj_core_ranges,
+                value=1,
+                other_value=0,
+            ),
+            # down_proj streamer cores: 16 cores when gather_to_next=True (8 primary
+            # + 8 secondary, each bank's 2 cores split N), otherwise 8 (= primaries).
+            # Senders (post-swap = secondaries) MUST be active so they NOC-write their
+            # accum onto the receiver/primary; otherwise the receiver waits forever.
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_down_proj_streamer_core",
+                core_range=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(c, c) for c in ctx.down_proj_params["compute_cores_list"]]
+                ),
                 value=1,
                 other_value=0,
             ),
