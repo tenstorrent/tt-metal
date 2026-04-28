@@ -41,6 +41,12 @@ void kernel_main() {
 
     constexpr bool exp_approx_mode = false;
 
+    // Number of output tiles produced between FPU->SFPU semaphore signals from the QK^T*V matmul.
+    // The packer loop below must consume tiles in matching groups.
+    // num_tiles_v must be divisible by output_granularity.
+    constexpr uint32_t output_granularity = 2;
+    static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
+
     PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
     PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true));
     sdpa_custom_mm_block_init<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
@@ -63,7 +69,8 @@ void kernel_main() {
             transpose_k,
             transpose_v,
             packed_tile_size,
-            exp_approx_mode>(
+            exp_approx_mode,
+            output_granularity>(
             cb_q,
             cb_k,
             0,  // cb_mask
@@ -78,11 +85,12 @@ void kernel_main() {
             false /* mask_last_chunk */);
     }
 
-    // Sem is incremented once per 2 tiles since sem can only go up to 15
-    for (uint32_t i = 0; i < num_tiles_v; i += 2) {
+    // Sem is incremented once per output_granularity tiles since sem can only go up to 15
+    for (uint32_t i = 0; i < num_tiles_v; i += output_granularity) {
         PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
-        pack_tile(mm2_dst_tile_offset + i, cb_out);
-        pack_tile(mm2_dst_tile_offset + i + 1, cb_out);
+        for (uint32_t g = 0; g < output_granularity; g++) {
+            pack_tile(mm2_dst_tile_offset + i + g, cb_out);
+        }
         PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
     }
     // Stall for Red Sum to finish

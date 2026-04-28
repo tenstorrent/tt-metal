@@ -716,6 +716,13 @@ struct FlashMLADecode {
 
             constexpr bool exp_approx_mode = false;
 
+            // Number of output tiles produced between FPU->SFPU semaphore signals from the
+            // QK^T*V matmul. The packer below must consume tiles in matching groups.
+            // out_chunk_tiles must be divisible by output_granularity.
+            constexpr uint32_t output_granularity = 2;
+            static_assert(
+                out_chunk_tiles % output_granularity == 0, "out_chunk_tiles must be divisible by output_granularity");
+
             bool sdpa_output_is_final = do_output && (!do_reduce || num_cores_to_wait == 0);
             uint32_t sdpa_output_cb = 0;
             uint32_t sdpa_ms_cb = 0;
@@ -750,7 +757,8 @@ struct FlashMLADecode {
                     transpose_k,
                     transpose_v,
                     packed_tile_size,
-                    exp_approx_mode>(
+                    exp_approx_mode,
+                    output_granularity>(
                     cb_q_in,
                     cb_k_in,
                     cb_mask,
@@ -772,10 +780,11 @@ struct FlashMLADecode {
                 compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(
                     cb_q_in, sum_dst_offset, corr_exp_dst_offset, mm2_dst_offset);
             }
-            for (uint32_t i = 0; i < out_chunk_tiles; i += 2) {
+            for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
                 PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
-                pack_tile(mm2_dst_tile_offset + i, sdpa_output_cb);
-                pack_tile(mm2_dst_tile_offset + i + 1, sdpa_output_cb);
+                for (uint32_t g = 0; g < output_granularity; g++) {
+                    pack_tile(mm2_dst_tile_offset + i + g, sdpa_output_cb);
+                }
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
