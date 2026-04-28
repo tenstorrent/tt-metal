@@ -783,6 +783,7 @@ class TTNNTurboQuantCache:
         current_pos: "ttnn.Tensor",
         scale: float,
         page_table: "ttnn.Tensor" = None,
+        num_cores_per_head: int = 1,
     ) -> "ttnn.Tensor":
         """Run fused TQ SDPA decode directly on BFP4 index + BF16 norm caches.
 
@@ -830,6 +831,8 @@ class TTNNTurboQuantCache:
             current_pos,
             centroids,
             scale,
+            False,  # pre_rescaled
+            num_cores_per_head,
         )
         if _own_pt:
             ttnn.deallocate(_pt)

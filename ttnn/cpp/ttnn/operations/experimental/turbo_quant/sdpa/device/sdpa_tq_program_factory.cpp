@@ -99,7 +99,16 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // Used in Phase 2.2+ to assign K consecutive cores to each (B, NQH) tuple.
     const uint32_t max_cores_per_head = total_work > 0 ? (num_cores / total_work) : 1;
     const uint32_t cores_per_head = std::min(std::max(attrs.num_cores_per_head, (uint32_t)1), max_cores_per_head);
-    (void)cores_per_head;  // Phase 2.2+ wires this into per-core args; for now K=1 is enforced.
+    log_info(
+        tt::LogOp,
+        "[TQ Phase 2.3] num_cores_per_head req={}, max={}, clamped={} (B={}, NQH={}, num_cores={}, total_work={})",
+        attrs.num_cores_per_head,
+        max_cores_per_head,
+        cores_per_head,
+        B,
+        NQH,
+        num_cores,
+        total_work);
 
     // ── Circular Buffers ──
     // Standard SDPA CBs
@@ -242,10 +251,11 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // ── Tier 2A Phase 2.3: cross-core partial-state CBs ──
     // When num_cores_per_head > 1, each (B, NQH) tuple is split across K worker
     // cores. Worker idx > 0 packs its final (max, sum, out) into c_18/c_19/c_20
-    // (cb_partial_max/sum/out) and signals a semaphore. The reducer (idx == 0)
-    // NoC-pulls remote partials into c_21/c_22/c_23 (cb_remote_max/sum/out)
-    // and merges via online-softmax correction. Allocated unconditionally so
-    // the compute kernel's CB indices stay constexpr; size is small (~12 KB).
+    // (cb_partial_max/sum/out, single-slot) and signals a semaphore. The
+    // reducer (idx == 0) holds K slots in c_21/c_22/c_23 (cb_remote_max/sum/out),
+    // each worker NoC-writes to its own slot (offset = idx * tile_bytes). The
+    // reducer compute then merges all K-1 peer slots via online-softmax
+    // correction. Slot 0 is unused (reducer keeps its own state in alias_prev_*).
     CreateCircularBuffer(
         program,
         all_cores,
@@ -261,21 +271,35 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         all_cores,
         CircularBufferConfig(out_chunk_tiles * im_tile_size, {{CBIndex::c_20, im_df}})
             .set_page_size(CBIndex::c_20, im_tile_size));
+    // Reducer-side CBs: K slots (one per worker) so peers can write in parallel.
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_21, im_df}})
+        CircularBufferConfig(cores_per_head * Sq_chunk_t * im_tile_size, {{CBIndex::c_21, im_df}})
             .set_page_size(CBIndex::c_21, im_tile_size));
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_22, im_df}})
+        CircularBufferConfig(cores_per_head * Sq_chunk_t * im_tile_size, {{CBIndex::c_22, im_df}})
             .set_page_size(CBIndex::c_22, im_tile_size));
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(out_chunk_tiles * im_tile_size, {{CBIndex::c_23, im_df}})
+        CircularBufferConfig(cores_per_head * out_chunk_tiles * im_tile_size, {{CBIndex::c_23, im_df}})
             .set_page_size(CBIndex::c_23, im_tile_size));
+    // Scratch CBs for the merge: cb_merge_new_max (c_3) holds max(prev, peer);
+    // cb_merge_peer_diff (c_4) holds exp((peer_max - new_max) * scale).
+    // cb_exp_max_diff (c_31) is reused as cb_merge_self_diff during the merge.
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_3, im_df}})
+            .set_page_size(CBIndex::c_3, im_tile_size));
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_4, im_df}})
+            .set_page_size(CBIndex::c_4, im_tile_size));
 
     // Per-group reducer semaphore: workers `noc_semaphore_inc` to signal they've
     // finished packing partial state; reducer `noc_semaphore_wait` for K-1
@@ -463,19 +487,16 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         batch_start = std::min(batch_start, B);
         head_start = std::min(head_start, NQH);
 
-        // Until the cross-core reduce is wired up (Phase 2.3-2.5), only the
-        // worker at idx 0 of each group does any work; the remaining workers
-        // get an empty (batch, head) range so their kernels exit early.
-        if (core_idx_in_group != 0) {
-            batch_end = batch_start;
-            head_end = head_start;
-        }
+        // Tier 2A Phase 2.3 step 5: workers (idx > 0) now share the same
+        // (batch, head) range as their reducer (idx == 0) — both process the
+        // SAME (B, NQH) tuple, just different chunk slices. The empty-range
+        // guard from Phase 2.2b is removed.
 
-        // Runtime cores_per_head sent to the compute kernel — forced to 1
-        // until the reduce phase lands so the chunk-loop bounds remain
-        // [0, valid_k_chunks).
-        const uint32_t kernel_core_idx_in_group = 0;
-        const uint32_t kernel_cores_per_head = 1;
+        // Tier 2A Phase 2.3 step 5: pass real (core_idx_in_group, cores_per_head)
+        // to the kernels. The reader/compute slice the chunk loop accordingly,
+        // workers pack-and-skip, and the reducer waits-pulls-merges.
+        const uint32_t kernel_core_idx_in_group = core_idx_in_group;
+        const uint32_t kernel_cores_per_head = cores_per_head;
 
         SetRuntimeArgs(
             program,

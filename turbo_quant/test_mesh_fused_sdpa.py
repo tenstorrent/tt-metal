@@ -46,8 +46,11 @@ def main():
     n_q_global = 32
     bits = 3
     scale = head_dim**-0.5
-    seq_len = 256
-    cur_pos = 41
+    seq_len = 2048
+    # Need valid_k_chunks ≥ K so every worker has at least one chunk (otherwise
+    # matmul_reduce in the post-loop hangs on an empty alias_prev_sum CB).
+    # For K=14: need valid_k_chunks=14, i.e. cur_pos in [13*128, 14*128-1] = [1664, 1791].
+    cur_pos = 1791
     block_size = 32
     max_blocks = 1024
 
@@ -146,7 +149,16 @@ def main():
         mesh_mapper=replicate,
     )
 
-    out = tq.fused_sdpa_decode(q_dev, layer_idx=0, current_pos=cur_pos_dev, scale=scale, page_table=page_table_dev)
+    K = int(os.environ.get("TQ_NUM_CORES_PER_HEAD", "1"))
+    print(f"  Running with num_cores_per_head={K}")
+    out = tq.fused_sdpa_decode(
+        q_dev,
+        layer_idx=0,
+        current_pos=cur_pos_dev,
+        scale=scale,
+        page_table=page_table_dev,
+        num_cores_per_head=K,
+    )
 
     # Output shape per device: [1, nqh_local, 1, dh]. Concat along head dim → [1, n_q_global, 1, dh].
     if num_devices > 1:

@@ -484,9 +484,16 @@ void kernel_main() {
     constexpr uint32_t cb_partial_sum = tt::CBIndex::c_19;
     constexpr uint32_t cb_partial_out = tt::CBIndex::c_20;
     // Reducer-side mirrors — the writer NoC-pushes peer partials into these.
-    [[maybe_unused]] constexpr uint32_t cb_remote_max = tt::CBIndex::c_21;
-    [[maybe_unused]] constexpr uint32_t cb_remote_sum = tt::CBIndex::c_22;
-    [[maybe_unused]] constexpr uint32_t cb_remote_out = tt::CBIndex::c_23;
+    // Each holds K slots (one per worker including reducer slot 0). Reducer
+    // compute discards slot 0 then merges slots 1..K-1 sequentially.
+    constexpr uint32_t cb_remote_max = tt::CBIndex::c_21;
+    constexpr uint32_t cb_remote_sum = tt::CBIndex::c_22;
+    constexpr uint32_t cb_remote_out = tt::CBIndex::c_23;
+    // Tier 2A merge scratch: cb_merge_new_max holds max(prev_max, peer_max);
+    // cb_merge_peer_diff holds exp((peer_max - new_max) * scale). cb_exp_max_diff
+    // (c_31) is reused for self_diff = exp((prev_max - new_max) * scale).
+    constexpr uint32_t cb_merge_new_max = tt::CBIndex::c_3;
+    constexpr uint32_t cb_merge_peer_diff = tt::CBIndex::c_4;
     constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
     // After typecast (when BFP8), the dequant kernels consume the BF16 scratch CB.
     // When norms are already BF16, both aliases point at the same input CB.
@@ -818,6 +825,85 @@ void kernel_main() {
                         cb_pop_front(alias_mm2_prev_out, out_chunk_tiles);
                         cb_pop_front(cb_q_in, q_chunk_tiles);
                         continue;  // skip dilution / recip / normalize / write
+                    }
+
+                    // ── Tier 2A Phase 2.3 step 4: reducer cross-core merge ──
+                    // The writer kernel has waited on the per-program semaphore
+                    // until all K-1 workers `noc_semaphore_inc`'d, then pushed
+                    // K slots' worth of tiles onto cb_remote_*. Slot 0 is the
+                    // reducer's own (unused — its state is in alias_prev_*),
+                    // slots 1..K-1 hold peer partials.
+                    //
+                    // For each peer, perform the symmetric online-softmax
+                    // merge:
+                    //   new_max  = max(prev_max, peer_max)
+                    //   self_d   = exp((prev_max - new_max) * scale)
+                    //   peer_d   = exp((peer_max - new_max) * scale)
+                    //   prev_sum = self_d * prev_sum + peer_d * peer_sum
+                    //   prev_out = self_d * prev_out + peer_d * peer_out
+                    //   prev_max = new_max
+                    if (cores_per_head_arg > 1 && is_reducer) {
+                        // Wait for all K worth of slots (writer pushes K at once).
+                        cb_wait_front(cb_remote_max, cores_per_head_arg * Sq_chunk_t);
+                        cb_wait_front(cb_remote_sum, cores_per_head_arg * Sq_chunk_t);
+                        cb_wait_front(cb_remote_out, cores_per_head_arg * out_chunk_tiles);
+
+                        // Discard slot 0 (reducer's own slot, never written).
+                        cb_pop_front(cb_remote_max, Sq_chunk_t);
+                        cb_pop_front(cb_remote_sum, Sq_chunk_t);
+                        cb_pop_front(cb_remote_out, out_chunk_tiles);
+
+                        for (uint32_t w = 1; w < cores_per_head_arg; ++w) {
+                            // 1. cb_merge_new_max = max(alias_prev_max, cb_remote_max[front])
+                            //    max_block does NOT pop either input.
+                            max_block<>(alias_prev_max, cb_remote_max, cb_merge_new_max, Sq_chunk_t);
+
+                            // 2. cb_exp_max_diff = exp((alias_prev_max - cb_merge_new_max) * scale)
+                            sub_exp_block<scale_fp32>(alias_prev_max, cb_merge_new_max, cb_exp_max_diff, Sq_chunk_t);
+
+                            // 3. alias_prev_sum *= cb_exp_max_diff (col-bcast, no pop of either)
+                            //    For Sq_chunk_t=1 the in-place pop/re-push of alias_prev_sum is a
+                            //    queue rotation by 1 slot — harmless because the CB only holds
+                            //    1 useful slot. cb_exp_max_diff retains its front for the out scale.
+                            mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+
+                            // 4. cb_merge_peer_diff = exp((cb_remote_max - cb_merge_new_max) * scale)
+                            sub_exp_block<scale_fp32>(cb_remote_max, cb_merge_new_max, cb_merge_peer_diff, Sq_chunk_t);
+
+                            // 5. cb_partial_sum = cb_remote_sum * cb_merge_peer_diff
+                            //    Use immediate_pop=true so cb_remote_sum is popped FROM THE FRONT
+                            //    by exactly Sq_chunk_t tiles (advances to the next peer's slot).
+                            //    A naive in-place version would pop+push and rotate the queue,
+                            //    breaking subsequent K>2 iterations.
+                            mul_block_bcast_cols<Sq_chunk_t, 1, true, false>(
+                                cb_remote_sum, cb_merge_peer_diff, cb_partial_sum);
+
+                            // 6. alias_prev_sum += cb_partial_sum (pops both, re-pushes alias_prev_sum)
+                            add_block_inplace(alias_prev_sum, cb_partial_sum, Sq_chunk_t);
+
+                            // 7. alias_mm2_prev_out *= cb_exp_max_diff (pops cb_exp_max_diff)
+                            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_mm2_prev_out, cb_exp_max_diff);
+
+                            // 8. Recompute peer_diff (step 5 popped it via mul_block_bcast_cols).
+                            sub_exp_block<scale_fp32>(cb_remote_max, cb_merge_new_max, cb_merge_peer_diff, Sq_chunk_t);
+
+                            // 9. cb_partial_out = cb_remote_out * cb_merge_peer_diff
+                            //    immediate_pop=true again — pops cb_remote_out's front slot
+                            //    (out_chunk_tiles tiles) and cb_merge_peer_diff (Sq_chunk_t tiles).
+                            mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
+                                cb_remote_out, cb_merge_peer_diff, cb_partial_out);
+
+                            // 10. alias_mm2_prev_out += cb_partial_out (pops both, re-pushes alias_mm2_prev_out)
+                            add_block_inplace(alias_mm2_prev_out, cb_partial_out, out_chunk_tiles);
+
+                            // 11. alias_prev_max := cb_merge_new_max
+                            cb_pop_front(alias_prev_max, Sq_chunk_t);
+                            move_block<true>(cb_merge_new_max, alias_prev_max, Sq_chunk_t);
+
+                            // Advance cb_remote_max to the next peer's slot. cb_remote_sum/out
+                            // were already advanced by the immediate_pop mul_block_bcast_cols.
+                            cb_pop_front(cb_remote_max, Sq_chunk_t);
+                        }
                     }
 
                     // ── Softmax-denominator correction for unfilled K positions ──

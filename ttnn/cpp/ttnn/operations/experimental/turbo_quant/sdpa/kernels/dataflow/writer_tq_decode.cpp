@@ -75,12 +75,19 @@ void kernel_main() {
     const uint32_t partial_sum_tile_bytes = get_tile_size(cb_partial_sum);
     const uint32_t partial_out_tile_bytes = get_tile_size(cb_partial_out);
 
-    // Reducer's local L1 addresses for the cb_remote_* slots — same on every
-    // core because CBs are deterministically allocated. Workers NoC-write to
-    // these addresses on the reducer.
-    const uint32_t remote_max_local_addr = get_write_ptr(cb_remote_max);
-    const uint32_t remote_sum_local_addr = get_write_ptr(cb_remote_sum);
-    const uint32_t remote_out_local_addr = get_write_ptr(cb_remote_out);
+    // Reducer-side cb_remote_* base L1 addresses — same on every core because
+    // CB allocation is deterministic. cb_remote_* holds K slots (one per worker
+    // including reducer slot 0 which is unused). Worker idx writes to slot idx,
+    // offset by idx * (count * tile_bytes). Reducer compute reads slots 1..K-1.
+    const uint32_t remote_max_base_addr = get_write_ptr(cb_remote_max);
+    const uint32_t remote_sum_base_addr = get_write_ptr(cb_remote_sum);
+    const uint32_t remote_out_base_addr = get_write_ptr(cb_remote_out);
+    const uint32_t partial_max_chunk_bytes = partial_max_tile_bytes * Sq_chunk_t;
+    const uint32_t partial_sum_chunk_bytes = partial_sum_tile_bytes * Sq_chunk_t;
+    const uint32_t partial_out_chunk_bytes = partial_out_tile_bytes * out_chunk_tiles;
+    const uint32_t worker_slot_max_offset = core_idx_in_group_arg * partial_max_chunk_bytes;
+    const uint32_t worker_slot_sum_offset = core_idx_in_group_arg * partial_sum_chunk_bytes;
+    const uint32_t worker_slot_out_offset = core_idx_in_group_arg * partial_out_chunk_bytes;
 
     const uint32_t reducer_sem_l1_addr = get_semaphore(reducer_semaphore_id_arg);
     volatile tt_l1_ptr uint32_t* local_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_sem_l1_addr);
@@ -94,25 +101,22 @@ void kernel_main() {
                 // remote_*_local_addr is the same address on the reducer too),
                 // then increment the reducer's semaphore. No output write.
                 const uint64_t reducer_remote_max_noc =
-                    get_noc_addr(reducer_noc_x_arg, reducer_noc_y_arg, remote_max_local_addr);
+                    get_noc_addr(reducer_noc_x_arg, reducer_noc_y_arg, remote_max_base_addr + worker_slot_max_offset);
                 const uint64_t reducer_remote_sum_noc =
-                    get_noc_addr(reducer_noc_x_arg, reducer_noc_y_arg, remote_sum_local_addr);
+                    get_noc_addr(reducer_noc_x_arg, reducer_noc_y_arg, remote_sum_base_addr + worker_slot_sum_offset);
                 const uint64_t reducer_remote_out_noc =
-                    get_noc_addr(reducer_noc_x_arg, reducer_noc_y_arg, remote_out_local_addr);
+                    get_noc_addr(reducer_noc_x_arg, reducer_noc_y_arg, remote_out_base_addr + worker_slot_out_offset);
                 const uint64_t reducer_sem_noc =
                     get_noc_addr(reducer_noc_x_arg, reducer_noc_y_arg, reducer_sem_l1_addr);
 
                 cb_wait_front(cb_partial_max, Sq_chunk_t);
-                noc_async_write(
-                    get_read_ptr(cb_partial_max), reducer_remote_max_noc, partial_max_tile_bytes * Sq_chunk_t);
+                noc_async_write(get_read_ptr(cb_partial_max), reducer_remote_max_noc, partial_max_chunk_bytes);
 
                 cb_wait_front(cb_partial_sum, Sq_chunk_t);
-                noc_async_write(
-                    get_read_ptr(cb_partial_sum), reducer_remote_sum_noc, partial_sum_tile_bytes * Sq_chunk_t);
+                noc_async_write(get_read_ptr(cb_partial_sum), reducer_remote_sum_noc, partial_sum_chunk_bytes);
 
                 cb_wait_front(cb_partial_out, out_chunk_tiles);
-                noc_async_write(
-                    get_read_ptr(cb_partial_out), reducer_remote_out_noc, partial_out_tile_bytes * out_chunk_tiles);
+                noc_async_write(get_read_ptr(cb_partial_out), reducer_remote_out_noc, partial_out_chunk_bytes);
 
                 noc_async_write_barrier();
 
@@ -126,22 +130,22 @@ void kernel_main() {
             }
 
             if (is_reducer && cores_per_head_arg > 1) {
-                // Reducer: wait for K-1 worker increments, then push the
-                // pre-staged remote partials so the compute kernel's merge
-                // loop can cb_wait_front on them. The actual NoC writes have
-                // already landed in cb_remote_* by the time the semaphore
-                // hits K-1 (workers issue noc_async_write_barrier before sema_inc).
+                // Reducer: wait for K-1 worker increments, then push K worth of
+                // tiles so the compute kernel's merge loop can cb_wait_front on
+                // all peer slots in one go. (Slot 0 is the reducer's own and is
+                // unused by the merge — but we still push it so the indexing
+                // matches core_idx_in_group.) NoC writes have landed by the
+                // time the semaphore hits K-1 (workers barrier before sema_inc).
                 const uint32_t expected_workers = cores_per_head_arg - 1;
                 noc_semaphore_wait(local_sem_ptr, expected_workers);
-                // Reset semaphore for next program iteration (e.g. trace replay).
-                noc_semaphore_set(local_sem_ptr, 0);
+                noc_semaphore_set(local_sem_ptr, 0);  // reset for trace replay
 
-                cb_reserve_back(cb_remote_max, Sq_chunk_t);
-                cb_reserve_back(cb_remote_sum, Sq_chunk_t);
-                cb_reserve_back(cb_remote_out, out_chunk_tiles);
-                cb_push_back(cb_remote_max, Sq_chunk_t);
-                cb_push_back(cb_remote_sum, Sq_chunk_t);
-                cb_push_back(cb_remote_out, out_chunk_tiles);
+                cb_reserve_back(cb_remote_max, cores_per_head_arg * Sq_chunk_t);
+                cb_reserve_back(cb_remote_sum, cores_per_head_arg * Sq_chunk_t);
+                cb_reserve_back(cb_remote_out, cores_per_head_arg * out_chunk_tiles);
+                cb_push_back(cb_remote_max, cores_per_head_arg * Sq_chunk_t);
+                cb_push_back(cb_remote_sum, cores_per_head_arg * Sq_chunk_t);
+                cb_push_back(cb_remote_out, cores_per_head_arg * out_chunk_tiles);
             }
 
             // ── Reducer / single-core path: write output ──
