@@ -23,8 +23,7 @@ def create_tt_model(
     create_kv_cache=True,
     users_row_sharded=False,
     use_throughput_experts=False,
-    use_deepseek_prefill=False,
-    prefill_seq_len=128,
+    prefill_seq_len=1024,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -72,7 +71,6 @@ def create_tt_model(
         create_kv_cache=create_kv_cache,
         users_row_sharded=users_row_sharded,
         use_throughput_experts=use_throughput_experts,
-        use_deepseek_prefill=use_deepseek_prefill,
         prefill_seq_len=prefill_seq_len,
     )
 

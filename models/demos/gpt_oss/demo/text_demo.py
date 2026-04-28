@@ -131,7 +131,6 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
-            use_deepseek_prefill=use_throughput,  # Use DeepSeek prefill ops when throughput experts enabled
             prefill_seq_len=min(
                 2048,
                 int(os.environ.get("GPT_OSS_FORCE_SEQ_LEN", 128))

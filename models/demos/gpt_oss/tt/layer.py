@@ -30,8 +30,7 @@ class DecoderLayer:
         users_row_sharded=False,
         use_throughput_experts=False,
         tokens_per_device=32,
-        use_deepseek_prefill=False,
-        prefill_seq_len=128,
+        prefill_seq_len=1024,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -57,7 +56,6 @@ class DecoderLayer:
             mesh_config=mesh_config,
             use_throughput_experts=use_throughput_experts,
             tokens_per_device=tokens_per_device,
-            use_deepseek_prefill=use_deepseek_prefill,
             prefill_seq_len=prefill_seq_len,
         )
 
