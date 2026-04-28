@@ -26,6 +26,19 @@ except ImportError:
 
 from model_tracer.mesh_metadata import normalize_machine_info
 
+# Ops where the tracer captures positional args as named kwargs.
+# The tracer's inner implementation resolves positional args to their actual
+# parameter names, so the DB may have arg1/arg2/… while the trace always has
+# starts/ends/… etc.  Renaming here keeps the reconstructed JSON consistent
+# with what the tracer produces.
+_POSITIONAL_TO_NAMED_REMAP = {
+    "ttnn.slice": {
+        "arg1": "starts",
+        "arg2": "ends",
+        "arg3": "steps",
+    },
+}
+
 # Default manifest path (relative to repo root)
 _DEFAULT_MANIFEST = "model_tracer/trace_selection_registry.yaml"
 
@@ -1423,6 +1436,14 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             config_dict.pop("executions", None)
             config_dict.pop("source", None)
             config_dict.pop("machine_info", None)
+
+            remap = _POSITIONAL_TO_NAMED_REMAP.get(op_name)
+            if remap and "arguments" in config_dict:
+                args = config_dict["arguments"]
+                for old_key, new_key in remap.items():
+                    if old_key in args and new_key not in args:
+                        args[new_key] = args.pop(old_key)
+
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
             ops[op_name][config_id] = config_dict
@@ -1804,6 +1825,11 @@ def reconstruct_from_manifest(
     if output_path:
         with open(output_path, "w") as f:
             json.dump(merged, f, indent=2, sort_keys=True)
+        from model_tracer.generic_ops_tracer import recompute_config_hashes
+
+        recompute_config_hashes(output_path)
+        with open(output_path, "r") as f:
+            merged = json.load(f)
         print(f"Saved to {output_path}")
 
     return merged
