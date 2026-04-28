@@ -29,6 +29,7 @@ Generates in output-dir:
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -123,6 +124,125 @@ def count_nodes(deployment_path):
     return len(re.findall(pattern, content, re.MULTILINE))
 
 
+def validate_cluster_node_types(cabling_path, deployment_path):
+    """
+    Validate that:
+    1. All hosts within each cluster have the same node_type (deployment descriptor)
+    2. Each host's node_descriptor (cabling) matches its node_type (deployment)
+    Uses cabling_descriptor_analysis.py to identify clusters.
+    """
+    script_dir = Path(__file__).resolve().parent
+    analysis_script = script_dir / "cabling_descriptor_analysis.py"
+
+    if not analysis_script.exists():
+        print(f"Warning: Cluster analysis script not found at {analysis_script}, skipping validation", file=sys.stderr)
+        return
+
+    # Run cluster analysis to get cluster information
+    try:
+        result = subprocess.run(
+            ["python3", str(analysis_script), str(cabling_path), "--json"], capture_output=True, text=True, check=True
+        )
+        cluster_data = json.loads(result.stdout)
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Failed to run cluster analysis: {e}", file=sys.stderr)
+        return
+    except json.JSONDecodeError as e:
+        print(f"Warning: Failed to parse cluster analysis JSON: {e}", file=sys.stderr)
+        return
+
+    # Parse deployment descriptor to build hostname -> node_type mapping
+    hostname_to_node_type = {}
+    with open(deployment_path, "r") as f:
+        content = f.read()
+
+    # Extract host blocks using regex
+    host_pattern = r"hosts\s*\{([^}]+)\}"
+    for host_match in re.finditer(host_pattern, content):
+        host_block = host_match.group(1)
+
+        # Extract hostname and node_type from block
+        hostname_match = re.search(r'host:\s*"([^"]+)"', host_block)
+        node_type_match = re.search(r'node_type:\s*"([^"]+)"', host_block)
+
+        if hostname_match and node_type_match:
+            hostname_to_node_type[hostname_match.group(1)] = node_type_match.group(1)
+
+    # Parse cabling descriptor to build hostname -> node_descriptor mapping
+    hostname_to_node_descriptor = {}
+    with open(cabling_path, "r") as f:
+        content = f.read()
+
+    # Extract children blocks with name and node_descriptor
+    children_pattern = r"children\s*\{([^}]+)\}"
+    for child_match in re.finditer(children_pattern, content):
+        child_block = child_match.group(1)
+
+        # Extract name and node_descriptor from block
+        name_match = re.search(r'name:\s*"([^"]+)"', child_block)
+        descriptor_match = re.search(r'node_descriptor:\s*"([^"]+)"', child_block)
+
+        if name_match and descriptor_match:
+            hostname_to_node_descriptor[name_match.group(1)] = descriptor_match.group(1)
+
+    # Validate: 1) cabling vs deployment consistency, 2) cluster homogeneity
+    print(f"\nValidating node type consistency...")
+    errors = []
+
+    # Check 1: Cabling descriptor matches deployment descriptor for each host
+    print("  Checking cabling descriptor vs deployment descriptor...")
+    cabling_deployment_mismatches = []
+    for hostname, node_descriptor in hostname_to_node_descriptor.items():
+        if hostname in hostname_to_node_type:
+            node_type = hostname_to_node_type[hostname]
+            if node_descriptor != node_type:
+                cabling_deployment_mismatches.append(
+                    f"    {hostname}: cabling has '{node_descriptor}' but deployment has '{node_type}'"
+                )
+
+    if cabling_deployment_mismatches:
+        errors.append("\n  Cabling/Deployment mismatch errors:")
+        errors.extend(cabling_deployment_mismatches)
+    else:
+        print("    All hosts match between cabling and deployment ✓")
+
+    # Check 2: All hosts within each cluster have the same node type
+    print(f"  Checking consistency across {cluster_data['total_clusters']} clusters...")
+    for cluster in cluster_data["clusters"]:
+        cluster_id = cluster["cluster_id"]
+        hostnames = cluster["hostnames"]
+
+        # Get node types for all hosts in this cluster
+        node_types_in_cluster = {}
+        for hostname in hostnames:
+            if hostname in hostname_to_node_type:
+                node_type = hostname_to_node_type[hostname]
+                if node_type not in node_types_in_cluster:
+                    node_types_in_cluster[node_type] = []
+                node_types_in_cluster[node_type].append(hostname)
+
+        # Check if all hosts have the same node type
+        if len(node_types_in_cluster) > 1:
+            error_msg = f"\n  Cluster {cluster_id} has mixed node types:"
+            for node_type, hosts in sorted(node_types_in_cluster.items()):
+                error_msg += f"\n    {node_type}: {len(hosts)} hosts ({', '.join(hosts[:3])}"
+                if len(hosts) > 3:
+                    error_msg += f", ... and {len(hosts) - 3} more"
+                error_msg += ")"
+            errors.append(error_msg)
+        else:
+            node_type = list(node_types_in_cluster.keys())[0] if node_types_in_cluster else "unknown"
+            print(f"    Cluster {cluster_id}: {cluster['num_hosts']} hosts, all {node_type} ✓")
+
+    if errors:
+        print("\n❌ Validation failed with errors:", file=sys.stderr)
+        for error in errors:
+            print(error, file=sys.stderr)
+        sys.exit(1)
+
+    print("\n✅ All validation checks passed\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Merge two cluster configurations.")
     parser.add_argument("--cabling1", required=True, help="First cabling_descriptor.textproto")
@@ -172,19 +292,32 @@ def main():
         else:
             shutil.copy(args.deployment1, merged_deployment)
 
-        merged_fsd = output_dir / "merged_fsd.textproto"
+        # Write merged files to temp directory first
+        merged_fsd_temp = temp_dir / "merged_fsd.textproto"
         generated_deployment_path = run_cabling_generator(
-            str(cabling_dir), str(merged_deployment), str(merged_fsd), args.build_dir
+            str(cabling_dir), str(merged_deployment), str(merged_fsd_temp), args.build_dir
         )
 
-        final_deployment = output_dir / "merged_deployment_descriptor.textproto"
+        final_deployment_temp = temp_dir / "final_deployment_descriptor.textproto"
         if generated_deployment_path is not None:
             # Use C++-generated deployment (one host per node in host_id order, no duplicates)
-            shutil.copy(generated_deployment_path, final_deployment)
+            shutil.copy(generated_deployment_path, final_deployment_temp)
         else:
-            shutil.copy(merged_deployment, final_deployment)
+            shutil.copy(merged_deployment, final_deployment_temp)
 
-        total_nodes = count_nodes(str(final_deployment))
+        # Validate node type consistency within each cluster before writing to output
+        merged_cabling_temp = temp_dir / "merged_cabling_descriptor.textproto"
+        if merged_cabling_temp.exists():
+            validate_cluster_node_types(merged_cabling_temp, final_deployment_temp)
+
+        # Validation passed - now copy files to output directory
+        shutil.copy(merged_fsd_temp, output_dir / "merged_fsd.textproto")
+        shutil.copy(final_deployment_temp, output_dir / "merged_deployment_descriptor.textproto")
+        if merged_cabling_temp.exists():
+            shutil.copy(merged_cabling_temp, output_dir / "merged_cabling_descriptor.textproto")
+
+        total_nodes = count_nodes(str(final_deployment_temp))
+        print(f"\n✅ Merge successful!")
         print(f"Merged {total_nodes} nodes")
         print(f"Output: {output_dir}")
 

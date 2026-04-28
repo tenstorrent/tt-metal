@@ -312,7 +312,7 @@ void validate_and_merge_node_templates(
     const std::unordered_map<std::string, Node>& other_node_desc_name_to_node,
     const std::string& existing_source_file,
     const std::string& new_source_file) {
-    // Forward pass: validate/merge templates that exist in both
+    // Forward pass: validate/merge templates that exist in both, add new ones
     for (const auto& [node_desc_name, other_template] : other_node_desc_name_to_node) {
         if (this_node_desc_name_to_node.contains(node_desc_name)) {
             // Template exists in both - validate it matches
@@ -321,36 +321,24 @@ void validate_and_merge_node_templates(
             validate_inter_board_connections(
                 this_template, other_template, node_desc_name, existing_source_file, new_source_file);
         } else {
-            // Template missing in 'this' - try torus-compatible merge or throw error
+            // Template missing in 'this' - try torus-compatible merge, otherwise add as new
             bool merged = try_merge_torus_compatible_template(
                 this_node_desc_name_to_node, node_desc_name, other_template, existing_source_file, new_source_file);
 
             if (!merged) {
-                throw std::runtime_error(fmt::format(
-                    "Node template '{}' exists in {} but not in {} - structural mismatch",
+                // Add the new template (allows merging clusters with different node types)
+                log_info(
+                    tt::LogDistributed,
+                    "Adding node template '{}' from {} to merged configuration",
                     node_desc_name,
-                    get_source_description(new_source_file),
-                    get_source_description(existing_source_file)));
+                    get_source_description(new_source_file));
+                this_node_desc_name_to_node[node_desc_name] = other_template;
             }
         }
     }
 
-    // Backward pass: check for templates in 'this' that don't exist in 'other'
-    for (const auto& [node_desc_name, this_template] : this_node_desc_name_to_node) {
-        if (!other_node_desc_name_to_node.contains(node_desc_name)) {
-            // Check if this is a torus type that can be merged with another torus variant
-            bool found_compatible =
-                find_torus_compatible_template(other_node_desc_name_to_node, node_desc_name).has_value();
-
-            if (!found_compatible) {
-                throw std::runtime_error(fmt::format(
-                    "Node template '{}' exists in {} but not in {} - structural mismatch",
-                    node_desc_name,
-                    get_source_description(existing_source_file),
-                    get_source_description(new_source_file)));
-            }
-        }
-    }
+    // Backward pass: templates in 'this' but not in 'other' are fine - they're kept as-is
+    // Different clusters can have different node types
 }
 
 // Find node descriptor by name - search inline first, then fallback to file
@@ -476,6 +464,7 @@ Node build_node(
         throw std::runtime_error("Node descriptor " + node_descriptor_name + " missing motherboard");
     }
     template_node.motherboard = node_descriptor.motherboard();
+    template_node.node_descriptor_name = node_descriptor_name;  // Store original template name
 
     // Create boards with internal connections marked (using cached boards)
     for (const auto& board_item : node_descriptor.boards().board()) {
@@ -602,21 +591,6 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
             HostId host_id = HostId(child_mapping.host_id());
             const std::string& node_descriptor_name = child_def.node_ref().node_descriptor();
 
-            // Validate deployment node type if deployment descriptor is provided
-            if (deployment_descriptor != nullptr) {
-                if (*host_id < deployment_descriptor->hosts().size()) {
-                    const auto& deployment_host = deployment_descriptor->hosts()[*host_id];
-                    if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
-                        throw std::runtime_error(
-                            "Node type mismatch for host " + deployment_host.host() + " (host_id " +
-                            std::to_string(*host_id) + "): deployment specifies '" + deployment_host.node_type() +
-                            "' but cluster configuration expects '" + node_descriptor_name + "'");
-                    }
-                } else {
-                    throw std::runtime_error("Host ID " + std::to_string(*host_id) + " not found in deployment");
-                }
-            }
-
             // Find node descriptor and build node
             resolved->nodes[child_name] = build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates);
             resolved->children_order.emplace_back(child_name, true);
@@ -679,13 +653,12 @@ void populate_deployment_hosts(
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::unordered_map<std::string, Node>& node_templates,
     std::vector<Host>& deployment_hosts) {
-    // Store deployment hosts
+    // Store deployment hosts - skip those whose node_type isn't in current templates
+    // (happens during merge when deployment contains multiple clusters)
     deployment_hosts.reserve(deployment_descriptor.hosts().size());
     for (const auto& proto_host : deployment_descriptor.hosts()) {
         if (!node_templates.contains(proto_host.node_type())) {
-            throw std::runtime_error(
-                "Node type '" + proto_host.node_type() + "' from deployment descriptor host '" + proto_host.host() +
-                "' not found in cluster descriptor templates");
+            continue;  // Skip - will be populated from other cabling files
         }
         deployment_hosts.emplace_back(Host{
             .hostname = proto_host.host(),
@@ -937,6 +910,7 @@ static Node create_base_node_from_template(
     // (template only has ports marked as used for inter-board connections from node descriptor)
     Node base_node = template_node;
     base_node.host_id = source_node.host_id;
+    base_node.node_descriptor_name = source_node.node_descriptor_name;  // Preserve original template name
     // Copy inter_board_connections from source (they may have been merged from multiple files)
     base_node.inter_board_connections = source_node.inter_board_connections;
     // Re-mark ports as used for the merged inter-board connections
@@ -979,6 +953,20 @@ static void merge_resolved_graph_instances(
                         source_node.host_id.get(),
                         get_source_description(new_source_file)));
                 }
+
+                // Validate node types match for duplicate nodes
+                if (!target.nodes[name].node_descriptor_name.empty() && !source_node.node_descriptor_name.empty() &&
+                    target.nodes[name].node_descriptor_name != source_node.node_descriptor_name) {
+                    throw std::runtime_error(fmt::format(
+                        "Node '{}' has conflicting node types: '{}' in {} vs '{}' in {} "
+                        "(same hostname cannot have different node types across cabling descriptors)",
+                        name,
+                        target.nodes[name].node_descriptor_name,
+                        get_source_description(existing_source_file),
+                        source_node.node_descriptor_name,
+                        get_source_description(new_source_file)));
+                }
+
                 // Validate inter_board_connections match or are torus-compatible
                 // For torus-compatible nodes, we merge the connections
                 // For non-torus nodes, we only merge internal_connections, not inter_board_connections
@@ -1317,15 +1305,12 @@ static void resolved_graph_to_protobuf(
         child->set_name(name);
         auto* node_ref = child->mutable_node_ref();
 
-        auto template_key = find_template_key_for_node(node, node_templates);
-        if (!template_key) {
-            throw std::runtime_error(fmt::format(
-                "Could not find node descriptor for node '{}' with motherboard '{}' and {} boards",
-                name,
-                node.motherboard,
-                node.boards.size()));
+        // Use the stored node_descriptor_name instead of finding by structure
+        if (node.node_descriptor_name.empty()) {
+            throw std::runtime_error(
+                fmt::format("Node '{}' missing node_descriptor_name - should have been set during construction", name));
         }
-        node_ref->set_node_descriptor(*template_key);
+        node_ref->set_node_descriptor(node.node_descriptor_name);
     }
 
     // Add internal_connections
