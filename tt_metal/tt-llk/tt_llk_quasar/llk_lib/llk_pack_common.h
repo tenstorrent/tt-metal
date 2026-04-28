@@ -17,7 +17,7 @@ using namespace ckernel::trisc;
  * @brief Programs packer input data format (THCON) for the selected packer
  * @tparam PACK_SEL: p_pacr::PACK0 (math dest → L1) or p_pacr::PACK1 (SrcS → L1).
  * Actual PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ /
- * _llk_pack_srcs_ in llk_srcs_tdma.h — do not drive Packer 1 via llk_pack.h MOP APIs.
+ * _llk_pack_srcs_ in llk_srcs.h — do not drive Packer 1 via llk_pack.h MOP APIs.
  * @param tdma_desc: Contains destination register format
  */
 

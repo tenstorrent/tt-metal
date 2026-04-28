@@ -3,7 +3,7 @@
 
 """
 Isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
-No MATH kernel. Unpack and pack use llk_srcs_tdma (unpack to SrcS, pack from SrcS).
+No MATH kernel. Unpack and pack use llk_srcs (unpack to SrcS, pack from SrcS).
 Same structure and parameter coverage as test_sfpu_square_quasar.
 """
 
