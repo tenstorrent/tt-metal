@@ -145,9 +145,9 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
     }
 
-    // HWCommandQueue holds a reference to sysmem_manager_, destroy before init_command_queue_host replaces it.
-    for (const auto& dev : active_devices) {
-        auto* device = dynamic_cast<tt::tt_metal::Device*>(dev);
+    // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
+    // init_command_queue_host call can safely replace sysmem_manager_ without dangling references
+    for (const auto& device : device_manager->get_all_active_devices_impl()) {
         device->command_queues_.clear();
         device->command_queue_programs_.clear();
     }
