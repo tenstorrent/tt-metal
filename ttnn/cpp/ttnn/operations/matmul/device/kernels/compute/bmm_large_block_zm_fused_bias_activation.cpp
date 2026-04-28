@@ -134,11 +134,13 @@ void kernel_main() {
         false;
 #endif
 
-    // PACK_RELU without bias: helper handles it via pack_relu template param.
-    // PACK_RELU with bias: caller manages RELU config between matmul and bias phases.
+    // PACK_RELU only applies when the last K-block packs to out_buf: bias and untilize
+    // both consume from interm, so RELU has to live in those post-interm phases instead.
+    // matmul_block static_asserts pack_relu && pack_last_to_interm — keep this in sync
+    // by gating do_relu against both FUSE_BIAS and untilize_out.
     constexpr bool do_relu =
 #if defined(PACK_RELU) && !defined(FUSE_BIAS)
-        true;
+        !untilize_out;
 #else
         false;
 #endif
@@ -236,6 +238,7 @@ void kernel_main() {
                         do_relu,
                         output_layout,
                         matmul_config::InitMode::Full,
+                        /*retain_in0=*/false,
                         PostFn,
                         XposeFn>(
                         in0_buf,
@@ -245,7 +248,6 @@ void kernel_main() {
                         shape,
                         PostFn{},
                         xpose,
-                        /*retain_in0=*/false,
                         /*in1_per_core_w=*/in1_block_w,
                         /*out_row_width=*/out_block_w);
                 } else {
@@ -256,6 +258,7 @@ void kernel_main() {
                         do_relu,
                         output_layout,
                         matmul_config::InitMode::Full,
+                        /*retain_in0=*/false,
                         PostFn,
                         NoPreKBlock>(
                         in0_buf,
@@ -265,7 +268,6 @@ void kernel_main() {
                         shape,
                         PostFn{},
                         NoPreKBlock{},
-                        /*retain_in0=*/false,
                         /*in1_per_core_w=*/in1_block_w,
                         /*out_row_width=*/out_block_w);
                 }

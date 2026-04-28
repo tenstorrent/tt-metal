@@ -27,6 +27,7 @@ template <
     bool pack_relu,
     OutputLayout layout,
     matmul_config::InitMode init_mode,
+    bool retain_in0,
     typename PostComputeFn,
     typename PreKBlockFn,
     typename Buf>
@@ -38,7 +39,6 @@ ALWI void matmul_block(
     MatmulBlockShape shape,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
-    bool retain_in0,
     uint32_t in1_per_core_w,
     uint32_t out_row_width) {
 
@@ -57,6 +57,15 @@ ALWI void matmul_block(
     const uint32_t block_w = shape.in0_block_w;
     const uint32_t num_k_blocks = shape.num_k_blocks;
     const uint32_t batch = shape.batch;
+
+    // pack_relu only takes effect when the last K-block packs to out_buf — its config
+    // is keyed off pack_target_id below. Combining it with pack_last_to_interm would
+    // silently drop the relu, so make it a build error instead and force the caller
+    // to express RELU in the post-interm phase (bias add / untilize) when going
+    // through interm.
+    static_assert(
+        !(pack_relu && pack_last_to_interm),
+        "pack_relu requires pack_last_to_interm=false; apply RELU as a post-process when packing to interm");
 
     // Init dispatch: helper owns mm_block_init / mm_block_init_short. Caller does
     // compute_kernel_hw_startup once at boot; everything else is internal.
@@ -337,8 +346,12 @@ ALWI void matmul_block(
 
             // retain_in0: SDPA reuses Q across K chunks, so caller keeps in0 front
             // on the last iteration. Intermediate blocks always pop.
-            if (!retain_in0 || !last_out) {
+            if constexpr (!retain_in0) {
                 in0_buf.pop_front(in0_block_num_tiles);
+            } else {
+                if (!last_out) {
+                    in0_buf.pop_front(in0_block_num_tiles);
+                }
             }
             in1_buf.pop_front(in1_block_num_tiles);
         }

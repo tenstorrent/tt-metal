@@ -1253,6 +1253,7 @@ ALWI void matmul_blocks(
         /*pack_relu=*/false,
         compute_kernel_lib::OutputLayout::RowMajor,
         compute_kernel_lib::matmul_config::InitMode::None,
+        /*retain_in0=*/true,
         OptionalMaskPostCompute,
         compute_kernel_lib::NoPreKBlock>(
         in0_buf,
@@ -1263,8 +1264,7 @@ ALWI void matmul_blocks(
             in0_num_subblocks, in1_num_subblocks, subblock_h, subblock_w, in0_block_w, num_blocks, /*batch=*/1),
         OptionalMaskPostCompute{
             mask_cb, zero_cb, in0_cb, in1_cb, subblock_h, subblock_w, in0_block_w, transpose, add_mask},
-        compute_kernel_lib::NoPreKBlock{},
-        /*retain_in0=*/true);
+        compute_kernel_lib::NoPreKBlock{});
 }
 
 template <uint32_t M>

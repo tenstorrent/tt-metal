@@ -145,6 +145,8 @@ struct NoPreKBlock {
  *   layout            OutputLayout: SubblockMajor (default) or RowMajor (see above).
  *   init_mode         matmul_config::InitMode: Full (default), Short, or None.
  *                     Controls whether the helper itself calls mm_block_init / _short.
+ *   retain_in0        When true, skip popping in0 on the last K-block so the caller
+ *                     retains the data (SDPA reuses Q across K chunks). (default: false)
  *   PostComputeFn     Functor called per output sub-block on the last K-block,
  *                     after matmul but before packing. Receives out_subblock_num_tiles.
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
@@ -167,8 +169,6 @@ struct NoPreKBlock {
  *                      K-blocking, batch. Build with MatmulBlockShape::of(...).
  *   post_compute       PostComputeFn instance (default: {}).
  *   pre_k_block        PreKBlockFn instance (default: {}).
- *   retain_in0         When true, skip popping in0 on the last K-block so the caller
- *                      retains the data (SDPA reuses Q across K chunks). (default: false)
  *   in1_per_core_w     Actual number of N-tiles in the in1 CB per K-block (= what NCRISC
  *                      pushes per block). Defaults to 0, meaning derive from
  *                      out_subblock_w * in1_num_subblocks. Pass the real value when the
@@ -212,27 +212,29 @@ struct NoPreKBlock {
  *   // The SDPA-side wrapper does its own [mm_block_init_short, reconfig_data_format]
  *   // pair externally (for ordering parity with matmul_reduce_inplace.inl and
  *   // OptionalMaskPostCompute), so the helper is invoked with init_mode=None.
+ *   // Template slot order: transpose, packer_l1_acc, pack_last_to_interm, pack_relu,
+ *   // layout, init_mode, retain_in0, PostComputeFn.
  *   matmul_block<transpose, false, false, false, OutputLayout::RowMajor,
- *                matmul_config::InitMode::None, OptionalMaskPostCompute>(
+ *                matmul_config::InitMode::None, true,
+ *                OptionalMaskPostCompute>(
  *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             subblock_h, subblock_w, in0_block_w, num_blocks),
  *       OptionalMaskPostCompute{...},
- *       NoPreKBlock{},
- *       true);  // retain_in0
+ *       NoPreKBlock{});
  *
  * @example
  *   // FUSE_BIAS path: last K-block packs to interm_buf so add_bias_bcast_rows reads it.
  *   // DRAM-sharded passes explicit in1_per_core_w (shard width) and
  *   // out_row_width (padded pack width).
  *   matmul_block<in1_transpose_tile, l1_acc, true, false,
- *                output_layout, matmul_config::InitMode::Full, PostFn, PreFn>(
+ *                output_layout, matmul_config::InitMode::Full, false,
+ *                PostFn, PreFn>(
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
  *                             in0_block_w, num_blocks_inner_dim),
  *       PostFn{}, PreFn{},
- *       false,            // retain_in0
  *       in1_block_w,      // in1_per_core_w  (DRAM-sharded shard width)
  *       out_block_w);     // out_row_width   (DRAM-sharded padded pack width)
  */
@@ -243,6 +245,7 @@ template <
     bool pack_relu = false,
     OutputLayout layout = OutputLayout::SubblockMajor,
     matmul_config::InitMode init_mode = matmul_config::InitMode::Full,
+    bool retain_in0 = false,
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock,
     typename Buf = ::experimental::CircularBuffer>
@@ -254,7 +257,6 @@ ALWI void matmul_block(
     MatmulBlockShape shape,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
-    bool retain_in0 = false,
     uint32_t in1_per_core_w = 0,
     uint32_t out_row_width = 0);
 
