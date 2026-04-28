@@ -461,30 +461,188 @@ TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, SemaphoresFail) {
-    // Semaphores are not yet implemented for Quasar
+TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
     sem.unique_id = "sem_0";
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsFail) {
-    // Semaphore bindings are not yet implemented
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
 
     KernelSpec::SemaphoreBinding binding;
     binding.semaphore_spec_name = "sem_0";
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelSucceedsOnQuasar) {
+    // Quasar permits compute kernels to participate in semaphore signalling.
+    // (The corresponding Gen1 test asserts this is rejected on WH/BH.)
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[1] is the compute kernel in MakeMinimalValidProgramSpec
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    KernelSpec::SemaphoreBinding binding;
+    binding.semaphore_spec_name = "missing_sem";
+    binding.accessor_name = "my_sem";
+    spec.kernels[0].semaphore_bindings = {binding};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("references unknown semaphore 'missing_sem'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    KernelSpec::SemaphoreBinding binding;
+    binding.semaphore_spec_name = "sem_0";
+    binding.accessor_name = "has-dash";
+    spec.kernels[0].semaphore_bindings = {binding};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("semaphore accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem0;
+    sem0.unique_id = "sem_0";
+    sem0.target_nodes = NodeCoord{0, 0};
+
+    SemaphoreSpec sem1;
+    sem1.unique_id = "sem_1";
+    sem1.target_nodes = NodeCoord{0, 0};
+
+    spec.semaphores = {sem0, sem1};
+    spec.workers.value()[0].semaphores = {"sem_0", "sem_1"};
+
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "same"},
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_1", .accessor_name = "same"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    sem.initial_value = 1;
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has initial_value=1 but only zero is supported on Quasar")));
+}
+
+// ---- Named RTA / CRTA / CTA schema validation ----
+
+TEST_F(ProgramSpecTestQuasar, NamedRuntimeArgsSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr", "output_ptr"};
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"tile_count"};
+    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidNamedRtaIdentifierFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"int"};  // C++ keyword
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("named RTA name 'int' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidNamedCrtaIdentifierFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"has-dash"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("named CRTA name 'has-dash' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, NamedRtaCrtaCollisionFails) {
+    // A single name cannot be both a named RTA and a named CRTA (they share the user namespace).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"count"};
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"count"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'count' is declared as both a named RTA and a named CRTA")));
+}
+
+TEST_F(ProgramSpecTestQuasar, NamedRtaCtaCollisionFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"block_size"};
+    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};  // same name as CTA
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'block_size' is declared as both a named RTA and a named CTA")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DifferentKernelsMayReuseArgNames) {
+    // Collision rule is per-kernel. Two different kernels may have identically-named args.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"shared_name"};
+    spec.kernels[1].runtime_arguments_schema.named_runtime_args = {"shared_name"};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
@@ -949,11 +1107,31 @@ TEST_F(ProgramSpecTestQuasar, RuntimeArgsSchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add runtime args schema
-    NodeCoord node{0, 0};
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_args = 2;
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 3;
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 2;
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
+    // Rule: overlapping entries in num_runtime_varargs_per_node are an error, even when
+    // their counts agree. Overlap suggests a user mistake.
+    using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{1, 0};
+    NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
+
+    ProgramSpec spec;
+    spec.program_id = "vararg_overlap_test";
+    auto kernel = MakeMinimalDMKernel("dm_kernel", both);
+    kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
+        NumVarargsPerNode{{both, 3}, {node_a, 3}};  // node_a listed twice
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", both, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("overlapping entries")));
 }
 
 // ============================================================================
@@ -1345,17 +1523,61 @@ TEST(AggregateSpecTypes, WorkerSpecDesignatedInitializers) {
     EXPECT_EQ(worker.dataflow_buffers.size(), 2u);
 }
 
+TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
+    // Named RTAs + CRTAs + scalar vararg counts, all via designated initializers.
+    KernelSpec::RuntimeArgSchema schema{
+        .named_runtime_args = {"input_ptr", "output_ptr"},
+        .named_common_runtime_args = {"tile_count"},
+        .num_runtime_varargs = 4,
+        .num_common_runtime_varargs = 2,
+    };
+
+    EXPECT_EQ(schema.named_runtime_args.size(), 2u);
+    EXPECT_EQ(schema.named_common_runtime_args.size(), 1u);
+    EXPECT_EQ(schema.num_runtime_varargs, 4u);
+    EXPECT_EQ(schema.num_common_runtime_varargs, 2u);
+    EXPECT_FALSE(schema.num_runtime_varargs_per_node.has_value());
+}
+
+TEST(AggregateSpecTypes, RuntimeArgSchemaPerNodeOverrideDesignatedInitializers) {
+    // Per-node override path (advanced): ensure designated-init through std::optional works.
+    using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
+    KernelSpec::RuntimeArgSchema schema{
+        .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
+    };
+
+    ASSERT_TRUE(schema.num_runtime_varargs_per_node.has_value());
+    EXPECT_EQ(schema.num_runtime_varargs_per_node->size(), 2u);
+    EXPECT_EQ(schema.num_runtime_varargs, 0u);  // scalar left at default in this example
+}
+
+TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
+    KernelSpec k{
+        .unique_id = "k",
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
+        .target_nodes = NodeCoord{0, 0},
+        .runtime_arguments_schema =
+            KernelSpec::RuntimeArgSchema{
+                .named_runtime_args = {"input_ptr"},
+            },
+        .config_spec =
+            DataMovementConfiguration{
+                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+            },
+    };
+    EXPECT_EQ(k.runtime_arguments_schema.named_runtime_args.size(), 1u);
+}
+
 TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
     // Demonstrates constructing SemaphoreSpec with designated initializers
     SemaphoreSpec sem{
         .unique_id = "my_semaphore",
         .target_nodes = NodeCoord{0, 0},
-        .initial_value = 0,
-        .memory_type = SemaphoreSpec::SemaphoreMemoryType::Register,
+        .initial_value = 7,
     };
 
     EXPECT_EQ(sem.unique_id, "my_semaphore");
-    EXPECT_EQ(sem.memory_type, SemaphoreSpec::SemaphoreMemoryType::Register);
+    EXPECT_EQ(sem.initial_value, 7u);
 }
 
 TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
@@ -1649,6 +1871,63 @@ TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
+    // On WH/BH, compute kernels cannot participate in semaphore signalling.
+    // (The corresponding Quasar test asserts this is allowed there.)
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[1] is the compute kernel in MakeMinimalGen1ValidProgramSpec
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has semaphore bindings, but it is a compute kernel.")));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
+    // Sanity check: binding a semaphore to a DM kernel on WH/BH is allowed.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
+    ASSERT_TRUE(spec.kernels[0].is_dm_kernel());
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
+    // Gen1 accepts non-zero initial values (only Quasar rejects them).
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    sem.initial_value = 3;
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
 TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {

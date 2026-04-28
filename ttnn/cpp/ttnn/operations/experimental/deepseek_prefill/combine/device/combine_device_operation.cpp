@@ -16,8 +16,9 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Validate layouts
     TT_FATAL(
-        tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Dispatched buffer must be ROW_MAJOR layout");
+        tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE ||
+            tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "Dispatched buffer must be TILE_LAYOUT or ROW_MAJOR layout");
     TT_FATAL(
         tensor_args.dispatched_metadata.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Dispatched metadata must be ROW_MAJOR layout");
@@ -27,8 +28,10 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
 
     // Validate dtypes
     TT_FATAL(
-        tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT16,
-        "Dispatched buffer must be BFLOAT16, got {}",
+        tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT16 ||
+            (tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT8_B &&
+             tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE),
+        "Dispatched buffer must be BFLOAT16 or BFLOAT8_B with TILE layout, got {}",
         tensor_args.dispatched_buffer.dtype());
     TT_FATAL(
         tensor_args.dispatched_metadata.dtype() == DataType::INT32,

@@ -71,7 +71,25 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t 
     __atomic_fetch_sub(sem_addr, val, __ATOMIC_RELAXED);
 }
 
+// Atomic semaphore increment
+FORCE_INLINE void semaphore_inc(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val = 1) {
+    __atomic_fetch_add(sem_addr, val, __ATOMIC_RELAXED);
+}
+
 #endif
+
+// Atomic L1 semaphore primitives by address — callable from any RISC
+// (BR / NC / TR0 / TR1 / TR2). RELAXED ordering; callers are responsible for
+// pipeline fences (e.g. noc_async_read_barrier on NC; blocking LLK calls on TR).
+FORCE_INLINE uint32_t sem_atomic_load(uint32_t sem_addr) {
+    return __atomic_load_n(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), __ATOMIC_RELAXED);
+}
+FORCE_INLINE void sem_atomic_inc(uint32_t sem_addr, uint32_t v = 1) {
+    __atomic_fetch_add(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELAXED);
+}
+FORCE_INLINE void sem_atomic_dec(uint32_t sem_addr, uint32_t v = 1) {
+    __atomic_fetch_sub(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELAXED);
+}
 
 // ============================================================================
 // Cross-RISC synchronization
@@ -95,7 +113,7 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t 
 // Phase 2 (exit):  NC adds N to high half → participants each spin until high != 0,
 //                  then subtract 1. The last one drains high to 0 for next iteration.
 
-template <bool sync_math_risc = true>
+template <bool sync_math_risc = true, bool sync_tensix = true>
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(UCK_CHLKC_MATH)
     if constexpr (sync_math_risc)
@@ -103,7 +121,9 @@ FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
     {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
 #if defined(COMPILE_FOR_TRISC)
-        tensix_sync();
+        if constexpr (sync_tensix) {
+            tensix_sync();
+        }
 #endif
         __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
 #elif defined(COMPILE_FOR_NCRISC)
@@ -137,6 +157,11 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 // ============================================================================
 
 #if defined(COMPILE_FOR_TRISC)
+
+// Read a CB's current read pointer as a byte address.
+FORCE_INLINE uint32_t get_cb_rd_ptr(uint32_t cb_id) {
+    return get_local_cb_interface(cb_id).fifo_rd_ptr << cb_addr_shift;
+}
 
 // Override a CB's read pointer to a byte address (converted to cb_addr_shift units).
 FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {

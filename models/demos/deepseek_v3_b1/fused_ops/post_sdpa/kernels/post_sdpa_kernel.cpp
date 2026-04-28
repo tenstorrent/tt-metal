@@ -435,6 +435,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_scale_fp32"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+                get_named_compile_time_arg_val("sdpa_compute_block_size"),
                 get_named_compile_time_arg_val("sdpa_position_enabled"),
                 get_named_compile_time_arg_val("sdpa_per_device_chunk_size"),
                 1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
@@ -593,6 +594,7 @@ void kernel_main() {
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);
         args.per_core_rta_start_idx = 0;
         deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> writer;
+        writer.open_connections(args);
         writer(args);
     }
     if constexpr (Core::is_allreduce_receiver_core) {
@@ -626,6 +628,7 @@ void kernel_main() {
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);
         args.per_core_rta_start_idx = 0;
         deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceBriscWriterCTArgs> writer;
+        writer.open_connections(args);
         writer(args);
     }
 
