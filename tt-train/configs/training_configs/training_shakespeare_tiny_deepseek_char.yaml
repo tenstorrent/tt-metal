@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_tiny_deepseek"
   seed: 5489
   model_save_interval: 500
-  batch_size: 1
+  batch_size: 4
   num_epochs: 1
   max_steps: 5000
   use_clip_grad_norm: true
