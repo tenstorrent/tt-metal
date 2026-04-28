@@ -59,7 +59,7 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-umd/coordinates/coordinate_manager.hpp>
+// #include <tt-umd/coordinates/coordinate_manager.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include <impl/debug/watcher_server.hpp>
