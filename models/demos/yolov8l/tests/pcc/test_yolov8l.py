@@ -76,20 +76,7 @@ def test_yolov8l_1280(device, model_location_generator):
     _run_yolov8l_pcc(device, model_location_generator, 1280)
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 8)],
-    indirect=True,
-    ids=["t3k_1x8"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280)}],
-    indirect=True,
-    ids=["l1_1280_for_all_res"],
-)
-@pytest.mark.parametrize("input_hw", [640, 1280], ids=["640", "1280"])
-def test_yolov8l_dp_batch8(mesh_device, model_location_generator, input_hw):
+def _run_yolov8l_dp_mesh_pcc(mesh_device, model_location_generator, input_hw):
     batch_size = mesh_device.get_num_devices()
     input_tensor = torch.rand((batch_size, 3, input_hw, input_hw))
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
@@ -112,3 +99,54 @@ def test_yolov8l_dp_batch8(mesh_device, model_location_generator, input_hw):
 
     passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
     logger.info(f"Passing: {passing}, PCC: {pcc}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 2)],
+    indirect=True,
+    ids=["n300_1x2"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280)}],
+    indirect=True,
+    ids=["l1_1280_for_all_res"],
+)
+@pytest.mark.parametrize("input_hw", [640, 1280], ids=["640", "1280"])
+def test_yolov8l_dp_batch2(mesh_device, model_location_generator, input_hw):
+    _run_yolov8l_dp_mesh_pcc(mesh_device, model_location_generator, input_hw)
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 4)],
+    indirect=True,
+    ids=["wh_1x4"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280)}],
+    indirect=True,
+    ids=["l1_1280_for_all_res"],
+)
+@pytest.mark.parametrize("input_hw", [640, 1280], ids=["640", "1280"])
+def test_yolov8l_dp_batch4(mesh_device, model_location_generator, input_hw):
+    _run_yolov8l_dp_mesh_pcc(mesh_device, model_location_generator, input_hw)
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 8)],
+    indirect=True,
+    ids=["t3k_1x8"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280)}],
+    indirect=True,
+    ids=["l1_1280_for_all_res"],
+)
+@pytest.mark.parametrize("input_hw", [640, 1280], ids=["640", "1280"])
+def test_yolov8l_dp_batch8(mesh_device, model_location_generator, input_hw):
+    _run_yolov8l_dp_mesh_pcc(mesh_device, model_location_generator, input_hw)

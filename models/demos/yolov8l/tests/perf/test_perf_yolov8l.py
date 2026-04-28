@@ -6,7 +6,6 @@
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import is_wormhole_b0
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
@@ -29,16 +28,20 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
             "models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l[1280-l1_1280_for_all_res-True]",
             12000,
         ],
-        # ["b8_640", 8, 640, 0.0, "test_yolov8l_dp_batch8 and 640", 12000],
-        # ["b8_1280", 8, 1280, 0.0, "test_yolov8l_dp_batch8 and 1280 and not 640", 12000],
+        ["b2_640", 2, 640, 50.0, "test_yolov8l_dp_batch2 and n300_1x2 and 640", 12000],
+        ["b2_1280", 2, 1280, 14.90, "test_yolov8l_dp_batch2 and n300_1x2 and 1280", 12000],
+        ["b4_640", 4, 640, 50.0, "test_yolov8l_dp_batch4 and wh_1x4 and 640", 12000],
+        ["b4_1280", 4, 1280, 14.90, "test_yolov8l_dp_batch4 and wh_1x4 and 1280", 12000],
+        ["b8_640", 8, 640, 50.0, "test_yolov8l_dp_batch8 and t3k_1x8 and 640", 12000],
+        ["b8_1280", 8, 1280, 14.90, "test_yolov8l_dp_batch8 and t3k_1x8 and 1280", 12000],
     ],
+    ids=["b1_640", "b1_1280", "b2_640", "b2_1280", "b4_640", "b4_1280", "b8_640", "b8_1280"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_yolov8l(name_suffix, batch_size, resolution, expected_perf, test_selector, op_support_count):
     subdir = "ttnn_yolov8l"
     num_iterations = 1
     margin = 0.03
-    expected_perf = expected_perf if is_wormhole_b0() else 0
     if test_selector.endswith(".py") or "::" in test_selector:
         command = f"pytest {test_selector}"
     else:
