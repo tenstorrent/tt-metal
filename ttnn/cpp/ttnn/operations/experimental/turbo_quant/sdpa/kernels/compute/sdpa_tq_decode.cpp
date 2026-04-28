@@ -32,8 +32,10 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/copy_dest_values.h"
 #include "api/compute/bcast.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -180,7 +182,8 @@ inline void dequant_k_chunk(
     uint32_t cb_dq_temp,
     uint32_t cb_k_in,
     const float* centroids,
-    const uint32_t* level_bits) {
+    const uint32_t* level_bits,
+    const uint32_t* delta_bits) {
     constexpr uint32_t chunk_tiles = Sk_chunk_t * DHt;
 
     // Pass 1: typecast BFP4→BF16 into cb_dq_temp (row-major layout).
@@ -204,6 +207,16 @@ inline void dequant_k_chunk(
     }
 
     // Pass 2a: Centroid gather, in-place in cb_dq_temp.
+    //
+    // For each input idx (BF16, integer 0..N-1), produce centroids[idx] using
+    // the telescoping cascade
+    //   result = c[0] + Σ_{lev=1..N-1} (idx >= lev) * (c[lev] - c[lev-1])
+    //
+    // The deltas (c[lev] - c[lev-1]) are precomputed once at kernel start and
+    // multiplied via mul_unary_tile (replaces fill+mul_binary). We also keep
+    // idx in DST 0 across the loop and use copy_dest_values for the per-level
+    // refresh into DST 2 (replaces re-reading idx from cb_dq_temp every level).
+    // Net per level: 4 SFPU ops (was 6), saving ~33% of the cascade overhead.
     {
         // DeviceZoneScopedN("TQ_K_GATHER");
         mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
@@ -212,22 +225,18 @@ inline void dequant_k_chunk(
         for (uint32_t t = 0; t < chunk_tiles; t++) {
             tile_regs_acquire();
             copy_tile_to_dst_init_short(cb_dq_temp);
-            copy_tile(cb_dq_temp, t, 0);
+            copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
             fill_tile_init();
-            fill_tile(1, centroids[0]);
+            fill_tile(1, centroids[0]);  // DST 1 = result, initialised to c[0]
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_tile_to_dst_init_short(cb_dq_temp);
-                copy_tile(cb_dq_temp, t, 2);
+                copy_dest_values_init();
+                copy_dest_values<DataFormat::Float16_b>(0, 2);  // DST 2 = idx
                 unary_ge_tile_init();
-                unary_ge_tile(2, level_bits[lev]);
-                fill_tile_init();
-                fill_tile(3, centroids[lev]);
-                sub_binary_tile_init();
-                sub_binary_tile(3, 1, 3);
-                mul_binary_tile_init();
-                mul_binary_tile(2, 3, 3);
+                unary_ge_tile(2, level_bits[lev]);  // DST 2 = (idx >= lev)
+                binop_with_scalar_tile_init();
+                mul_unary_tile(2, delta_bits[lev]);  // DST 2 *= (c[lev] - c[lev-1])
                 add_binary_tile_init();
-                add_binary_tile(1, 3, 1);
+                add_binary_tile(1, 2, 1);  // DST 1 += contribution
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -267,7 +276,8 @@ inline void dequant_v_chunk(
     uint32_t cb_dq_temp,
     uint32_t cb_v_in,
     const float* centroids,
-    const uint32_t* level_bits) {
+    const uint32_t* level_bits,
+    const uint32_t* delta_bits) {
     constexpr uint32_t chunk_tiles = Sk_chunk_t * vDHt;
 
     // Pass 1: Typecast BFP4→BF16 into cb_dq_temp.
@@ -290,7 +300,9 @@ inline void dequant_v_chunk(
         cb_push_back(cb_dq_temp, chunk_tiles);
     }
 
-    // Pass 2a: Centroid gather, in-place in cb_dq_temp.
+    // Pass 2a: Centroid gather, in-place in cb_dq_temp. (See dequant_k_chunk
+    // pass 2a for the rationale — same telescoping cascade with precomputed
+    // deltas + copy_dest_values + mul_unary_tile, ~33% fewer SFPU ops/level.)
     {
         // DeviceZoneScopedN("TQ_V_GATHER");
         mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
@@ -299,22 +311,18 @@ inline void dequant_v_chunk(
         for (uint32_t t = 0; t < chunk_tiles; t++) {
             tile_regs_acquire();
             copy_tile_to_dst_init_short(cb_dq_temp);
-            copy_tile(cb_dq_temp, t, 0);
+            copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
             fill_tile_init();
-            fill_tile(1, centroids[0]);
+            fill_tile(1, centroids[0]);  // DST 1 = result
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_tile_to_dst_init_short(cb_dq_temp);
-                copy_tile(cb_dq_temp, t, 2);
+                copy_dest_values_init();
+                copy_dest_values<DataFormat::Float16_b>(0, 2);
                 unary_ge_tile_init();
                 unary_ge_tile(2, level_bits[lev]);
-                fill_tile_init();
-                fill_tile(3, centroids[lev]);
-                sub_binary_tile_init();
-                sub_binary_tile(3, 1, 3);
-                mul_binary_tile_init();
-                mul_binary_tile(2, 3, 3);
+                binop_with_scalar_tile_init();
+                mul_unary_tile(2, delta_bits[lev]);
                 add_binary_tile_init();
-                add_binary_tile(1, 3, 1);
+                add_binary_tile(1, 2, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -428,6 +436,21 @@ void kernel_main() {
     float centroids[16];
     uint32_t level_bits_arr[16];
     LoadSDPACentroids<0, num_levels, TQ_BASE>::apply(centroids, level_bits_arr);
+
+    // Precompute centroid deltas (c[lev] - c[lev-1]) as FP32 bit patterns —
+    // used by the gather cascade's mul_unary_tile to skip the per-level
+    // fill_tile + sub_binary_tile pair. Computed once per kernel run.
+    uint32_t delta_bits_arr[16];
+    delta_bits_arr[0] = 0;  // unused
+    for (uint32_t lev = 1; lev < num_levels; ++lev) {
+        float delta = centroids[lev] - centroids[lev - 1];
+        union {
+            float f;
+            uint32_t u;
+        } conv;
+        conv.f = delta;
+        delta_bits_arr[lev] = conv.u;
+    }
 
     // ── CB indices ──
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
@@ -585,7 +608,7 @@ void kernel_main() {
                         {
                             // DeviceZoneScopedN("TQ_DEQUANT_K");
                             dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
-                                cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
+                                cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr, delta_bits_arr);
                         }
 
                         // ── Step 2: QK = Q × K^T ──
@@ -634,7 +657,7 @@ void kernel_main() {
                         {
                             // DeviceZoneScopedN("TQ_DEQUANT_V");
                             dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
-                                cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
+                                cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr, delta_bits_arr);
                         }
 
                         // ── Step 5: OUT_IM = softmax × V ──
