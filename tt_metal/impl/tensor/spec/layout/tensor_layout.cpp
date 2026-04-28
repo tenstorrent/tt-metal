@@ -24,6 +24,20 @@ size_t round_up(size_t value, size_t multiple) {
     return ((value + multiple - 1) / multiple) * multiple;
 };
 
+std::tuple<bool, bool> get_inner_hw_overpadded(
+    const tt::tt_metal::Shape& logical_shape,
+    const tt::tt_metal::Shape& legacy_padded_shape,
+    const PageConfig& page_config) {
+    if (page_config.get_layout() == Layout::TILE) {
+        const auto& tile = page_config.get_tile();
+        const uint32_t min_padded_h = round_up(logical_shape[-2], tile.get_height());
+        const uint32_t min_padded_w = round_up(logical_shape[-1], tile.get_width());
+        return {legacy_padded_shape[-2] > min_padded_h, legacy_padded_shape[-1] > min_padded_w};
+    }
+    // Always true for non-tile layouts; alignment is the standard padding mechanism for row-major tensors
+    return {true, true};
+}
+
 Alignment legacyShapeToAlignment(
     const tt::tt_metal::Shape& logical_shape,
     const tt::tt_metal::Shape& legacy_padded_shape,
@@ -53,15 +67,19 @@ Alignment legacyShapeToAlignment(
         return Alignment{};
     }
 
+    const auto [height_overpadded, width_overpadded] =
+        get_inner_hw_overpadded(logical_shape, legacy_padded_shape, page_config);
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
         ttsl::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
-            values[alignment_size - 1] = legacy_padded_shape[-1];
+            values[alignment_size - 1] =
+                width_overpadded ? legacy_padded_shape[-1] : page_config.get_tile().get_width();
         }
         if (alignment_size == 2) {
-            values[alignment_size - 2] = legacy_padded_shape[-2];
+            values[alignment_size - 2] =
+                height_overpadded ? legacy_padded_shape[-2] : page_config.get_tile().get_height();
         }
         Alignment result(std::move(values));
         return result;
@@ -71,16 +89,10 @@ Alignment legacyShapeToAlignment(
     // NOTE: Rank > 2 is guaranteed in this case
     ttsl::SmallVector<uint32_t> values(padded_rank);
 
-    if (page_config.get_layout() == Layout::TILE && logical_shape[-1] == legacy_padded_shape[-1] &&
-        logical_shape[-2] == legacy_padded_shape[-2]) {
-        // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
-        // for the innermost alignment; otherwise use the legacy padded H/W.
-        values[padded_rank - 1] = page_config.get_tile().get_width();
-        values[padded_rank - 2] = page_config.get_tile().get_height();
-    } else {
-        values[padded_rank - 1] = legacy_padded_shape[-1];
-        values[padded_rank - 2] = legacy_padded_shape[-2];
-    }
+    // When the inner dimensions are not over-padded beyond the logical H/W, use the tile width and height
+    // for the innermost alignment; otherwise use the legacy padded H/W.
+    values[padded_rank - 1] = width_overpadded ? legacy_padded_shape[-1] : page_config.get_tile().get_width();
+    values[padded_rank - 2] = height_overpadded ? legacy_padded_shape[-2] : page_config.get_tile().get_height();
 
     uint32_t cumulative_padded_volume = legacy_padded_shape[-2];
     for (int dim = padded_rank - 3; dim >= 0; dim--) {

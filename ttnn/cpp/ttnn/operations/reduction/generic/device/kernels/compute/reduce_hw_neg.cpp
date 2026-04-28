@@ -11,10 +11,18 @@
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
 
+#ifdef REDUCE_POST_MUL
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#endif
+
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
+#ifdef REDUCE_POST_MUL
+    // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
+    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+#endif
 
     constexpr uint32_t cb_input = tt::CBIndex::c_0;
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
@@ -78,6 +86,13 @@ void kernel_main() {
         copy_tile(cb_acc, 0, reduce_dst_idx);
         negative_tile_init();
         negative_tile(reduce_dst_idx);
+#ifdef REDUCE_POST_MUL
+        // GMPOOL only respects the scaler's exponent for MAX/MIN, so the host requests reduction
+        // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU) on each
+        // output DEST register.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(reduce_dst_idx, post_mul_scaler_bits);
+#endif
         cb_acc_obj.pop_front(onetile);
         cb_output_obj.reserve_back(onetile);
         pack_tile(reduce_dst_idx, cb_output);

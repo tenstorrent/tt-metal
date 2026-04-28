@@ -4445,6 +4445,7 @@ class MoeOp:
         downstream_sockets=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        termination_semaphore=None,
         forward_metadata_size_bytes=0,
         metadata_l1_addr=0,
     ):
@@ -4463,6 +4464,9 @@ class MoeOp:
             int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
             if persistent_next_iter_semaphore is not None
             else 0
+        )
+        self.termination_sem_addr = (
+            int(ttnn.get_global_semaphore_address(termination_semaphore)) if termination_semaphore is not None else 0
         )
 
         if cb_id_context is None:
@@ -4682,6 +4686,9 @@ class MoeOp:
         ncrisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
         brisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
         trisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
+        ncrisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
+        brisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
+        trisc_args += [("termination_semaphore_addr", self.termination_sem_addr)]
 
     def _build_semaphore_descriptors(self):
         """Build semaphore descriptors — empty, global semaphores are used instead."""
@@ -4836,6 +4843,7 @@ class MoeOp:
         num_iterations=1,
         persistent_mode=False,
         persistent_next_iter_semaphore=None,
+        termination_semaphore=None,
         # ReduceToOne parameters
         reduce_intermediate_tensors: Optional[list] = None,
         reduce_output_tensor: Optional[ttnn.Tensor] = None,
@@ -4935,6 +4943,7 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            termination_semaphore=termination_semaphore,
         )
 
         # ==================================================================

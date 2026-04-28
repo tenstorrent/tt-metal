@@ -676,22 +676,8 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
 }  // namespace
 
 std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initialize_loopback) {
-    log_info(
-        LogMetal,
-        "[generate_blitz_decode_pipeline] rank={} initialize_loopback={} — building topology",
-        *tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->rank(),
-        initialize_loopback);
     auto stages = build_pipeline_from_topology(initialize_loopback);
-    log_info(
-        LogMetal,
-        "[generate_blitz_decode_pipeline] rank={} — built {} stages, validating",
-        *tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->rank(),
-        stages.size());
     validate_pipeline(stages, initialize_loopback);
-    log_info(
-        LogMetal,
-        "[generate_blitz_decode_pipeline] rank={} — validated, entering barrier",
-        *tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->rank());
 
     // Synchronize all ranks before returning so that downstream socket creation
     // (which cascades sequentially through stages) starts from a common point.
@@ -702,7 +688,6 @@ std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initia
     const auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     ctx->barrier();
 
-    log_info(LogMetal, "[generate_blitz_decode_pipeline] rank={} — barrier complete, returning", *ctx->rank());
     return stages;
 }
 

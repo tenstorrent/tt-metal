@@ -32,10 +32,15 @@ public:
     // Called to process the user named compile time args
     virtual void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
+
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
-    // (Initially just DFB local accessor names, but will be extended and refactored as needed.)
+    //  - DFB accessors
+    //  - Semaphore accessors
+    //  - Tensor accessors (TODO)
     virtual void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+    virtual void process_semaphore_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args
