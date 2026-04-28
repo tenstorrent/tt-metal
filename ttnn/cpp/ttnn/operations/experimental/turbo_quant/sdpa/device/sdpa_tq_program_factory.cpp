@@ -173,6 +173,22 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(dq_temp_tiles * bf16_tile_size, {{CBIndex::c_14, bf16_df}})
             .set_page_size(CBIndex::c_14, bf16_tile_size));
 
+    // BF16 typecast scratch CBs for norms when stored as BFP8 in DRAM.
+    // Compute kernel typecasts c_11 (BFP8) → c_15 (BF16), and c_13 → c_17,
+    // then mul_bcast_cols uses the BF16 versions. When norms are already BF16
+    // these CBs are unused (the kernel takes a fast path).
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sk_chunk_t * bf16_tile_size, {{CBIndex::c_15, bf16_df}})
+            .set_page_size(CBIndex::c_15, bf16_tile_size));
+
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sk_chunk_t * bf16_tile_size, {{CBIndex::c_17, bf16_df}})
+            .set_page_size(CBIndex::c_17, bf16_tile_size));
+
     // SDPA intermediates
     CreateCircularBuffer(
         program,
@@ -276,6 +292,9 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         compute_ct_args.push_back(sdpa_float_to_bits(c));
     }
     compute_ct_args.push_back(attrs.pre_rescaled ? 1 : 0);
+    // Whether norms are BFP8_B (1) or BF16 (0) — compute kernel typecasts when 1.
+    const bool norms_are_bfp8 = (k_norms.dtype() == tt::tt_metal::DataType::BFLOAT8_B);
+    compute_ct_args.push_back(norms_are_bfp8 ? 1 : 0);
 
     KernelHandle compute_kernel = CreateKernel(
         program,

@@ -144,9 +144,34 @@ inline void dequantize_chunk(
 //     layout needed for softmax × V matmul (transpose=false).
 // ──────────────────────────────────────────────────────────────────────
 
-// DataFormat constants for typecast (BFP4=7, BF16=5)
+// DataFormat constants for typecast (BFP4=7, BFP8=4, BF16=5)
 constexpr uint32_t TQ_DF_BFP4 = 7;
+constexpr uint32_t TQ_DF_BFP8 = 4;
 constexpr uint32_t TQ_DF_BF16 = 5;
+
+// Typecast Sk_chunk_t tiles of BFP8 norms from cb_in to BF16 in cb_out. The
+// dequant_*_chunk paths require BF16 norms because mul_tiles_bcast_cols does
+// not natively unpack BFP8 input. Cost: 1 copy + 1 typecast + 1 pack per K
+// chunk row (Sk_chunk_t tiles total) — negligible vs the dequant body.
+template <uint32_t Sk_chunk_t>
+inline void typecast_norms_bfp8_to_bf16(uint32_t cb_in, uint32_t cb_out) {
+    init_sfpu(cb_in, cb_out);
+    cb_wait_front(cb_in, Sk_chunk_t);
+    cb_reserve_back(cb_out, Sk_chunk_t);
+    for (uint32_t t = 0; t < Sk_chunk_t; ++t) {
+        tile_regs_acquire();
+        copy_tile(cb_in, t, 0);
+        typecast_tile_init<TQ_DF_BFP8, TQ_DF_BF16>();
+        typecast_tile<TQ_DF_BFP8, TQ_DF_BF16>(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_out);
+        pack_tile(0, cb_out);
+        tile_regs_release();
+    }
+    cb_pop_front(cb_in, Sk_chunk_t);
+    cb_push_back(cb_out, Sk_chunk_t);
+}
 
 template <uint32_t Sk_chunk_t, uint32_t DHt, uint32_t NumLevels>
 inline void dequant_k_chunk(
@@ -380,6 +405,8 @@ void kernel_main() {
     constexpr uint32_t num_levels = get_compile_time_arg_val(TQ_BASE);
     // pre_rescaled=1: BFP4 values are already centroid×norm, skip gather+norm
     constexpr bool pre_rescaled = get_compile_time_arg_val(TQ_BASE + 1 + num_levels) == 1;
+    // norms_are_bfp8=1: norms cache is BFP8_B (must typecast to BF16 before bcast_cols multiply)
+    constexpr bool norms_are_bfp8 = get_compile_time_arg_val(TQ_BASE + 2 + num_levels) == 1;
 
     // Runtime args
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -410,11 +437,17 @@ void kernel_main() {
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_k_idx = tt::CBIndex::c_10;
-    constexpr uint32_t cb_k_norms = tt::CBIndex::c_11;
+    constexpr uint32_t cb_k_norms_in = tt::CBIndex::c_11;  // BFP8 (or BF16) from reader
     constexpr uint32_t cb_v_idx = tt::CBIndex::c_12;
-    constexpr uint32_t cb_v_norms = tt::CBIndex::c_13;
+    constexpr uint32_t cb_v_norms_in = tt::CBIndex::c_13;  // BFP8 (or BF16) from reader
     constexpr uint32_t cb_dq_temp = tt::CBIndex::c_14;
+    constexpr uint32_t cb_k_norms_bf16 = tt::CBIndex::c_15;  // BFP8→BF16 typecast scratch (K)
+    constexpr uint32_t cb_v_norms_bf16 = tt::CBIndex::c_17;  // BFP8→BF16 typecast scratch (V)
     constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
+    // After typecast (when BFP8), the dequant kernels consume the BF16 scratch CB.
+    // When norms are already BF16, both aliases point at the same input CB.
+    constexpr uint32_t cb_k_norms = norms_are_bfp8 ? cb_k_norms_bf16 : cb_k_norms_in;
+    constexpr uint32_t cb_v_norms = norms_are_bfp8 ? cb_v_norms_bf16 : cb_v_norms_in;
 
     // ── Wait for reader to fill cur_pos CB ──
     // Reader does a single noc_async_read of the cur_pos tensor into cb_cur_pos
@@ -543,6 +576,11 @@ void kernel_main() {
                     DeviceZoneScopedN("TQ_CHUNK_LOOP");
                     for (uint32_t k_chunk = 0; k_chunk < valid_k_chunks; ++k_chunk) {
                         DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
+                        // ── Step 0: Typecast BFP8 norms → BF16 (when stored as BFP8) ──
+                        if constexpr (norms_are_bfp8) {
+                            typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_k_norms_in, cb_k_norms_bf16);
+                        }
+
                         // ── Step 1: Dequantize K chunk → cb_k_in (transposed layout) ──
                         {
                             // DeviceZoneScopedN("TQ_DEQUANT_K");
@@ -590,6 +628,9 @@ void kernel_main() {
                         }
 
                         // ── Step 4: Dequantize V chunk → cb_v_in (natural layout) ──
+                        if constexpr (norms_are_bfp8) {
+                            typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_v_norms_in, cb_v_norms_bf16);
+                        }
                         {
                             // DeviceZoneScopedN("TQ_DEQUANT_V");
                             dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(

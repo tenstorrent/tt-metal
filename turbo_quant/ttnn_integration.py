@@ -492,11 +492,16 @@ class TTNNTurboQuantCache:
         ]
         del zero_idx
 
+        # Norms stored as BFP8 (1 byte/elem) to halve the on-device norms cache
+        # vs BF16. The compute kernel typecasts BFP8 → BF16 in DST registers
+        # before the bcast_cols multiply (BFP8 input is not natively supported
+        # by mul_tiles_bcast_cols).
+        norms_dtype = ttnn.bfloat8_b
         zero_norms = torch.zeros(norms_shape, dtype=torch.bfloat16)
         self.k_norms_dev = [
             ttnn.from_torch(
                 zero_norms,
-                dtype=ttnn.bfloat16,
+                dtype=norms_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -507,7 +512,7 @@ class TTNNTurboQuantCache:
         self.v_norms_dev = [
             ttnn.from_torch(
                 zero_norms,
-                dtype=ttnn.bfloat16,
+                dtype=norms_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

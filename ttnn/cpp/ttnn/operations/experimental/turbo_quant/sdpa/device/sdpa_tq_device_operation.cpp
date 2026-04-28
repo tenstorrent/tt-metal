@@ -29,9 +29,16 @@ void SDPATQDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.k_indices.layout() == Layout::TILE, "K indices must be TILE layout");
     TT_FATAL(args.v_indices.layout() == Layout::TILE, "V indices must be TILE layout");
 
-    // Norms: BF16, TILE
-    TT_FATAL(args.k_norms.dtype() == tt::tt_metal::DataType::BFLOAT16, "K norms must be BF16");
-    TT_FATAL(args.v_norms.dtype() == tt::tt_metal::DataType::BFLOAT16, "V norms must be BF16");
+    // Norms: BF16 or BFP8_B, TILE. BFP8 halves on-device norms storage; the
+    // compute kernel typecasts BFP8 → BF16 before the bcast_cols multiply.
+    TT_FATAL(
+        args.k_norms.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            args.k_norms.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "K norms must be BF16 or BFP8_B");
+    TT_FATAL(
+        args.v_norms.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            args.v_norms.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "V norms must be BF16 or BFP8_B");
 
     // Centroids
     TT_FATAL(attrs.centroids.size() >= 2 && attrs.centroids.size() <= 16, "Need 2-16 centroids");
