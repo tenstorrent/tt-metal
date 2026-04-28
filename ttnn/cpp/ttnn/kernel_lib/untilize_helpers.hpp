@@ -66,11 +66,12 @@ ALWI void untilize_uninit();
  * Automatically selects single-pass or block-based pack_untilize at compile time
  * based on block_width_tiles vs DEST capacity.
  *
- * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
- * start of your kernel before using this function, unless another init or
- * compute_kernel_hw_startup has already been called. The two-argument overload
- * sets srcA=srcB=input_cb. Use the three-argument form
- * compute_kernel_hw_startup(icb0, icb1, ocb) when srcA and srcB differ.
+ * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) exactly once
+ * at the start of your kernel before using this function. Do NOT re-call it later
+ * (and never inside a loop) — re-running mid-kernel can race the compute pipeline
+ * and produce undefined behavior. The two-argument overload sets srcA=srcB=input_cb.
+ * Use the three-argument form compute_kernel_hw_startup(icb0, icb1, ocb) when
+ * srcA and srcB differ.
  *
  * ── Template Parameters (compile-time) ──────────────────────────────────────
  *
@@ -100,7 +101,7 @@ ALWI void untilize_uninit();
  *
  *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
  *
- *   // Hardware init — only if no other init or compute_kernel_hw_startup was called before
+ *   // Hardware init — must come first, exactly once at kernel start
  *   compute_kernel_hw_startup(cb_in, cb_out);
  *
  *   // 1. Basic untilize (most common)
