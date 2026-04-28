@@ -106,10 +106,13 @@ def run(
     # correct matmul behavior with sharded memory configs.
     op_kwargs = build_op_kwargs(kwargs)
 
-    # Only inject memory_config if the master trace explicitly passed it as a kwarg.
-    # The __ABSENT__ sentinel means it was NOT in the traced call signature.
-    # Do NOT inject memory_config from output_memory_config — that's infrastructure
-    # metadata, not an op kwarg, and would cause extra_key diffs in validation.
+    # build_op_kwargs filters memory_config (infrastructure key), but matmul
+    # accepts it as an op kwarg.  Re-inject from the traced kwargs when present.
+    raw_mc = kwargs.get("memory_config")
+    if raw_mc is not None and raw_mc != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        op_kwargs["memory_config"] = parse_dict_value("memory_config", raw_mc) if isinstance(raw_mc, dict) else raw_mc
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
