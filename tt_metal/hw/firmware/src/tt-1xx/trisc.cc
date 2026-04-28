@@ -225,6 +225,11 @@ int main(int argc, char* argv[]) {
         // stamp it onto each in-kernel tick. Single writer (this thread,
         // between kernel launches), single reader (LLK on this thread).
         ttnvtop_sampler::set_current_kernel_id(launch_msg->kernel_config.host_assigned_id);
+        // Phase 2.1.c.iv: unconditional presence sample at kernel launch.
+        // Closes the attribution gap for kernels that never call any of
+        // the LLK math hooks (pure SFPU, unpack/pack-only, debug). Cheap
+        // (~1 ring write per kernel) and well within the drain budget.
+        ttnvtop_sampler::force_kernel_start_sample();
 #endif
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);

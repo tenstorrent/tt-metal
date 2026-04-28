@@ -299,4 +299,47 @@ inline void maybe_tick_with_kernel_id_first_only() {
     maybe_tick_with_kernel_id();
 }
 
+// Phase 2.1.c.iv: unconditional kernel-start sample. Writes one ring entry
+// at the moment trisc.cc transfers control to the JIT-compiled kernel.
+// Guarantees that every kernel that ever runs on TRISC1 — including ones
+// that never call _llk_math_wait_for_dest_available_ or
+// _llk_math_dest_section_done_ (pure SFPU paths, unpack/pack-only,
+// kernels that complete before any tile is written, debug/test kernels)
+// — has at least one ring entry attributed to its host_assigned_id.
+//
+// Bypasses the deadline gate by design: the goal is presence capture, not
+// rate-limited sampling. After this fires, next_due_wall_l is set to
+// wall + period, so subsequent Hook B / Hook B' calls inside this kernel
+// are throttled normally.
+//
+// Cost: one ring write per kernel launch. At Llama's ~1k kernels/sec/core
+// × 64 cores × 2 chips = ~128k extra entries/sec total — well within the
+// host drain budget. The kernel_id written is the encoded host_assigned_id
+// stashed by set_current_kernel_id, decoded host-side like every other
+// sample.
+inline void force_kernel_start_sample() {
+    auto* s = ring();
+    const uint32_t kid = s->current_kernel_id;
+    if (kid == 0u) {
+        return;  // no kernel bound — nothing to attribute
+    }
+    const uint32_t wall_l = sampler_reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    const uint32_t period = s->period_cycles;
+    if (period != 0u) {
+        s->next_due_wall_l = wall_l + period;
+    }
+    const uint32_t fpu_out_h = sampler_reg_read(RISCV_DEBUG_REG_PERF_CNT_OUT_H_FPU);
+
+    const uint32_t head = s->head;
+    const uint32_t slot = head % UTIL_SAMPLER_RING_SIZE;
+    s->ring[slot].wall_clock_l = wall_l;
+    s->ring[slot].kernel_id = kid;
+    s->ring[slot].fpu_count = fpu_out_h;
+    s->ring[slot].math_fidelity = UTIL_SAMPLER_MATH_FIDELITY_UNSET;
+    s->ring[slot].counter_sel = UTIL_SAMPLER_COUNTER_FPU;
+    s->ring[slot].producer_riscv = UTIL_SAMPLER_PRODUCER_TRISC1;
+    s->ring[slot].flags = UTIL_SAMPLER_FLAG_KERNEL_START;
+    s->head = head + 1;
+}
+
 }  // namespace ttnvtop_sampler
