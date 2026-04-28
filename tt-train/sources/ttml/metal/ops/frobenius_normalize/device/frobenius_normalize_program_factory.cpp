@@ -42,7 +42,9 @@ constexpr uint32_t kWriterOutputAddrIdx = 0;
 namespace ttml::metal::ops::frobenius_normalize::device {
 
 FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const FrobeniusNormalizeAttributes& args,
+    const FrobeniusNormalizeTensorArgs& tensor_args,
+    FrobeniusNormalizeTensorReturn& output) {
     const auto& input = tensor_args.input;
     auto* device = input.device();
 
@@ -243,9 +245,9 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
 
 void FrobeniusNormalizeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const FrobeniusNormalizeAttributes& operation_attributes,
+    const FrobeniusNormalizeTensorArgs& tensor_args,
+    FrobeniusNormalizeTensorReturn& output) {
     auto& shared = cached_program.shared_variables;
     auto& program = cached_program.program;
 

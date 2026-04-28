@@ -12,7 +12,7 @@
 namespace ttml::metal::ops::frobenius_normalize::device {
 
 void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const FrobeniusNormalizeAttributes& args, const FrobeniusNormalizeTensorArgs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
     TT_FATAL(
@@ -45,8 +45,8 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t FrobeniusNormalizeDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+FrobeniusNormalizeSpecReturn FrobeniusNormalizeDeviceOperation::compute_output_specs(
+    const FrobeniusNormalizeAttributes& args, const FrobeniusNormalizeTensorArgs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return {tensor_args.preallocated_output->tensor_spec()};
     }
@@ -57,8 +57,8 @@ spec_return_value_t FrobeniusNormalizeDeviceOperation::compute_output_specs(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()))};
 }
 
-tensor_return_value_t FrobeniusNormalizeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+FrobeniusNormalizeTensorReturn FrobeniusNormalizeDeviceOperation::create_output_tensors(
+    const FrobeniusNormalizeAttributes& args, const FrobeniusNormalizeTensorArgs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return {tensor_args.preallocated_output.value()};
     }
@@ -68,7 +68,7 @@ tensor_return_value_t FrobeniusNormalizeDeviceOperation::create_output_tensors(
 }
 
 ttsl::hash::hash_t FrobeniusNormalizeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const FrobeniusNormalizeAttributes& args, const FrobeniusNormalizeTensorArgs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     return tt::tt_metal::operation::hash_operation<FrobeniusNormalizeDeviceOperation>(
         args, input_tensor.dtype(), input_tensor.logical_shape());
@@ -78,13 +78,13 @@ ttsl::hash::hash_t FrobeniusNormalizeDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-ttml::metal::ops::frobenius_normalize::device::FrobeniusNormalizeDeviceOperation::tensor_return_value_t
-ttml_frobenius_normalize(
+ttml::metal::ops::frobenius_normalize::device::FrobeniusNormalizeTensorReturn ttml_frobenius_normalize(
     const ttnn::Tensor& input_tensor, float epsilon, const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::frobenius_normalize::device::FrobeniusNormalizeDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{.epsilon = epsilon};
-    auto tensor_args = OperationType::tensor_args_t{
+    namespace fn_device = ttml::metal::ops::frobenius_normalize::device;
+    auto operation_attributes = fn_device::FrobeniusNormalizeAttributes{.epsilon = epsilon};
+    auto tensor_args = fn_device::FrobeniusNormalizeTensorArgs{
         .input = input_tensor,
         .preallocated_output = preallocated_output,
     };

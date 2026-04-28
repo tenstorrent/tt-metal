@@ -8,17 +8,17 @@
 
 namespace ttml::metal::ops::frobenius_normalize::device {
 
-struct operation_attributes_t {
+struct FrobeniusNormalizeAttributes {
     float epsilon{1e-7F};
 };
 
-struct tensor_args_t {
+struct FrobeniusNormalizeTensorArgs {
     const ttnn::Tensor& input;
     std::optional<ttnn::Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = std::vector<ttnn::Tensor>;
+using FrobeniusNormalizeTensorReturn = std::vector<ttnn::Tensor>;
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using FrobeniusNormalizeSpecReturn = std::vector<ttnn::TensorSpec>;
 
 }  // namespace ttml::metal::ops::frobenius_normalize::device

@@ -13,28 +13,31 @@
 namespace ttml::metal::ops::frobenius_normalize::device {
 
 struct FrobeniusNormalizeDeviceOperation {
-    using operation_attributes_t = ttml::metal::ops::frobenius_normalize::device::operation_attributes_t;
-    using tensor_args_t = ttml::metal::ops::frobenius_normalize::device::tensor_args_t;
-    using spec_return_value_t = ttml::metal::ops::frobenius_normalize::device::spec_return_value_t;
-    using tensor_return_value_t = ttml::metal::ops::frobenius_normalize::device::tensor_return_value_t;
+    // Framework-required aliases (ttnn::device_operation::launch dispatches via these names).
+    using operation_attributes_t = FrobeniusNormalizeAttributes;
+    using tensor_args_t = FrobeniusNormalizeTensorArgs;
+    using spec_return_value_t = FrobeniusNormalizeSpecReturn;
+    using tensor_return_value_t = FrobeniusNormalizeTensorReturn;
     using program_factory_t = std::variant<FrobeniusNormalizeProgramFactory>;
 
-    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(
+        const FrobeniusNormalizeAttributes&, const FrobeniusNormalizeTensorArgs&);
 
-    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static FrobeniusNormalizeSpecReturn compute_output_specs(
+        const FrobeniusNormalizeAttributes&, const FrobeniusNormalizeTensorArgs&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static FrobeniusNormalizeTensorReturn create_output_tensors(
+        const FrobeniusNormalizeAttributes& operation_attributes, const FrobeniusNormalizeTensorArgs&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(
+        const FrobeniusNormalizeAttributes&, const FrobeniusNormalizeTensorArgs&);
 };
 
 }  // namespace ttml::metal::ops::frobenius_normalize::device
 
 namespace ttnn::prim {
 
-ttml::metal::ops::frobenius_normalize::device::FrobeniusNormalizeDeviceOperation::tensor_return_value_t
-ttml_frobenius_normalize(
+ttml::metal::ops::frobenius_normalize::device::FrobeniusNormalizeTensorReturn ttml_frobenius_normalize(
     const ttnn::Tensor& input_tensor,
     float epsilon = 1e-7F,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
