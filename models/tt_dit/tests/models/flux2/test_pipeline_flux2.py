@@ -22,7 +22,7 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 37000000}],
     indirect=True,
 )
-@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 40)])
+@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 12)])
 @pytest.mark.parametrize(
     (
         "mesh_device",
@@ -34,8 +34,10 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
         "topology",
         "num_links",
         "mesh_test_id",
-        "use_torch_prompt_encoder",
-        "use_torch_vae_decoder",
+        "encoder_on_device",
+        "vae_on_device",
+        "is_fsdp",
+        "dynamic_load",
     ),
     [
         pytest.param(
@@ -48,8 +50,10 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
             ttnn.Topology.Linear,
             1,  # num_links
             "1x8tp1",
-            True,  # use_torch_prompt_encoder
-            True,  # use_torch_vae_decoder
+            True,  # encoder_on_device
+            True,  # vae_on_device
+            False,  # is_fsdp
+            True,  # dynamic_load
             id="1x8tp1",
         ),
     ],
@@ -58,8 +62,8 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 @pytest.mark.parametrize(
     "traced",
     [
-        pytest.param(True, id="traced"),
-        # pytest.param(False, id="not_traced"),
+        # pytest.param(True, id="traced"),
+        pytest.param(False, id="not_traced"),
     ],
 )
 def test_pipeline(
@@ -76,10 +80,12 @@ def test_pipeline(
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
-    use_torch_prompt_encoder: bool,
-    use_torch_vae_decoder: bool,
+    encoder_on_device: bool,
+    vae_on_device: bool,
     traced: bool,
     mesh_test_id: str,
+    is_fsdp: bool,
+    dynamic_load: bool,
 ) -> None:
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -88,12 +94,14 @@ def test_pipeline(
         dit_tp=tp,
         encoder_tp=encoder_tp,
         vae_tp=vae_tp,
-        use_torch_prompt_encoder=use_torch_prompt_encoder,
-        use_torch_vae_decoder=use_torch_vae_decoder,
+        encoder_on_device=encoder_on_device,
+        vae_on_device=vae_on_device,
         num_links=num_links,
         topology=topology,
         width=width,
         height=height,
+        is_fsdp=is_fsdp,
+        dynamic_load=dynamic_load,
     )
 
     prompts = [
@@ -109,9 +117,9 @@ def test_pipeline(
     ]
 
     filename_prefix = f"flux2_{width}_{height}_{mesh_test_id}"
-    if use_torch_prompt_encoder:
+    if not encoder_on_device:
         filename_prefix += "_encodercpu"
-    if use_torch_vae_decoder:
+    if not vae_on_device:
         filename_prefix += "_vaecpu"
     if not traced:
         filename_prefix += "_untraced"

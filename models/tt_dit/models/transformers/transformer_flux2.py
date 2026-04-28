@@ -64,11 +64,13 @@ class Flux2SingleTransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        is_fsdp: bool = False,
     ) -> None:
         super().__init__()
 
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         mlp_hidden_dim = 3 * dim
+        fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
         self.attn = Attention(
             query_dim=dim,
@@ -84,6 +86,7 @@ class Flux2SingleTransformerBlock(Module):
             parallel_config=parallel_config,
             padding_config=padding_config,
             use_spatial_weights_for_prompt=True,
+            is_fsdp=is_fsdp,
         )
 
         self.norm = DistributedLayerNorm(
@@ -104,6 +107,8 @@ class Flux2SingleTransformerBlock(Module):
             activation_fn="swiglu",
             mesh_device=device,
             mesh_axis=tp_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         # Shard input, since size of input dimension >> size of output dimension.
@@ -114,6 +119,7 @@ class Flux2SingleTransformerBlock(Module):
             mesh_device=device,
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
+            fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
         self._dim = dim
@@ -205,6 +211,7 @@ class Flux2Transformer(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        is_fsdp: bool = False,
     ) -> None:
         super().__init__()
 
@@ -243,6 +250,7 @@ class Flux2Transformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=device,
+                is_fsdp=is_fsdp,
             )
             for i in range(num_layers)
         )
@@ -256,6 +264,7 @@ class Flux2Transformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 device=device,
+                is_fsdp=is_fsdp,
             )
             for i in range(num_single_layers)
         )

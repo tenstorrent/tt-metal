@@ -49,6 +49,8 @@ class PromptEncoder:
             self._encoder = _load_torch_encoder(checkpoint_name)
             return
 
+        self._checkpoint_name = checkpoint_name
+
         self._encoder = Mistral3Encoder(
             vocab_size=131072,
             head_size=128,
@@ -66,15 +68,19 @@ class PromptEncoder:
             ccl_manager=ccl_manager,
         )
 
+    def load_weights(self) -> None:
+        if not isinstance(self._encoder, Module):
+            return
+
         def get_torch_state_dict() -> dict[str, torch.Tensor]:
-            return Mistral3Encoder.convert_state(_load_torch_encoder(checkpoint_name).state_dict())
+            return Mistral3Encoder.convert_state(_load_torch_encoder(self._checkpoint_name).state_dict())
 
         cache.load_model(
             self._encoder,
             model_name="flux2",
             subfolder="text_encoder",
-            parallel_config=parallel_config,
-            mesh_shape=tuple(device.shape),
+            parallel_config=self._parallel_config,
+            mesh_shape=tuple(self._device.shape),
             dtype="bf16",
             get_torch_state_dict=get_torch_state_dict,
         )
