@@ -75,6 +75,7 @@ class TimestepEmbedding(Module):
         time_embed_dim,
         act_fn="silu",
         dtype=ttnn.bfloat16,
+        bias: bool = True,
         mesh_device=None,
         tp_mesh_axis=None,
         ccl_manager=None,
@@ -85,15 +86,15 @@ class TimestepEmbedding(Module):
         self.time_embed_dim = time_embed_dim
         self.mesh_device = mesh_device
         self.act_fn = ACT2CLS[act_fn]  # TODO: Fuse with linear instead
-        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+        self.linear_1 = Linear(in_channels, time_embed_dim, bias=bias, mesh_device=mesh_device, dtype=dtype)
 
         if tp_mesh_axis is None:
-            self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+            self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=bias, mesh_device=mesh_device, dtype=dtype)
         else:  # Specifically for Wan2.2
             self.linear_2 = ColParallelLinear(
                 time_embed_dim,
                 time_embed_dim,
-                bias=True,
+                bias=bias,
                 mesh_device=mesh_device,
                 dtype=dtype,
                 mesh_axis=tp_mesh_axis,
@@ -107,14 +108,14 @@ class TimestepEmbedding(Module):
 
 
 class PixArtAlphaTextProjection(Module):
-    def __init__(self, in_features, hidden_size, mesh_device=None, act_fn="silu"):
+    def __init__(self, in_features, hidden_size, bias: bool = True, mesh_device=None, act_fn="silu"):
         super().__init__()
 
         self.in_features = in_features
         self.hidden_size = hidden_size
         self.mesh_device = mesh_device
-        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device, activation_fn=act_fn)
-        self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device)
+        self.linear_1 = Linear(in_features, hidden_size, bias=bias, mesh_device=mesh_device, activation_fn=act_fn)
+        self.linear_2 = Linear(hidden_size, hidden_size, bias=bias, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
