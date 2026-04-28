@@ -309,6 +309,7 @@ class OLMo3ForCausalLM(Generator):
 
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
