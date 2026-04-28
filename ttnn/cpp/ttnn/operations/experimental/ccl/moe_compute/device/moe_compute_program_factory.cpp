@@ -313,14 +313,14 @@ MoEComputeMeshWorkloadFactory::create_at(
     const auto combine_token_parallel_cores = args.combine_params.num_token_parallel_cores;
     const auto combine_data_parallel_cores = args.combine_params.num_data_parallel_cores;
 
-    // Determine config type based on hidden size
+    // Determine config type based on hidden size. Bias does not matter for these values
     uint32_t config_type, a2a_cb_pages;
     if (hidden_size == 7168) {
         config_type = static_cast<uint32_t>(detail::MoEConfigType::DEEPSEEK);
-        a2a_cb_pages = moe_ring::DeepSeekRingConfig::IN2_TILES_PER_STEP;
+        a2a_cb_pages = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
     } else if (hidden_size == 2880) {
         config_type = static_cast<uint32_t>(detail::MoEConfigType::GPT);
-        a2a_cb_pages = moe_ring::GptRingConfig::IN2_TILES_PER_STEP;
+        a2a_cb_pages = moe_ring::GptRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
     } else {
         TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
     }

@@ -69,9 +69,13 @@ constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(cons
 
 }  // namespace detail
 
+template <bool HasBias>
 struct DeepSeekRingConfig {
     static constexpr uint32_t NUM_W0_W1_TILES_H = 224;     // Height of W0/W1 weight matrix in tiles (7168 / 32 = 224)
+    static constexpr uint32_t NUM_W0_W1_DRAM_TILES_H =
+        (HasBias) ? NUM_W0_W1_TILES_H + 1 : NUM_W0_W1_TILES_H;  // 225 or 224
     static constexpr uint32_t NUM_W2_TILES_H = 64;         // Height of W2 weight matrix in tiles (2048 / 32 = 64)
+    static constexpr uint32_t NUM_W2_DRAM_TILES_H = (HasBias) ? NUM_W2_TILES_H + 1 : NUM_W2_TILES_H;  // 65 or 64
     static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 4;  // Number of data-parallel shards for output
 
     // Evenly distributed: tiles[core_id][step]
@@ -144,9 +148,14 @@ struct DeepSeekRingConfig {
 };
 
 // For GPT-OSS: K = N = 2880, so both W0/W1 and W2 have 90x90 tile dimensions
+template <bool HasBias>
 struct GptRingConfig {
     static constexpr uint32_t NUM_W0_W1_TILES_H = 90;  // Height of W0/W1 weight matrix in tiles (2880 / 32 = 90)
+    static constexpr uint32_t NUM_W0_W1_DRAM_TILES_H =
+        (HasBias) ? NUM_W0_W1_TILES_H + 1 : NUM_W0_W1_TILES_H;  // 91 or 90
+
     static constexpr uint32_t NUM_W2_TILES_H = 90;     // Height of W2 weight matrix in tiles (2880 / 32 = 90)
+    static constexpr uint32_t NUM_W2_DRAM_TILES_H = (HasBias) ? NUM_W2_TILES_H + 1 : NUM_W2_TILES_H;  // 91 or 90
 
     static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 3;  // Number of data-parallel shards for output
 
@@ -211,23 +220,23 @@ struct GptRingConfig {
 };
 
 // Template trait for config type selection
-template <ttnn::experimental::prim::detail::MoEConfigType ConfigType>
+template <bool HasBias, ttnn::experimental::prim::detail::MoEConfigType ConfigType>
 struct ConfigTypeSelector;
 
 // Template specialization for DeepSeek
-template <>
-struct ConfigTypeSelector<ttnn::experimental::prim::detail::MoEConfigType::DEEPSEEK> {
-    using type = DeepSeekRingConfig;
+template <bool HasBias>
+struct ConfigTypeSelector<HasBias, ttnn::experimental::prim::detail::MoEConfigType::DEEPSEEK> {
+    using type = DeepSeekRingConfig<HasBias>;
 };
 
 // Template specialization for GPT
-template <>
-struct ConfigTypeSelector<ttnn::experimental::prim::detail::MoEConfigType::GPT> {
-    using type = GptRingConfig;
+template <bool HasBias>
+struct ConfigTypeSelector<HasBias, ttnn::experimental::prim::detail::MoEConfigType::GPT> {
+    using type = GptRingConfig<HasBias>;
 };
 
 // Helper alias template
-template <ttnn::experimental::prim::detail::MoEConfigType ConfigType>
-using ConfigType_t = typename ConfigTypeSelector<ConfigType>::type;
+template <bool HasBias, ttnn::experimental::prim::detail::MoEConfigType ConfigType>
+using ConfigType_t = typename ConfigTypeSelector<HasBias, ConfigType>::type;
 
 }  // namespace moe_ring

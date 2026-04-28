@@ -10,8 +10,10 @@
 void kernel_main() {
     // Extract config type from compile-time argument
     constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
+    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
+
     constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<config_type>;
+    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");

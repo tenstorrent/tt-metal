@@ -67,8 +67,10 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
 void kernel_main() {
     // Extract config type from compile-time argument
     constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
+    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
+
     constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<config_type>;
+    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -78,7 +80,6 @@ void kernel_main() {
 
     // For synchronization with tilize cores
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
-    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") != 0;
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -128,22 +129,20 @@ void kernel_main() {
 
     // When has_bias, dm0 reads (num_w0_w1_tiles_h + 1) tiles per column (weights + 1 bias row).
     // Block counts must match what dm0 pushes into the CB.
-    constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? (num_w0_w1_tiles_h + 1) : num_w0_w1_tiles_h;
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = detail::div_up<num_w0_w1_tiles_h, w0_w1_block_tiles_h>();
-    constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP /
-        2;  // 32 * 3 = 96
-            // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
-
+    constexpr uint32_t w0_w1_dram_tiles_h = config_t::NUM_W0_W1_DRAM_TILES_H;
+    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = detail::div_up<w0_w1_dram_tiles_h, w0_w1_block_tiles_h>();
+    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP / 2;
     // W2 reading constants
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
     constexpr auto w2_tiles_per_expert_w = config_t::W2_TILES_PER_EXPERT_W;
-    constexpr uint32_t w2_subblock_rem_idx = config_t::W2_SUBBLOCK_REM * w2_tiles_per_iter_w;
+    // constexpr uint32_t w2_subblock_rem_idx = config_t::W2_SUBBLOCK_REM * w2_tiles_per_iter_w;
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_dram_tiles_h = config_t::NUM_W2_DRAM_TILES_H;
+    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
+    // constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -151,7 +150,7 @@ void kernel_main() {
     // The number of times to repeat the all2all
     constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
 
-    constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
+    // constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
@@ -336,8 +335,8 @@ void kernel_main() {
 
                 uint32_t w2_k_tracker = 0;
                 for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
-                    WAYPOINT("W2LW");
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                    DPRINT << "block_id: " << block_id << " iter: " << iter << "\n";
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
                         if constexpr (has_bias) {
                             if (w2_k_tracker == num_w2_tiles_h) {
