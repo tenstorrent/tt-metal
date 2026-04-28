@@ -161,6 +161,13 @@ class GraniteTTMStreamingForecaster:
         return self._n_observations
 
     @property
+    def buffer(self) -> torch.Tensor:
+        """The current context buffer in chronological order [context_length, num_channels]."""
+        if self._write_pos == 0:
+            return self._buffer
+        return torch.cat([self._buffer[self._write_pos :], self._buffer[: self._write_pos]], dim=0)
+
+    @property
     def is_warmed_up(self) -> bool:
         """True once the buffer has been filled with at least context_length real observations."""
         return self._n_observations >= self._config.context_length
@@ -172,16 +179,11 @@ class GraniteTTMStreamingForecaster:
     def _run_inference(self) -> torch.Tensor:
         """Run a single forward pass over the current buffer contents."""
         import ttnn
+
         from models.demos.granite_ttm_r1.tt.common import to_torch_tensor
 
         # Reconstruct chronological view from the circular buffer.
-        # _write_pos points to the oldest slot; the logical order is:
-        #   [_write_pos:] ++ [:_write_pos]
-        # When _write_pos == 0 the buffer is already in order (no-copy fast path).
-        if self._write_pos == 0:
-            history = self._buffer.unsqueeze(0)
-        else:
-            history = torch.cat([self._buffer[self._write_pos :], self._buffer[: self._write_pos]], dim=0).unsqueeze(0)
+        history = self.buffer.unsqueeze(0)
 
         if self._use_compiled and getattr(self._model, "_is_compiled", False):
             # Trace path: single host command

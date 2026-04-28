@@ -96,9 +96,9 @@ def test_streaming_rolling_window(device):
         chunk = all_values[i : i + 4]
         _ = forecaster.step(chunk)
 
-    # Buffer should now hold the last T rows of all_values
+    # Buffer should now hold the last T rows of all_values in chronological order
     expected_buffer = all_values[-T:]
-    max_diff = (forecaster._buffer - expected_buffer).abs().max().item()
+    max_diff = (forecaster.buffer - expected_buffer).abs().max().item()
     assert max_diff < 1e-5, f"Buffer mismatch after rolling: max_diff={max_diff}"
     assert forecaster.n_observations == T + n_extra
 
