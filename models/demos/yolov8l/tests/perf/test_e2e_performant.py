@@ -126,12 +126,9 @@ def test_run_yolov8l_trace_2cqs_inference(
 )
 @pytest.mark.parametrize(
     "resolution",
-    [
-        # (640, 640),
-        (1280, 1280)
-    ],
+    [(640, 640), (1280, 1280)],
     ids=[
-        # "640",
+        "640",
         "1280",
     ],
 )

@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -26,8 +25,6 @@ def _run_yolov8l_pcc(device, model_location_generator, input_res, use_pretrained
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
     ttnn_model = TtYolov8lModel(device=device, parameters=parameters, res=(inp_h, inp_w))
 
-    # torch_input_ch16 = F.pad(input_tensor, (0, 0, 0, 0, 0, 13))
-    # ttnn_input = yolov8l_dram_sharded_input_from_torch(device, torch_input_ch16)
     ttnn_input = yolov8l_dram_sharded_input_from_torch(device, input_tensor)
 
     with torch.inference_mode():
@@ -87,8 +84,7 @@ def _run_yolov8l_dp_mesh_pcc(mesh_device, model_location_generator, input_hw):
     parameters = custom_preprocessor(mesh_device, state_dict, inp_h=inp_h, inp_w=inp_w, mesh_mapper=weights_mesh_mapper)
     ttnn_model = TtYolov8lModel(device=mesh_device, parameters=parameters, res=(inp_h, inp_w))
 
-    torch_input_ch16 = F.pad(input_tensor, (0, 0, 0, 0, 0, 13))
-    ttnn_input = yolov8l_dram_sharded_input_from_torch(mesh_device, torch_input_ch16)
+    ttnn_input = yolov8l_dram_sharded_input_from_torch(mesh_device, input_tensor)
 
     with torch.inference_mode():
         ttnn_model_output = ttnn_model(ttnn_input)[0]
@@ -113,7 +109,17 @@ def _run_yolov8l_dp_mesh_pcc(mesh_device, model_location_generator, input_hw):
     indirect=True,
     ids=["l1_1280_for_all_res"],
 )
-@pytest.mark.parametrize("input_hw", [640, 1280], ids=["640", "1280"])
+@pytest.mark.parametrize(
+    "input_hw",
+    [
+        640,
+        1280,
+    ],
+    ids=[
+        "640",
+        "1280",
+    ],
+)
 def test_yolov8l_dp_batch2(mesh_device, model_location_generator, input_hw):
     _run_yolov8l_dp_mesh_pcc(mesh_device, model_location_generator, input_hw)
 
