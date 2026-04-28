@@ -590,6 +590,30 @@ class TestInterleavedToBlockSharded:
         result = ttnn.to_torch(out)
         assert_equal(expected, result)
 
+    def test_i2s_tile_small_width_concat(self, device):
+        """Tile-layout interleaved inputs with small inner dim, width concat → block-sharded output.
+        Regression test for issue #41469."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        ta = torch.randn(1, 1, 1, 16)
+        tb = torch.randn(1, 1, 1, 16)
+        expected = torch.concat([ta, tb], dim=3)
+
+        a = ttnn.from_torch(
+            ta, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        b = ttnn.from_torch(
+            tb, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+        shard_spec = ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+        out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+        out = ttnn.concat([a, b], dim=3, memory_config=out_mem)
+        assert out.is_sharded()
+        result = ttnn.to_torch(out)
+        assert_equal(expected, result)
+
 
 # ---------------------------------------------------------------------------
 # 6. Parametrized sweep across shapes and grids

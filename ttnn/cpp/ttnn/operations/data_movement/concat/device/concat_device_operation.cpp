@@ -123,12 +123,6 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "row-major then retilizing. This may have adverse performance impacts.",
             args.dim);
     }
-    if (!shard_first) {
-        TT_FATAL(
-            !args.output_mem_config.is_sharded(),
-            "Cannot concat interleaved inputs into a sharded output. "
-            "Either shard the inputs first or use an interleaved output memory config.");
-    }
     if (shard_first) {
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
@@ -370,15 +364,29 @@ Tensor concat_impl(
             return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
         }
         // Sharded inputs with interleaved output:
-        // Do sharded concat with a computed sharded output config, then convert to interleaved
+        // Do sharded concat with a computed sharded output config, then convert to interleaved.
+        // Only valid when sharding type is compatible with the concat dimension:
+        //   width concat (dim=-1) → HEIGHT_SHARDED or BLOCK_SHARDED
+        //   height concat (dim=-2) → WIDTH_SHARDED or BLOCK_SHARDED
         const bool is_width_concat = normalized_dim == ref_rank - 1;
         const bool is_height_concat = normalized_dim == ref_rank - 2;
-        if (is_width_concat || is_height_concat) {
+        const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+        const bool shard_dim_compatible = (is_width_concat && (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                                                               memory_layout == TensorMemoryLayout::BLOCK_SHARDED)) ||
+                                          (is_height_concat && (memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                                                memory_layout == TensorMemoryLayout::BLOCK_SHARDED));
+        if (shard_dim_compatible) {
+            TT_FATAL(
+                input_tensors[0].shard_spec().has_value(),
+                "Sharded tensor must have a shard_spec (nd_shard_spec not supported for concat).");
             const auto& first_shard = input_tensors[0].shard_spec().value();
             auto output_shard_shape = first_shard.shape;
             const uint32_t shard_concat_idx = is_width_concat ? 1 : 0;
             output_shard_shape[shard_concat_idx] = 0;
             for (const auto& t : input_tensors) {
+                TT_FATAL(
+                    t.shard_spec().has_value(),
+                    "Sharded tensor must have a shard_spec (nd_shard_spec not supported for concat).");
                 output_shard_shape[shard_concat_idx] += t.shard_spec().value().shape[shard_concat_idx];
             }
             auto temp_shard_spec = ShardSpec(first_shard.grid, output_shard_shape, first_shard.orientation);
@@ -388,7 +396,14 @@ Tensor concat_impl(
             auto sharded_result = ttnn::prim::concat(input_tensors, dim, groups, temp_sharded_config);
             return ttnn::to_memory_config(sharded_result, output_mem_config, std::nullopt);
         }
-        // Non-H/W dim on sharded tensors: unshard inputs, then interleaved concat
+        // Incompatible shard type + dim, or non-H/W dim: unshard inputs, then interleaved concat
+        log_warning(
+            tt::LogOp,
+            "ttnn.concat: Sharded inputs with dim={} are not natively supported for {} layout. "
+            "Falling back to interleaved concat (inputs will be unsharded). "
+            "For best performance, unshard inputs explicitly or concat on supported dimensions (height or width).",
+            normalized_dim,
+            memory_layout);
         std::vector<Tensor> interleaved_inputs;
         interleaved_inputs.reserve(input_tensors.size());
         for (const auto& input_tensor : input_tensors) {
@@ -434,8 +449,13 @@ Tensor concat_impl(
         }
     }
 
-    if (output_mem_config.is_sharded()) {
-        // Interleaved inputs with sharded output: do interleaved concat, then convert to sharded
+    if (output_mem_config.is_sharded() && target_layout == Layout::ROW_MAJOR &&
+        output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        // For width/block-sharded RM output the buffer page width equals the shard width,
+        // which is narrower than the full-row pages the concat pipeline produces.
+        // Fall back to interleaved concat + to_memory_config for these cases.
+        // Height-sharded RM pages span the full tensor width (same as interleaved),
+        // so they flow through ConcatProgramFactory natively via TensorAccessor.
         auto interleaved_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
         auto interleaved_result =
             ttnn::prim::concat(formatted_tensors, dim, groups, interleaved_config, sub_core_grids);
