@@ -151,14 +151,29 @@ def bench_fused_tq(mesh, num_devices, seq_len, warmup=2, iters=5):
         mesh_mapper=replicate,
     )
 
+    K = int(os.environ.get("TQ_NUM_CORES_PER_HEAD", "1"))
     for _ in range(warmup):
-        out = tq.fused_sdpa_decode(q_dev, layer_idx=0, current_pos=cur_pos_dev, scale=SCALE, page_table=page_table_dev)
+        out = tq.fused_sdpa_decode(
+            q_dev,
+            layer_idx=0,
+            current_pos=cur_pos_dev,
+            scale=SCALE,
+            page_table=page_table_dev,
+            num_cores_per_head=K,
+        )
         ttnn.deallocate(out)
 
     ttnn.synchronize_device(mesh)
     t0 = time.perf_counter()
     for _ in range(iters):
-        out = tq.fused_sdpa_decode(q_dev, layer_idx=0, current_pos=cur_pos_dev, scale=SCALE, page_table=page_table_dev)
+        out = tq.fused_sdpa_decode(
+            q_dev,
+            layer_idx=0,
+            current_pos=cur_pos_dev,
+            scale=SCALE,
+            page_table=page_table_dev,
+            num_cores_per_head=K,
+        )
         ttnn.deallocate(out)
     ttnn.synchronize_device(mesh)
     elapsed_ms = (time.perf_counter() - t0) / iters * 1000
