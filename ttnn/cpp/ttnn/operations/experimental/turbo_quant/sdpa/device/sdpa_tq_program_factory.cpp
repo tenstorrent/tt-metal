@@ -239,6 +239,50 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(out_chunk_tiles * out_tile_size, {{CBIndex::c_16, out_df}})
             .set_page_size(CBIndex::c_16, out_tile_size));
 
+    // ── Tier 2A Phase 2.3: cross-core partial-state CBs ──
+    // When num_cores_per_head > 1, each (B, NQH) tuple is split across K worker
+    // cores. Worker idx > 0 packs its final (max, sum, out) into c_18/c_19/c_20
+    // (cb_partial_max/sum/out) and signals a semaphore. The reducer (idx == 0)
+    // NoC-pulls remote partials into c_21/c_22/c_23 (cb_remote_max/sum/out)
+    // and merges via online-softmax correction. Allocated unconditionally so
+    // the compute kernel's CB indices stay constexpr; size is small (~12 KB).
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_18, im_df}})
+            .set_page_size(CBIndex::c_18, im_tile_size));
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_19, im_df}})
+            .set_page_size(CBIndex::c_19, im_tile_size));
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(out_chunk_tiles * im_tile_size, {{CBIndex::c_20, im_df}})
+            .set_page_size(CBIndex::c_20, im_tile_size));
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_21, im_df}})
+            .set_page_size(CBIndex::c_21, im_tile_size));
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_22, im_df}})
+            .set_page_size(CBIndex::c_22, im_tile_size));
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(out_chunk_tiles * im_tile_size, {{CBIndex::c_23, im_df}})
+            .set_page_size(CBIndex::c_23, im_tile_size));
+
+    // Per-group reducer semaphore: workers `noc_semaphore_inc` to signal they've
+    // finished packing partial state; reducer `noc_semaphore_wait` for K-1
+    // increments before pulling. One semaphore for the whole program is enough
+    // because each core's local L1 holds an independent counter.
+    const uint32_t reducer_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, 0);
+
     // ── Compute kernel ──
     // Matmul config for QK and out
     uint32_t qk_in0_block_w = DHt;
@@ -468,7 +512,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 (uint32_t)1,               // [6]  local_q_end
                 kernel_core_idx_in_group,  // [7]  Tier 2A: chunk-slice routing (forced 0 until reduce lands)
                 kernel_cores_per_head,     // [8]  Tier 2A: chunk-slice routing (forced 1 until reduce lands)
-                (uint32_t)0,               // [9]  chunked_q_chunk_offset
+                reducer_semaphore_id,      // [9]  Tier 2A: per-program semaphore (worker→reducer signal)
             });
 
         SetRuntimeArgs(
