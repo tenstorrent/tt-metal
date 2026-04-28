@@ -161,7 +161,10 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         "this.",
         num_groups_per_core);
 
-    // Compute num_out_blocks if not provided
+    // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select":
+    // pick num_out_blocks from a simple input-size / grid-size heuristic, rounded
+    // up to the next power of two and capped at MAX_HEURISTIC_NUM_OUT_BLOCKS.
+    // Any other value is taken as an explicit user choice and validated below.
     if (num_out_blocks == static_cast<uint32_t>(-1)) {
         const uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
         const uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;

@@ -339,6 +339,9 @@ Tensor group_norm(
             negative_mask,
             reciprocals);
     }
+    // When the user did not pin a core grid, defer num_out_blocks to the program
+    // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
+    // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
         .im_data_format = DataType::BFLOAT16,
