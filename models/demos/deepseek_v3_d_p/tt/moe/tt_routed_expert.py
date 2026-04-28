@@ -366,38 +366,6 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
-    def _create_weight_from_torch_per_device(
-        self, torch_weights_per_device: list[torch.Tensor], name: str
-    ) -> ttnn.Tensor:
-        """
-        Convert list of torch weights to ttnn tensor with each device getting its own weight.
-
-        Args:
-            torch_weights_per_device: List of PyTorch weight tensors, one per device.
-                                      Each in HuggingFace format (out_features, in_features).
-            name: Weight name for logging
-
-        Returns:
-            TTNN tensor sharded so each device has its unique weight
-        """
-        # Stack weights and transpose for TTNN matmul
-        # Then reshape to match mesh topology: (mesh_rows, mesh_cols, in_features, out_features)
-        stacked = torch.stack([w.T.contiguous() for w in torch_weights_per_device], dim=0)
-        mesh_rows, mesh_cols = self.mesh_device.shape
-        in_features, out_features = stacked.shape[1], stacked.shape[2]
-        stacked = stacked.reshape(mesh_rows, mesh_cols, in_features, out_features)
-
-        mesh_mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
-
-        tt_weight = ttnn.from_torch(
-            stacked,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-        )
-
-        return tt_weight
-
     def _expert_ffn(
         self,
         x: ttnn.Tensor,

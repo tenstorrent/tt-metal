@@ -454,7 +454,7 @@ def compute_constants(
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
-    # we support replicated experts
+    # we support replicated experts (See Issue #41293)
     max_dispatched_tokens_per_expert = dispatch_group_size * seq_len_per_chip
     max_dispatch_buffer_token_size = max_dispatched_tokens_per_expert * dispatch_buffer_capacity_factor
 
