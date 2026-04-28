@@ -55,6 +55,11 @@ _NAMED_TO_POSITIONAL_REMAP = {
 _CCL_INFRASTRUCTURE_DEFAULTS = {
     "ttnn.experimental.all_gather_async": {
         "arg1": None,
+        "arg3": [
+            {"type": "global_semaphore", "value": "<ttnn._ttnn.global_semaphore.global_semaphore object>"},
+            {"type": "global_semaphore", "value": "<ttnn._ttnn.global_semaphore.global_semaphore object>"},
+        ],
+        "subdevice_id": {"type": "SubDeviceId", "value": "SubDeviceId(0)"},
     },
 }
 
@@ -63,6 +68,28 @@ _STRIP_WHEN_NONE = frozenset(
         "compute_kernel_config",
     }
 )
+
+
+def _canonicalize_mesh_shape(mesh_shape):
+    """Convert [1, N] mesh shapes to the closest-to-square 2D factorization.
+
+    Some executions record the mesh as [1, 32] instead of [4, 8].  The sweep
+    always uses the actual 2D mesh shape, so we normalize here to match.
+    """
+    import math
+
+    if not isinstance(mesh_shape, (list, tuple)) or len(mesh_shape) != 2:
+        return mesh_shape
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    if rows != 1 and cols != 1:
+        return mesh_shape
+    total = rows * cols
+    if total <= 1:
+        return mesh_shape
+    for r in range(int(math.sqrt(total)), 0, -1):
+        if total % r == 0:
+            return [r, total // r]
+    return mesh_shape
 
 
 def _normalize_tensor_placement(arguments, mesh_shape):
@@ -104,6 +131,9 @@ def _normalize_tensor_placement(arguments, mesh_shape):
                         pl = []
                     if isinstance(pl, list) and len(pl) == 1:
                         tp["placement"] = str(["PlacementReplicate"] + pl)
+            elif isinstance(ds, list) and len(ds) == 2:
+                if ds[0] * ds[1] == total and ds != target:
+                    tp["distribution_shape"] = str(target)
 
         # --- mesh_device_shape: [1, N] or similar -> [rows, cols] ---
         mds_str = tp.get("mesh_device_shape", "")
@@ -1567,8 +1597,9 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                         del args[k]
 
             if mesh_shape and "arguments" in config_dict:
-                _normalize_tensor_placement(config_dict["arguments"], mesh_shape)
-                _normalize_host_storage_on_mesh(config_dict["arguments"], mesh_shape)
+                _canonical_ms = _canonicalize_mesh_shape(mesh_shape)
+                _normalize_tensor_placement(config_dict["arguments"], _canonical_ms)
+                _normalize_host_storage_on_mesh(config_dict["arguments"], _canonical_ms)
 
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
