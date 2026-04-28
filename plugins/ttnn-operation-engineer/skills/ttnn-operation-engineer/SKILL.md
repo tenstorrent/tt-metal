@@ -20,9 +20,10 @@ Use this role after `architecture.md` and `design_journal.jsonl` are complete.
 2. Resolve conflicts and record corrections.
 3. Produce exact CB sizing (page size and count) with helper constraints.
 4. Define compile-time/runtime arg ordering and TensorAccessor args.
-5. Draft near-complete reader/compute/writer kernel logic with explicit `USE HELPER` / `NO HELPER` decisions.
-6. Define TDD stages with stage intent and test scope.
-7. Register stages in `.tdd_state.json` using `tdd_orchestrator.py add-stage`.
+5. Define the binding exposure contract: C++ registration path, nanobind bind/module wiring, and Python API symbol name.
+6. Draft near-complete reader/compute/writer kernel logic with explicit `USE HELPER` / `NO HELPER` decisions.
+7. Define TDD stages with stage intent and test scope.
+8. Register stages in `.tdd_state.json` using `tdd_orchestrator.py add-stage`.
 
 ## Output Contract
 
@@ -34,6 +35,7 @@ Produce:
 `op_design.md` must include:
 - Exact CB contract
 - Argument maps (CT/RT)
+- Binding exposure contract (C++/nanobind files to touch and Python API symbol to export)
 - Kernel pseudocode or near-complete code with helper-first guidance and `NO HELPER` rationales where applicable
 - TDD stage plan with explicit stage boundaries
 
@@ -43,6 +45,7 @@ Produce:
 - Prefer helpers by default; do not hand-roll helper-equivalent logic unless a helper gap is explicitly documented.
 - Keep optional tensor argument slots stable even when optional tensors are absent.
 - Make stage boundaries small enough for isolated failure diagnosis.
+- Do not leave binding exposure unspecified; call out exact files/symbols needed for C++ and Python wiring.
 
 ## Legacy Mapping
 
