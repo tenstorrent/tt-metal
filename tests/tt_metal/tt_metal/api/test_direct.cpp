@@ -93,10 +93,10 @@ bool reader_only(
         reader_kernel,
         reader_core,
         {
-            (uint32_t)dram_byte_address,
+            static_cast<uint32_t>(dram_byte_address),
             0,
-            (uint32_t)l1_byte_address,
-            (uint32_t)byte_size,
+            static_cast<uint32_t>(l1_byte_address),
+            static_cast<uint32_t>(byte_size),
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -164,10 +164,10 @@ bool writer_only(
         writer_kernel,
         writer_core,
         {
-            (uint32_t)dram_byte_address,
+            static_cast<uint32_t>(dram_byte_address),
             0,
-            (uint32_t)l1_byte_address,
-            (uint32_t)byte_size,
+            static_cast<uint32_t>(l1_byte_address),
+            static_cast<uint32_t>(byte_size),
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -262,15 +262,15 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     // DRAM buffer is configured with page_size = byte_size (whole buffer),
     // so aligned_page_size() returns the whole-buffer stride, not per-tile.
     // Derive the per-tile DRAM stride directly from byte_size / num_tiles.
-    const uint32_t per_tile_stride = (uint32_t)(byte_size / test_config.num_tiles);
+    const uint32_t per_tile_stride = static_cast<uint32_t>(byte_size / test_config.num_tiles);
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)input_dram_byte_address,
+            static_cast<uint32_t>(input_dram_byte_address),
             0,
-            (uint32_t)test_config.num_tiles,
+            static_cast<uint32_t>(test_config.num_tiles),
             per_tile_stride,
         });
     tt_metal::SetRuntimeArgs(
@@ -278,9 +278,9 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            static_cast<uint32_t>(output_dram_byte_address),
             0,
-            (uint32_t)test_config.num_tiles,
+            static_cast<uint32_t>(test_config.num_tiles),
             per_tile_stride,
         });
 
@@ -438,13 +438,13 @@ bool reader_datacopy_writer(
     // per-tile stride directly. byte_size covers all test_config.num_tiles
     // tiles across all threads; the stride between consecutive tiles in DRAM
     // is byte_size / test_config.num_tiles.
-    const uint32_t per_tile_stride = (uint32_t)(byte_size / test_config.num_tiles);
+    const uint32_t per_tile_stride = static_cast<uint32_t>(byte_size / test_config.num_tiles);
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)input_dram_byte_address,
+            static_cast<uint32_t>(input_dram_byte_address),
             0,
             num_tiles_per_thread,
             per_tile_stride,
@@ -454,7 +454,7 @@ bool reader_datacopy_writer(
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)output_dram_byte_address,
+            static_cast<uint32_t>(output_dram_byte_address),
             0,
             num_tiles_per_thread,
             per_tile_stride,

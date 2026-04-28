@@ -19,34 +19,24 @@ RoundResult round_ties_even(uint32_t input_mantissa, int output_width, int input
     if (output_width < 0) {
         return {0, 0};
     }
-    if (input_width == output_width) {
-        return {input_mantissa, 0};
+    auto mask_of = [](int w) -> uint32_t { return (w >= 32) ? 0xFFFFFFFFu : ((1u << w) - 1u); };
+    // No rounding needed: output is at least as wide as input.
+    if (output_width >= input_width) {
+        return {input_mantissa & mask_of(output_width), 0};
     }
-    const int shift_out = input_width - output_width;
-    if (shift_out <= 0) {
-        uint32_t mask = (output_width >= 32) ? 0xFFFFFFFFu : ((1u << output_width) - 1u);
-        return {input_mantissa & mask, 0};
-    }
-    uint32_t rounded_bits = input_mantissa & ((1u << shift_out) - 1u);
-    uint32_t rounded_msb = (rounded_bits >> (shift_out - 1)) & 0x1u;
-    uint32_t rounded_lsbs = rounded_bits & ((1u << (shift_out - 1)) - 1u);
-    uint32_t mantissa_lsb = (input_mantissa >> shift_out) & 0x1u;
-
-    uint32_t round_inc = 0;
-    if (rounded_msb && rounded_lsbs != 0) {
-        round_inc = 1;
-    } else if (rounded_msb && rounded_lsbs == 0) {
-        round_inc = mantissa_lsb;
-    }
-
+    const int shift_out = input_width - output_width;  // 1..32
+    const uint32_t shifted = (shift_out >= 32) ? 0u : (input_mantissa >> shift_out);
+    const uint32_t round_bit = (input_mantissa >> (shift_out - 1)) & 1u;
+    const uint32_t sticky = input_mantissa & mask_of(shift_out - 1);  // 0 when shift_out == 1
+    const uint32_t lsb = shifted & 1u;                                // 0 when output_width == 0
+    // Round up iff round bit is set AND (any sticky bit OR kept LSB is 1).
+    const uint32_t round_inc = round_bit & ((sticky != 0 ? 1u : 0u) | lsb);
+    const uint32_t new_mantissa = shifted + round_inc;
     if (output_width == 0) {
-        round_inc = (rounded_msb && rounded_lsbs != 0) ? 1 : 0;
-        output_width = 1;
+        // Whole rounded value is overflow; mantissa field is empty.
+        return {0, new_mantissa};
     }
-
-    uint32_t new_mantissa = (input_mantissa >> shift_out) + round_inc;
-    uint32_t mask = (output_width >= 32) ? 0xFFFFFFFFu : ((1u << output_width) - 1u);
-    return {new_mantissa & mask, new_mantissa >> output_width};
+    return {new_mantissa & mask_of(output_width), new_mantissa >> output_width};
 }
 
 BlockScaleResult compute_block_scale(
@@ -278,12 +268,14 @@ float convert_from_mx_elem_bits(uint32_t elem_bits, uint8_t scale_exp_biased, co
 }
 
 void pack_exp_words(const std::vector<uint8_t>& exps, uint32_t exp_words, std::vector<uint32_t>& out) {
-    uint32_t exp_index = 0;
+    out.reserve(out.size() + exp_words);
+    const size_t exps_length = exps.size();
     for (uint32_t w = 0; w < exp_words; ++w) {
         uint32_t word = 0;
-        for (uint32_t b = 0; b < 4; ++b) {
-            uint32_t exp_val = exp_index < exps.size() ? exps[exp_index++] : 0;
-            word |= (exp_val << (8 * b));
+        const size_t base = size_t(w) * 4;
+        const size_t take = (exps_length > base) ? std::min<size_t>(4, exps_length - base) : 0;
+        for (size_t b = 0; b < take; ++b) {
+            word |= uint32_t(exps[base + b]) << (8 * b);
         }
         out.push_back(word);
     }
@@ -334,8 +326,10 @@ void unpack_exp_words(
     out.clear();
     out.reserve(exp_count);
     for (uint32_t w = 0; w < exp_words; ++w) {
-        uint32_t word = words[word_offset++];
-        for (uint32_t b = 0; b < 4 && out.size() < exp_count; ++b) {
+        const uint32_t word = words[word_offset++];
+        const size_t base = size_t(w) * 4;
+        const size_t take = (exp_count > base) ? std::min<size_t>(4, exp_count - base) : 0;
+        for (size_t b = 0; b < take; ++b) {
             out.push_back(static_cast<uint8_t>((word >> (8 * b)) & 0xFFu));
         }
     }

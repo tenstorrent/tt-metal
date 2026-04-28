@@ -219,6 +219,96 @@ static bool check_pcc(const vector<float>& a, const vector<float>& b, double min
 	return true;
 }
 
+// --- Special-case rule testing infrastructure ---
+//
+// Helpers for hand-crafting raw MXFP4 tile bytes and reading raw BF16 outputs.
+// Used to verify hardware spec rules (block-exp = 0xFF, "leave as is" for
+// unit_exp = all-1, over/underflow) that random-data tests don't exercise.
+
+struct TileLayout {
+    size_t total_words = 0;
+    size_t exp_bytes = 0;  // byte offset where the elem region begins
+};
+
+// Pack an all-zero tile to discover the runtime tile layout (which depends on
+// HAL L1 alignment), then derive exp_bytes from the resulting word count.
+static TileLayout get_mxfp4_tile_layout() {
+    constexpr uint32_t kTileHW = 1024;
+    std::vector<float> zeros(kTileHW, 0.0f);
+    auto packed = pack_as_mxfp4_tiles(tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    const size_t elem_words = kTileHW / 8;  // 8 nibbles per uint32
+    const size_t exp_words = packed.size() - elem_words;
+    return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
+}
+
+struct ScalePatch {
+    uint32_t block_idx;
+    uint8_t scale_byte;
+};
+struct ElemPatch {
+    uint32_t elem_idx;
+    uint8_t elem_nibble;  // low 4 bits used
+};
+
+// Build a single-tile packed MXFP4 buffer: all 32 scale bytes set to
+// scale_default, all 1024 elem nibbles set to elem_nibble_default, then
+// patches applied. elem_idx is in face-major order; even indices live in
+// the low nibble of their byte, odd indices in the high nibble.
+static vector<uint32_t> build_mxfp4_tile_raw(
+    const TileLayout& layout,
+    uint8_t scale_default,
+    uint8_t elem_nibble_default,
+    std::initializer_list<ScalePatch> scale_patches,
+    std::initializer_list<ElemPatch> elem_patches) {
+    vector<uint32_t> packed(layout.total_words, 0);
+    auto* bytes = reinterpret_cast<uint8_t*>(packed.data());
+    for (uint32_t s = 0; s < 32; ++s) {
+        bytes[s] = scale_default;
+    }
+    const uint8_t default_byte =
+        static_cast<uint8_t>((elem_nibble_default & 0x0F) | ((elem_nibble_default & 0x0F) << 4));
+    for (uint32_t b = 0; b < 512; ++b) {
+        bytes[layout.exp_bytes + b] = default_byte;
+    }
+    for (const auto& p : scale_patches) {
+        TT_FATAL(p.block_idx < 32, "block_idx {} out of range", p.block_idx);
+        bytes[p.block_idx] = p.scale_byte;
+    }
+    for (const auto& p : elem_patches) {
+        TT_FATAL(p.elem_idx < 1024, "elem_idx {} out of range", p.elem_idx);
+        const uint32_t byte_idx = p.elem_idx / 2;
+        const uint32_t shift = (p.elem_idx % 2) * 4;
+        const uint8_t nib = p.elem_nibble & 0x0F;
+        const uint32_t off = layout.exp_bytes + byte_idx;
+        bytes[off] = static_cast<uint8_t>((bytes[off] & ~(0x0Fu << shift)) | (static_cast<uint32_t>(nib) << shift));
+    }
+    return packed;
+}
+
+// Extract raw BF16 bits at face-major position `i` from a packed BF16 readback.
+// BF16 readback packs two values per uint32 (LSB = lower index, MSB = higher).
+static uint16_t bf16_raw_at(const vector<uint32_t>& packed, uint32_t i) {
+    return static_cast<uint16_t>((packed[i / 2] >> ((i % 2) * 16)) & 0xFFFFu);
+}
+
+enum class Bf16Class { Zero, Subnormal, Normal, PosInf, NegInf, NaN };
+
+static Bf16Class classify_bf16(uint16_t bits) {
+    uint16_t sign = (bits >> 15) & 0x1u;
+    uint16_t exp = (bits >> 7) & 0xFFu;
+    uint16_t mant = bits & 0x7Fu;
+    if (exp == 0xFF) {
+        if (mant == 0) {
+            return sign ? Bf16Class::NegInf : Bf16Class::PosInf;
+        }
+        return Bf16Class::NaN;
+    }
+    if (exp == 0) {
+        return mant == 0 ? Bf16Class::Zero : Bf16Class::Subnormal;
+    }
+    return Bf16Class::Normal;
+}
+
 }  // namespace unit_tests::llk::mxfp4_typecast
 
 namespace mxfp4_tc = unit_tests::llk::mxfp4_typecast;
@@ -316,6 +406,81 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
 	auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
 	EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
 	EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+}
+
+// ============================================================================
+// Device special-case tests for hardware MXFP4 → BF16 typecast.
+// MXFP4 (E2M1) is finite-only — every "unit_exp = all 1" pattern is a normal
+// finite value (4.0 or 6.0 with sign), so spec rule "leave as is" applies to
+// all such elements. Block-exp = 0xFF still emits NaN; over/underflow follow
+// BF16 saturation.
+//
+// Nibble legend (sign:1 exp:2 mant:1, bias=1):
+//   0x0 = +0          0x8 = -0
+//   0x1 = +0.5 sub    0x9 = -0.5 sub
+//   0x2 = +1.0        0xA = -1.0
+//   0x3 = +1.5        0xB = -1.5
+//   0x4 = +2.0        0xC = -2.0
+//   0x5 = +3.0        0xD = -3.0
+//   0x6 = +4.0  (unit exp=all 1, mant=0) "leave as is"
+//   0x7 = +6.0  (unit exp=all 1, mant=1) max normal, "leave as is"
+//   0xE = -4.0
+//   0xF = -6.0
+// ============================================================================
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto layout = mxfp4_tc::get_mxfp4_tile_layout();
+
+    // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
+    // Block 1: scale = 1. elem 32-35: 0x6, 0x7, 0xE, 0xF — every "unit exp =
+    //          all 1" pattern (mant=0 / mant=all 1, both signs). All should
+    //          appear in BF16 unchanged.
+    // Block 2: scale = 2^127 (block_exp_biased=0xFE). elem 64-65: ±max normal
+    //          → 6.0 * 2^127 ≈ 2^129.6, overflows BF16 → ±Inf.
+    // Block 3: scale = 1. elem 96: 0x2 (+1.0) — sanity, must remain finite.
+    // Block 4: scale = 2^-127 (block_exp_biased=0x00). elem 128-129: ±0.5
+    //          subnormal → ±2^-128, below BF16 normal range. Rule 3
+    //          ("< -127 → Zero") expects flush; if silicon retains BF16
+    //          subnormal precision instead, that's still spec-conformant
+    //          for fp32-range arithmetic, so accept either.
+    auto packed = mxfp4_tc::build_mxfp4_tile_raw(
+        layout,
+        /*scale_default=*/0x7F,
+        /*elem_nibble_default=*/0x0,
+        {{0, 0xFF}, {1, 0x7F}, {2, 0xFE}, {3, 0x7F}, {4, 0x00}},
+        {{32, 0x6}, {33, 0x7}, {34, 0xE}, {35, 0xF}, {64, 0x7}, {65, 0xF}, {96, 0x2}, {128, 0x1}, {129, 0x9}});
+
+    auto result = mxfp4_tc::run_mxfp4_typecast(
+        dev,
+        tt::DataFormat::MxFp4,
+        tt::DataFormat::Float16_b,
+        packed,
+        /*num_tiles=*/1,
+        /*fp32_dest_acc_en=*/false);
+
+    using Cls = mxfp4_tc::Bf16Class;
+    for (uint32_t i = 0; i < 32; ++i) {
+        EXPECT_EQ(mxfp4_tc::classify_bf16(mxfp4_tc::bf16_raw_at(result, i)), Cls::NaN)
+            << "block 0 (NaN-scale) elem " << i;
+    }
+    EXPECT_EQ(mxfp4_tc::bf16_raw_at(result, 32), 0x4080u);  // +4.0
+    EXPECT_EQ(mxfp4_tc::bf16_raw_at(result, 33), 0x40C0u);  // +6.0
+    EXPECT_EQ(mxfp4_tc::bf16_raw_at(result, 34), 0xC080u);  // -4.0
+    EXPECT_EQ(mxfp4_tc::bf16_raw_at(result, 35), 0xC0C0u);  // -6.0
+    EXPECT_EQ(mxfp4_tc::classify_bf16(mxfp4_tc::bf16_raw_at(result, 64)), Cls::PosInf);
+    EXPECT_EQ(mxfp4_tc::classify_bf16(mxfp4_tc::bf16_raw_at(result, 65)), Cls::NegInf);
+    EXPECT_EQ(mxfp4_tc::bf16_raw_at(result, 96), 0x3F80u);  // +1.0
+    {
+        const auto bits_pos = mxfp4_tc::bf16_raw_at(result, 128);
+        const auto cls_pos = mxfp4_tc::classify_bf16(bits_pos);
+        EXPECT_TRUE(cls_pos == Cls::Zero || cls_pos == Cls::Subnormal)
+            << "elem 128 expected Zero/Subnormal, got bits=0x" << std::hex << bits_pos;
+        const auto bits_neg = mxfp4_tc::bf16_raw_at(result, 129);
+        const auto cls_neg = mxfp4_tc::classify_bf16(bits_neg);
+        EXPECT_TRUE(cls_neg == Cls::Zero || cls_neg == Cls::Subnormal)
+            << "elem 129 expected Zero/Subnormal, got bits=0x" << std::hex << bits_neg;
+    }
 }
 
 }  // namespace tt::tt_metal
