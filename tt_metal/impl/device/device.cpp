@@ -2803,6 +2803,15 @@ void Device::wait_for_fabric_workers_ready() {
             static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         // 10s matches the fabric router sync timeout used at initial startup.
         constexpr uint32_t kSyncTimeoutMs = 10000;
+        // FIX AL (#42429): When the ERISC is running (status=STARTED, not 0x0) but has not
+        // completed the ETH handshake after 3 seconds, the master channel's peer is almost
+        // certainly not responding — most commonly because the peer is an out-of-mesh device
+        // that was never included in this quiesce set and remains in base-UMD mode.  In the
+        // STARTED case we already know firmware booted (so the relay path is not broken), and
+        // Phase 5b's FIX AK health-check will handle the non-fatal partial-mesh diagnosis.
+        // Using a 3s cap avoids the full 10s wait that accumulated across all devices
+        // (4 devices × ~12s = ~48s extra latency per quiesce call in t3k 2×4 configurations).
+        constexpr uint32_t kStartedTimeoutMs = 3000;
         constexpr uint32_t kSpinLimit = 64U;
         // Log intermediate status every 2.5s so we can see whether the ERISC is stuck at
         // STARTED (0xA0B0C0D0), 0x0 (never launched), or something unexpected.
@@ -2923,6 +2932,23 @@ void Device::wait_for_fabric_workers_ready() {
                         sync_buf[0],
                         edm_status_str(sync_buf[0]),
                         sync_status);
+                }
+                // FIX AL (#42429): STARTED early-exit — ERISC firmware is running but peer
+                // is not responding.  This is the partial-mesh scenario where the master
+                // channel connects to a device outside the quiesce set.  Phase 5b (FIX AK)
+                // will diagnose this as non-fatal.  No need to wait the full 10s.
+                if (sync_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STARTED) &&
+                    elapsed > kStartedTimeoutMs) {
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5: STARTED early-exit "
+                        "after {}ms — master chan {} ERISC is running but peer is not responding "
+                        "(likely out-of-mesh device). Deferring to Phase 5b health check. "
+                        "(FIX AL: #42429)",
+                        this->id(),
+                        elapsed,
+                        master_chan);
+                    break;
                 }
                 if (elapsed > kSyncTimeoutMs) {
                     // FIX V (#42429): On a non-MMIO device, status=0x0 after 10s means the
