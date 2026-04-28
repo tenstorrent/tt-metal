@@ -334,5 +334,8 @@ class ModelPipeline:
     def barrier(self) -> None:
         self.pipeline.barrier()
 
+    def dump_kv_cache(self, out_dir) -> None:
+        self.pipeline.dump_kv_cache(out_dir)
+
     def terminate(self) -> None:
         self.pipeline.terminate()

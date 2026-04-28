@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -38,6 +39,7 @@ from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExp
 from models.demos.deepseek_v3_b1.utils import (
     deinterleave_kv_cache,
     get_pinned_optimal_dram_bank_to_logical_worker_assignment,
+    interleave_kv_cache,
 )
 from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3DenseLayerWeights,
@@ -960,6 +962,9 @@ class DecoderStage(StageKind):
             "reduce_root_coord": reduce_root_coord,
             "recv_socket": recv_socket,
             "downstream_sockets": downstream_sockets,
+            "mesh_device": mesh_device,
+            "dcs": FlashMLADecode.ProgramConfig.k_chunk_size,
+            "num_sp": mesh_device.shape[0],
         }
 
         if self._persistent_mode:
@@ -975,6 +980,47 @@ class DecoderStage(StageKind):
 
     def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         self._persistent_loop.terminate()
+
+    def dump_kv_cache(self, out_dir, stage_idx: int) -> None:
+        if not self._state or "d" not in self._state:
+            logger.warning(f"[stage={stage_idx}] dump_kv_cache called before setup; skipping")
+            return
+        ttnn_kv_cache = self._state["d"]["ttnn_kv_cache"]
+        mesh_device = self._state["mesh_device"]
+        dcs = self._state["dcs"]
+        num_sp = self._state["num_sp"]
+        mesh_rows, mesh_cols = mesh_device.shape
+
+        ttnn.synchronize_device(mesh_device)
+
+        # KV cache mapper is ShardTensor2dMesh(dims=(2, None)): sharded along seq (dim 2)
+        # over rows, replicated over cols. ConcatMesh2dToTensor(dims=(2, 0)) concats seq
+        # along rows and stacks the replicated col copies along dim 0; slice to dedupe.
+        composed = ttnn.to_torch(
+            ttnn_kv_cache,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(2, 0)),
+        )
+
+        # TP-axis (cols) is replicated, so each `num_slots` block along dim 0 should be
+        # byte-identical. Mismatches mean a write landed on one TP replica but not all.
+        for col_idx in range(1, mesh_cols):
+            col0 = composed[: self._num_slots]
+            col_n = composed[col_idx * self._num_slots : (col_idx + 1) * self._num_slots]
+            if not torch.equal(col0, col_n):
+                n_diff = (col0 != col_n).any(dim=tuple(range(1, col0.dim()))).sum().item()
+                logger.warning(
+                    f"[stage={stage_idx}] TP col mismatch: col 0 vs col {col_idx} differ "
+                    f"on {n_diff}/{self._num_slots} slots"
+                )
+
+        composed = composed[: self._num_slots]
+        kv_cache_torch = interleave_kv_cache(composed, dcs, num_sp)
+
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"kv_cache_stage_{stage_idx:02d}_layer_{self._layer_idx}.pt"
+        torch.save(kv_cache_torch, out_path)
+        logger.info(f"[stage={stage_idx}] dumped KV cache shape={tuple(kv_cache_torch.shape)} to {out_path}")
 
 
 class MoEDecoderStage(DecoderStage):

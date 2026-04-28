@@ -120,7 +120,8 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;  // Skip hardware read for mock devices
     }
     // Wait for idle here to ensure that programs emitting this data are complete.
-    wait_for_cores_idle();
+    std::cout << "Call read_shard_from_device" << std::endl;
+    // wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 

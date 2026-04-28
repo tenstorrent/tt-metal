@@ -168,6 +168,15 @@ def create_parser() -> argparse.ArgumentParser:
             "this is omitted, defaults to deepseek."
         ),
     )
+    parser.add_argument(
+        "--kv-cache-dump-dir",
+        type=Path,
+        default=None,
+        help=(
+            "If set, after the pipeline shuts down each rank dumps its on-device KV cache "
+            "(decoder stages only) as torch tensor binaries into this directory."
+        ),
+    )
     return parser
 
 
@@ -193,6 +202,7 @@ def run_demo(
     bspm_dir: Path | None = None,
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
+    kv_cache_dump_dir: Path | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -244,19 +254,40 @@ def run_demo(
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
         if launch_only and my_mesh_id == 0:
-            # Keep process/pipeline alive until user interrupts
             # Only runs on mesh 0, all other processes wait for a barrier
-            logger.info("Pipeline launched; keeping sockets alive until interrupted.")
-            try:
-                while True:
-                    time.sleep(3600)
-            except KeyboardInterrupt:
-                logger.info("Shutting down launch-only pipeline after interrupt.")
-
+            if kv_cache_dump_dir is not None:
+                # Sentinel-file trigger: robust to mpirun signal-stealing.
+                kv_cache_dump_dir.mkdir(parents=True, exist_ok=True)
+                sentinel = (kv_cache_dump_dir / ".dump_now").resolve()
+                logger.info(f"Pipeline launched. To dump KV cache and shut down: touch {sentinel}")
+                while not sentinel.exists():
+                    time.sleep(1)
+                try:
+                    sentinel.unlink()
+                except OSError:
+                    pass
+                logger.info("Sentinel detected; shutting down launch-only pipeline.")
+            else:
+                logger.info("Pipeline launched; keeping sockets alive until interrupted.")
+                try:
+                    while True:
+                        time.sleep(3600)
+                except KeyboardInterrupt:
+                    logger.info("Shutting down launch-only pipeline after interrupt.")
         model_pipeline.barrier()
 
         logger.info("Pod pipeline complete - terminating now...")
         model_pipeline.terminate()
+
+        print("Done running inference")
+        if kv_cache_dump_dir is not None:
+            try:
+                print("Dumping KV cache")
+                with ttnn.device.setup_fast_dispatch(mesh_device):
+                    model_pipeline.dump_kv_cache(kv_cache_dump_dir)
+                print("KV cache dumped")
+            except Exception:
+                logger.exception("KV cache dump failed on this rank")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -297,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         bspm_dir=args.bspm_dir,
         bspm_variant=args.bspm_variant,
         bspm_budget=args.bspm_budget,
+        kv_cache_dump_dir=args.kv_cache_dump_dir,
     )
     print(file=sys.stdout, flush=True)
     return 0

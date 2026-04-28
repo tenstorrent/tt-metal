@@ -122,6 +122,9 @@ class StageKind(ABC):
         iteration and break naturally at the top-of-loop termination check. Default: no-op.
         """
 
+    def dump_kv_cache(self, out_dir, stage_idx: int) -> None:
+        """Dump on-device KV cache to a torch binary on host. Default: no-op (only decoder stages override)."""
+
 
 class PassthroughPayload(Enum):
     ACTIVATION = "activation"
