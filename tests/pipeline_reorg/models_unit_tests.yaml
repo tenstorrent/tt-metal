@@ -206,7 +206,7 @@
 - name: Gemma-4-E2B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E2B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it
     pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x1"
   model: gemma-4-e2b
   skus:
@@ -219,7 +219,7 @@
 - name: Gemma-4-E4B unit tests (N150)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it
     pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x1"
   model: gemma-4-e4b-n150
   skus:
@@ -232,7 +232,7 @@
 - name: Gemma-4-E4B unit tests (N300)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-E4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it
     pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x2"
   model: gemma-4-e4b-n300
   skus:
@@ -245,7 +245,7 @@
 - name: Gemma-4-26B-A4B unit tests (T3K)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it
     pytest --timeout 900 models/demos/gemma4/tests/unit/ -k "1x8"
   model: gemma-4-26b-a4b
   skus:
@@ -258,7 +258,7 @@
 - name: Gemma-4-31B unit tests (T3K)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it
     pytest --timeout 900 models/demos/gemma4/tests/unit/ -k "1x8"
   model: gemma-4-31b
   skus:
