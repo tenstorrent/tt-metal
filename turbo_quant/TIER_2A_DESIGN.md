@@ -173,11 +173,44 @@ reuse one triplet sequentially (simpler).
 
 ## Implementation phases
 
-**Phase 1 — chunk-range scaffolding (~1 day)**
-- Add `core_idx_in_group` and `cores_per_head` runtime args to
-  reader + compute. Default to (0, 1) — no behavior change.
-- Verify `test_paged_partial_cache.py` + `test_mesh_fused_sdpa.py` + e2e.
-- Add `num_cores_per_head` attribute (default 1) to device op + binding.
+**Phase 1 — chunk-range scaffolding (✅ DONE — commit a6d2903)**
+- Compute kernel now uses `(k_chunk_start_for_core, k_chunk_end_for_core)`
+  as loop bounds instead of `(0, valid_k_chunks)`.
+- `core_idx_in_group` and `cores_per_head_runtime` are still `constexpr (0, 1)`.
+- Lazy-correction guard updated to `k_chunk > k_chunk_start_for_core`.
+- Validated: cos=0.9969 (unchanged), T3K e2e 26.9 ms/tok (unchanged).
+
+**Phase 2.1 — runtime arg plumbing (⚠️ ATTEMPTED, REVERTED)**
+- Tried promoting `core_idx_in_group` and `cores_per_head_runtime` from
+  `constexpr (0, 1)` to runtime args [10] and [11]. Program factory set
+  them to (0, 1) per-core — no logical change.
+- **Result:** kernel hung with `Read unexpected run_mailbox value` error.
+  Device required `tt-smi -r` to recover; subsequent runs of the
+  identical reverted code also timed out, suggesting the failed run left
+  the device in a wedged state that the test runner could not recover
+  from inside the same Python process.
+- **Hypothesis on why it hung:** the original program factory passed 10
+  runtime args; my version passed 12. The device-op's program cache may
+  have keyed the existing program on the old arg count, and the new args
+  were either not propagated to the right slots or trampled cache state.
+  Alternatively the kernel's stack/mailbox layout shifted in a way that
+  trips an alignment check.
+- **Next session must:**
+  1. Reset the device with `tt-smi -r`.
+  2. Re-add the runtime args, but bisect carefully: first add only one
+     extra arg (e.g. just `cores_per_head_arg`) and re-run; if that
+     works, add the second.
+  3. If still hangs, check whether `override_runtime_arguments` needs to
+     also be updated to reflect the new arg layout (currently it only
+     touches reader_args; compute_args is set once at create and not
+     overridden, which should be fine but may interact badly with the
+     program cache).
+  4. Try forcing a fresh program by clearing
+     `~/.cache/tt-metal-cache/*/kernels/sdpa_tq_decode` before running.
+
+**Phase 2.2-2.5 — actual split + reduce (planned)**
+- See "Algorithm" and "Plumbing required" sections above. ~3-5 days
+  combined.
 
 **Phase 2 — split + linear reduce (~3-5 days)**
 - Implement worker/reducer split.
