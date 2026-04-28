@@ -354,7 +354,9 @@ class DecoderBlock:
             chip_id = row * moe_ctx.mesh_cols + col
 
             # ── MoE per-device setup ──
-            moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, mesh_coord, row, col)
+            moe._setup_per_device_args(
+                chip_id, num_iterations, reduce_root_coord, mesh_coord, row, col, moe_ctx.mesh_rows, moe_ctx.mesh_cols
+            )
 
             moe_ncrisc_ct = _adapt_moe_ct_args(moe.ncrisc_args)
             moe_brisc_ct = _adapt_moe_ct_args(moe.brisc_args)
@@ -569,7 +571,9 @@ class DecoderBlock:
                 ccl_receiver_ncrisc_rt.extend(ccl["receiver_ncrisc_common_rt_args"])
 
             # MoE fabric connections (reduce-to-one)
-            moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
+            moe._setup_fabric_connections(
+                mesh_coord, row, col, moe_ctx.mesh_rows, moe_ctx.mesh_cols, reduce_root_coord, kernel_result, program
+            )
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 
         return io_tensors, mesh_program_descriptor, attention_block_output_tensor

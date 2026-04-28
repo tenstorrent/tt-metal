@@ -1524,6 +1524,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_y_addr"),
                 get_named_compile_time_arg_val("pipeline_stage_sync_semaphore_l1_addr"),
                 get_named_compile_time_arg_val("pipeline_stage_sync_rt_arg_base")>;
+
+            deepseek_b1_ops::PipelineStageSync::ReaderArgs pipeline_stage_sync_rt_args = {};
 #endif
         } routed;
 
@@ -1809,8 +1811,8 @@ void kernel_main() {
 
             // PipelineStageSync
             using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::WriterCTArgs<
-                get_named_compile_time_arg_val("pipeline_stage_sync_run_stalling_logic_on_ncrisc"),
-                get_named_compile_time_arg_val("pipeline_stage_sync_run_signalling_logic_on_ncrisc"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_run_stalling_logic_on_brisc"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_run_signalling_logic_on_brisc"),
                 get_named_compile_time_arg_val("pipeline_stage_sync_is_intermediate_signaller"),
                 get_named_compile_time_arg_val("pipeline_stage_sync_is_signalling_to_intermediate_signaller"),
                 get_named_compile_time_arg_val("pipeline_stage_sync_signalling_core_noc_x_addr"),
@@ -1819,6 +1821,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_y_addr"),
                 get_named_compile_time_arg_val("pipeline_stage_sync_semaphore_l1_addr"),
                 get_named_compile_time_arg_val("pipeline_stage_sync_rt_arg_base")>;
+
+            deepseek_b1_ops::PipelineStageSync::WriterArgs pipeline_stage_sync_rt_args = {};
 #endif
         } routed;
 
@@ -2105,6 +2109,8 @@ void kernel_main() {
 
             // PipelineStageSync
             using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::ComputeCTArgs;
+
+            deepseek_b1_ops::PipelineStageSync::ComputeArgs pipeline_stage_sync_rt_args = {};
 #endif
         } routed;
 
@@ -2985,7 +2991,7 @@ void kernel_main() {
         {
             DeviceZoneScopedN("PIPELINE_STAGE_SYNC");
             deepseek_b1_ops::PipelineStageSync::Op<Moe::Routed::PipelineStageSyncCTArgs> pipeline_stage_sync_op;
-            // pipeline_stage_sync_op();
+            pipeline_stage_sync_op(moe.routed.pipeline_stage_sync_rt_args);
         }
 
         // Reduce fabric cores signal sender core that fabric sends are done.
@@ -3021,9 +3027,6 @@ void kernel_main() {
     constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
     uint32_t iteration = 0;
     while (true) {
-        // TODO: (GR) remove
-        DPRINT << iteration << ENDL();
-
         {
             DeviceZoneScopedN("MLA_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
