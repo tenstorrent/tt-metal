@@ -39,6 +39,8 @@ COMPUTE_FUSED_PATH = f"{_KERNEL_DIR}/compute/gdn_fused.cpp"
 READER_PREFILL_PATH = f"{_KERNEL_DIR}/dataflow/reader_gdn_prefill.cpp"
 WRITER_PREFILL_PATH = f"{_KERNEL_DIR}/dataflow/writer_gdn_prefill.cpp"
 COMPUTE_PREFILL_PATH = f"{_KERNEL_DIR}/compute/gdn_prefill.cpp"
+COMPUTE_PREFILL_WITH_NORM_PATH = f"{_KERNEL_DIR}/compute/gdn_prefill_with_norm.cpp"
+WRITER_PREFILL_SEQ_MAJOR_PATH = f"{_KERNEL_DIR}/dataflow/writer_gdn_prefill_seq_major.cpp"
 
 # Use InterleavedAddrGenFast (IAF) by default; set GDN_USE_TA=1 for TensorAccessor
 _USE_IAF = not os.environ.get("GDN_USE_TA", "")
@@ -70,6 +72,8 @@ def _compute_kernel_hash():
         READER_PREFILL_PATH,
         WRITER_PREFILL_PATH,
         COMPUTE_PREFILL_PATH,
+        COMPUTE_PREFILL_WITH_NORM_PATH,
+        WRITER_PREFILL_SEQ_MAJOR_PATH,
     ]:
         full = os.path.join(tt_home, path)
         try:
