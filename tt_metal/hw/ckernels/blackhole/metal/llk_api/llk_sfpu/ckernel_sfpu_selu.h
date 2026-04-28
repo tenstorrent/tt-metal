@@ -6,13 +6,11 @@
 
 #include "sfpu/ckernel_sfpu_selu.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_selu(uint32_t scale, uint32_t alpha) {
     _calculate_selu_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(scale, alpha);
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
