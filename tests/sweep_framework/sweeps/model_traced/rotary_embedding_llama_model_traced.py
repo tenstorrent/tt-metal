@@ -64,7 +64,9 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    apply_tensor_placement_topology,
     create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
 )
 
@@ -579,6 +581,18 @@ def run(
         )
         trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
 
+        # Restore 2D mesh topology on decode-path tensors so the tracer
+        # records the canonical distribution_shape matching the master.
+        if is_mesh_device:
+            _mesh_shape = get_model_traced_mesh_shape()
+            for _t, _tp in [
+                (input_tensor_a, input_a_tensor_placement),
+                (cos_cache_tt, input_b_tensor_placement or input_a_tensor_placement),
+                (sin_cache_tt, input_c_tensor_placement or input_a_tensor_placement),
+                (trans_mat_tt, input_d_tensor_placement or input_a_tensor_placement),
+            ]:
+                apply_tensor_placement_topology(_t, _tp, _mesh_shape)
+
     else:
         # --- Prefill Mode: Use interleaved memory ---
         if is_mesh_device and input_a_tensor_placement:
@@ -591,15 +605,27 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config,
+                torch_cos_cache,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
                 input_b_tensor_placement or input_a_tensor_placement,
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config,
+                torch_sin_cache,
+                device,
+                input_c_dtype,
+                input_c_layout,
+                input_c_memory_config,
                 input_c_tensor_placement or input_a_tensor_placement,
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config,
+                torch_trans_mat,
+                device,
+                input_d_dtype,
+                input_d_layout,
+                input_d_memory_config,
                 input_d_tensor_placement or input_a_tensor_placement,
             )
         else:
