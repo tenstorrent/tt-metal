@@ -203,7 +203,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         uint32_t tiles_this_core = core_group_1.contains(logical_core) ? tiles_per_core_g1 : tiles_per_core_g2;
 
         // Reader runtime args
-        auto reader_handle = (i == 0) ? reader_origin : reader_kernel;
+        auto reader_handle = (logical_core == origin_core) ? reader_origin : reader_kernel;
         SetRuntimeArgs(
             program,
             reader_handle,
@@ -220,8 +220,9 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
             program, writer_kernel, logical_core, {output_buffer->address(), tiles_this_core, tiles_written});
 
         // Compute runtime args
-        auto compute_handle =
-            (i == 0) ? compute_origin : (core_group_1.contains(logical_core) ? compute_g1 : compute_g2);
+        auto compute_handle = (logical_core == origin_core)
+                                  ? compute_origin
+                                  : (core_group_1.contains(logical_core) ? compute_g1 : compute_g2);
         SetRuntimeArgs(program, compute_handle, logical_core, {std::bit_cast<uint32_t>(args.epsilon)});
 
         tiles_written += tiles_this_core;
@@ -263,15 +264,16 @@ void FrobeniusNormalizeProgramFactory::override_runtime_arguments(
     auto& compute_g2_rt = GetRuntimeArgs(program, shared.compute_group_2_id);
 
     const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
+    const tt::tt_metal::CoreCoord origin_core{0, 0};
 
     for (uint32_t i = 0; i < shared.num_cores; ++i) {
         tt::tt_metal::CoreCoord core{i / shared.num_cores_y, i % shared.num_cores_y};
-        auto& rt = (i == 0) ? reader_origin_rt : reader_rt;
+        auto& rt = (core == origin_core) ? reader_origin_rt : reader_rt;
         rt[core.x][core.y][kReaderInputAddrIdx] = input_buffer->address();
         writer_rt[core.x][core.y][kWriterOutputAddrIdx] = output_buffer->address();
 
-        auto& compute_rt =
-            (i == 0) ? compute_origin_rt : (shared.core_group_1.contains(core) ? compute_g1_rt : compute_g2_rt);
+        auto& compute_rt = (core == origin_core) ? compute_origin_rt
+                                                 : (shared.core_group_1.contains(core) ? compute_g1_rt : compute_g2_rt);
         compute_rt[core.x][core.y][0] = epsilon_bits;
     }
 }
