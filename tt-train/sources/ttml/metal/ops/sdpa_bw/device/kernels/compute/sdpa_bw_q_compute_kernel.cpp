@@ -81,6 +81,7 @@ constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_10;  // Gradient w.r.t.
 constexpr uint32_t cb_grad_scores = tt::CBIndex::c_11;        // Gradient w.r.t. QK scores
 constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_12;       // u_scalar per row
 constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;         // Output: grad_Q
+constexpr uint32_t cb_u_scaler_output = tt::CBIndex::c_14;    // Output: u_scaler to DRAM for KV kernel
 
 const uint32_t tiles_per_row = qWt;       // number of tiles per row (qWt == kWt == vWt)
 const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q row
@@ -101,7 +102,13 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_query, tiles_per_row);
 
     compute_u_scalar_row(
-        cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
+        cb_grad_output,
+        cb_attn_output,
+        cb_u_scalar_row,
+        cb_mat_mul_reduction,
+        tiles_per_row,
+        scaler_bits,
+        cb_u_scaler_output);
 
     const uint32_t q_row_tile = global_row_idx % Ht;
 

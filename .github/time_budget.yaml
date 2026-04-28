@@ -68,9 +68,9 @@ metal_infra:
 # No official decision has been made yet for division of budgets per team.
 ttnn:
   sanity:
-    wh_n300_civ2: 540
-    bh_p100: 540
-    bh_p150b_civ2: 540
+    wh_n300_civ2: 545
+    bh_p100: 545
+    bh_p150b_civ2: 545
   unit:
     wh_llmbox: 50
   e2e:
@@ -101,6 +101,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 60
     bh_sp1: 90
+    bh_sp4: 120
 
 runtime:
   sanity:
