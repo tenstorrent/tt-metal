@@ -1443,6 +1443,8 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                 for old_key, new_key in remap.items():
                     if old_key in args and new_key not in args:
                         args[new_key] = args.pop(old_key)
+                if op_name == "ttnn.slice" and "starts" in args and "steps" not in args:
+                    args["steps"] = [1] * len(args["starts"])
 
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
