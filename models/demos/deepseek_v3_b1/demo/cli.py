@@ -168,6 +168,7 @@ def run_demo(
     launch_only: bool = False,
     io_socket_descriptor_prefix: str | None = None,
     num_slots: int = 64,
+    on_kv_cache_ready=None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -186,6 +187,7 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
             num_slots=num_slots,
+            on_kv_cache_ready=on_kv_cache_ready,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()

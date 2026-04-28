@@ -48,6 +48,7 @@ class ModelPipeline:
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
         num_slots: int = 64,
+        on_kv_cache_ready=None,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -111,6 +112,9 @@ class ModelPipeline:
         logger.info("Setting up and running pipeline")
         self.pipeline.setup_and_run()
 
+        if on_kv_cache_ready is not None:
+            on_kv_cache_ready(self.mesh_device, self.pipeline.kv_cache)
+
         self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
         self.model: DeepSeekV3 | None = None
         if self.pipeline.my_stage_idx == 0:
@@ -125,6 +129,11 @@ class ModelPipeline:
                 self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
         logger.info(f"Created ModelPipeline for stage {self.pipeline.my_stage_idx}.")
+
+    @property
+    def kv_cache(self):
+        """Return this rank's KV cache tensor if it is a decoder stage, else None."""
+        return self.pipeline.kv_cache
 
     def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
         """Prefill prompt tokens and return the DecodeResults from the last prompt token's outputs."""

@@ -586,6 +586,11 @@ class Pipeline:
     def my_stage_idx(self) -> int:
         return self._my_stage_idx
 
+    @property
+    def kv_cache(self):
+        """Return the KV cache tensor if this rank's stage exposes one, else None."""
+        return getattr(self._stage_kind, "kv_cache", None)
+
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
         self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
