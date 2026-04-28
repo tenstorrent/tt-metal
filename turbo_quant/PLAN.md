@@ -88,13 +88,73 @@ all 32 layers and all devices.
 norms tensor is shaped `[max_blocks, num_kv_heads, block_size, 1]` and
 `TILE_LAYOUT` pads `[block_size, 1]` to `[32, 32]`, so 31/32 of the norms
 storage is wasted padding. That waste is exactly the size of the BFP4
-indices, so the savings cancel out at every seqlen. **NEXT: repack norms
-to recover the 2× savings.**
+indices, so the savings cancel out at every seqlen. **PARTIAL FIX → BFP8
+norms now lands the ratio at 0.75×, see below.**
 
 **2. TQ FD per-call latency is 5-100× slower than BFP8** and scales linearly
 with `cur_pos` (~0.48 ms / 128 tokens per layer). T3K does not help — each
 device runs the full chunk loop on its local head shard. BFP8 stays
 sub-millisecond up to 128K. At long context this gap dominates e2e.
+
+## BFP8 norms repack (2026-04-28 PM)
+
+Cut on-device norms storage in half by storing as BFP8_B in DRAM and
+typecasting to BF16 in the compute kernel before `mul_tiles_bcast_cols`
+(which does not natively unpack BFP8 input).
+
+**Wiring:** TTNNTurboQuantCache now allocates norms as `bfloat8_b`. The
+device op accepts BF16 or BFP8 norms. The program factory adds two BF16
+scratch CBs (`c_15` for K, `c_17` for V) and passes a `norms_are_bfp8`
+compile-time flag. The compute kernel runs a per-chunk typecast helper
+before each `dequant_*_chunk` when the flag is set; `cb_k_norms` /
+`cb_v_norms` aliases route the dequant body at the BF16 scratch.
+
+### Updated seqlen sweep — BFP8 norms
+
+**N150 (1 chip):**
+
+| seq | TQ FD ms | BFP8 ms | speedup | TQ KV total | BFP8 total | TQ/BFP8 | TQ idx (BFP4) | TQ norms (BFP8) |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 0.48 | 0.04 | 0.09× | 6 MB | 8 MB | **0.75×** | 4 MB | 2 MB |
+| 256 | 0.94 | 0.04 | 0.05× | 12 MB | 16 MB | **0.75×** | 8 MB | 4 MB |
+| 512 | 1.85 | 0.05 | 0.03× | 24 MB | 32 MB | **0.75×** | 16 MB | 8 MB |
+| 1 024 | 3.68 | 0.06 | 0.02× | 48 MB | 64 MB | **0.75×** | 32 MB | 16 MB |
+| 2 048 | 7.36 | 0.07 | 0.01× | 96 MB | 128 MB | **0.75×** | 64 MB | 32 MB |
+| 4 096 | 14.64 | 0.10 | 0.01× | 192 MB | 256 MB | **0.75×** | 128 MB | 64 MB |
+| 8 192 | 29.31 | 0.16 | 0.01× | 384 MB | 512 MB | **0.75×** | 256 MB | 128 MB |
+| 16 384 | 58.52 | 0.24 | 0.00× | 768 MB | 1.00 GB | **0.75×** | 512 MB | 256 MB |
+| 32 768 | 116.97 | 0.41 | 0.00× | 1.50 GB | 2.00 GB | **0.75×** | 1.00 GB | 512 MB |
+| 65 536 | 233.86 | 0.77 | 0.00× | 3.00 GB | 4.00 GB | **0.75×** | 2.00 GB | 1.00 GB |
+| 131 072 | 468.87 | 1.47 | 0.00× | 6.00 GB | 8.00 GB | **0.75×** | 4.00 GB | 2.00 GB |
+
+**T3K (8 chips):**
+
+| seq | TQ FD ms | BFP8 ms | speedup | TQ KV total | BFP8 total | TQ/BFP8 | TQ idx (BFP4) | TQ norms (BFP8) |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 0.48 | 0.10 | 0.21× | 6 MB | 8 MB | **0.75×** | 4 MB | 2 MB |
+| 256 | 0.94 | 0.16 | 0.17× | 12 MB | 16 MB | **0.75×** | 8 MB | 4 MB |
+| 512 | 1.85 | 0.11 | 0.06× | 24 MB | 32 MB | **0.75×** | 16 MB | 8 MB |
+| 1 024 | 3.68 | 0.12 | 0.03× | 48 MB | 64 MB | **0.75×** | 32 MB | 16 MB |
+| 2 048 | 7.33 | 0.11 | 0.01× | 96 MB | 128 MB | **0.75×** | 64 MB | 32 MB |
+| 4 096 | 14.64 | 0.11 | 0.01× | 192 MB | 256 MB | **0.75×** | 128 MB | 64 MB |
+| 8 192 | 29.28 | 0.14 | 0.00× | 384 MB | 512 MB | **0.75×** | 256 MB | 128 MB |
+| 16 384 | 58.51 | 0.14 | 0.00× | 768 MB | 1.00 GB | **0.75×** | 512 MB | 256 MB |
+| 32 768 | 116.88 | 0.15 | 0.00× | 1.50 GB | 2.00 GB | **0.75×** | 1.00 GB | 512 MB |
+| 65 536 | 233.66 | 0.23 | 0.00× | 3.00 GB | 4.00 GB | **0.75×** | 2.00 GB | 1.00 GB |
+| 131 072 | 467.13 | 0.33 | 0.00× | 6.00 GB | 8.00 GB | **0.75×** | 4.00 GB | 2.00 GB |
+
+**Validation:**
+- `test_paged_partial_cache.py`: cos = 0.997 (unchanged)
+- `test_mesh_fused_sdpa.py` on T3K: all 8 devices PASS (cos 0.996-0.998)
+- N150 e2e 32 layers: "The capital of France is Paris." (correct)
+- T3K e2e 32 layers traced: 32.7 ms/tok (vs 32.6 ms/tok pre-change → typecast
+  pass adds ~0.3% overhead, in noise)
+
+**To get below 0.75× ratio**, the norms tensor still has 31/32 of its tile
+cols zero-padded — repacking 32 blocks per tile (instead of 1) would cut
+norms by another ~32× and bring the total ratio under 0.5×. That requires
+bypassing `paged_update_cache` for norms (it writes whole rows and assumes
+1 block per tile-row), which is a deeper refactor.
 
 ## Earlier (2026-04-27 evening) — perf bottleneck
 
