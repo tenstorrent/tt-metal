@@ -506,8 +506,24 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 uint32_t ay_succeeded = 0;
                 uint32_t ay_failed = 0;
                 for (const tt::ChipId non_mmio_id : relay_broken_non_mmio) {
+                    // FIX AV (#42429): All ETH cores on a non-MMIO device share the same
+                    // MMIO relay path.  If assert_risc_reset_at_core fails on any core
+                    // (relay not re-synced after PCIe ERISC reset), ALL subsequent cores on
+                    // the same device will also fail — each burning a full 5-second
+                    // read_non_mmio timeout before throwing.  On a typical T3K with 4 active
+                    // fabric ETH channels per non-MMIO device × 2 devices = 8 channels,
+                    // that is 8 × 5 s = 40 s wasted, long enough to trigger the 5-minute
+                    // SIGALRM in CI.  Break out of the per-core loop immediately on the
+                    // first relay failure for a device and skip all remaining cores.
+                    bool device_relay_dead = false;
                     for (const auto& eth_logical_core :
                          this->get_control_plane_().get_active_ethernet_cores(non_mmio_id)) {
+                        if (device_relay_dead) {
+                            // Relay confirmed dead for this device — skip all remaining
+                            // cores without attempting reads that would each block 5 s.
+                            ++ay_failed;
+                            continue;
+                        }
                         CoreCoord eth_virt;
                         try {
                             eth_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
@@ -525,20 +541,24 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         } catch (const std::exception& e) {
                             log_warning(
                                 tt::LogAlways,
-                                "teardown: FIX AY — deferred reset of ETH {} on non-MMIO "
-                                "device {} failed (UMD relay not re-synced in current process): {}",
+                                "teardown: FIX AY/AV — deferred reset of ETH {} on non-MMIO "
+                                "device {} failed (UMD relay not re-synced in current process): {}. "
+                                "Skipping all remaining ETH cores on this device. (FIX AV #42429)",
                                 eth_virt.str(),
                                 non_mmio_id,
                                 e.what());
                             ++ay_failed;
+                            device_relay_dead = true;
                         } catch (...) {
                             log_warning(
                                 tt::LogAlways,
-                                "teardown: FIX AY — deferred reset of ETH {} on non-MMIO "
-                                "device {} threw non-std exception (UMD relay timeout).",
+                                "teardown: FIX AY/AV — deferred reset of ETH {} on non-MMIO "
+                                "device {} threw non-std exception (UMD relay timeout). "
+                                "Skipping all remaining ETH cores on this device. (FIX AV #42429)",
                                 eth_virt.str(),
                                 non_mmio_id);
                             ++ay_failed;
+                            device_relay_dead = true;
                         }
                     }
                 }
@@ -551,8 +571,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 } else {
                     log_warning(
                         tt::LogAlways,
-                        "teardown: FIX AY — {}/{} non-MMIO ETH ERISCs reset successfully "
-                        "({} failed). Next session may encounter stale FABRIC fw on failed channels.",
+                        "teardown: FIX AY/AV — {}/{} non-MMIO ETH ERISCs reset successfully "
+                        "({} failed/skipped). Next session may encounter stale FABRIC fw on failed channels.",
                         ay_succeeded,
                         ay_succeeded + ay_failed,
                         ay_failed);

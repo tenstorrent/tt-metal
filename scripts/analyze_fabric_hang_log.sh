@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AT|FIX AU|FIX AW|FIX AX|FIX AY|FIX AZ|teardown:.*relay|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|teardown:.*relay|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -110,7 +110,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AT|FIX AU|FIX AW|FIX AX|FIX AY|FIX AZ|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re
@@ -735,9 +735,11 @@ FIX_AQ_TIMEOUT=$(grep -cE 'FIX AQ.*ROM postcode.*after.*ms' "$CLEAN" 2>/dev/null
 # FIX AT: Phase 5 handshake poll skipped when MMIO master chan was FIX AS Pass-0 timeout'd
 FIX_AT_FIRES=$(grep -cE 'FIX AT|Pass-0 timeout.*skipping.*handshake|master chan.*FIX AS.*Pass-0 timeout' "$CLEAN" 2>/dev/null || echo 0)
 # FIX AY: deferred non-MMIO ETH ERISC reset via restored MMIO relay
+# FIX AV: skip remaining ETH cores on same device when first assert_risc_reset times out
 FIX_AY_FIRES=$(grep -cE 'FIX AY' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AY_SUCCEEDED=$(grep -cE 'FIX AY.*all.*reset to base firmware|FIX AY.*succeeded' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AY_FAILED=$(grep -cE 'FIX AY.*failed|FIX AY.*non-std exception' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AY_FAILED=$(grep -cE 'FIX AY.*failed|FIX AY.*non-std exception|FIX AY/AV.*failed' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AV_FIRES=$(grep -cE 'FIX AV #42429|FIX AY/AV.*Skipping all remaining' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -830,7 +832,11 @@ if [ "${FIX_AY_FIRES:-0}" -gt 0 ]; then
     if [ "${FIX_AY_FAILED:-0}" -eq 0 ]; then
         echo "  => [FIX AY] deferred non-MMIO ERISC reset succeeded (${FIX_AY_FIRES} event(s), ${FIX_AY_SUCCEEDED} ERISCs reset) — next session should find base fw"
     else
-        echo "  => [FIX AY] deferred non-MMIO ERISC reset PARTIAL (${FIX_AY_FIRES} event(s), ${FIX_AY_SUCCEEDED} ok / ${FIX_AY_FAILED} failed) — some ERISCs may retain FABRIC fw"
+        if [ "${FIX_AV_FIRES:-0}" -gt 0 ]; then
+            echo "  => [FIX AY/AV] deferred non-MMIO ERISC reset: relay dead on first core, remaining cores skipped (FIX AV fired ${FIX_AV_FIRES}×) — ${FIX_AY_SUCCEEDED} ok / ${FIX_AY_FAILED} failed/skipped"
+        else
+            echo "  => [FIX AY] deferred non-MMIO ERISC reset PARTIAL (${FIX_AY_FIRES} event(s), ${FIX_AY_SUCCEEDED} ok / ${FIX_AY_FAILED} failed) — some ERISCs may retain FABRIC fw"
+        fi
     fi
 fi
 # FIX AV: sysmem_manager_->reset() skipped for relay-broken non-MMIO devices
