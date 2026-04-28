@@ -43,7 +43,7 @@ from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved, ttnn_rearrange_to_noninterleaved
+from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved
 
 
 class Attention(LightweightModule):
@@ -292,9 +292,8 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        # HiFi3 + fp32 accumulation for float32 attention matmuls (Wormhole: HiFi4 + fp32 acc has a
-        # known accuracy issue; see compute_kernel_config warning and tech_reports/
-        # AdvancedPerformanceOptimizationsForModels — prefer HiFi3 for fp32 accumulation on WH.)
+        # Keep fp32 accumulation for attention matmuls. HiFi2 is the current
+        # quality/speed tradeoff for this path.
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -402,8 +401,10 @@ class Attention(LightweightModule):
         k = ttnn_rearrange_to_interleaved(k)
         q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, transformation_mat, is_decode_mode=False)
         k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, transformation_mat, is_decode_mode=False)
-        q = ttnn_rearrange_to_noninterleaved(q)
-        k = ttnn_rearrange_to_noninterleaved(k)
+        # Keep Q/K in interleaved layout after RoPE.
+        # Attention only needs Q and K to be consistently ordered relative to each
+        # other; converting back to non-interleaved format adds extra reshape/permute
+        # traffic without changing the math for QK^T.
 
         k_seq = k.shape[2]
 
