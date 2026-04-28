@@ -59,10 +59,10 @@
   .logo-card img { height: 56px; display: block; }
   .center-stack { display: flex; flex-direction: column; align-items: center; gap: 10px; }
   .title {
-    font-size: 24px; line-height: 1.2; font-weight: 600;
-    letter-spacing: 0.2px;
+    font-size: 32px; line-height: 1.15; font-weight: 700;
+    letter-spacing: 0.3px;
     border-bottom: 2px solid rgba(124, 92, 255, 0.5);
-    padding-bottom: 6px;
+    padding-bottom: 8px;
   }
   .toggle-pill {
     position: relative;
@@ -139,6 +139,61 @@
     max-height: calc(100vh - 110px);
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
+  /* Big purple dimension labels — used on each stream-cell wrapper in
+     multi-stream mode and on the main video card (positioned dynamically
+     by syncDimBadges so they sit just outside the visible video rect,
+     even when the video is letterboxed inside the card). */
+  .dim-badge {
+    position: absolute;
+    pointer-events: none;
+    color: var(--accent-hover);
+    font: 800 26px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.5px;
+    z-index: 5;
+    user-select: none;
+  }
+  /* `.hidden` utility wins over the higher-specificity #vdimW/#vdimH rules
+     below (ID > class), so it needs !important to actually hide the badge. */
+  .dim-badge.hidden { display: none !important; }
+  /* Main-video badges: positioned by JS at the edges of the visible video
+     content rect. The .dim-h variant uses upright vertical writing. */
+  #vdimW { display: flex; align-items: center; justify-content: center; }
+  #vdimH {
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    letter-spacing: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* Each stream cell is wrapped in .stream-cell-wrap so the badges sit
+     outside the cell's frame in their own gutter. The padding gutter and
+     badges only appear when the Slice Overlay toggle is on (body class). */
+  .stream-cell-wrap {
+    position: relative;
+    padding-top: 22px;
+    padding-left: 24px;
+    min-width: 0; min-height: 0;
+  }
+  body:not(.dims-on) .stream-cell-wrap {
+    padding-top: 0;
+    padding-left: 0;
+  }
+  body:not(.dims-on) .stream-cell-wrap > .dim-badge { display: none; }
+  .stream-cell-wrap > .stream-cell {
+    width: 100%;
+    height: 100%;
+  }
+  .stream-cell-wrap > .dim-badge { font-size: 16px; }
+  .stream-cell-wrap > .dim-badge.dim-w {
+    top: 0; left: 24px; right: 0; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .stream-cell-wrap > .dim-badge.dim-h {
+    top: 22px; left: 0; bottom: 0; width: 24px;
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    display: flex; align-items: center; justify-content: center;
+    letter-spacing: 0;
+  }
   #main, #localCam {
     display: block;
     width: 100%;
@@ -158,37 +213,208 @@
     pointer-events: none;
   }
   .right-col { display: flex; flex-direction: column; gap: 14px; }
-  .preview-card {
+  .galaxy-card {
     background: var(--card);
     border: 1px solid var(--card-border);
     border-radius: 12px;
-    padding: 14px;
+    padding: 18px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
-  .preview-card h3 {
-    margin: 0 0 10px 0;
-    font-size: 13px;
-    letter-spacing: 1.2px;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    font-weight: 600;
+  /* "Blackhole Galaxy" headline — bigger than the description text. */
+  .galaxy-title {
+    margin: 0 0 8px 0;
+    font-size: 28px;
+    letter-spacing: 0.6px;
+    color: var(--text);
+    font-weight: 800;
+    text-align: center;
   }
-  #tiles {
-    display: block;
-    width: 100%;
-    height: auto;
+  /* 3-line description below the title:
+       line 1: input dims
+       line 2: down arrow (conversion symbol, same size as text)
+       line 3: output slices count + model.
+     Flex column so the arrow sits centered on its own line. Text and arrow
+     share the same font-size for visual balance. */
+  .galaxy-desc {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: var(--text);
+    font: 600 18px -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    letter-spacing: 0.1px;
+    line-height: 1.2;
+    margin-bottom: 12px;
+    white-space: nowrap;
+  }
+  .galaxy-desc .arrow {
+    font-size: inherit;
+    color: var(--accent-hover);
+    line-height: 1;
+    margin: 2px 0;
+  }
+  /* 8 rows × 4 cols = 32 chips. The grid's aspect ratio matches the
+     physical 8:4 (= 2:1) Galaxy mesh so the visualisation is honest. */
+  .galaxy-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    gap: 6px;
+    aspect-ratio: 4 / 8;
+    padding: 10px;
     background: #050308;
-    border-radius: 6px;
+    border-radius: 8px;
     border: 1px solid rgba(124, 92, 255, 0.18);
+    position: relative;
+    overflow: hidden;
   }
+  .chip {
+    background: rgba(124, 92, 255, 0.04);
+    border: 1px solid rgba(124, 92, 255, 0.18);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: rgba(232, 228, 240, 0.30);
+    transition: background 200ms ease, border-color 200ms ease,
+                color 200ms ease, box-shadow 200ms ease;
+  }
+  .chip.active {
+    background: linear-gradient(135deg, rgba(124, 92, 255, 0.55), rgba(91, 61, 214, 0.45));
+    border-color: var(--accent);
+    color: #f0eaff;
+    box-shadow: 0 0 12px rgba(124, 92, 255, 0.45),
+                inset 0 0 14px rgba(124, 92, 255, 0.18);
+    animation: chipPulse 2.4s ease-in-out infinite;
+  }
+  @keyframes chipPulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(124, 92, 255, 0.30),
+                           inset 0 0 10px rgba(124, 92, 255, 0.14); }
+    50%      { box-shadow: 0 0 18px rgba(124, 92, 255, 0.65),
+                           inset 0 0 18px rgba(124, 92, 255, 0.28); }
+  }
+  .galaxy-tiles {
+    margin-top: 10px;
+    text-align: center;
+    font: 13px ui-monospace, monospace;
+    color: var(--text-dim);
+    letter-spacing: 0.3px;
+  }
+  /* Slice overlay toggle button. Inactive matches an inactive chip;
+     active matches the .chip.active gradient + glow. */
+  .galaxy-btn {
+    margin-top: 12px;
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(124, 92, 255, 0.04);
+    border: 1px solid rgba(124, 92, 255, 0.18);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: background 200ms ease, border-color 200ms ease,
+                color 200ms ease, box-shadow 200ms ease;
+  }
+  .galaxy-btn:hover {
+    border-color: rgba(124, 92, 255, 0.4);
+    color: var(--text);
+  }
+  .galaxy-btn.active {
+    background: linear-gradient(135deg, rgba(124, 92, 255, 0.55), rgba(91, 61, 214, 0.45));
+    border-color: var(--accent);
+    color: #f0eaff;
+    box-shadow: 0 0 12px rgba(124, 92, 255, 0.45),
+                inset 0 0 14px rgba(124, 92, 255, 0.18);
+  }
+  /* Slice overlay rendered on top of the main video — boxes representing
+     each tile slice the runtime processes. Only visible when the toggle
+     is on. pointer-events:none so we don't intercept video clicks. */
+  .slice-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .slice-overlay.hidden { display: none; }
+  .slice-box {
+    position: absolute;
+    border: 2px solid var(--accent);
+    background: rgba(124, 92, 255, 0.10);
+    border-radius: 4px;
+    box-shadow: 0 0 8px rgba(124, 92, 255, 0.35), inset 0 0 8px rgba(124, 92, 255, 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 6px;
+    color: #f0eaff;
+    font: 700 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.4px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+    overflow: hidden;
+  }
+  /* Small corner tag describing the per-slice model + tile size. Sits in
+     the lower-right of every slice box without disturbing the centered
+     "Chip N" label. */
+  .slice-corner {
+    position: absolute;
+    bottom: 3px;
+    right: 5px;
+    font: 600 9px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.2px;
+    color: #f0eaff;
+    opacity: 0.85;
+    pointer-events: none;
+  }
+
+  /* Per-cell slice overlay for multi-stream mode: covers each stream cell
+     and breaks it into 4 quadrants (one per chip serving that stream). */
+  .slice-cell-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .slice-cell-overlay.hidden { display: none; }
+
+  /* Stream-group labels overlaying rows of the Galaxy chip grid (multi-
+     stream mode only). One per stream, spans 4 chips in one row. Uses a
+     teal-ish accent so it reads as distinct from the active-chip purple. */
+  .stream-group {
+    position: absolute;
+    left: 10px; right: 10px;
+    pointer-events: none;
+    border: 1px dashed rgba(92, 184, 255, 0.55);
+    border-radius: 5px;
+    background: rgba(92, 184, 255, 0.06);
+    /* Label centred horizontally and pinned to the top of the row so it
+       lines up with the top edge of the chips it groups (Stream 1 sits at
+       the top of chips 1–4, etc.). */
+    display: flex; align-items: flex-start; justify-content: center;
+    padding-top: 2px;
+    color: rgba(180, 220, 255, 0.95);
+    font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.4px;
+    z-index: 2;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  }
+  .stream-group.hidden { display: none; }
   .caption {
     margin-top: 10px;
     font: 15px ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--text-dim);
     text-align: center;
   }
-  /* Dedicated FPS line — bigger than the caption so it reads across the room. */
-  #fpsCap {
+  /* Dedicated FPS rows — bigger than the caption so they read across the
+     room. 2-column grid keeps the ":" of E2E FPS and Aggr. FPS lined up
+     at the same x-pixel; values left-align in the right column. */
+  .fps-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 8px;
+    align-items: baseline;
+  }
+  .fps-row .fps-lbl { text-align: right; }
+  .fps-row .fps-val { text-align: left; }
+  #fpsCap, #aggFpsCap {
     font-size: 22px;
     font-weight: 600;
     letter-spacing: 0.3px;
@@ -251,7 +477,6 @@
     width: 100%;
   }
   main.streams-mode {
-    grid-template-columns: 1fr;
     padding: 8px 10px;
   }
   main.streams-mode #streamsGrid {
@@ -260,17 +485,21 @@
     --gap: 10px;
     /* source content is 1280x724 (16:9-ish) after cropping the baked-in
        gray bars. Cell width takes the lesser of width-budget/4 and
-       (height-budget/2) * aspect so rows of the grid still fit. */
+       (height-budget/2) * aspect so rows of the grid still fit. The width
+       budget subtracts the 300 px right-col + 12 px main gap so the Galaxy
+       panel is visible in multi-stream mode too. */
     --aspect: calc(1280 / 724);
+    --rcol: 312px;
     --s-w: min(
-      calc((100vw - 40px - 3 * var(--gap)) / 4),
+      calc((100vw - 40px - var(--rcol) - 3 * var(--gap)) / 4),
       calc(((100vh - var(--header-h) - var(--gap)) / 2) * var(--aspect))
     );
     grid-template-columns: repeat(4, var(--s-w));
     grid-template-rows: repeat(2, calc(var(--s-w) / var(--aspect)));
   }
-  main.streams-mode .video-card,
-  main.streams-mode .right-col { display: none; }
+  /* Hide only the main video pane in streams mode — the right-col Galaxy
+     panel stays visible so all 3 transports show the chip visualisation. */
+  main.streams-mode .video-card { display: none; }
   .stream-cell {
     position: relative;
     background: #050308;
@@ -364,21 +593,15 @@
       <div class="toggle-pill" id="toggle" role="tablist" aria-label="Source">
         <span class="indicator" id="ind"></span>
         <button class="seg" data-id="camera" role="tab" aria-selected="false">
-          <span aria-hidden="true">🎥</span><span>Live Camera</span>
+          <span aria-hidden="true">📷</span><span>Live Camera</span>
         </button>
         <button class="seg active" data-id="video" role="tab" aria-selected="true">
-          <span aria-hidden="true">🎬</span><span>4k Video Stream</span>
+          <span aria-hidden="true">🎥</span><span>4k Video Stream</span>
         </button>
         <button class="seg" data-id="multi" role="tab" aria-selected="false">
-          <span aria-hidden="true">🗂️</span><span>Multi-Stream</span>
+          <span aria-hidden="true">📡</span><span>Multi-Stream</span>
         </button>
       </div>
-    </div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;align-items:center;">
-      <button id="resetBtn" title="Stop pipeline and reset all 32 Galaxy chips. Use if a switch hangs or detections stop arriving."
-              style="background:#3a1f1f;color:#f8c0c0;border:1px solid #6a2a2a;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;">
-        ↻ Reset Chips
-      </button>
     </div>
   </header>
 
@@ -387,21 +610,25 @@
       <video id="main" autoplay muted playsinline loop></video>
       <video id="localCam" autoplay muted playsinline></video>
       <canvas id="overlay"></canvas>
+      <div class="slice-overlay hidden" id="sliceOverlay"></div>
+      <div class="dim-badge dim-w hidden" id="vdimW">—</div>
+      <div class="dim-badge dim-h hidden" id="vdimH">—</div>
     </section>
     <section id="streamsGrid"></section>
     <aside class="right-col">
-      <div class="preview-card">
-        <h3>Tile preview</h3>
-        <canvas id="tiles" width="320" height="180"></canvas>
-        <div class="caption" id="tilesCap">YOLOv8L · — tiles</div>
-        <div class="caption" id="fpsCap">inference —.— FPS</div>
+      <div class="galaxy-card">
+        <h3 class="galaxy-title">Blackhole Galaxy</h3>
+        <div class="galaxy-desc" id="galaxyDesc">—</div>
+        <div class="galaxy-grid" id="galaxyGrid"></div>
+        <div class="galaxy-tiles" id="galaxyTiles">— chips active</div>
+        <div class="caption fps-row" id="fpsCap">
+          <span class="fps-lbl">E2E FPS:</span><span class="fps-val">—.—</span>
+        </div>
+        <div class="caption fps-row" id="aggFpsCap">
+          <span class="fps-lbl">Aggr FPS:</span><span class="fps-val">—.—</span>
+        </div>
       </div>
-      <div class="meta-card" id="meta">
-        <div class="row"><span>transport</span><b id="m_transport">—</b></div>
-        <div class="row"><span>resolution</span><b id="m_res">—</b></div>
-        <div class="row"><span>tiles</span><b id="m_tiles">—</b></div>
-        <div class="row" id="m_camera_row" style="display:none"><span>camera</span><b id="m_camera">—</b></div>
-      </div>
+      <button class="galaxy-btn" id="sliceOverlayBtn" type="button">Enable Slice Overlay</button>
     </aside>
   </main>
 
@@ -445,94 +672,329 @@ function captionFor(g) {
 /* ===================================================================
  * Tile preview canvas: downscale a recent video frame and overlay grid
  * =================================================================== */
-const tileCanvas = document.getElementById("tiles");
-const tileCtx    = tileCanvas.getContext("2d");
 let lastGrid     = gridFor(3840, 2160);
 let mainSrc      = null; // <video> or <canvas>-equivalent for ctx.drawImage
 
 // Source resolution drives the grid even before pixels arrive.
 let srcW = 0, srcH = 0;
 
-function _drawGridOnly(dx, dy, dw, dh, sw, sh) {
-  const sxToPx = dw / sw, syToPx = dh / sh;
-  tileCtx.lineWidth = 1;
-  tileCtx.strokeStyle = "rgba(124, 92, 255, 0.85)";
-  for (const x of lastGrid.xStarts) {
-    const px = dx + Math.round(x * sxToPx);
-    tileCtx.beginPath(); tileCtx.moveTo(px + 0.5, dy); tileCtx.lineTo(px + 0.5, dy + dh); tileCtx.stroke();
-    const px2 = dx + Math.round((x + TILE) * sxToPx);
-    tileCtx.beginPath(); tileCtx.moveTo(px2 + 0.5, dy); tileCtx.lineTo(px2 + 0.5, dy + dh); tileCtx.stroke();
+// 8x4 = 32 Blackhole Galaxy chips. Build once on load, then flip the
+// `.active` class on chips 0..n_tiles-1 to visualise which subset of the
+// mesh is currently running inference. Chip layout in the DOM is row-major
+// so chip 1..4 = top row, chip 29..32 = bottom row.
+const N_GALAXY_CHIPS = 32;
+function buildGalaxy() {
+  const grid = document.getElementById("galaxyGrid");
+  if (!grid) return;
+  // Preserve the bg canvas across rebuilds — wiping innerHTML would erase
+  // it and the video overlay would stop drawing.
+  const bg = grid.querySelector(".galaxy-bg");
+  grid.innerHTML = "";
+  if (bg) grid.appendChild(bg);
+  for (let i = 0; i < N_GALAXY_CHIPS; i++) {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.dataset.idx = i;
+    chip.textContent = i + 1;
+    grid.appendChild(chip);
   }
-  for (const y of lastGrid.yStarts) {
-    const py = dy + Math.round(y * syToPx);
-    tileCtx.beginPath(); tileCtx.moveTo(dx, py + 0.5); tileCtx.lineTo(dx + dw, py + 0.5); tileCtx.stroke();
-    const py2 = dy + Math.round((y + TILE) * syToPx);
-    tileCtx.beginPath(); tileCtx.moveTo(dx, py2 + 0.5); tileCtx.lineTo(dx + dw, py2 + 0.5); tileCtx.stroke();
+}
+buildGalaxy();
+
+// Cached for the Aggregate-FPS computation in _updateFpsCap.
+let _activeChipCount = 0;
+
+function updateGalaxyActive(nTiles) {
+  const n = Math.max(0, Math.min(N_GALAXY_CHIPS, nTiles | 0));
+  _activeChipCount = n;
+  const chips = document.querySelectorAll("#galaxyGrid .chip");
+  chips.forEach((c, i) => c.classList.toggle("active", i < n));
+  const tilesEl = document.getElementById("galaxyTiles");
+  if (tilesEl) {
+    tilesEl.textContent = n > 0
+      ? `${n} of ${N_GALAXY_CHIPS} chips active`
+      : "— chips active";
+  }
+  // Stream-group labels are only meaningful in multi-stream mode AND only
+  // shown when the Slice Overlay toggle is on (matches the per-cell sub-tile
+  // overlay that gets drawn at the same time).
+  updateGalaxyStreamGroups(currentMode === "multi" && sliceOverlayOn);
+}
+
+// 8 stream labels (one per row) overlaid on the chip grid. Each spans
+// 4 chips. Only shown in multi-stream mode. Uses an absolute layout so
+// it doesn't disturb the existing 4×8 CSS-grid of chips.
+function updateGalaxyStreamGroups(showStreams) {
+  const grid = document.getElementById("galaxyGrid");
+  if (!grid) return;
+  // Clear any existing groups; rebuild only when in multi-stream mode.
+  grid.querySelectorAll(".stream-group").forEach(n => n.remove());
+  if (!showStreams) return;
+  // The grid uses padding:10px and its content area maps to 8 rows. Each
+  // row is (100% - 20px) / 8 in height. We position groups in % so they
+  // resize with the grid. Top + height computed against the grid's
+  // total height; the 10 px padding is preserved by `top` offset math.
+  // The grid has 10 px inner padding, then 8 rows fill the remaining
+  // (100% - 20px) of height. Compute one row's height once, then stack
+  // groups by multiplying.
+  const rowH = `calc((100% - 20px) / 8)`;
+  for (let s = 0; s < 8; s++) {
+    const g = document.createElement("div");
+    g.className = "stream-group";
+    g.style.top    = `calc(10px + ${rowH} * ${s})`;
+    g.style.height = rowH;
+    g.textContent = `Stream ${s + 1}`;
+    grid.appendChild(g);
   }
 }
 
-function drawTilePreview() {
-  const cw = tileCanvas.width, ch = tileCanvas.height;
-  tileCtx.fillStyle = "#050308";
-  tileCtx.fillRect(0, 0, cw, ch);
-
-  // The grid is computed in SOURCE-frame space (e.g. 3840×2160 even when the
-  // H.264 stream is downscaled to 1920×1080). If we used mainSrc.videoWidth
-  // here the grid would be drawn against display-space dims and tile coords
-  // > videoWidth would fall off-canvas (symptom: caption says 24 tiles, only
-  // 6 visible). Always prefer supervisor-reported srcW/srcH and fall back to
-  // the element's intrinsic size only when the supervisor hasn't told us yet.
-  let sw = srcW || (mainSrc && (mainSrc.videoWidth || mainSrc.naturalWidth)) || 0;
-  let sh = srcH || (mainSrc && (mainSrc.videoHeight || mainSrc.naturalHeight)) || 0;
-  if (!sw || !sh) {
-    tileCtx.fillStyle = "#1c1530";
-    tileCtx.fillRect(0, 0, cw, ch);
-    tileCtx.fillStyle = "#b9a7ff";
-    tileCtx.font = "11px ui-monospace, monospace";
-    tileCtx.fillText("waiting for stream…", 12, 20);
-    document.getElementById("tilesCap").textContent = captionFor(lastGrid);
+// Per-mode description shown above the chip grid. Phrasing matches the
+// transport so the panel reads as a sentence describing what the user is
+// looking at right now.
+function setGalaxyMeta(status) {
+  if (!status) return;
+  const descEl = document.getElementById("galaxyDesc");
+  if (!descEl) return;
+  const t = status.transport;
+  const w = status.frame_w | 0, h = status.frame_h | 0;
+  const n = status.n_tiles | 0;
+  // 3-line layout: input dims on top, big arrow centered on its own
+  // line, output slices below. Multi-stream prefixes the input with the
+  // parallel-stream count.
+  let topLine;
+  if (t === "multi") {
+    const ns = status.n_streams || 8;
+    topLine = `${ns} × ${w}×${h}`;
+  } else if (t === "camera" || t === "video") {
+    topLine = `${w}×${h}`;
+  } else {
+    descEl.textContent = "—";
     return;
   }
-  const ar = sw / sh;
-  let dw = cw, dh = Math.round(cw / ar);
-  if (dh > ch) { dh = ch; dw = Math.round(ch * ar); }
-  const dx = ((cw - dw) >> 1), dy = ((ch - dh) >> 1);
-
-  // Draw pixels if available; else draw a dim rectangle to host the grid lines.
-  const haveStream = mainSrc && (mainSrc.videoWidth || mainSrc.naturalWidth);
-  if (haveStream) {
-    try { tileCtx.drawImage(mainSrc, dx, dy, dw, dh); } catch (_e) {}
-  } else {
-    tileCtx.fillStyle = "#1c1530";
-    tileCtx.fillRect(dx, dy, dw, dh);
-  }
-  _drawGridOnly(dx, dy, dw, dh, sw, sh);
-  document.getElementById("tilesCap").textContent = captionFor(lastGrid);
+  const bottomLine = `${n} × YOLOv8L 640×640`;
+  descEl.innerHTML =
+    `<div class="d-line">${topLine}</div>` +
+    `<div class="arrow">↓</div>` +
+    `<div class="d-line">${bottomLine}</div>`;
 }
 
-// 500ms snapshot cadence: the underlying EMA already smooths in ~40ms, so
-// half-second sampling looks live without flickering. Stall threshold stays
-// at 2s — we still want to blank the readout if dets actually stop.
-const _FPS_HUD_INTERVAL_MS = 500;
+// Galaxy panel is now CSS-only — chips animate via the chipPulse keyframes
+// and active/inactive classes. Stub kept for the rAF loop so we don't have
+// to chase every callsite.
+function drawTilePreview() { /* no-op */ }
+
+
+/* ===================================================================
+ * Slice overlay: draws purple boxes on top of the main video showing
+ * the SAHI tile layout, one box per chip. Each box is labelled with
+ * "Chip N" and the model spec ("YOLOv8L 640×640"). Toggled by the
+ * Slice Overlay button in the Galaxy panel; rebuilt automatically
+ * when transport / source resolution changes.
+ * =================================================================== */
+let sliceOverlayOn = false;
+
+// Position the width/height dimension badges on the main video card so
+// they sit JUST outside the video's visible content rect. With letterbox
+// or pillarbox bars, this puts them in the black-bar region (still inside
+// the card) — when there are no bars they overlap the video edge. Called
+// from the rAF loop while Slice Overlay is on.
+function syncDimBadges() {
+  if (currentMode === "multi") return; // multi uses per-cell badges
+  const wEl = document.getElementById("vdimW");
+  const hEl = document.getElementById("vdimH");
+  if (!wEl || !hEl) return;
+  if (!sliceOverlayOn) {
+    wEl.classList.add("hidden");
+    hEl.classList.add("hidden");
+    return;
+  }
+  const v = (currentMode === "camera") ? localCam : mainEl;
+  if (!v) return;
+  const sw = (currentMode === "camera" ? v.videoWidth : negotiatedW) || v.videoWidth || 0;
+  const sh = (currentMode === "camera" ? v.videoHeight : negotiatedH) || v.videoHeight || 0;
+  if (!sw || !sh) return;
+  const vRect = v.getBoundingClientRect();
+  const card = document.getElementById("videoCard");
+  const cardRect = card.getBoundingClientRect();
+  const srcAR = sw / sh, elemAR = vRect.width / vRect.height;
+  // Compute the visible content rect inside the <video> element.
+  let cw, ch, cx, cy;
+  if (elemAR > srcAR) {
+    ch = vRect.height; cw = ch * srcAR;
+    cx = (vRect.width - cw) / 2; cy = 0;
+  } else {
+    cw = vRect.width; ch = cw / srcAR;
+    cx = 0; cy = (vRect.height - ch) / 2;
+  }
+  const left = (vRect.left - cardRect.left) + cx;
+  const top  = (vRect.top  - cardRect.top)  + cy;
+  // Badge sizing — small fixed gutter outside the visible content edge.
+  const W_GUTTER = 32;  // height above the content for the width number
+  const H_GUTTER = 36;  // width to the left of the content for the height number
+  wEl.style.left   = `${left}px`;
+  wEl.style.top    = `${Math.max(0, top - W_GUTTER)}px`;
+  wEl.style.width  = `${cw}px`;
+  wEl.style.height = `${W_GUTTER}px`;
+  wEl.textContent  = `${sw}`;
+  wEl.classList.remove("hidden");
+  hEl.style.top    = `${top}px`;
+  hEl.style.left   = `${Math.max(0, left - H_GUTTER)}px`;
+  hEl.style.height = `${ch}px`;
+  hEl.style.width  = `${H_GUTTER}px`;
+  hEl.textContent  = `${sh}`;
+  hEl.classList.remove("hidden");
+}
+
+// Position the slice-overlay div over the video's *visible content rect*,
+// not the .video-card rect. The card has black bars when its aspect ratio
+// doesn't match the source — without this, bottom-row boxes for the 4 K
+// video would extend into the black region below the picture.
+function syncSliceOverlay() {
+  const root = document.getElementById("sliceOverlay");
+  if (!root || currentMode === "multi") return;
+  const v = (currentMode === "camera") ? localCam : mainEl;
+  if (!v) return;
+  const sw = (currentMode === "camera" ? v.videoWidth : negotiatedW) || v.videoWidth || 0;
+  const sh = (currentMode === "camera" ? v.videoHeight : negotiatedH) || v.videoHeight || 0;
+  if (!sw || !sh) return;
+  const vRect = v.getBoundingClientRect();
+  const card = document.getElementById("videoCard");
+  const cardRect = card.getBoundingClientRect();
+  const srcAR = sw / sh, elemAR = vRect.width / vRect.height;
+  let cw, ch, cx, cy;
+  if (elemAR > srcAR) {
+    ch = vRect.height; cw = ch * srcAR;
+    cx = (vRect.width - cw) / 2; cy = 0;
+  } else {
+    cw = vRect.width; ch = cw / srcAR;
+    cx = 0; cy = (vRect.height - ch) / 2;
+  }
+  root.style.inset = "auto";
+  root.style.left   = `${(vRect.left - cardRect.left) + cx}px`;
+  root.style.top    = `${(vRect.top  - cardRect.top)  + cy}px`;
+  root.style.width  = `${cw}px`;
+  root.style.height = `${ch}px`;
+}
+
+function rebuildSliceOverlay() {
+  const root = document.getElementById("sliceOverlay");
+  if (!root) return;
+  root.innerHTML = "";
+  if (currentMode === "multi") {
+    // Multi-stream: per-cell sub-tile overlays, NOT a single overlay on the
+    // (hidden) main video. Build inside each stream cell instead.
+    rebuildMultiSliceOverlays();
+    return;
+  }
+  // Single-source video / camera: 1 box per tile, positioned in source coords.
+  if (!srcW || !srcH || !lastGrid) return;
+  syncSliceOverlay();
+  let chipIdx = 1;
+  for (const y of lastGrid.yStarts) {
+    for (const x of lastGrid.xStarts) {
+      const box = document.createElement("div");
+      box.className = "slice-box";
+      box.style.left   = `${(x / srcW) * 100}%`;
+      box.style.top    = `${(y / srcH) * 100}%`;
+      box.style.width  = `${(TILE / srcW) * 100}%`;
+      box.style.height = `${(TILE / srcH) * 100}%`;
+      box.innerHTML = `Chip ${chipIdx}<span class="slice-corner">YOLOv8L 640×640</span>`;
+      root.appendChild(box);
+      chipIdx++;
+    }
+  }
+}
+
+// Multi-stream: each cell shows a 1280×1280 source processed by 4 chips
+// (2×2 grid of 640×640 tiles). For stream s, chips are (s*4 + 1)..(s*4 + 4).
+function rebuildMultiSliceOverlays() {
+  document.querySelectorAll(".stream-cell .slice-cell-overlay").forEach(n => n.remove());
+  const cells = document.querySelectorAll(".stream-cell");
+  cells.forEach((cell, s) => {
+    const ov = document.createElement("div");
+    ov.className = "slice-cell-overlay";
+    for (let i = 0; i < 4; i++) {
+      const row = i >> 1, col = i & 1;
+      const chipIdx = s * 4 + i + 1;
+      const box = document.createElement("div");
+      box.className = "slice-box";
+      box.style.left   = `${col * 50}%`;
+      box.style.top    = `${row * 50}%`;
+      box.style.width  = "50%";
+      box.style.height = "50%";
+      box.innerHTML = `Chip ${chipIdx}<span class="slice-corner">YOLOv8L 640×640</span>`;
+      ov.appendChild(box);
+    }
+    cell.appendChild(ov);
+  });
+}
+
+function setSliceOverlay(on) {
+  sliceOverlayOn = !!on;
+  const root = document.getElementById("sliceOverlay");
+  const btn  = document.getElementById("sliceOverlayBtn");
+  if (root) root.classList.toggle("hidden", !sliceOverlayOn);
+  if (btn)  btn.classList.toggle("active", sliceOverlayOn);
+  // body.dims-on drives stream-cell-wrap gutter visibility (multi mode);
+  // syncDimBadges() handles visibility for video/camera mode.
+  document.body.classList.toggle("dims-on", sliceOverlayOn);
+  // Multi-stream overlay lives on individual cells — toggle them collectively.
+  document.querySelectorAll(".stream-cell .slice-cell-overlay").forEach(o => {
+    o.classList.toggle("hidden", !sliceOverlayOn);
+  });
+  // Stream-group labels on the Galaxy chip grid follow the same toggle —
+  // hidden by default, shown only with Slice Overlay on (multi mode).
+  updateGalaxyStreamGroups(currentMode === "multi" && sliceOverlayOn);
+  if (sliceOverlayOn) rebuildSliceOverlay();
+  // Reset main-video badges if turning off (rAF won't run for them).
+  if (!sliceOverlayOn) {
+    const wEl = document.getElementById("vdimW");
+    const hEl = document.getElementById("vdimH");
+    if (wEl) wEl.classList.add("hidden");
+    if (hEl) hEl.classList.add("hidden");
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("sliceOverlayBtn");
+  if (btn) btn.addEventListener("click", () => setSliceOverlay(!sliceOverlayOn));
+});
+
+// 250ms snapshot cadence — quarter-second sample is fast enough to feel
+// live during a demo, slow enough not to flicker the digit unreadably.
+// Both the video-mode E2E/Aggregate captions and the per-stream HUD timer
+// in multi mode read this constant.
+const _FPS_HUD_INTERVAL_MS = 250;
 let _fpsCapDisplay = 0;
 let _fpsCapLastSampleT = 0;
 function _updateFpsCap() {
-  const el = document.getElementById("fpsCap");
-  if (!el) return;
+  const e2eVal = document.querySelector("#fpsCap .fps-val");
+  const aggVal = document.querySelector("#aggFpsCap .fps-val");
+  if (!e2eVal) return;
   const now = performance.now();
   const stalled = _detsLastT === 0 || (now - _detsLastT) > 2000;
   if (now - _fpsCapLastSampleT >= _FPS_HUD_INTERVAL_MS || _fpsCapLastSampleT === 0) {
     _fpsCapDisplay = detsFps;
     _fpsCapLastSampleT = now;
   }
-  el.textContent = (!stalled && _fpsCapDisplay > 0.5)
-    ? `inference ${_fpsCapDisplay.toFixed(1)} FPS`
-    : "inference —.— FPS";
+  const live = !stalled && _fpsCapDisplay > 0.5;
+  e2eVal.textContent = live ? _fpsCapDisplay.toFixed(1) : "—.—";
+  if (aggVal) {
+    const agg = live ? _fpsCapDisplay * _activeChipCount : 0;
+    aggVal.textContent = (live && _activeChipCount > 0) ? agg.toFixed(1) : "—.—";
+  }
 }
 
 function rafLoop() {
   drawTilePreview();
   _updateFpsCap();
+  // Keep the slice overlay's CSS rect + dim badges aligned with the video's
+  // content rect when the toggle is on (handles window resize, video
+  // metadata loading late, etc.). Cheap when nothing is visible.
+  if (sliceOverlayOn && currentMode !== "multi") {
+    syncSliceOverlay();
+    syncDimBadges();
+  }
   requestAnimationFrame(rafLoop);
 }
 
@@ -824,6 +1286,9 @@ function teardown() {
   closeDetsStream();
   teardownStreams();
   _resetDetsFps();
+  // Dim all chips on transport teardown — the next mode's updateMeta will
+  // re-light the right subset.
+  updateGalaxyActive(0);
   // Hide the camera-only meta row on mode change.
   const _camRow = document.getElementById("m_camera_row");
   if (_camRow) _camRow.style.display = "none";
@@ -1110,13 +1575,16 @@ async function startCamera() {
 }
 
 function updateMeta(status, _deliveryDesc) {
-  document.getElementById("m_transport").textContent = status.transport || "—";
-  document.getElementById("m_res").textContent = `${status.frame_w}×${status.frame_h}`;
-  document.getElementById("m_tiles").textContent = `${status.tiles_x}×${status.tiles_y} = ${status.n_tiles}`;
   if (status.frame_w && status.frame_h) {
     srcW = status.frame_w; srcH = status.frame_h;
     lastGrid = gridFor(srcW, srcH);
   }
+  // Galaxy view: model + resolution above the chip grid, n_tiles drives the
+  // active chip count (camera=6, video=24, multi=32).
+  setGalaxyMeta(status);
+  updateGalaxyActive(status.n_tiles);
+  // If the slice-overlay toggle is on, redraw boxes for the new resolution.
+  if (sliceOverlayOn) rebuildSliceOverlay();
   // fps / n_frames are present in video mode only. Stash for rVFC lookup math.
   negotiatedFps = +(status.fps || 0) || 0;
   totalFrames = (status.n_frames | 0) || 0;
@@ -1268,13 +1736,24 @@ function buildStreamsGrid(forceRebuild = false) {
   }
 
   for (let i = 0; i < N_STREAMS; i++) {
+    // Wrap each cell so its width/height badges sit outside the cell frame.
+    const cellWrap = document.createElement("div");
+    cellWrap.className = "stream-cell-wrap";
+    const dW = document.createElement("div");
+    dW.className = "dim-badge dim-w";
+    dW.textContent = `${STREAMS_SRC_W}`;
+    const dH = document.createElement("div");
+    dH.className = "dim-badge dim-h";
+    dH.textContent = `${STREAMS_SRC_H}`;
+    cellWrap.appendChild(dW);
+    cellWrap.appendChild(dH);
     const cell = document.createElement("div");
     cell.className = "stream-cell";
     const hud = document.createElement("div");
     hud.className = "stream-hud";
     const hudLeft = document.createElement("span");
     hudLeft.className = "hud-left";
-    hudLeft.textContent = `Stream ${i + 1} · YOLOv8L · ${streamsTilesPerStream} devices`;
+    hudLeft.textContent = `Stream ${i + 1}`;
     const hudRight = document.createElement("span");
     hudRight.className = "hud-right";
     hudRight.textContent = "—.— FPS";
@@ -1307,7 +1786,8 @@ function buildStreamsGrid(forceRebuild = false) {
     cell.appendChild(c);
     cell.appendChild(hud);
     cell.appendChild(loading);
-    grid.appendChild(cell);
+    cellWrap.appendChild(cell);
+    grid.appendChild(cellWrap);
     streamsCanvases.push(c);
     streamsCtxs.push(c.getContext("2d"));
     streamsDetsBuffers.push(new Map());
@@ -1358,7 +1838,7 @@ function openStreamsDetsStream() {
   streamsDetsSSE.onerror = () => { console.warn("[dets-multi] SSE error (auto-reconnect)"); };
 }
 
-// 500ms HUD repaint timer — matches the video-mode FPS caption cadence
+// HUD repaint timer — matches the video-mode FPS caption cadence
 // (_FPS_HUD_INTERVAL_MS). Fast enough to feel live, slow enough to read.
 let _streamsHudTimer = null;
 function _startStreamsHudTimer() {
@@ -1553,13 +2033,16 @@ async function startStreams() {
 
   buildStreamsGrid(true);
   document.querySelector("main").classList.add("streams-mode");
+  // Re-attach per-cell slice overlays after the grid was rebuilt — they
+  // live inside .stream-cell so a fresh DOM means we have to recreate them.
+  if (sliceOverlayOn) rebuildMultiSliceOverlays();
   for (let i = 0; i < N_STREAMS; i++) {
     // Canvas internal size matches the cropped content area, NOT the raw
     // 1280x1280 frame — the drawImage call above crops the gray bars.
     streamsCanvases[i].width = STREAMS_SRC_W;
     streamsCanvases[i].height = STREAMS_CROP_H;
     if (streamsHudLeftEls[i]) {
-      streamsHudLeftEls[i].textContent = `Stream ${i + 1} · YOLOv8L · ${tps} devices`;
+      streamsHudLeftEls[i].textContent = `Stream ${i + 1}`;
     }
     if (streamsHudRightEls[i]) {
       streamsHudRightEls[i].textContent = "—.— FPS";
