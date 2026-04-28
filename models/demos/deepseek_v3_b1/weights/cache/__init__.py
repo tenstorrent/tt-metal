@@ -42,6 +42,13 @@ def get_or_create_bspm_expert(*args, **kwargs):
     return _fn(*args, **kwargs)
 
 
+def get_or_create_bspm_expert_tp8(*args, **kwargs):
+    """Lazy wrapper — defers bspm_expert_cache imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert_tp8 as _fn
+
+    return _fn(*args, **kwargs)
+
+
 def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -89,4 +96,5 @@ __all__ = [
     "TensorTarget",
     "create_overlapped_tensor",
     "get_or_create_bspm_expert",
+    "get_or_create_bspm_expert_tp8",
 ]

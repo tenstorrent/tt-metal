@@ -241,6 +241,13 @@ def moe_routed_expert_bspm_tp8_torch_for_cache(
     if shard_dim == 1:
         assert N % tp == 0, f"N={N} must be divisible by tp={tp} for column-parallel shard"
         per_device_N = N // tp
+        # ``N % tp == 0`` alone is not enough: we slice the assignment at tile
+        # granularity (``col_start // tile_w``), so per_device_N must itself be
+        # tile-aligned or the slice boundaries collapse onto the wrong tiles.
+        assert per_device_N % tile_w == 0, (
+            f"per_device_N={per_device_N} must be a multiple of tile_w={tile_w} "
+            f"(N={N}, tp={tp}); N % tp == 0 alone is insufficient"
+        )
         K_per_device = K
         N_padded = ((per_device_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
         assignment_cols = N_padded // tile_w
@@ -262,6 +269,13 @@ def moe_routed_expert_bspm_tp8_torch_for_cache(
     elif shard_dim == 0:
         assert K % tp == 0, f"K={K} must be divisible by tp={tp} for row-parallel shard"
         per_device_K = K // tp
+        # Row-parallel slices the assignment at tile granularity along K
+        # (``row_start // tile_w``); per_device_K must be tile-aligned for the
+        # slice boundaries to land on tile edges.
+        assert per_device_K % tile_w == 0, (
+            f"per_device_K={per_device_K} must be a multiple of tile_w={tile_w} "
+            f"(K={K}, tp={tp}); K % tp == 0 alone is insufficient"
+        )
         K_per_device = per_device_K
         N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
         assignment_cols = N_padded // tile_w
@@ -289,6 +303,27 @@ def moe_routed_expert_bspm_tp8_torch_for_cache(
         .reshape(mesh_rows, mesh_cols, K_per_device // tile_w, N_padded // tile_w)
         .reshape(mesh_rows * mesh_cols * (K_per_device // tile_w), N_padded // tile_w)
     )
+
+    # B/E drift check (defensive): per-rank shuffles are permutations and the only
+    # cells the helper introduces are pad cells (always code 3).  So the sum of
+    # the output assignment must equal the sum of the *used* input portion plus
+    # 3*pad_cells_added.  A mismatch means the slicing math went wrong.
+    input_used = np.asarray(assignment)[: K // tile_w, : N // tile_w]
+    pad_cells_added = stacked_assignment.size - input_used.size
+    expected_sum = int(input_used.sum()) + 3 * pad_cells_added
+    actual_sum = int(stacked_assignment.sum())
+    if actual_sum != expected_sum:
+        logger.warning(
+            "BSPM TP8 assignment drift detected: input_sum={}, pad_cells_added={}, "
+            "expected_output_sum={}, actual_output_sum={} (shard_dim={}, mesh_shape={})",
+            int(input_used.sum()),
+            pad_cells_added,
+            expected_sum,
+            actual_sum,
+            shard_dim,
+            mesh_shape,
+        )
+
     return stacked.contiguous(), np.ascontiguousarray(stacked_assignment)
 
 

@@ -39,7 +39,10 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     SourceTensorSelection,
     TensorTarget,
 )
-from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert
+from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import (
+    get_or_create_bspm_expert,
+    get_or_create_bspm_expert_tp8,
+)
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
@@ -61,7 +64,6 @@ from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
     mlp_routed_dense_stacked_torch_for_cache,
-    moe_routed_expert_bspm_tp8_torch_for_cache,
     moe_routed_expert_torch_for_cache,
     preprocess_gate_up,
     shared_down_torch_for_cache,
@@ -1201,24 +1203,74 @@ def prepare_moe_routed_experts_bspm_tp8(
     mesh_shape: tuple[int, int],
     *,
     bspm_path: Path | None = None,
+    bspm_variant: BspmVariant = BspmVariant.B,
+    bspm_budget: float = 3.5,
+    cache_config: CacheConfig | None = None,
     move_to_device: bool,
 ) -> MoERoutedExpertWeights:
     """Upload MoE routed experts as TP8-sharded CompressedTensor objects.
 
     When ``bspm_path`` exists, its mixed-precision assignments are sliced into the
-    same TP8 layout as the weights.  Otherwise the helper uses a uniform BFP4
-    assignment, matching the previous compressed TP8 path.
+    same TP8 layout as the weights.  When ``bspm_path is None`` the helper falls
+    back to a uniform BFP4 assignment (matching the previous compressed TP8
+    path).  When ``bspm_path`` is supplied but the file does not exist, this
+    function raises :class:`FileNotFoundError` rather than silently falling back —
+    silent fallback would let a misconfigured ``--bspm-dir`` quietly degrade to
+    uniform BFP4.
+
+    Caching
+    -------
+    Every ``(layer, expert, projection)`` is keyed individually in
+    ``cache_config.cache``.  Subsequent runs with the same BSPM file and the
+    same mesh layout skip slicing/packing and load directly from the on-disk
+    compact-tile blob (``tiles.bin`` + ``assignment.npy``) under
+    ``cache_root/objects/<id[:2]>/<id>/``.
+
+    Each fingerprint comprises:
+
+    - ``source`` — the HF state-dict key for that expert/projection.
+    - ``mesh_shape`` (carried by :class:`Fingerprint`) — differentiates
+      single-device, 4×2, 2×4, etc., so caches built for different mesh
+      topologies never collide.
+    - :class:`CompressedTensorTarget` with:
+
+      - ``name`` — ``routed_<gate|up|down>_proj`` (implicitly captures
+        ``shard_dim`` since gate/up are column-parallel and down is
+        row-parallel).
+      - ``K`` — *flattened* TP8 storage K, i.e.
+        ``mesh_rows*mesh_cols*K_per_device``.  TP8 weights are written to
+        the cache as a 2D ``(K_flat, N_padded_per_device)`` blob so they fit
+        the existing compact-tile pack/unpack primitives; the 4D mesh shape
+        is reconstructed at load time inside
+        :func:`get_or_create_bspm_expert_tp8`'s ``reconstruct`` callback.
+      - ``N_padded`` — *per-device* ``N_padded_per_device`` (matches the
+        per-rank :class:`MemoryConfig` used to upload to each device).
+      - ``num_banks`` — ``device.dram_grid_size().x``.
+      - ``bspm_variant``, ``bspm_budget`` — the BSPM allocation parameters.
+      - ``assignment_hash`` — sha256[:16] of the *full logical* assignment
+        ``(K_tiles, N_padded_full_tiles)`` for that expert/projection.  This
+        invalidates the cache entry whenever bit_sculpt produces a new BSPM
+        for the same expert at the same budget.
+
+    Uniform-BFP4 experts share a single cache entry per projection (same
+    assignment, same hash), so the per-layer disk footprint collapses
+    dramatically when ``bspm_path is None``.
     """
+    if cache_config is None:
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+
     tile_w = 32
     bspm_data = None
     if bspm_path is not None:
         bspm_path = Path(bspm_path)
-        if bspm_path.exists():
-            logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
-            bspm_data = load_bspm_for_layer(str(bspm_path))
-            logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
-        else:
-            logger.debug("BSPM not found for layer {}, using uniform bfloat4_b TP8", layer_idx)
+        if not bspm_path.exists():
+            raise FileNotFoundError(
+                f"BSPM file required for layer {layer_idx} but not found: {bspm_path}. "
+                f"Pass bspm_path=None to use uniform BFP4 fallback."
+            )
+        logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
+        bspm_data = load_bspm_for_layer(str(bspm_path))
+        logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
 
     proj_specs = [
         ("gate_proj", 1),
@@ -1228,15 +1280,6 @@ def prepare_moe_routed_experts_bspm_tp8(
 
     mesh_rows, mesh_cols = mesh_shape
     tp = mesh_rows * mesh_cols
-    dram_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-            )
-        }
-    )
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
 
     results: list[list[CompressedTensor]] = [[], [], []]
     for proj_idx, (proj_name, shard_dim) in enumerate(proj_specs):
@@ -1256,43 +1299,62 @@ def prepare_moe_routed_experts_bspm_tp8(
                 raise ValueError(f"{proj_name} K={K} must be divisible by tp={tp}")
             K_per_device = K // tp
             N_padded_per_device = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-        per_core_N = N_padded_per_device // num_banks
 
-        shard_spec = ttnn.ShardSpec(dram_grid, [K_per_device, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+        target_name = f"routed_{proj_name}"
+        K_flat = tp * K_per_device  # cache stores TP8 weights as 2D-flattened mesh
+
+        # Build per-expert logical assignments (pre-slice, pre-shuffle).
+        # BSPM assignments are pre-padded to N_padded_full so the helper can pad-then-slice cleanly.
+        N_padded_full = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        tiles_h_full = K // tile_w
+        tiles_w_full_padded = N_padded_full // tile_w
 
         if bspm_data is not None:
-            N_padded_for_bspm = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-            tiles_h = K // tile_w
-            tiles_w_count = N_padded_for_bspm // tile_w
             if num_routed_experts > bspm_data["n_experts"]:
                 raise ValueError(f"Requested {num_routed_experts} experts, but BSPM only has {bspm_data['n_experts']}")
             all_assignments = [
-                np.ascontiguousarray(bspm_data["codes"][e, proj_idx].reshape(tiles_w_count, tiles_h).T)
+                np.ascontiguousarray(bspm_data["codes"][e, proj_idx].reshape(tiles_w_full_padded, tiles_h_full).T)
                 for e in range(num_routed_experts)
             ]
         else:
-            all_assignments = [None] * num_routed_experts
+            # Uniform fallback: shape matches what the helper would synthesize from `assignment=None`.
+            uniform_assignment = np.ones((tiles_h_full, N // tile_w), dtype=np.int8)
+            all_assignments = [uniform_assignment] * num_routed_experts
 
         for e, key in enumerate(keys):
-            w = state_dict[key].T.contiguous()
-            stacked, assignment = moe_routed_expert_bspm_tp8_torch_for_cache(
-                w,
-                all_assignments[e],
-                num_banks,
-                mesh_shape,
-                shard_dim=shard_dim,
+            assignment_logical = all_assignments[e]
+            assignment_hash = hashlib.sha256(np.ascontiguousarray(assignment_logical).tobytes()).hexdigest()[:16]
+            tgt = CompressedTensorTarget(
+                name=target_name,
+                K=K_flat,
+                N_padded=N_padded_per_device,
+                num_banks=num_banks,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                assignment_hash=assignment_hash,
             )
-            ct = CompressedTensor.from_bspm(
-                stacked.float(),
-                assignment,
-                device=device if move_to_device else None,
-                memory_config=mem_config,
-                mesh_mapper_config=mesh_mapper_config,
+            fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(key,)),
+                target=tgt,
+            )
+            ct = get_or_create_bspm_expert_tp8(
+                cache_config.cache,
+                fp,
+                device,
+                raw_tensors=lambda _k=key: {_k: state_dict[_k]},
+                preprocess=lambda tensors, _k=key, _a=assignment_logical: CompressedTensorBuildInputs(
+                    w=tensors[_k].T.contiguous().float().numpy(),
+                    assignment=_a,
+                ),
+                mesh_shape=mesh_shape,
+                shard_dim=shard_dim,
+                K_per_device=K_per_device,
+                N_padded_per_device=N_padded_per_device,
+                move_to_device=move_to_device,
             )
             results[proj_idx].append(ct)
             if (e + 1) % 32 == 0:
-                mode = "BSPM TP8" if bspm_data is not None else "compressed TP8"
+                mode = "BSPM TP8" if bspm_data is not None else "compressed TP8 (uniform)"
                 logger.info("  {}: uploaded {}/{} experts ({})", proj_name, e + 1, num_routed_experts, mode)
 
     routed = MoERoutedExpertWeights(
@@ -1342,11 +1404,12 @@ def prepare_routed_expert_weights(
                 / "precision_eval"
                 / f"precision_map_{bspm_variant}_{bspm_budget:.1f}.bspm"
             )
-            if bspm_path.exists():
-                logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
-            else:
-                logger.debug("BSPM not found for layer {}, using fallback routed weights", layer_idx)
-                bspm_path = None
+            if not bspm_path.exists():
+                raise FileNotFoundError(
+                    f"BSPM file required for MoE layer {layer_idx} but not found: {bspm_path}. "
+                    f"Pass bspm_dir=None (or omit --bspm-dir) to use uniform BFP4 fallback."
+                )
+            logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
 
         # --- BSPM-or-uniform CompressedTensor TP8 path ---
         if compressed_tp8:
@@ -1358,6 +1421,9 @@ def prepare_routed_expert_weights(
                 num_banks=num_banks,
                 mesh_shape=mesh_shape,
                 bspm_path=bspm_path,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                cache_config=cache_config,
                 move_to_device=move_to_device,
             )
 
