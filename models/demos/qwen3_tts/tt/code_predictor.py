@@ -22,6 +22,7 @@ from typing import List, Optional, Tuple
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0
 
 
 class CodePredictor(LightweightModule):
@@ -233,9 +234,10 @@ class CodePredictor(LightweightModule):
 
         # Input projection if needed (from Talker's 2048 dim to CodePredictor's 1024 dim)
         if self.needs_projection:
-            hidden_states = ttnn.linear(
+            hidden_states = linear_width_sharded_in0(
                 hidden_states,
                 self.input_proj,
+                device=self.device,
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -268,9 +270,10 @@ class CodePredictor(LightweightModule):
         # generation_step is 1-indexed (1 for code 1, 15 for code 15)
         lm_head_idx = generation_step - 1
         if lm_head_idx < len(self.lm_heads):
-            logits = ttnn.linear(
+            logits = linear_width_sharded_in0(
                 hidden_states,
                 self.lm_heads[lm_head_idx],
+                device=self.device,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -314,9 +317,10 @@ class CodePredictor(LightweightModule):
         """
         # Input projection if needed (from Talker's 2048 dim to CodePredictor's 1024 dim)
         if self.needs_projection:
-            hidden_states = ttnn.linear(
+            hidden_states = linear_width_sharded_in0(
                 hidden_states,
                 self.input_proj,
+                device=self.device,
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -342,9 +346,10 @@ class CodePredictor(LightweightModule):
         # Compute logits for each code group (parallel - only correct for prefill)
         logits_list = []
         for lm_head in self.lm_heads:
-            logits = ttnn.linear(
+            logits = linear_width_sharded_in0(
                 hidden_states,
                 lm_head,
+                device=self.device,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )

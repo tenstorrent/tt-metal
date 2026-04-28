@@ -37,12 +37,17 @@ TRACE-COMPATIBLE DECODE:
   - decode_attn_mask (float32 [1, 1, 1, max_seq]) is pre-allocated on device and
     updated outside the trace each step to mask out future positions.
   When cur_pos_tensor is None, falls back to non-traceable update_cache+slice.
+
+STANDARD PREFILL CAUSAL:
+  Built with TTNN only (ones/triu/zeros/full/where). The result is cached per (q_seq,k_seq)
+  so repeated forwards skip rebuild and only run add(scores, mask).
 """
 
 from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0, matmul_width_sharded_in0
 from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved, ttnn_rearrange_to_noninterleaved
 
 
@@ -316,6 +321,11 @@ class Attention(LightweightModule):
             ttnn.ShardSpec(paged_shard_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
         )
 
+        # Standard prefill causal mask (TTNN-built): reuse tensor when q_seq/k_seq unchanged
+        # so steady-state forwards only pay add(scores, mask), not ones/triu/where each time.
+        self._prefill_causal_mask_fp32 = None
+        self._prefill_causal_mask_key = None
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -366,8 +376,12 @@ class Attention(LightweightModule):
         # linear_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
         # QKV projection
-        xqkv = ttnn.linear(
-            x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
+        xqkv = linear_width_sharded_in0(
+            x,
+            self.wqkv,
+            device=self.device,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
@@ -619,8 +633,12 @@ class Attention(LightweightModule):
         # Float32 scaled dot-product attention via ttnn.matmul + ttnn.softmax
         q_seq = q_f32.shape[2]
         k_t = ttnn.transpose(k_exp, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        scores = ttnn.matmul(
-            q_f32, k_t, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
+        scores = matmul_width_sharded_in0(
+            q_f32,
+            k_t,
+            device=self.device,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(k_t)
         ttnn.deallocate(q_f32)
@@ -640,50 +658,55 @@ class Attention(LightweightModule):
             # positions; padding query rows and empty cache columns are -inf.
             scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
         elif q_seq == k_seq and q_seq > 1:
-            # Causal mask for standard prefill (full sequence self-attention)
-            # Torch reference:
-            # causal_mask = torch.triu(torch.full((1, 1, q_seq, k_seq), float("-inf")), diagonal=1)
-            # mask_tt = ttnn.from_torch(causal_mask, dtype=ttnn.float32, device=self.device, ...)
-            # ttnn.triu is multiply(mask, x); triu(full(-inf)) gives 0*(-inf)->NaN. Use where(triu(ones), -inf, 0).
+            # Causal mask (TTNN only): where(triu(ones,1), -inf, 0). Cache by (q_seq,k_seq).
+            qs, ks = int(q_seq), int(k_seq)
+            _cm_key = (qs, ks)
+            if self._prefill_causal_mask_key == _cm_key and self._prefill_causal_mask_fp32 is not None:
+                mask_tt = self._prefill_causal_mask_fp32
+            else:
+                if self._prefill_causal_mask_fp32 is not None:
+                    ttnn.deallocate(self._prefill_causal_mask_fp32)
+                _cm_shape = [1, 1, qs, ks]
+                _cm_ones = ttnn.ones(
+                    _cm_shape,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                _cm_upper = ttnn.triu(_cm_ones, diagonal=1)
+                ttnn.deallocate(_cm_ones)
+                _cm_zeros = ttnn.zeros(
+                    _cm_shape,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                _cm_neg_inf = ttnn.full(
+                    _cm_shape,
+                    float("-inf"),
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                mask_tt = ttnn.where(_cm_upper, _cm_neg_inf, _cm_zeros)
+                ttnn.deallocate(_cm_upper)
+                ttnn.deallocate(_cm_zeros)
+                ttnn.deallocate(_cm_neg_inf)
+                self._prefill_causal_mask_fp32 = mask_tt
+                self._prefill_causal_mask_key = _cm_key
 
-            _cm_shape = [1, 1, q_seq, k_seq]
-            _cm_ones = ttnn.ones(
-                _cm_shape,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            _cm_upper = ttnn.triu(_cm_ones, diagonal=1)
-            ttnn.deallocate(_cm_ones)
-            _cm_zeros = ttnn.zeros(
-                _cm_shape,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            _cm_neg_inf = ttnn.full(
-                _cm_shape,
-                float("-inf"),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            mask_tt = ttnn.where(_cm_upper, _cm_neg_inf, _cm_zeros)
-            ttnn.deallocate(_cm_upper)
-            ttnn.deallocate(_cm_zeros)
-            ttnn.deallocate(_cm_neg_inf)
             scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(mask_tt)
 
         attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(scores)
 
-        attn_output_f32 = ttnn.matmul(
+        attn_output_f32 = matmul_width_sharded_in0(
             attn_weights,
             v_exp,
+            device=self.device,
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -697,9 +720,10 @@ class Attention(LightweightModule):
         # Reshape: [b, num_heads, seq, head_dim] → [b, 1, seq, hidden_size]
         attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        output = ttnn.linear(
+        output = linear_width_sharded_in0(
             attn_output,
             self.wo,
+            device=self.device,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )

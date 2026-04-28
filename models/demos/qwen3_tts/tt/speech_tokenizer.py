@@ -24,6 +24,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.reference.functional import SpeechTokenizerDecoderConfig
 from models.demos.qwen3_tts.reference.functional import speech_tokenizer_decoder_forward as reference_decoder_forward
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0
 from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, TTNNConvTranspose1d, ttnn_snake_activation
 
 
@@ -134,7 +135,7 @@ def convnext_block(
         if pwconv1_bias is not None
         else None
     )
-    x = ttnn.linear(x, pw1_w_tt, bias=pw1_b_tt, memory_config=mc)
+    x = linear_width_sharded_in0(x, pw1_w_tt, bias=pw1_b_tt, memory_config=mc, device=device)
     x = ttnn.gelu(x, memory_config=mc)
     pw2_w_tt = ttnn.from_torch(
         pwconv2_weight.T.contiguous().view(1, 1, pwconv2_weight.shape[1], pwconv2_weight.shape[0]).to(torch.bfloat16),
@@ -152,7 +153,7 @@ def convnext_block(
         if pwconv2_bias is not None
         else None
     )
-    x = ttnn.linear(x, pw2_w_tt, bias=pw2_b_tt, memory_config=mc)
+    x = linear_width_sharded_in0(x, pw2_w_tt, bias=pw2_b_tt, memory_config=mc, device=device)
 
     # Layer scale (broadcast on channels)
     if gamma is not None:
@@ -399,9 +400,9 @@ class TtPreTransformerAttention(LightweightModule):
         seq_len = x.shape[1]
 
         # Project Q, K, V
-        q = ttnn.linear(x, self.wq, bias=self.q_bias)
-        k = ttnn.linear(x, self.wk, bias=self.k_bias)
-        v = ttnn.linear(x, self.wv, bias=self.v_bias)
+        q = linear_width_sharded_in0(x, self.wq, bias=self.q_bias, device=self.device)
+        k = linear_width_sharded_in0(x, self.wk, bias=self.k_bias, device=self.device)
+        v = linear_width_sharded_in0(x, self.wv, bias=self.v_bias, device=self.device)
 
         # Reshape to [batch, seq_len, num_heads, head_dim]
         q = ttnn.reshape(q, [batch_size, seq_len, self.num_heads, self.head_dim])
@@ -430,7 +431,7 @@ class TtPreTransformerAttention(LightweightModule):
         attn_output = ttnn.reshape(attn_output, [batch_size, seq_len, self.qkv_dim])
 
         # Output projection: qkv_dim (1024) -> hidden_size (512)
-        output = ttnn.linear(attn_output, self.wo, bias=self.o_bias)
+        output = linear_width_sharded_in0(attn_output, self.wo, bias=self.o_bias, device=self.device)
 
         return output
 
@@ -476,11 +477,11 @@ class TtPreTransformerMLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """SwiGLU MLP forward."""
-        gate = ttnn.linear(x, self.w_gate)
+        gate = linear_width_sharded_in0(x, self.w_gate, device=self.device)
         gate = ttnn.silu(gate)
-        up = ttnn.linear(x, self.w_up)
+        up = linear_width_sharded_in0(x, self.w_up, device=self.device)
         hidden = ttnn.mul(gate, up)
-        output = ttnn.linear(hidden, self.w_down)
+        output = linear_width_sharded_in0(hidden, self.w_down, device=self.device)
         return output
 
 
@@ -670,7 +671,7 @@ class TtPreTransformer(LightweightModule):
             Output [batch, seq_len, decoder_dim] (3D)
         """
         # Input projection (3D → 3D)
-        x = ttnn.linear(x, self.input_proj, bias=self.input_proj_bias)
+        x = linear_width_sharded_in0(x, self.input_proj, bias=self.input_proj_bias, device=self.device)
 
         # Process through layers (each layer: 3D → 3D)
         for layer in self.layers:
@@ -685,7 +686,7 @@ class TtPreTransformer(LightweightModule):
         x = ttnn.reshape(x_4d, [batch_size, seq_len, hidden])
 
         # Output projection (3D → 3D)
-        x = ttnn.linear(x, self.output_proj, bias=self.output_proj_bias)
+        x = linear_width_sharded_in0(x, self.output_proj, bias=self.output_proj_bias, device=self.device)
 
         return x
 

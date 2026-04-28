@@ -8,6 +8,7 @@ SwiGLU MLP implementation for Qwen3-TTS.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0
 
 
 class MLP(LightweightModule):
@@ -156,25 +157,29 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Use L1 for decode mode (small tensors fit in L1), DRAM for prefill
-        mem_cfg = ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        # L1 for activations so matmul in0 is not DRAM interleaved (width-shard path in
+        # model_config loads shards from L1). Large seq prefill may need DRAM — caller
+        # can split buckets if L1 overflows.
+        mem_cfg = ttnn.L1_MEMORY_CONFIG
 
         # Reshape for large sequences to fit on device
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
         # Gate projection with SiLU activation
-        gate_out = ttnn.linear(
+        gate_out = linear_width_sharded_in0(
             x,
             self.gate_proj,
+            device=self.device,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=mem_cfg,
         )
 
         # Up projection
-        up_out = ttnn.linear(
+        up_out = linear_width_sharded_in0(
             x,
             self.up_proj,
+            device=self.device,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=mem_cfg,
         )
@@ -191,9 +196,10 @@ class MLP(LightweightModule):
         ttnn.deallocate(up_out)
 
         # Down projection
-        output = ttnn.linear(
+        output = linear_width_sharded_in0(
             hidden,
             self.down_proj,
+            device=self.device,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=mem_cfg,
         )

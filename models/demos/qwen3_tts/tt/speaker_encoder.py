@@ -26,6 +26,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0
 
 
 class SpeakerEncoderConfig:
@@ -529,9 +530,10 @@ class SpeakerEncoder(LightweightModule):
                 ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            out_tt = ttnn.linear(
+            out_tt = linear_width_sharded_in0(
                 x_tt,
                 self._fc_linear_weight_tt,
+                device=self.device,
                 bias=self._fc_bias_tt,
                 compute_kernel_config=self._compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

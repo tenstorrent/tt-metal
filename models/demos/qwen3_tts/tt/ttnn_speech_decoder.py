@@ -16,6 +16,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0
 from models.demos.qwen3_tts.tt.speech_tokenizer import SpeechTokenizerConfig
 from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, TTNNConvTranspose1d, ttnn_snake_activation
 
@@ -145,12 +146,12 @@ class TTNNConvNeXtBlock(LightweightModule):
 
         # Pointwise conv1 + GELU
         if self.pwconv1_weight is not None:
-            x = ttnn.linear(x, self.pwconv1_weight, bias=self.pwconv1_bias)
+            x = linear_width_sharded_in0(x, self.pwconv1_weight, bias=self.pwconv1_bias, device=self.device)
             x = ttnn.gelu(x)
 
         # Pointwise conv2
         if self.pwconv2_weight is not None:
-            x = ttnn.linear(x, self.pwconv2_weight, bias=self.pwconv2_bias)
+            x = linear_width_sharded_in0(x, self.pwconv2_weight, bias=self.pwconv2_bias, device=self.device)
 
         # Layer scale
         if self.gamma is not None:

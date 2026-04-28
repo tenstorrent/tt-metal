@@ -16,6 +16,7 @@ from typing import Optional, Tuple
 import torch
 
 import ttnn
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0
 
 
 @dataclass
@@ -182,9 +183,9 @@ class TalkerAttentionMesh:
         batch, _, seq_len, _ = hidden_states.shape
 
         # Q, K, V projections (each device computes local heads)
-        q = ttnn.linear(hidden_states, self.q_proj)  # [batch, 1, seq_len, local_heads * head_dim]
-        k = ttnn.linear(hidden_states, self.k_proj)  # [batch, 1, seq_len, local_kv_heads * head_dim]
-        v = ttnn.linear(hidden_states, self.v_proj)  # [batch, 1, seq_len, local_kv_heads * head_dim]
+        q = linear_width_sharded_in0(hidden_states, self.q_proj, device=self.mesh_device)  # local heads
+        k = linear_width_sharded_in0(hidden_states, self.k_proj, device=self.mesh_device)
+        v = linear_width_sharded_in0(hidden_states, self.v_proj, device=self.mesh_device)
 
         # Reshape for multi-head attention
         # Q: [batch, seq_len, local_heads, head_dim] -> [batch, local_heads, seq_len, head_dim]
@@ -221,7 +222,7 @@ class TalkerAttentionMesh:
         attn_output = ttnn.reshape(attn_output, [batch, 1, seq_len, self.n_local_heads * self.config.head_dim])
 
         # Output projection (local)
-        output = ttnn.linear(attn_output, self.o_proj)
+        output = linear_width_sharded_in0(attn_output, self.o_proj, device=self.mesh_device)
 
         # All-reduce across devices
         output = ttnn.all_gather(output, dim=3, num_links=1)

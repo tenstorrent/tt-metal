@@ -153,12 +153,12 @@ class DecoderLayer(LightweightModule):
             cp_prefill_mask=cp_prefill_mask,
             prefill_attn_mask=prefill_attn_mask,
         )
-        x = ttnn.add(residual, x)
+        x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm MLP
         residual = x
         x = self.post_attention_layernorm(x)
         x = self.mlp(x, mode=mode)
-        x = ttnn.add(residual, x)
+        x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return x, updated_kv_cache

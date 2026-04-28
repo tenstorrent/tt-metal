@@ -17,6 +17,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
+from models.demos.qwen3_tts.tt.model_config import linear_width_sharded_in0
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
 
@@ -407,9 +408,10 @@ class Talker(LightweightModule):
         if self.codec_head is None:
             raise ValueError("codec_head not loaded. Cannot compute codec logits.")
 
-        logits = ttnn.linear(
+        logits = linear_width_sharded_in0(
             hidden_states,
             self.codec_head,
+            device=self.device,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -434,9 +436,10 @@ class Talker(LightweightModule):
             raise ValueError("text_projection not loaded. Cannot project text embeddings.")
 
         # FC1 + bias
-        h = ttnn.linear(
+        h = linear_width_sharded_in0(
             text_embeds,
             self.text_proj_fc1,
+            device=self.device,
             bias=self.text_proj_fc1_bias,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -446,9 +449,10 @@ class Talker(LightweightModule):
         h = ttnn.silu(h)
 
         # FC2 + bias
-        output = ttnn.linear(
+        output = linear_width_sharded_in0(
             h,
             self.text_proj_fc2,
+            device=self.device,
             bias=self.text_proj_fc2_bias,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
