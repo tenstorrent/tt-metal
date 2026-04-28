@@ -1277,12 +1277,22 @@ class ModelArgs:
                     )
         elif mode == Mode.PREFILL:
             if seq_len > 128:
-                grid = self.mlp2_grid(seq_len)
+                # FF2 (W2) prefill: bump grid_x to 10 when dim/32 divides cleanly
+                # (e.g. dim=5120 → 160 tiles, 160/10=16 exact) → (10, 10) = 100
+                # cores. Otherwise (8, 10) = 80. The MinimalMatmul kernel handles
+                # grid_x=10 correctly; the regular MatmulMultiCoreReuseMultiCast
+                # kernel does NOT (it garbles output) — so this bump is restricted
+                # to MinimalMatmul callsites only.
+                use_100 = is_blackhole() and (self.dim // ttnn.TILE_SIZE) % 10 == 0
+                if is_blackhole():
+                    grid = ttnn.CoreCoord(10, 10) if use_100 else ttnn.CoreCoord(8, 10)
+                else:
+                    grid = ttnn.CoreCoord(8, 8)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
                     N_block_size=8,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                    compute_with_storage_grid_size=grid,
                 )
             else:
                 return self.matmul_config(

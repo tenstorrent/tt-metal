@@ -64,7 +64,14 @@ def _prefill_grid_default():
     # at 64 cores because m_tiles=8 < grid_y=10 — accepted tradeoff. (10, 8)
     # was tried but produces garbled output because per_core_N*grid_x > n_tiles
     # for several shapes (e.g. N=2048: 7*10 > 64) and the kernel does not mask
-    # N-axis overflow. WH stays at (x=8, y=8) = 64.
+    # N-axis overflow. y=11 is rejected by the device — P150 worker grid is
+    # 11 wide × 10 tall, so y is capped at 10 (rows 0..9). (10, 10) was tried
+    # for shapes where N divides by 10 (dim=5120 → 160 tiles): the regular
+    # MatmulMultiCoreReuseMultiCast kernel garbles output even though the math
+    # checks out (per_core_N=16 exact, M-overflow safe at (8, 10)). Cause is
+    # internal to the kernel; only MinimalMatmul handles grid_x=10 correctly.
+    # So this default stays at (8, 10); MinimalMatmul callsites can opt up to
+    # (10, 10) directly when their N tile count divides by 10. WH stays at (8, 8).
     return (8, 10) if is_blackhole() else (8, 8)
 
 
