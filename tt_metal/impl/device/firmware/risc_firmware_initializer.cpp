@@ -615,11 +615,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 }
             }
 
-            // FIX AW: Notify Cluster that these non-MMIO chips have stale UMD relay CMD
-            // queue state (prefetch_q_in_flight may be non-zero after MMIO ERISC reset).
-            // ~Cluster will run driver_->close_device() with a timeout rather than
-            // blocking indefinitely in wait_for_non_mmio_flush().
-            cluster_.mark_relay_broken_for_close(relay_broken_non_mmio);
+            // FIX AE supersedes FIX AW: ~Cluster() now marks ALL remote chips relay-broken
+            // before close_device() so wait_for_non_mmio_flush() returns instantly.
+            // No per-chip notification needed here.
         }
 
         // Step 3: assert_cores / l1_barrier.  Skip ALL non-MMIO devices when any relay
