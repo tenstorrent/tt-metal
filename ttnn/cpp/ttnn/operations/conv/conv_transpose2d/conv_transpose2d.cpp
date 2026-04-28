@@ -291,6 +291,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         Tensor halo_output = ttnn::halo(
             input_tensor_post_tm,
             sliding_window_config,
+            compute_config,
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
