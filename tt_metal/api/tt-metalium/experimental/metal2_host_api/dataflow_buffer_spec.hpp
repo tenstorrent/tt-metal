@@ -98,15 +98,20 @@ struct DataflowBufferSpec {
     bool disable_implicit_sync = false;
 };
 
-// A RemoteDataflowBufferSpec describes a "remote" DFB:
-// A DFB whose producer and consumer kernels run on different nodes, with data flowing
-// over the NoC.
+// NOTE: Remote DataflowBuffer is not yet supported!
+//       A sketch is included in the experimental Metal 2.0 APIs for visibility.
+//
+// RemoteDataflowBufferSpec is the descriptor for a "remote" DFB:
+// A DFB whose producer and consumer kernels run on different nodes, with data
+// flowing over the NoC. Its semantics should be as close as possible to that of
+// a local DFB.
 //
 // A RemoteDataflowBufferSpec has all of the properties of a DataflowBufferSpec,
-// but must additionally specify explicit producer-consumer node relationships.
-// A local DFB instance "serves" the producer/consumer kernel instances on the same
-// node: the producer-consumer node instance relationships are structurally implicit.
-// For a remote DFB, this cannot be inferred and must be explicit.
+// but must specify additional remote-DFB specific properties, such as the
+// producer-consumer node mapping.
+//
+// TBD: Much about remote DFBs is still TBD! Everything below this line is expected
+// to change with the implementation.
 //
 // Invariant: Every remote DFB instance has exactly one producer kernel instance and
 // one consumer kernel instance. The instances must not be on the same node.
@@ -121,6 +126,9 @@ struct DataflowBufferSpec {
 struct RemoteDataflowBufferSpec {
     // A remote DFB has all of the same properties as a local DFB
     DataflowBufferSpec dfb_spec;
+
+    // Plus, some remote-DFB-specific properties.
+    // (These are TBD...)
 
     // Producer-consumer node mapping: each entry pairs a producer node with the
     // consumer node it feeds.
