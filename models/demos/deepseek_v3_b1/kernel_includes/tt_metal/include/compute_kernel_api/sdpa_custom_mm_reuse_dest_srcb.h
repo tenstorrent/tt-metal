@@ -105,8 +105,14 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | kt_dim         | The inner dimension (K reduction dimension).                            | uint32_t | Must be equal to block A column dimension      | True     |
  * | in1_k_stride   | Stride between K tiles in in1 CB (default 1 for contiguous K tiles).    | uint32_t | >= 1                                           | False    |
  * | signal_output  | Signal SFPU semaphore for pipelining (default false).                   | bool     | true or false                                  | False    |
+ *
+ * Compile-time template parameter:
+ * | output_granularity | Number of output tiles produced between successive FPU->SFPU semaphore
+ * |                    | posts when signal_output is true. nt_dim must be divisible by it.
+ * |                    | Default is 2.                                                       | uint32_t | >= 1
  */
 // clang-format on
+template <std::uint32_t output_granularity = 2>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -122,8 +128,8 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
-    MATH(
-        (llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY>(isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
+    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity>(
+        isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
 }
 
 }  // namespace ckernel

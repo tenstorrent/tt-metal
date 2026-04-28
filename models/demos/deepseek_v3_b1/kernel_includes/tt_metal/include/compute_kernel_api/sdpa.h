@@ -231,6 +231,10 @@ inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
 
 // First chunk controls whether we run the correction path with prev sum, max, out
 // Last chunk controls whether we signal out packer to start packing as output is produced
+//
+// output_granularity controls how often the QK^T*V matmul (sdpa_custom_mm_reuse_dest_srcb_block)
+// signals the packer via the FPU->SFPU semaphore. The packer must consume tiles in matching
+// groups of output_granularity. num_tiles_v must be divisible by output_granularity.
 template <
     uint32_t chunk_size,
     uint32_t num_tiles_k,
@@ -240,7 +244,8 @@ template <
     bool transpose_k,
     bool transpose_v,
     uint32_t packed_tile_size,
-    bool exp_approx_mode = false>
+    bool exp_approx_mode = false,
+    uint32_t output_granularity = 2>
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
@@ -255,6 +260,7 @@ void compute_sdpa_chunk(
     bool last_chunk,
     bool mask_chunk) {
     static_assert(DST_ACCUM_MODE == false, "FP32 destination accumulation mode is not supported");
+    static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
@@ -303,7 +309,7 @@ void compute_sdpa_chunk(
 
     // MM (FPU)
     sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, cb_k, cb_out, transpose_v, chunk_size, num_tiles_v);
-    sdpa_custom_mm_reuse_dest_srcb_block(
+    sdpa_custom_mm_reuse_dest_srcb_block<output_granularity>(
         cb_q,
         cb_k,
         0,
