@@ -215,7 +215,31 @@ reuse one triplet sequentially (simpler).
   cb_remote_max/sum/out. All [[maybe_unused]] for now.
 - K=1, 2, 4 still bit-identical.
 
-**Phase 2.3 step 2b — worker pack-and-exit (NEXT)**
+**Phase 2.3 step 2b — reader chunk slicing (✅ DONE — commit 34850b7)**
+- Reader reads `core_idx_in_group_arg` / `cores_per_head_arg` from
+  new runtime arg slots and slices the chunk loop accordingly.
+- Program factory passes the same forced (0, 1) values.
+
+**Phase 2.3 step 2c — compute kernel worker pack-and-skip (✅ DONE — commit 60c5e2d)**
+- After matmul_reduce, when `cores_per_head_arg > 1 && !is_reducer`,
+  the compute kernel copies the running (max, sum, out) tile-by-tile
+  into cb_partial_max/sum/out and `continue`s — skipping the dilution
+  correction, recip, and normalize.
+- Dead code at K=1; K=1, 2, 4 still bit-identical.
+
+**Phase 2.3 step 3 — writer NoC-send / wait-and-push (✅ DONE — commit 4d706be)**
+- Worker writer NoC-async-writes cb_partial_max/sum/out into the
+  reducer's cb_remote_max/sum/out L1 slots, then noc_semaphore_inc's
+  the reducer.
+- Reducer writer noc_semaphore_wait's for K-1 increments, resets the
+  sema, then cb_push_back's cb_remote_* so the compute merge loop
+  unblocks.
+- Program factory computes the reducer's physical NoC (x, y) via
+  `device->worker_core_from_logical_core(group_id * cores_per_head)`
+  and passes (x, y) + semaphore_id to every core's writer.
+- Both branches dead at K=1; bit-identical confirmed.
+
+**Phase 2.3 step 4 — reducer compute wait-and-merge (NEXT)**
 
 Concrete steps:
 
@@ -278,9 +302,61 @@ Concrete steps:
 - Once stable: re-run `bench_seqlen_sweep.py` on T3K with K=14 and
   measure the per-call latency gain at long context.
 
+### Open issues for step 4 (reducer merge)
+
+1. **Multiple workers all write to the SAME reducer slot.** Current writer
+   has all K-1 workers `noc_async_write`ing to the reducer's
+   `cb_remote_max[0]` — race condition. Fix options:
+   - **(a)** Allocate `cb_remote_*` with `cores_per_head` slots; worker w
+     writes to slot w (offset `w * tile_bytes * Sq_chunk_t`). Reducer
+     reads slots 1..K-1 sequentially. Simpler L1, more memory.
+   - **(b)** Sequential: reducer signals worker_w "your turn", worker_w
+     sends, etc. Less L1 but more latency.
+   - Pick (a). Need to plumb `cores_per_head` into the cb allocation
+     (already available at program-build time as the clamped attribute).
+
+2. **Online softmax merge math is symmetric.** The chunk-loop's lazy
+   correction assumes `cur_max ≥ prev_max` because reduce_c with
+   eltwise_max enforces that. Cross-core merge has no such guarantee —
+   the peer's max could be larger or smaller. Need both
+   `exp_max_diff_self` and `exp_max_diff_peer` (mirror sdpa_flash_decode's
+   tree-reduction code).
+
+3. **Workers don't apply dilution correction.** Each worker only sees
+   `cur_pos % chunks_per_worker` real positions in its slice (or none, if
+   its slice is past cur_pos). Currently the dilution correction uses
+   `valid_k_chunks * k_chunk_size_tokens` for total iterated and
+   `cur_pos + 1` for real count — which is the *global* count.
+   - The reducer must apply the dilution correction with global counts
+     after merging all workers. Workers should NOT apply it themselves
+     (they'd double-count zeros).
+   - Workers also need to skip the matmul_reduce — actually no, the
+     matmul_reduce just consolidates the per-row sum, it's a no-op for
+     a properly-rowmaxed sum. Both worker and reducer can do it; merge
+     happens after.
+
+### Step 4 plan
+
+- Update CB allocation: `cb_remote_max/sum` size = `cores_per_head * Sq_chunk_t`,
+  `cb_remote_out` size = `cores_per_head * out_chunk_tiles`.
+- Update worker writer: write to offset `core_idx_in_group * tile_bytes * count`.
+- Update reducer writer: cb_push_back per-slot with proper sequence.
+- Implement the merge loop in compute kernel after own `matmul_reduce`:
+  - For each peer w in 1..K-1:
+    - cb_wait_front for that peer's slot (or single CB if reducer reads
+      one at a time)
+    - Compute `new_max = max(prev_max, cb_remote_max[peer])` via
+      `max_block` or `reduce_c<MAX>`
+    - Compute `exp_max_diff_self = exp((prev_max - new_max) * scale)`
+    - Compute `exp_max_diff_peer = exp((cb_remote_max[peer] - new_max) * scale)`
+    - `prev_sum = exp_max_diff_self * prev_sum + exp_max_diff_peer * cb_remote_sum[peer]`
+    - `prev_out = exp_max_diff_self * prev_out + exp_max_diff_peer * cb_remote_out[peer]`
+    - `prev_max = new_max`
+- Then existing dilution correction + recip + normalize → output.
+
 ### Pickup checklist for next session
 
-Resume at Phase 2.3 step 2b. The next concrete edits are:
+Resume at Phase 2.3 step 4 (above). The next concrete edits are:
 
 1. **Program factory: stop forcing empty (batch, head) range for idx > 0**
    - Currently `if (core_idx_in_group != 0) { batch_end = batch_start;
