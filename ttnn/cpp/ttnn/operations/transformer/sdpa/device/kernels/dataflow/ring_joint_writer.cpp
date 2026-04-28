@@ -10,7 +10,7 @@
 
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
 // Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
-// Pushes output tiles into cb_prev_out (c_7) and LSE tiles into cb_lse_in (c_6).
+// Pushes output tiles into cb_prev_out and LSE tiles into cb_lse_in.
 //
 // @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
 // @param stats_writer        TensorAccessor for the stats DRAM tensor
@@ -22,8 +22,8 @@
 // @param end_seq_tile        Last valid sequence tile (for padding-aware reads)
 // @param stats_seq_start_tile  First tile row in the stats tensor for this Q chunk
 // @param stats_seq_end_tile    One-past-last tile row (clamped to avoid reading past padding)
-// @param cb_prev_out         CB to push previous output tiles into (c_7, read by compute)
-// @param cb_lse_in           CB to push previous LSE tiles into (c_6, read by compute)
+// @param cb_prev_out         CB to push previous output tiles into (read by compute)
+// @param cb_lse_in           CB to push previous LSE tiles into (read by compute)
 // @param tile_bytes          Output tile size in bytes
 // @param stats_tile_bytes    Stats tile size in bytes
 template <typename ReaderType, typename TensorAccessorType>
@@ -228,7 +228,7 @@ void save_accumulators_with_trid(
 
 // Eager-path writer: writes normalized output and LSE to DRAM every ring iteration.
 // Used by the non-streaming (old sdpa_ring) path.
-// Reads from: cb_out (c_16), cb_lse_out (c_17).
+// Reads from: cb_out and cb_lse_out.
 //
 // @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
 // @param stats_writer        TensorAccessor for the stats DRAM tensor
@@ -240,8 +240,8 @@ void save_accumulators_with_trid(
 // @param end_seq_tile        Last valid sequence tile
 // @param stats_seq_start_tile  First tile row in stats tensor for this Q chunk's LSE
 // @param stats_seq_end_tile    One-past-last tile row (clamped to sequence bounds)
-// @param cb_out              CB to drain output tiles from (c_16)
-// @param cb_lse_out          CB to drain LSE tiles from (c_17)
+// @param cb_out              CB to drain output tiles from
+// @param cb_lse_out          CB to drain LSE tiles from
 // @param tile_bytes          Output tile size in bytes
 // @param stats_tile_bytes    Stats tile size in bytes
 template <typename ReaderType, typename TensorAccessorType>
@@ -361,8 +361,9 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // c_6/c_17 carry softmax statistics between compute and writer for DRAM round-trips.
-    // Aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
+    // TODO: CB indices below are hardcoded and duplicated from the program factory.
+    // They should be passed as compile-time args so the factory is the single source of truth.
+    // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
     constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: DRAM → compute (running max)
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: DRAM → compute (LSE)
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
@@ -373,6 +374,10 @@ void kernel_main() {
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
     constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
@@ -388,10 +393,6 @@ void kernel_main() {
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
-
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
@@ -592,10 +593,15 @@ void kernel_main() {
                     get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
                 const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
 
-                // 1. Complete restore + prefetch run for ALL Q chunks (including balanced-skipped)
-                // to keep the prefetch pipeline in sync across ring iters.
+                // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
+                // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
+                // compute skips these Q chunks entirely and doesn't need staging data.
                 if (!single_q_chunk && ring_iter > 0) {
-                    complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
+                    if (balanced_skip_q && !is_last_ring_iter) {
+                        noc_async_read_barrier();
+                    } else {
+                        complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
+                    }
                 }
 
                 // 2. Early flush: drain staging before prefetch when needed.

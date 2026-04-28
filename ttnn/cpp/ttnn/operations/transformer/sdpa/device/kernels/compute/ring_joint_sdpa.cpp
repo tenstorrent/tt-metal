@@ -56,7 +56,7 @@ void kernel_main() {
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
 
-    // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
+    // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     // Needed when any K/joint dimension has padding, or when causal masking is active.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
@@ -87,16 +87,25 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
+    // TODO: CB indices below are hardcoded and duplicated from the program factory.
+    // They should be passed as compile-time args so the factory is the single source of truth.
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: running max
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: LSE
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
+    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;  // 1-tile scratch for normalize_row_streaming
+    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
+    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
+    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
     constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
@@ -105,18 +114,6 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
-
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
-
-    // Streaming compute uses c_9 as 1-tile recip scratch for normalize_row_streaming.
-    // (c_4 is used by cb_scale_in in ring joint SDPA, unlike regular SDPA.)
-    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;
-
-    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
-    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -254,7 +251,10 @@ void kernel_main() {
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
                 cb_sum_in,
-                needs_lightweight_mask>(
+                cb_signal,
+                needs_lightweight_mask,
+                is_causal,
+                is_balanced>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,

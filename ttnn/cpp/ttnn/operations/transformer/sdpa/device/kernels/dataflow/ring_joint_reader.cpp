@@ -32,7 +32,6 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
 
     constexpr auto q_args = TensorAccessorArgs<25>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -120,6 +119,8 @@ void kernel_main() {
         receiver_semaphore_noc_addr = get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
     }
 
+    // TODO: CB indices below are hardcoded and duplicated from the program factory.
+    // They should be passed as compile-time args so the factory is the single source of truth.
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
