@@ -20,10 +20,12 @@ void kernel_main() {
         return;
     }
 
+    constexpr uint8_t noc = 1;  // 0;
+
     const uint32_t tile_size = get_tile_size(cb_dst);
     const auto dst_tensor = TensorAccessor(dst_args, dst_addr, tile_size);
 
-    uint64_t dst_noc_addr = dst_tensor.get_noc_addr(tile_ofs);
+    uint64_t dst_noc_addr = dst_tensor.get_noc_addr(tile_ofs, /*offset=*/0, noc);
     uint32_t dst_noc_ofs = 0;
 
     const uint32_t large_chunk = num_batches * num_tiles_per_batch;
@@ -44,10 +46,10 @@ void kernel_main() {
 
         // TODO: Can we send n_tiles_proc for one noc_async_write transaction?
         for (uint32_t k = 0; k < n_tiles_proc; k++) {
-            noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size);
+            noc_async_write(l1_read_addr + k * tile_size, dst_noc_addr + dst_noc_ofs, tile_size, noc);
             dst_noc_ofs += tile_size;
         }
-        noc_async_write_barrier();
+        noc_async_write_barrier(noc);
 
         cb_pop_front(cb_dst, n_tiles_proc);
         remaining -= n_tiles_proc;

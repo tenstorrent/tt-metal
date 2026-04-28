@@ -347,6 +347,15 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     core_ranges.reserve(all_worker_cores_ordered.size());
     for (const auto& c : all_worker_cores_ordered) {
         CoreCoord chosen = c;
+        auto& w = chosen;
+        if (w.x == 3 && w.y == 7) {
+            w.x = 1;
+            w.y = 0;
+        }
+        if (w.x == 7 && w.y == 3) {
+            w.x = 7;
+            w.y = 0;
+        }
         const bool is_reserved = !available_set.contains(c);
         const bool is_duplicate = used_cores.contains(c);
         if (is_reserved || is_duplicate) {
@@ -370,6 +379,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         used_cores.insert(chosen);
         core_ranges.emplace_back(chosen, chosen);
     }
+
     auto dram_optimal_cores = CoreRangeSet(core_ranges);
 
     Program program{};

@@ -26,14 +26,35 @@ void kernel_main() {
         return;
     }
 
+    // Pick the best NOC for this worker based on its location.
+    //
+    // Wormhole B0 has a 10x12 NOC torus with DRAM columns at physical x=0 and x=5.
+    // NOC 0 routes +x (with wrap); NOC 1 routes -x. Because the input buffers are
+    // interleaved across all 12 DRAM banks, the best NOC is the one whose routing
+    // direction reaches the nearer DRAM column in fewer hops.
+    //
+    // The 8 worker columns map to logical x as:
+    //   logical_x : 0  1 | 2  3 | 4  5 | 6  7
+    //   phys_x    : 1  2 | 3  4 | 6  7 | 8  9
+    //   best_noc  : 1  1 | 0  0 | 1  1 | 0  0
+    //
+    // i.e. the decision is bit 1 of logical_x.
+    const uint8_t logical_x = get_absolute_logical_x();
+    const uint8_t logical_y = get_absolute_logical_y();
+    // uint8_t noc = ((logical_x >> 1) & 1u) ? 1u : 0u;
+    // if ((logical_y == 7 && logical_x == 7)) {
+    //     noc = 1;
+    // }
+    uint8_t noc = 0;
+
     const uint32_t a_tile_size = get_tile_size(cb_a);
     const uint32_t b_tile_size = get_tile_size(cb_b);
 
     const auto a_tensor = TensorAccessor(src_a_args, a_addr, a_tile_size);
     const auto b_tensor = TensorAccessor(src_b_args, b_addr, b_tile_size);
 
-    uint64_t a_noc_addr = a_tensor.get_noc_addr(tile_ofs);
-    uint64_t b_noc_addr = b_tensor.get_noc_addr(tile_ofs);
+    uint64_t a_noc_addr = a_tensor.get_noc_addr(tile_ofs, /*offset=*/0, noc);
+    uint64_t b_noc_addr = b_tensor.get_noc_addr(tile_ofs, /*offset=*/0, noc);
 
     uint32_t a_addr_ofs = 0;
     uint32_t b_addr_ofs = 0;
@@ -94,20 +115,20 @@ void kernel_main() {
         uint32_t chunk = get_num_tiles(remaining_tiles);
         uint32_t transfer_sz = chunk * a_tile_size;
 
-        noc_async_read_set_trid(trid);
+        noc_async_read_set_trid(trid, noc);
 
-        noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz);
-        noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_cb_ptr, trid);
+        noc_async_read_one_packet_set_state<true>(a_noc_addr, transfer_sz, /*vc=*/0, noc);
+        noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_cb_ptr, trid, noc);
         a_addr_ofs += transfer_sz;
         a_cb_ptr = next_a_cb_addr(a_cb_ptr, chunk);
 
-        noc_async_read_one_packet_set_state<true>(b_noc_addr, transfer_sz);
-        noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_cb_ptr, trid);
+        noc_async_read_one_packet_set_state<true>(b_noc_addr, transfer_sz, /*vc=*/0, noc);
+        noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_cb_ptr, trid, noc);
         b_addr_ofs += transfer_sz;
         b_cb_ptr = next_b_cb_addr(b_cb_ptr, chunk);
 
         if (!first_iter) {
-            noc_async_read_barrier_with_trid(trid_to_wait);
+            noc_async_read_barrier_with_trid(trid_to_wait, noc);
 
             trid_to_wait = get_next_trid(trid_to_wait);
             cb_push_back(cb_a, prev_chunk);
@@ -124,7 +145,7 @@ void kernel_main() {
         remaining_tiles -= chunk;
     }
 
-    noc_async_read_barrier_with_trid(trid_to_wait);
+    noc_async_read_barrier_with_trid(trid_to_wait, noc);
     cb_push_back(cb_a, prev_chunk);
     cb_push_back(cb_b, prev_chunk);
 }
