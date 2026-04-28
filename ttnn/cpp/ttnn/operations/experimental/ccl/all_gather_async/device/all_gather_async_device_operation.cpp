@@ -342,44 +342,38 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherAsyncDeviceOperation
 AllGatherAsyncDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     // =========================================================================
-    // AllGather Roofline Performance Model
+    // AllGather Roofline Performance Model (First-Principles)
     //
-    // AllGather is pure data movement — no compute. Performance is bounded by:
-    //   ideal_ns = max(DRAM_bandwidth_time, Fabric_transfer_time)
+    // AllGather is pure data movement — no compute. The roofline is the
+    // hardware ceiling: the minimum time given the physical topology and
+    // memory bandwidth, independent of any particular algorithm.
     //
-    // The OpPerformanceModelGeneral constructor computes DRAM_bandwidth_time
-    // from input/output tensor sizes and peak DRAM BW. We encode the fabric
-    // transfer time as ideal_compute_cycles so the constructor's max() picks
-    // the true bottleneck.
+    // Performance is bounded by:
+    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency
     //
-    // We model from the perspective of the worst-case device: the one that
-    // takes longest to receive all (N-1) slices. AllGather finishes when
-    // the last device completes.
+    // --- Fabric term (bottleneck link analysis) ---
+    //
+    // For any topology the roofline is set by the most-loaded link.
+    // N devices, each contributing S bytes. Every device must receive
+    // the other (N-1) chunks.
     //
     // LINE topology:
-    //   Edge devices (0 and N-1) have only ONE incoming link. All (N-1)
-    //   slices must arrive through that single link. This is the hard
-    //   bottleneck — no algorithm can avoid it.
-    //   bottleneck_bytes = (N-1) * S.  Latency = (N-1) hops.
+    //   The edge device has a single link to the rest of the network.
+    //   All (N-1) chunks must pass through that one link — no topology
+    //   can avoid this.
+    //   bottleneck_bytes = (N-1) * S.  Max hops = N-1.
     //
-    // RING topology — pick the better of two strategies:
-    //   Option A (balanced half-ring, low latency):
-    //     Each device splits its slice S and multicasts in both directions,
-    //     covering half the ring each way. For even N: in clockwise dir
-    //     upper S/2 goes to N/2 neighbors and lower S/2 to N/2-1 neighbors,
-    //     while in counter-clockwise dir upper S/2 goes to N/2-1 neighbors
-    //     and lower S/2 to N/2 neighbors. So the boundary device receives
-    //     different halves from each direction with zero redundancy.
-    //     For odd N: full S is sent to floor(N/2) neighbors in each direction
-    //     with no overlap.
-    //     bottleneck_bytes = (N-1) * S/2, latency = ceil((N-1)/2) hops.
+    // RING topology:
+    //   A bisection cut crosses 2 links. Data from N/2 devices on one
+    //   side must reach N/2 devices on the other, and vice-versa. Each
+    //   direction carries at most half the total load.
+    //   bottleneck_bytes = ceil((N-1) * S / 2).  Max hops = ceil((N-1)/2).
     //
-    //   Option B (split, full-ring, lower BW):
-    //     Each device sends S/2 in each direction around the full ring.
-    //     By symmetry, each device receives (N-1)*S/2 from each direction.
-    //     bottleneck_bytes = (N-1) * S/2, latency = (N-1) hops.
+    // --- DRAM term (memory bandwidth ceiling) ---
     //
-    //   fabric_ns = min(time_A, time_B)
+    // Each device reads S bytes and writes N*S bytes. The roofline
+    // assumes all compute cores can drive DRAM concurrently (hardware
+    // maximum parallelism), so DRAM time = bytes / peak_aggregate_BW.
     // =========================================================================
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -405,23 +399,11 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
         // Single device: no fabric communication
         fabric_time_ns = 0.0f;
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
-        // Ring topology: pick the better of two strategies
-
-        // Option A: balanced half-ring — each device distributes its slice
-        // across both directions so the boundary device (at distance N/2)
-        // receives different halves from each direction. Achieves the
-        // optimal (N-1)*S/2 per link with only ceil((N-1)/2) hops.
-        const uint64_t bottleneck_bytes_a = tt::div_up((N - 1) * input_size_bytes, 2);
-        const double time_a =
-            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes_a, num_links, tt::div_up(N - 1, 2u));
-
-        // Option B: split slice, multicast S/2 in each direction around full ring.
-        // Bottleneck link carries N-1 senders * S/2 bytes each (source's stream
-        // doesn't traverse its own outgoing link).
-        const uint64_t bottleneck_bytes_b = tt::div_up((N - 1) * input_size_bytes, 2);
-        const double time_b = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes_b, num_links, N - 1);
-
-        fabric_time_ns = std::min(time_a, time_b);
+        // Ring topology: bisection cuts 2 links, so each direction carries
+        // at most half the total data. Bottleneck per direction = ceil((N-1)*S/2).
+        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
+        fabric_time_ns =
+            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(N - 1, 2u));
     } else {
         // Line/Linear/Mesh topology: edge device has one link and must
         // receive all (N-1) slices through it.
@@ -433,28 +415,31 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // clock_rate_ghz cycles/ns * ns = cycles
     const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
 
-    // --- Local data movement overhead (pipelined model) ---
-    // Read: device reads input S bytes from memory.
-    // Write: device writes output N*S bytes to memory.
-    // BW terms compete with fabric (max). Latencies are additive (pipeline fill/drain).
+    // --- Local DRAM bandwidth ceiling (first-principles) ---
+    // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
+    // Roofline assumes all device compute cores drive DRAM concurrently
+    // (hardware max parallelism). BW competes with fabric (max); latencies
+    // are additive (pipeline fill/drain).
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.buffer()->page_size();
     const uint32_t write_page_size = output_tensor.buffer()->page_size();
-    const uint32_t num_workers_per_link = 1;                                         // per link per dir
-    const uint32_t num_dirs = (args.topology == ttnn::ccl::Topology::Ring) ? 2 : 1;  // =1 for line since edge device
-    const uint32_t total_workers = num_workers_per_link * num_links * num_dirs;
+
+    // Hardware ceiling: total compute cores available to drive DRAM
+    const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
+    const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
+    const uint32_t num_cores = device_rows * device_cols;
 
     const int64_t output_size_bytes = N * input_size_bytes;
-    const uint32_t read_pages_per_worker =
-        tt::div_up(static_cast<uint32_t>(input_size_bytes / read_page_size), total_workers);
-    const uint32_t write_pages_per_worker =
-        tt::div_up(static_cast<uint32_t>(output_size_bytes / write_page_size), total_workers);
+    const uint32_t read_pages = static_cast<uint32_t>(input_size_bytes / read_page_size);
+    const uint32_t write_pages = static_cast<uint32_t>(output_size_bytes / write_page_size);
+    const uint32_t read_pages_per_core = tt::div_up(read_pages, num_cores);
+    const uint32_t write_pages_per_core = tt::div_up(write_pages, num_cores);
 
     auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
-        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_worker, arch, /*is_read=*/true);
+        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_core, arch, /*is_read=*/true);
     auto [write_bw_cycles, write_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
-        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_worker, arch, /*is_read=*/false);
+        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_core, arch, /*is_read=*/false);
 
     const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
     const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
