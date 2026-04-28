@@ -43,7 +43,6 @@ from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved
 
 
 class Attention(LightweightModule):
@@ -80,6 +79,26 @@ class Attention(LightweightModule):
         self.scale = head_dim**-0.5
         self.rms_norm_eps = rms_norm_eps
 
+        def _permute_rope_head_dim_rows(weight_2d, local_heads: int, head_dim: int):
+            # Convert each head block from non-interleaved [..., d0..d63, d64..d127]
+            # to interleaved [..., d0, d64, d1, d65, ...] once at load time.
+            hidden_size_in = int(weight_2d.shape[1])
+            half_dim = head_dim // 2
+            w = weight_2d.reshape(local_heads, head_dim, hidden_size_in)
+            first = w[:, :half_dim, :]
+            second = w[:, half_dim:, :]
+            out = w.clone()
+            out[:, 0::2, :] = first
+            out[:, 1::2, :] = second
+            return out.reshape(local_heads * head_dim, hidden_size_in)
+
+        def _permute_rope_head_dim_vector(weight_1d, head_dim: int):
+            half_dim = head_dim // 2
+            out = weight_1d.clone()
+            out[0::2] = weight_1d[:half_dim]
+            out[1::2] = weight_1d[half_dim:]
+            return out
+
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
 
         def get_cache_name(name):
@@ -88,8 +107,12 @@ class Attention(LightweightModule):
             return weight_cache_path / f"{layer_prefix}_{name}".replace(".", "_")
 
         # Fuse QKV weights: [hidden_size, (num_heads + 2*num_kv_heads) * head_dim]
-        q_proj_weight = state_dict[f"{layer_prefix}.self_attn.q_proj.weight"]
-        k_proj_weight = state_dict[f"{layer_prefix}.self_attn.k_proj.weight"]
+        q_proj_weight = _permute_rope_head_dim_rows(
+            state_dict[f"{layer_prefix}.self_attn.q_proj.weight"], num_heads, head_dim
+        )
+        k_proj_weight = _permute_rope_head_dim_rows(
+            state_dict[f"{layer_prefix}.self_attn.k_proj.weight"], num_kv_heads, head_dim
+        )
         v_proj_weight = state_dict[f"{layer_prefix}.self_attn.v_proj.weight"]
         o_proj_weight = state_dict[f"{layer_prefix}.self_attn.o_proj.weight"]
 
@@ -217,8 +240,8 @@ class Attention(LightweightModule):
             )
 
         # QK-norm weights (per-head RMSNorm)
-        q_norm_weight = state_dict[f"{layer_prefix}.self_attn.q_norm.weight"]
-        k_norm_weight = state_dict[f"{layer_prefix}.self_attn.k_norm.weight"]
+        q_norm_weight = _permute_rope_head_dim_vector(state_dict[f"{layer_prefix}.self_attn.q_norm.weight"], head_dim)
+        k_norm_weight = _permute_rope_head_dim_vector(state_dict[f"{layer_prefix}.self_attn.k_norm.weight"], head_dim)
 
         TILE = 32
         q_norm_torch = q_norm_weight.unsqueeze(0).view(1, 1, head_dim).reshape([1, 1, head_dim // TILE, TILE])
@@ -398,16 +421,14 @@ class Attention(LightweightModule):
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        # RoPE: rearrange to interleaved format for TTNN, apply, rearrange back.
+        # RoPE:
+        # Q/K projection rows + Q/K norm weights were pre-permuted at init time so
+        # Q/K are already in interleaved head-dim layout for rotary_embedding_llama.
+        # This avoids per-call reshape/permute/reshape churn in decode/prefill.
         # Use is_decode_mode=False to work with DRAM layout for all sequence lengths.
-        q = ttnn_rearrange_to_interleaved(q)
-        k = ttnn_rearrange_to_interleaved(k)
         q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, transformation_mat, is_decode_mode=False)
         k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, transformation_mat, is_decode_mode=False)
         # Keep Q/K in interleaved layout after RoPE.
-        # Attention only needs Q and K to be consistently ordered relative to each
-        # other; converting back to non-interleaved format adds extra reshape/permute
-        # traffic without changing the math for QK^T.
 
         k_seq = k.shape[2]
 
