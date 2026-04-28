@@ -47,6 +47,8 @@ CPP_OPS_BASE="${REPO_ROOT}/ttnn/cpp/ttnn/operations"
 PRIMARY_CPP_OPS_DIR="${CPP_OPS_BASE}/${CATEGORY}"
 PRIMARY_OP_DIR="${PRIMARY_CPP_OPS_DIR}/${OPERATION}"
 BACKUP_BASE="/tmp/nuked_ops/${CATEGORY}/${OPERATION}"
+TOP_CMAKE="${REPO_ROOT}/ttnn/CMakeLists.txt"
+ALIAS_FILE="/tmp/nuked_ops/${CATEGORY}/${OPERATION}/_aliases_to_remove.txt"
 
 # ---- Discover all related operation directories ----
 # Searches the entire operations tree for directories AND CMake references
@@ -155,6 +157,17 @@ nuke_single_op() {
     [[ -f "${cmake_file}" ]] && cp "${cmake_file}" "${backup_dir}/CMakeLists.txt.bak"
     [[ -f "${nanobind_file}" ]] && cp "${nanobind_file}" "${backup_dir}/$(basename "${nanobind_file}").bak"
     [[ -f "${python_file}" ]] && cp "${python_file}" "${backup_dir}/$(basename "${python_file}").bak"
+
+    # Capture any TTNN::* CMake alias targets defined inside the op directory
+    # BEFORE deletion. The top-level ttnn/CMakeLists.txt links these aliases via
+    # target_link_libraries(ttnncpp ...) and the names cannot be derived from the
+    # op directory name (CamelCased with custom capitalization).
+    if [[ -d "${op_dir}" ]]; then
+        mkdir -p "$(dirname "${ALIAS_FILE}")"
+        while IFS= read -r cm; do
+            grep -oP 'add_library\s*\(\s*\KTTNN::[A-Za-z0-9_:]+(?=\s+ALIAS\b)' "$cm" 2>/dev/null || true
+        done < <(find "${op_dir}" -name CMakeLists.txt) >> "${ALIAS_FILE}"
+    fi
 
     # Delete operation directory
     if [[ -d "${op_dir}" ]]; then
@@ -272,6 +285,59 @@ PYEOF
     fi
 }
 
+# ---- Clean the top-level ttnn/CMakeLists.txt ----
+# The per-category CMakeLists.txt only catches its own ops. The top-level
+# ttnn/CMakeLists.txt independently references some ops in two ways:
+#   1. Bundled nanobind sources, e.g.
+#        ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/tilize/tilize_nanobind.cpp
+#   2. Per-op add_subdirectory(...) for ops with their own CMakeLists.txt, e.g.
+#        add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
+# Without this step, build fails immediately on a stale add_subdirectory and later
+# on a missing nanobind source.
+clean_top_level_cmake() {
+    local -a targets=("$@")
+    [[ ! -f "${TOP_CMAKE}" ]] && return 0
+
+    cp "${TOP_CMAKE}" "${BACKUP_BASE}/$(basename "${TOP_CMAKE}").bak"
+
+    local before after removed total_removed=0
+    for target in "${targets[@]}"; do
+        before=$(wc -l < "${TOP_CMAKE}")
+        # Match path followed by `/` (nanobind source) or `)` (add_subdirectory).
+        # The trailing `[/)]` prevents prefix matches (e.g. `tilize` vs `tilize_with_val_padding`).
+        sed -i "\|cpp/ttnn/operations/${target}[/)]|d" "${TOP_CMAKE}"
+        after=$(wc -l < "${TOP_CMAKE}")
+        removed=$((before - after))
+        total_removed=$((total_removed + removed))
+        if [[ ${removed} -gt 0 ]]; then
+            echo "NUKE_TOP_CMAKE: ${target}: removed ${removed} lines from $(basename "${TOP_CMAKE}")"
+        fi
+    done
+    # Also strip any TTNN::* alias links captured during nuke_single_op.
+    # These are linked from target_link_libraries(ttnncpp ...) and don't follow
+    # a path-based naming convention, so must be captured by inspecting each
+    # deleted op's CMakeLists.txt before deletion.
+    if [[ -f "${ALIAS_FILE}" ]]; then
+        while IFS= read -r alias_name; do
+            [[ -z "${alias_name}" ]] && continue
+            before=$(wc -l < "${TOP_CMAKE}")
+            # Match alias on its own line (typical target_link_libraries item)
+            # with optional surrounding whitespace.
+            sed -i "\|^[[:space:]]*${alias_name}[[:space:]]*\$|d" "${TOP_CMAKE}"
+            after=$(wc -l < "${TOP_CMAKE}")
+            removed=$((before - after))
+            total_removed=$((total_removed + removed))
+            if [[ ${removed} -gt 0 ]]; then
+                echo "NUKE_TOP_CMAKE: alias ${alias_name}: removed ${removed} lines from $(basename "${TOP_CMAKE}")"
+            fi
+        done < <(sort -u "${ALIAS_FILE}")
+    fi
+
+    if [[ ${total_removed} -eq 0 ]]; then
+        echo "NUKE_TOP_CMAKE: no references found in $(basename "${TOP_CMAKE}")"
+    fi
+}
+
 # ---- Collect all targets ----
 # Start with the primary target
 ALL_TARGETS=()
@@ -325,6 +391,24 @@ if $DRY_RUN; then
         [[ -f "${_pyfile}" ]] && echo "  NUKE_MODIFY: ${_pyfile}"
     done
 
+    if [[ -f "${TOP_CMAKE}" ]]; then
+        for target in "${ALL_TARGETS[@]}"; do
+            if grep -q "cpp/ttnn/operations/${target}[/)]" "${TOP_CMAKE}" 2>/dev/null; then
+                echo "  NUKE_MODIFY_TOP: ${TOP_CMAKE} (lines matching ${target})"
+            fi
+            # Predict alias removals by scanning the still-present op CMakes
+            target_dir="${CPP_OPS_BASE}/${target}"
+            if [[ -d "${target_dir}" ]]; then
+                while IFS= read -r alias_name; do
+                    [[ -z "$alias_name" ]] && continue
+                    if grep -q "^[[:space:]]*${alias_name}[[:space:]]*\$" "${TOP_CMAKE}" 2>/dev/null; then
+                        echo "  NUKE_MODIFY_TOP_ALIAS: ${TOP_CMAKE} (alias ${alias_name})"
+                    fi
+                done < <(find "${target_dir}" -name CMakeLists.txt -exec grep -hoP 'add_library\s*\(\s*\KTTNN::[A-Za-z0-9_:]+(?=\s+ALIAS\b)' {} \; 2>/dev/null | sort -u)
+            fi
+        done
+    fi
+
     echo ""
     echo "NUKE_BACKUP: ${BACKUP_BASE}/"
 
@@ -349,7 +433,12 @@ for target in "${ALL_TARGETS[@]}"; do
     nuke_single_op "$target"
 done
 
-# --- Step 2: Delete test files (once, using the operation name as substring) ---
+# --- Step 2: Clean top-level ttnn/CMakeLists.txt ---
+echo ""
+echo "NUKE_STEP: top-level CMakeLists.txt"
+clean_top_level_cmake "${ALL_TARGETS[@]}"
+
+# --- Step 3: Delete test files (once, using the operation name as substring) ---
 echo ""
 echo "NUKE_STEP: tests"
 test_count=0
