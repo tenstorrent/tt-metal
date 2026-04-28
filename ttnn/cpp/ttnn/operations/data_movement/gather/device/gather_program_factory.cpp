@@ -54,23 +54,27 @@ ProgramDescriptor GatherDeviceOperation::SingleRowSingleCore::create_descriptor(
     const uint32_t Wt_input = input_shape[3] / tile_width;
     const uint32_t Wt_index = input_index_shape[3] / tile_width;
 
+    // Calculate the number of cores available for computation
     auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t max_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
+    // Create core grid
     CoreRangeSet core_grid =
         tt::tt_metal::num_cores_to_corerangeset(max_number_of_cores, compute_with_storage_grid_size, true);
+    // Override core grid if sub_core_grids is provided in operation attributes
     if (attributes.sub_core_grids.has_value()) {
         core_grid = attributes.sub_core_grids.value();
     }
 
     const auto
-        [total_number_of_cores,
-         core_range,
-         core_group_1,
-         core_group_2,
-         num_tiles_per_core_group_1,
-         num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, Ht, true);
+        [total_number_of_cores,       // number of cores utilized
+         core_range,                  // set of all cores used
+         core_group_1,                // Primary core group
+         core_group_2,                // Secondary core group
+         num_tiles_per_core_group_1,  // Number of tiles each core in the primary group processes
+         num_tiles_per_core_group_2   // Number of tiles each core in the secondary group processes
+    ] = tt::tt_metal::split_work_to_cores(core_grid, Ht, true);
     const auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
@@ -151,7 +155,7 @@ ProgramDescriptor GatherDeviceOperation::SingleRowSingleCore::create_descriptor(
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
 
-    uint32_t id = 0;
+    uint32_t id = 0;  // Offset for the next core in the group
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
@@ -203,23 +207,27 @@ ProgramDescriptor GatherDeviceOperation::SingleRowMultiCore::create_descriptor(
     const uint32_t Wt_input = input_shape[3] / tile_width;
     const uint32_t Wt_index = input_index_shape[3] / tile_width;
 
+    // Calculate the number of cores available for computation
     auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t max_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
+    // Create core grid
     CoreRangeSet core_grid =
         tt::tt_metal::num_cores_to_corerangeset(max_number_of_cores, compute_with_storage_grid_size, true);
+    // Override core grid if sub_core_grids is provided in operation attributes
     if (attributes.sub_core_grids.has_value()) {
         core_grid = attributes.sub_core_grids.value();
     }
 
     const auto
-        [total_number_of_cores,
-         core_range,
-         core_group_1,
-         core_group_2,
-         num_tiles_per_core_group_1,
-         num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, Wt_index, true);
+        [total_number_of_cores,       // number of cores utilized
+         core_range,                  // set of all cores used
+         core_group_1,                // Primary core group
+         core_group_2,                // Secondary core group
+         num_tiles_per_core_group_1,  // Number of tiles each core in the primary group processes
+         num_tiles_per_core_group_2   // Number of tiles each core in the secondary group processes
+    ] = tt::tt_metal::split_work_to_cores(core_grid, Wt_index, true);
     const auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
@@ -301,7 +309,7 @@ ProgramDescriptor GatherDeviceOperation::SingleRowMultiCore::create_descriptor(
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
 
-    uint32_t id = 0;
+    uint32_t id = 0;  // Offset for the next core in the group
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {

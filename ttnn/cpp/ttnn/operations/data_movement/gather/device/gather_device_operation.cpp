@@ -23,6 +23,7 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
     const uint32_t Wt_index = input_index_tensor_shape[3] / tile_width;
 
     if (Wt_input > GATHER_WT_THRESHOLD || Wt_index > GATHER_WT_THRESHOLD) {
+        // Use multi core for larger Wt
         return SingleRowMultiCore{};
     }
     return SingleRowSingleCore{};
