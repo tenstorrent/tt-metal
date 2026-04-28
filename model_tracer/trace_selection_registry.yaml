@@ -46,7 +46,7 @@ targets:
       trace: [2]
     - model:
         - gpt_oss
-      trace: [10]
+      trace: [15]
 
   model_traced:
     - model:
@@ -70,7 +70,7 @@ targets:
         - vit_2
         - whisper
         - gpt_oss
-      trace: [3,4,5,7,10]
+      trace: [3,4,5,7,15]
 
 registry:
   - trace_id: 1
@@ -174,14 +174,14 @@ registry:
     loaded_at: '2026-04-17'
     notes: ''
 
-  - trace_id: 10
+  - trace_id: 15
     status: active
     models: [gpt_oss]
     hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
-    trace_uid: 39637819-20dc-4fc4-a168-b1d3bdf0495f
-    tt_metal_sha: bf8cdac63c32c5a1a04fa1de699af55e26851624
+    trace_uid: 1d3eeadb-ae5a-4364-b9ba-0aef89fb1160
+    tt_metal_sha: 6a06f99b3689765310a5d3d16694bc8db74cd451
     config_count: 130
-    loaded_at: '2026-04-17'
+    loaded_at: '2026-04-28'
     notes: ''
 
   - trace_id: 13
