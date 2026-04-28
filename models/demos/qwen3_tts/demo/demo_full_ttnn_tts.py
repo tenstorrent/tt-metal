@@ -1043,6 +1043,11 @@ def generate_codes_ttnn(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    _n_cp_decode = config.num_code_groups - 2
+    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
+        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
+    )
+
     cp_trace_decode_embed_tt = ttnn.from_torch(
         torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
         device=device,
@@ -1050,27 +1055,15 @@ def generate_codes_ttnn(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cp_trace_decode_cos_tt = ttnn.from_torch(
-        torch.ones(1, 1, 1, cp_head_dim, dtype=torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    cp_trace_decode_sin_tt = ttnn.from_torch(
-        torch.zeros(1, 1, 1, cp_head_dim, dtype=torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    cp_trace_decode_mask_tt = ttnn.from_torch(
-        torch.full((1, _cp_num_heads, 1, max_cp_seq_len), float("-inf")),
-        device=device,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    cp_trace_decode_cos_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_cos_h2d
+    ]
+    cp_trace_decode_sin_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_sin_h2d
+    ]
+    cp_trace_decode_mask_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_mask_h2d
+    ]
 
     # === STEP 5: Capture ALL traces (after prefill, KV cache is populated) ===
     # Program cache must be warm before trace capture; otherwise compile uploads binaries
@@ -1154,19 +1147,22 @@ def generate_codes_ttnn(
     cp_decode_trace_ids = []
     cp_decode_logits_tts = []
     print(f"  Capturing {config.num_code_groups - 2} CP decode traces (one per lm_head)...")
-    for _step_code_idx in range(2, config.num_code_groups):
+    for _trace_i, _step_code_idx in enumerate(range(2, config.num_code_groups)):
+        _cp_cos_tt = cp_trace_decode_cos_tts[_trace_i]
+        _cp_sin_tt = cp_trace_decode_sin_tts[_trace_i]
+        _cp_mask_tt = cp_trace_decode_mask_tts[_trace_i]
         print(f"    Untraced warmup: CP decode (generation_step={_step_code_idx})...")
         _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
             cp_trace_decode_embed_tt,
-            cp_trace_decode_cos_tt,
-            cp_trace_decode_sin_tt,
+            _cp_cos_tt,
+            _cp_sin_tt,
             cp_trans_mat,
             generation_step=_step_code_idx,
             kv_caches=cp_kv_caches_persistent,
             start_pos=_step_code_idx,
             mode="decode",
             cur_pos_tensor=None,
-            decode_attn_mask=cp_trace_decode_mask_tt,
+            decode_attn_mask=_cp_mask_tt,
             return_hidden_state=False,
         )
         ttnn.synchronize_device(device)
@@ -1175,15 +1171,15 @@ def generate_codes_ttnn(
         try:
             _logits_tt, _ = model.code_predictor.forward_single_step(
                 cp_trace_decode_embed_tt,
-                cp_trace_decode_cos_tt,
-                cp_trace_decode_sin_tt,
+                _cp_cos_tt,
+                _cp_sin_tt,
                 cp_trans_mat,
                 generation_step=_step_code_idx,
                 kv_caches=cp_kv_caches_persistent,
                 start_pos=_step_code_idx,
                 mode="decode",
                 cur_pos_tensor=None,
-                decode_attn_mask=cp_trace_decode_mask_tt,
+                decode_attn_mask=_cp_mask_tt,
                 return_hidden_state=False,
             )
         finally:
@@ -1210,10 +1206,6 @@ def generate_codes_ttnn(
     talker_embed_cpu = torch.empty(1, 1, 1, talker_h, dtype=torch.bfloat16)
     cp_decode_embed_cpu = torch.empty(1, 1, 1, talker_h, dtype=torch.bfloat16)
     acc_code_embed = torch.zeros(1, 1, talker_h, dtype=torch.float32)
-    _n_cp_decode = config.num_code_groups - 2
-    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
-        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
-    )
     talker_cos_h2d, talker_sin_h2d, talker_mask_h2d, talker_cur_pos_h2d = build_talker_decode_trace_h2d_constants(
         talker_cos_table, talker_sin_table, _talker_num_heads, max_talker_seq_len, real_seq_len
     )
@@ -1279,15 +1271,9 @@ def generate_codes_ttnn(
 
                 cp_decode_embed_cpu.copy_(next_embed)
                 e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                c_h = cp_decode_cos_h2d[_trace_i]
-                s_h = cp_decode_sin_h2d[_trace_i]
-                m_h = cp_decode_mask_h2d[_trace_i]
                 if use_2cq:
                     ttnn.wait_for_event(1, trace_cq0_idle)
                 ttnn.copy_host_to_device_tensor(e_h, cp_trace_decode_embed_tt, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(c_h, cp_trace_decode_cos_tt, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(s_h, cp_trace_decode_sin_tt, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(m_h, cp_trace_decode_mask_tt, cq_id=h2d_cq)
                 if use_2cq:
                     write_ev = ttnn.record_event(device, 1)
                     ttnn.wait_for_event(0, write_ev)
@@ -1403,12 +1389,11 @@ def generate_codes_ttnn(
             cp_trace_prefill_sin_tt,
             cp_trace_prefill_mask_tt,
             cp_trace_decode_embed_tt,
-            cp_trace_decode_cos_tt,
-            cp_trace_decode_sin_tt,
-            cp_trace_decode_mask_tt,
         ]:
             if t is not None:
                 ttnn.deallocate(t)
+        for t in cp_trace_decode_cos_tts + cp_trace_decode_sin_tts + cp_trace_decode_mask_tts:
+            ttnn.deallocate(t)
         deallocate_kv_cache(talker_kv_caches)
         deallocate_kv_cache(cp_kv_caches_persistent)
 
@@ -1680,9 +1665,9 @@ class TTSServerContext:
     cp_trace_prefill_sin_host: object
     cp_trace_prefill_mask_host: object
     cp_trace_decode_embed_tt: object
-    cp_trace_decode_cos_tt: object
-    cp_trace_decode_sin_tt: object
-    cp_trace_decode_mask_tt: object
+    cp_trace_decode_cos_tts: list
+    cp_trace_decode_sin_tts: list
+    cp_trace_decode_mask_tts: list
     # Shared model helpers
     talker_trans_mat: object
     cp_trans_mat: object
@@ -1695,9 +1680,6 @@ class TTSServerContext:
     max_cp_seq_len: int
     _talker_num_heads: int
     _cp_num_heads: int
-    cp_decode_cos_h2d: list
-    cp_decode_sin_h2d: list
-    cp_decode_mask_h2d: list
 
 
 def init_server_context(device, model, config, main_weights: dict) -> "TTSServerContext":
@@ -1811,27 +1793,19 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cp_trace_decode_cos_tt = ttnn.from_torch(
-        torch.ones(1, 1, 1, cp_head_dim, dtype=torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    _n_cp_decode = config.num_code_groups - 2
+    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
+        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
     )
-    cp_trace_decode_sin_tt = ttnn.from_torch(
-        torch.zeros(1, 1, 1, cp_head_dim, dtype=torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    cp_trace_decode_mask_tt = ttnn.from_torch(
-        torch.full((1, _cp_num_heads, 1, max_cp_seq_len), float("-inf")),
-        device=device,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    cp_trace_decode_cos_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_cos_h2d
+    ]
+    cp_trace_decode_sin_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_sin_h2d
+    ]
+    cp_trace_decode_mask_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_mask_h2d
+    ]
 
     # Run dummy CP prefill to populate KV cache before trace capture
     dummy_cp_input = ttnn.from_torch(
@@ -1914,18 +1888,21 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     print(f"  Capturing {config.num_code_groups - 2} CP decode traces...")
     cp_decode_trace_ids = []
     cp_decode_logits_tts = []
-    for _step_code_idx in range(2, config.num_code_groups):
+    for _trace_i, _step_code_idx in enumerate(range(2, config.num_code_groups)):
+        _cp_cos_tt = cp_trace_decode_cos_tts[_trace_i]
+        _cp_sin_tt = cp_trace_decode_sin_tts[_trace_i]
+        _cp_mask_tt = cp_trace_decode_mask_tts[_trace_i]
         _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
             cp_trace_decode_embed_tt,
-            cp_trace_decode_cos_tt,
-            cp_trace_decode_sin_tt,
+            _cp_cos_tt,
+            _cp_sin_tt,
             cp_trans_mat,
             generation_step=_step_code_idx,
             kv_caches=cp_kv_caches_persistent,
             start_pos=_step_code_idx,
             mode="decode",
             cur_pos_tensor=None,
-            decode_attn_mask=cp_trace_decode_mask_tt,
+            decode_attn_mask=_cp_mask_tt,
             return_hidden_state=False,
         )
         ttnn.synchronize_device(device)
@@ -1934,15 +1911,15 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         try:
             _logits_tt, _ = model.code_predictor.forward_single_step(
                 cp_trace_decode_embed_tt,
-                cp_trace_decode_cos_tt,
-                cp_trace_decode_sin_tt,
+                _cp_cos_tt,
+                _cp_sin_tt,
                 cp_trans_mat,
                 generation_step=_step_code_idx,
                 kv_caches=cp_kv_caches_persistent,
                 start_pos=_step_code_idx,
                 mode="decode",
                 cur_pos_tensor=None,
-                decode_attn_mask=cp_trace_decode_mask_tt,
+                decode_attn_mask=_cp_mask_tt,
                 return_hidden_state=False,
             )
         finally:
@@ -1959,11 +1936,6 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
 
     print("Server context initialized. CP traces pre-captured.")
 
-    _n_cp_decode = config.num_code_groups - 2
-    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
-        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
-    )
-
     return TTSServerContext(
         cp_kv_caches_persistent=cp_kv_caches_persistent,
         cp_kv_zero_hosts=cp_kv_zero_hosts,
@@ -1979,9 +1951,9 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         cp_trace_prefill_sin_host=cp_trace_prefill_sin_host,
         cp_trace_prefill_mask_host=cp_trace_prefill_mask_host,
         cp_trace_decode_embed_tt=cp_trace_decode_embed_tt,
-        cp_trace_decode_cos_tt=cp_trace_decode_cos_tt,
-        cp_trace_decode_sin_tt=cp_trace_decode_sin_tt,
-        cp_trace_decode_mask_tt=cp_trace_decode_mask_tt,
+        cp_trace_decode_cos_tts=cp_trace_decode_cos_tts,
+        cp_trace_decode_sin_tts=cp_trace_decode_sin_tts,
+        cp_trace_decode_mask_tts=cp_trace_decode_mask_tts,
         talker_trans_mat=talker_trans_mat,
         cp_trans_mat=cp_trans_mat,
         talker_cos_table=talker_cos_table,
@@ -1993,9 +1965,6 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         max_cp_seq_len=max_cp_seq_len,
         _talker_num_heads=_talker_num_heads,
         _cp_num_heads=_cp_num_heads,
-        cp_decode_cos_h2d=cp_decode_cos_h2d,
-        cp_decode_sin_h2d=cp_decode_sin_h2d,
-        cp_decode_mask_h2d=cp_decode_mask_h2d,
     )
 
 
@@ -2252,15 +2221,9 @@ def run_inference(
 
                 cp_decode_embed_cpu.copy_(next_embed)
                 e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                c_h = ctx.cp_decode_cos_h2d[_trace_i]
-                s_h = ctx.cp_decode_sin_h2d[_trace_i]
-                m_h = ctx.cp_decode_mask_h2d[_trace_i]
                 if use_2cq:
                     ttnn.wait_for_event(1, trace_cq0_idle)
                 ttnn.copy_host_to_device_tensor(e_h, ctx.cp_trace_decode_embed_tt, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(c_h, ctx.cp_trace_decode_cos_tt, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(s_h, ctx.cp_trace_decode_sin_tt, cq_id=h2d_cq)
-                ttnn.copy_host_to_device_tensor(m_h, ctx.cp_trace_decode_mask_tt, cq_id=h2d_cq)
                 if use_2cq:
                     write_ev = ttnn.record_event(device, 1)
                     ttnn.wait_for_event(0, write_ev)
