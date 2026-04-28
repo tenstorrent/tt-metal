@@ -333,6 +333,12 @@ def replicate_with_topology(
             mesh_shape_tuple = (1, 1)
         elif len(mesh_shape_tuple) == 1:
             mesh_shape_tuple = (mesh_shape_tuple[0], 1)
+        try:
+            _actual = get_model_traced_mesh_shape()
+            if _actual and len(_actual) == 2:
+                mesh_shape_tuple = tuple(_actual)
+        except Exception:
+            pass
 
         if dist_parsed:
             try:
