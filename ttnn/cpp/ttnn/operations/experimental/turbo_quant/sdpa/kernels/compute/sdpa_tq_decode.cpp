@@ -423,12 +423,18 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    // (Tier 2A Phase 2.1) Per-core chunk-slice routing — currently the program
-    // factory always passes (0, 1) so this core processes every chunk exactly
-    // as before. Phase 2.2 will route different (core_idx_in_group) values to
-    // different cores per (B, NQH) tuple.
+    // (Tier 2A) Per-core chunk-slice routing. The program factory currently sends
+    // (0, 1) per core, so the kernel processes the full chunk range exactly as
+    // before. Worker/reducer split lights up when cores_per_head_arg > 1.
     const uint32_t core_idx_in_group_arg = get_arg_val<uint32_t>(7);
     const uint32_t cores_per_head_arg = get_arg_val<uint32_t>(8);
+    // (Tier 2A Phase 2.3) Per-program semaphore for worker→reducer signal. The
+    // worker `noc_semaphore_inc`s this when its partial state is packed to the
+    // reducer's L1; the reducer `noc_semaphore_wait`s for K-1 increments before
+    // pulling and merging. Currently unused (cores_per_head_arg == 1 means the
+    // kernel runs the legacy single-core path with no cross-core sync needed).
+    [[maybe_unused]] const uint32_t reducer_semaphore_id = get_arg_val<uint32_t>(9);
+    [[maybe_unused]] const bool is_reducer = (core_idx_in_group_arg == 0);
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -472,6 +478,15 @@ void kernel_main() {
     constexpr uint32_t cb_dq_temp = tt::CBIndex::c_14;
     constexpr uint32_t cb_k_norms_bf16 = tt::CBIndex::c_15;  // BFP8→BF16 typecast scratch (K)
     constexpr uint32_t cb_v_norms_bf16 = tt::CBIndex::c_17;  // BFP8→BF16 typecast scratch (V)
+    // Tier 2A Phase 2.3 — cross-core partial-state CBs. Workers pack their final
+    // (max, sum, out) here; the writer kernel NoC-sends to the reducer's L1.
+    [[maybe_unused]] constexpr uint32_t cb_partial_max = tt::CBIndex::c_18;
+    [[maybe_unused]] constexpr uint32_t cb_partial_sum = tt::CBIndex::c_19;
+    [[maybe_unused]] constexpr uint32_t cb_partial_out = tt::CBIndex::c_20;
+    // Reducer-side mirrors — the writer NoC-pushes peer partials into these.
+    [[maybe_unused]] constexpr uint32_t cb_remote_max = tt::CBIndex::c_21;
+    [[maybe_unused]] constexpr uint32_t cb_remote_sum = tt::CBIndex::c_22;
+    [[maybe_unused]] constexpr uint32_t cb_remote_out = tt::CBIndex::c_23;
     constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
     // After typecast (when BFP8), the dequant kernels consume the BF16 scratch CB.
     // When norms are already BF16, both aliases point at the same input CB.
