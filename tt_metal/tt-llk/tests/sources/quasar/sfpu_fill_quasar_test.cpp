@@ -10,6 +10,18 @@
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
+using namespace ckernel;
+#include "params.h" // FILL_INT_FORMAT, IS_INT_FILL, IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en
+
+// IS_INT_FILL and FILL_INT_FORMAT are independent template parameters supplied by the harness.
+// IS_INT_FILL selects the kernel path (int_fill or fill); FILL_INT_FORMAT only matters on the int path
+
+// is_fp32_dest_acc_en mirrors:
+//   - EN_FP32_MATH_FORMAT for float fills (true for Float32, false for Float16/Float16_b)
+//   - EN_INT32_MATH_FORMAT for int fills   (true for Int32,   false for Int16/Int8/UInt8)
+constexpr bool EN_FP32_MATH_FORMAT  = !IS_INT_FILL && is_fp32_dest_acc_en;
+constexpr bool EN_INT32_MATH_FORMAT = IS_INT_FILL && is_fp32_dest_acc_en;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_math_common.h"
@@ -27,7 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, EN_FP32_MATH_FORMAT, EN_INT32_MATH_FORMAT>();
 
     buffer_descriptor_u bd_val = {0};
 
@@ -54,8 +66,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-const bool is_int_fpu_en = false;
-
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "experimental/ckernel_sfpu_fill.h"
@@ -75,17 +85,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // fill always uses unpack_to_dest path
     set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
-    DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
+    DataFormat math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, EN_FP32_MATH_FORMAT, EN_INT32_MATH_FORMAT>(math_format, math_format);
+
+    constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
 
     _llk_math_eltwise_unary_sfpu_init_();
 
-    constexpr float FILL_CONST        = 5.0f;
-    constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
-
-    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+    if constexpr (IS_INT_FILL)
     {
-        _llk_math_eltwise_unary_sfpu_params_([](float v) { _calculate_fill_<num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_CONST);
+        // Int path: _calculate_fill_int_ writes FILL_INT_VALUE to every element of Dest
+        // via SFPLOADI + SFPSTORE; the SFPMEM store mode is selected by FILL_INT_FORMAT
+        // at compile time (no runtime dispatch).
+        constexpr std::uint32_t FILL_INT_VALUE = 5;
+
+        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        {
+            _llk_math_eltwise_unary_sfpu_params_(
+                [](std::uint32_t v) { ckernel::sfpu::_calculate_fill_int_<FILL_INT_FORMAT, num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_INT_VALUE);
+        }
+    }
+    else
+    {
+        // Float path: _calculate_fill_ uses SFPU DEFAULT store mode, which supports
+        // all float formats (Float16, Float16_b, Float32).
+        constexpr float FILL_CONST = 5.0f;
+
+        for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+        {
+            _llk_math_eltwise_unary_sfpu_params_([](float v) { _calculate_fill_<num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_CONST);
+        }
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

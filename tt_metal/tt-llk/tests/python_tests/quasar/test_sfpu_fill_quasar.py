@@ -24,7 +24,9 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    FILL_INT_FORMAT,
     IMPLIED_MATH_FORMAT,
+    IS_INT_FILL,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
@@ -35,21 +37,24 @@ from helpers.utils import passed_test
 
 
 def generate_sfpu_fill_combinations(
-    formats_list: List[FormatConfig],
+    float_formats: List[FormatConfig],
+    int_formats: List[FormatConfig],
 ):
     """
     Generate SFPU fill test combinations.
 
     fill is a universal op: it writes a constant to every element of Dest,
-    independent of the current values. The format matrix covers float formats.
+    independent of the current values. The format matrix covers float and
+    integer formats; the kernel path (and FILL_INT_FORMAT template) is
+    chosen by the test based on whether the format is integer.
 
-    Args: Input-output format pairs
+    Args: Input-output format pairs for float and int paths
 
     Returns: List of (format, dest_acc, implied_math_format, input_dimensions) tuples
     """
     combinations = []
 
-    for fmt in formats_list:
+    for fmt in float_formats:
         in_fmt = fmt.input_format
 
         # SFPU unpack_to_dest requires bit-width match: 32-bit formats pair with
@@ -70,12 +75,20 @@ def generate_sfpu_fill_combinations(
                     (fmt, dest_acc, implied_math_format, input_dimensions)
                 )
 
+    # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
+    # Int32 is 32-bit → dest_acc Yes; Int16 (16-bit) and Int8/UInt8 (8-bit) → dest_acc No.
+    # Only ImpliedMathFormat.No is exercised on the int path.
+    for fmt in int_formats:
+        in_fmt = fmt.input_format
+        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
+        for input_dimensions in [[32, 32], [64, 64]]:
+            combinations.append((fmt, dest_acc, ImpliedMathFormat.No, input_dimensions))
+
     return combinations
 
 
 # Fill float path: SFPU DEFAULT store mode supports all float formats.
-# Int32 requires _calculate_fill_int_ with p_sfpu::sfpmem::INT32 and a separate test.
-SFPU_FILL_FORMATS = input_output_formats(
+SFPU_FILL_FLOAT_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
@@ -83,24 +96,47 @@ SFPU_FILL_FORMATS = input_output_formats(
     ]
 )
 
+# Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/UINT8.
+# Quasar integer formats and their SFPMEM store modes:
+#   Int32  → sfpmem::INT32  (32-bit sign-magnitude)
+#   Int16  → sfpmem::UINT16 (INT16 = Quasar hardware code 9, maps to SFPMEM::UINT16)
+#   Int8   → sfpmem::UINT8  (8-bit)
+#   UInt8  → sfpmem::UINT8  (8-bit unsigned)
+# Note: UInt16 (Quasar code 130) is invalid on Quasar; Int16 (code 9) is the correct
+# 16-bit integer format. FILL_INT_FORMAT bakes the format into each compiled variant.
+SFPU_FILL_INT_FORMATS = input_output_formats(
+    [DataFormat.Int32, DataFormat.Int16, DataFormat.Int8, DataFormat.UInt8],
+    same=True,
+)
+
 
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_implied_math_input_dims=generate_sfpu_fill_combinations(
-        SFPU_FILL_FORMATS
+        SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
     ),
 )
 def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
     """
     Test fill operation on Quasar architecture.
 
-    fill writes a scalar constant (5.0) to every element of a Dest tile.
-    The golden reference fills the tensor with the same constant.
-    Since fill ignores input values, the input stimuli are arbitrary.
+    fill writes a scalar constant to every element of a Dest tile.
+
+    Float formats use _calculate_fill_ (SFPU DEFAULT store mode) with
+    FILL_CONST_VALUE = 5.0; integer formats use _calculate_fill_int_ with
+    FILL_INT_FORMAT baked in as a constexpr so the SFPMEM store mode is
+    selected at compile time with no runtime dispatch (kernel writes
+    FILL_INT_VALUE = 5 via SFPLOADI + SFPSTORE). FILL_INT_FORMAT is always
+    forwarded — the merged kernel derives IS_INT_FILL from it at compile time.
+
+    Since fill ignores input values, the input stimuli are arbitrary —
+    typed stimuli are still generated so the unpack path sees a valid buffer.
     """
     (formats, dest_acc, implied_math_format, input_dimensions) = (
         formats_dest_acc_implied_math_input_dims[0]
     )
+
+    is_int_fill = formats.input_format.is_integer()
 
     # Seed for reproducibility
     torch.manual_seed(42)
@@ -115,19 +151,29 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
 
     num_faces = 4
 
-    # FILL_CONST_VALUE must match FILL_CONST = 5.0f in sfpu_fill_quasar_test.cpp
-    FILL_CONST_VALUE = 5.0
+    if is_int_fill:
+        # FILL_INT_VALUE must match FILL_INT_VALUE in sfpu_fill_quasar_test.cpp
+        FILL_INT_VALUE = 5
+        num_elements = src_A.numel()
+        golden_tensor = torch.full(
+            (num_elements,),
+            FILL_INT_VALUE,
+            dtype=format_dict[formats.output_format],
+        )
+    else:
+        # FILL_CONST_VALUE must match FILL_CONST = 5.0f in sfpu_fill_quasar_test.cpp
+        FILL_CONST_VALUE = 5.0
 
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Fill,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-        fill_const_value=FILL_CONST_VALUE,
-    )
+        generate_golden = get_golden_generator(UnarySFPUGolden)
+        golden_tensor = generate_golden(
+            MathOperation.Fill,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+            fill_const_value=FILL_CONST_VALUE,
+        )
 
     # SFPU tests always use unpack_to_dest=True (format matrix pre-filtered to matched bit-widths)
     configuration = TestConfig(
@@ -139,6 +185,8 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            FILL_INT_FORMAT(formats.input_format if is_int_fill else DataFormat.Int32),
+            IS_INT_FILL(is_int_fill),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

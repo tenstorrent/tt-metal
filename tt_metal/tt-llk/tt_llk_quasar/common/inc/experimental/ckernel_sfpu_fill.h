@@ -41,6 +41,10 @@ inline void _calculate_fill_(const float value)
 template <DataFormat FMT, int ITERATIONS>
 inline void _calculate_fill_int_(const std::uint32_t value)
 {
+    static_assert(
+        FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8 || FMT == DataFormat::UInt8,
+        "_calculate_fill_int_ only supports Int32, Int16, Int8, and UInt8 formats");
+
     constexpr std::uint32_t SFPMEM_MODE = (FMT == DataFormat::Int32)   ? p_sfpu::sfpmem::INT32
                                           : (FMT == DataFormat::Int16) ? p_sfpu::sfpmem::UINT16
                                                                        : p_sfpu::sfpmem::UINT8;
