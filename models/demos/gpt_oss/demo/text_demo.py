@@ -131,15 +131,6 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
-            prefill_seq_len=min(
-                2048,
-                int(os.environ.get("GPT_OSS_FORCE_SEQ_LEN", 128))
-                * int(
-                    os.environ.get(
-                        "GPT_OSS_USERS_PER_ROW", 8 if int(os.environ.get("GPT_OSS_FORCE_SEQ_LEN", 128)) <= 128 else 1
-                    )
-                ),
-            ),
             num_layers=int(os.environ.get("GPT_OSS_NUM_LAYERS", 0)) or None,
         )
         model_args.append(model_args_i)
@@ -619,18 +610,6 @@ def test_gpt_oss_demo(
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info(f"Input prompt: {input_prompts_batch[0]}")
-        force_sl = int(os.environ.get("GPT_OSS_FORCE_SEQ_LEN", 0))
-        if force_sl > 0:
-            cur = input_tokens_prefill_pt.shape[-1]
-            if cur < force_sl:
-                pad = torch.zeros(input_tokens_prefill_pt.shape[0], force_sl - cur, dtype=input_tokens_prefill_pt.dtype)
-                input_tokens_prefill_pt = torch.cat([input_tokens_prefill_pt, pad], dim=-1)
-            elif cur > force_sl:
-                input_tokens_prefill_pt = input_tokens_prefill_pt[:, :force_sl].contiguous()
-            for i in range(len(decoding_pos)):
-                decoding_pos[i] = force_sl
-                prefill_lens[i] = force_sl
-            logger.info(f"GPT_OSS_FORCE_SEQ_LEN={force_sl}: overrode prompt len (was {cur})")
         logger.info(f"Encoded length: {prefill_lens[0]} tokens")
 
         # Clear KV caches for repeat batches (like tt-transformers)

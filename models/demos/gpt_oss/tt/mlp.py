@@ -33,7 +33,6 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
-        prefill_seq_len=1024,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -85,7 +84,7 @@ class MLP:
                     dispatch_group_size=mesh_device.shape[0],
                     num_dispatch_groups=mesh_device.shape[1],
                     capacity_factor=2.0,
-                    seq_len_per_chip=prefill_seq_len,
+                    seq_len_per_chip=1024,
                     num_links=4,
                 )
                 # Permute expert state_dict to GROUP-BASED ordering before loading
