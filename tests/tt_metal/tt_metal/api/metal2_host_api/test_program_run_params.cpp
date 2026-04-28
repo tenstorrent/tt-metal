@@ -4,7 +4,7 @@
 
 //---------------------------------------------------------------------------------
 // Unit tests for the Metal 2.0 Host API: ProgramRunParams and SetProgramRunParameters
-// These tests all use mock device (Quasar and Workhole) for API-level validation.
+// These tests all use mock device (Quasar and Wormhole) for API-level validation.
 //
 // Test categories:
 //   1. Validation tests (parameter validation errors)

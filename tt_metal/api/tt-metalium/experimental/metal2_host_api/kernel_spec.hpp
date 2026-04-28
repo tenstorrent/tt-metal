@@ -69,7 +69,7 @@ using KernelSpecName = std::string;
 //
 // The KernelSpec describes the properties of a compute or data movement kernel:
 //  - Source code
-//  - Compiler options for generating the kernel binary(ies)s
+//  - Compiler options for generating the kernel binary/binaries
 //  - Resource bindings (access to DFBs, semaphores, etc.)
 //  - Kernel argument schema (for arguments specified when the Program is enqueued)
 //  - Kernel argument bindings (for compile-time constant arguments)

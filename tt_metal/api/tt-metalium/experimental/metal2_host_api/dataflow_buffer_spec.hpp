@@ -102,10 +102,10 @@ struct DataflowBufferSpec {
 // A DFB whose producer and consumer kernels run on different nodes, with data flowing
 // over the NoC.
 //
-// A RemoteDataflowBuffer Spec has all of the priorties of a DataflowBufferSpec,
-// but must additionally specify an explicit producer-consumer node relationships.
-// A local DFB instance "serves" the producer/consumer kernels instances on the same
-// node: the producer-consumer node instance relationships are structually implicit.
+// A RemoteDataflowBufferSpec has all of the properties of a DataflowBufferSpec,
+// but must additionally specify explicit producer-consumer node relationships.
+// A local DFB instance "serves" the producer/consumer kernel instances on the same
+// node: the producer-consumer node instance relationships are structurally implicit.
 // For a remote DFB, this cannot be inferred and must be explicit.
 //
 // Invariant: Every remote DFB instance has exactly one producer kernel instance and

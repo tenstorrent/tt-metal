@@ -688,28 +688,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Remote DFBs are not yet supported.
+    //
+    // TODO: When remote DFB is supported, add a validation checks. Enforce that
+    //       each (producer_node, consumer_node) entry in producer_consumer_map has
+    //       p_node != c_node.
+
     TT_FATAL(
         spec.remote_dataflow_buffers.empty(),
         "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
         "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
         spec.program_id,
         spec.remote_dataflow_buffers.size());
-
-    // Validate remote DFB endpoint placement:
-    // The producer and consumer must not be on the same node.
-    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
-        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
-        for (const auto& [p_node, c_node] : remote_dfb.producer_consumer_map) {
-            TT_FATAL(
-                p_node != c_node,
-                "RemoteDataflowBufferSpec '{}' has a producer-consumer map entry where the "
-                "producer node and the consumer node are the same ({}, {}). Same-node "
-                "communication should be modeled as a (local) DataflowBufferSpec.",
-                name,
-                p_node.x,
-                p_node.y);
-        }
-    }
 
     // Borrowed memory is not yet implemented
     for (const auto& dfb : spec.dataflow_buffers) {

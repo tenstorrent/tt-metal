@@ -28,7 +28,7 @@ using SemaphoreSpecName = std::string;
 // Instancing: One SRAM ("L1") cell per node in the set of target_nodes.
 //
 // Placement: Specified directly via target_nodes. Unlike DFBs, semaphores are remote
-// resources for kernels. Placement cannot be inferred from kernel bindings..
+// resources for kernels. Placement cannot be inferred from kernel bindings.
 //
 // Binding scope: Any kernel can bind to any semaphore in the ProgramSpec, regardless of
 // location. Any kernel instance can signal or wait on any semaphore instance.

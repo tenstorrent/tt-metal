@@ -4,7 +4,7 @@
 
 //---------------------------------------------------------------------------------
 // Unit tests for the Metal 2.0 Host API: ProgramSpec and MakeProgramFromSpec
-// These tests all use mock device (Quasar and Workhole) for API-level validation.
+// These tests all use mock device (Quasar and Wormhole) for API-level validation.
 //
 // Test categories:
 //  Quasar (Gen2):
@@ -431,72 +431,6 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
         MakeMinimalWorkUnit("consumer_work_unit", consumer_node, {"consumer"}),
     };
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
-}
-
-TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameNodeProducerConsumerPairFails) {
-    // A remote DFB's producer_consumer_map must have p_node != c_node for every entry.
-    // Same-node communication is structurally local and should use a DataflowBufferSpec.
-    // (Note: producer-work_unit and consumer-work_unit target_nodes ARE allowed to overlap —
-    //  the cross-node-ness is established per-pair, not per-work_unit. E.g. A↔B would have
-    //  producer-work_unit = consumer-work_unit = {A, B} and is legal.)
-    NodeCoord node_a{0, 0};
-    NodeCoord node_b{1, 0};
-
-    ProgramSpec spec;
-    spec.program_id = "test_program";
-
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
-
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {producer, consumer};
-    spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
-        .dfb_spec = MakeMinimalDFB("dfb"),
-        // Degenerate map: node_a → node_a is structurally local.
-        .producer_consumer_map = {{node_a, node_b}, {node_b, node_b}},
-    }};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work_unit_a", node_a, {"producer"}),
-        MakeMinimalWorkUnit("work_unit_b", node_b, {"producer", "consumer"}),
-    };
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
-}
-
-TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameWorkUnitNodeSetIsAllowed) {
-    // A<->B pattern: producer and consumer kernels both run on nodes {A, B}, but
-    // exclusively cross-node (A -> B, B -> A). Validation should accept this.
-    // (TODO: Update after remote DFB support is implemented)
-    NodeCoord node_a{0, 0};
-    NodeCoord node_b{1, 0};
-    NodeRangeSet both(std::set<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}});
-
-    ProgramSpec spec;
-    spec.program_id = "test_program";
-
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
-
-    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {producer, consumer};
-    spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
-        .dfb_spec = MakeMinimalDFB("dfb"),
-        .producer_consumer_map = {{node_a, node_b}, {node_b, node_a}},
-    }};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work_unit", both, {"producer", "consumer"}),
-    };
-
-    // Validation passes; the unsupported-at-runtime gate fires last.
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
