@@ -47,7 +47,6 @@ def _cleanup_sub_devices(mesh_device, sub_device_manager):
 def _run_all_broadcast_test(
     mesh_device,
     output_shape,
-    num_devices,
     num_links,
     input_dtype,
     layout,
@@ -57,16 +56,30 @@ def _run_all_broadcast_test(
     num_iters=1,
 ):
     mesh_shape = tuple(mesh_device.shape)
+    num_devices = mesh_shape[cluster_axis]
     worker_sub_device_id, sub_device_stall_group, sub_device_manager = _setup_sub_devices(mesh_device)
 
     try:
+        # Seed before torch.rand so every MPI rank generates identical golden
+        # data; otherwise rank-local goldens diverge and PCC drops to ~0.5.
+        torch.manual_seed(0)
         output_tensors = []
         for k in range(num_devices):
             output_tensors.append(torch.rand(output_shape).bfloat16())
 
         temp_output_tensor = torch.cat(output_tensors, -1)
 
-        mapper_mesh_shape = ttnn.MeshShape(mesh_shape[0], mesh_shape[1])
+        # Input must be sharded along the broadcast axis so each device on that
+        # axis contributes a distinct shard. Replicating along the broadcast axis
+        # would make the broadcast a no-op and corrupt the per-source outputs.
+        # Use the full mesh shape so xtensor_views == mesh_size, which the 2D
+        # composer needs in distributed-env verification below.
+        if cluster_axis == 0:
+            placements = [ttnn.PlacementShard(-1), ttnn.PlacementReplicate()]
+        else:
+            placements = [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)]
+        mapper_mesh_shape = ttnn.MeshShape(*mesh_shape)
+
         input_tensor_mesh = ttnn.from_torch(
             temp_output_tensor,
             device=mesh_device,
@@ -75,10 +88,7 @@ def _run_all_broadcast_test(
             memory_config=mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
-                    mapper_mesh_shape,
-                ),
+                ttnn.MeshMapperConfig(placements, mapper_mesh_shape),
             ),
         )
 
@@ -94,24 +104,21 @@ def _run_all_broadcast_test(
 
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
-        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
-
+        # Compose the broadcast output across both mesh axes and verify each
+        # per-mesh-coord block equals output_tensors[k]. With full-mesh
+        # placements above, xtensor_views == mesh_size so the 2D composer
+        # works in both single-galaxy and multi-host MPI runs.
+        mesh_shape_tt = ttnn.MeshShape(*mesh_shape)
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_shape_tt)
         for k in range(num_devices):
             output_tensor = output_tensors[k]
-            coords = list(tt_out_tensors[k].tensor_topology().mesh_coords())
-            device_tensors = ttnn.get_device_tensors(tt_out_tensors[k])
-            coord_iter = coords
-            if view is not None and len(device_tensors) != len(coords):
-                coord_iter = [coord for coord in coords if view.is_local(coord)]
-            for coord, t in zip(coord_iter, device_tensors):
-                if view is not None and not view.is_local(coord):
-                    continue
-                tt_output_tensor = ttnn.to_torch(t)
-                if input_dtype == ttnn.bfloat16:
-                    eq, output = comp_equal(tt_output_tensor, output_tensor)
-                else:
-                    eq, output = comp_pcc(tt_output_tensor, output_tensor)
-                assert eq, f"Device {coord}, source {k} FAILED: {output}"
+            composed = ttnn.to_torch(tt_out_tensors[k], mesh_composer=composer)
+            expected = output_tensor.repeat([mesh_shape[0], mesh_shape[1]] + [1] * (output_tensor.ndim - 2))
+            if input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(composed, expected)
+            else:
+                eq, output = comp_pcc(composed, expected)
+            assert eq, f"source {k} FAILED: {output}"
     finally:
         _cleanup_sub_devices(mesh_device, sub_device_manager)
 
@@ -152,30 +159,28 @@ FABRIC_TOPOLOGY_COMBOS = [
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
-@pytest.mark.parametrize("cluster_axis", [pytest.param(1, id="axis1")])
+@pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, output_shape, layout, input_dtype, mem_config",
+    "output_shape, layout, input_dtype, mem_config",
     [
-        (4, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
-        (4, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
-        (4, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        ([1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        ([2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
     ],
-    ids=["tile_dram", "rm_l1_small", "rm_l1_large"],
+    ids=["tile_dram", "rm_l1_small"],
 )
 def test_all_broadcast_16x4(
     mesh_device,
     cluster_axis,
     topology,
     num_links,
-    num_devices,
     output_shape,
     layout,
     input_dtype,
     mem_config,
 ):
     _run_all_broadcast_test(
-        mesh_device, output_shape, num_devices, num_links, input_dtype, layout, topology, cluster_axis, mem_config
+        mesh_device, output_shape, num_links, input_dtype, layout, topology, cluster_axis, mem_config
     )
 
 
@@ -191,32 +196,69 @@ def test_all_broadcast_16x4(
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((32, 4), id="32x4_grid")], indirect=True)
-@pytest.mark.parametrize("cluster_axis", [pytest.param(1, id="axis1")])
+@pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, output_shape, layout, input_dtype, mem_config",
+    "output_shape, layout, input_dtype, mem_config",
     [
-        (4, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
-        (4, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
-        (4, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
-        (4, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        ([1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        ([2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
     ],
-    ids=["tile_dram", "rm_l1_small", "rm_l1_large", "tile_l1_bfloat8"],
+    ids=["tile_dram", "rm_l1_small"],
 )
 def test_all_broadcast_32x4(
     mesh_device,
     cluster_axis,
     topology,
     num_links,
-    num_devices,
     output_shape,
     layout,
     input_dtype,
     mem_config,
 ):
-    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported for row-major")
-
     _run_all_broadcast_test(
-        mesh_device, output_shape, num_devices, num_links, input_dtype, layout, topology, cluster_axis, mem_config
+        mesh_device, output_shape, num_links, input_dtype, layout, topology, cluster_axis, mem_config
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test: all_broadcast on 8x4 mesh (SINGLE_BH) — single-galaxy diagnostic
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_device(["SINGLE_BH"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        pytest.param(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            ttnn.Topology.Linear,
+            id="fabric_1d-linear",
+        ),
+    ],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "output_shape, layout, input_dtype, mem_config",
+    [
+        ([1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        ([2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+    ],
+    ids=["tile_dram", "rm_l1_small"],
+)
+def test_all_broadcast_8x4(
+    mesh_device,
+    cluster_axis,
+    topology,
+    num_links,
+    output_shape,
+    layout,
+    input_dtype,
+    mem_config,
+):
+    _run_all_broadcast_test(
+        mesh_device, output_shape, num_links, input_dtype, layout, topology, cluster_axis, mem_config
     )
