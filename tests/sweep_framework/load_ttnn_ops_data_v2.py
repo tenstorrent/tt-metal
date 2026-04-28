@@ -1572,34 +1572,13 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                 if op_name == "ttnn.slice" and "starts" in args and "steps" not in args:
                     args["steps"] = [1] * len(args["starts"])
 
-            # Named-to-positional remap (API evolution: named kwargs in master
-            # become positional in sweep due to new required params).
-            rev_remap = _NAMED_TO_POSITIONAL_REMAP.get(op_name)
-            if rev_remap and "arguments" in config_dict:
-                args = config_dict["arguments"]
-                for old_key, new_key in rev_remap.items():
-                    if old_key in args and new_key not in args:
-                        args[new_key] = args.pop(old_key)
-
-            # Add CCL infrastructure defaults that the sweep produces but
-            # were absent from the original model trace.
-            ccl_defaults = _CCL_INFRASTRUCTURE_DEFAULTS.get(op_name)
-            if ccl_defaults and "arguments" in config_dict:
-                args = config_dict["arguments"]
-                for key, default_val in ccl_defaults.items():
-                    if key not in args:
-                        args[key] = default_val
-
             if "arguments" in config_dict:
                 args = config_dict["arguments"]
-                for k in _STRIP_WHEN_NONE:
-                    if k in args and args[k] is None:
-                        del args[k]
-
-            if mesh_shape and "arguments" in config_dict:
-                _canonical_ms = _canonicalize_mesh_shape(mesh_shape)
-                _normalize_tensor_placement(config_dict["arguments"], _canonical_ms)
-                _normalize_host_storage_on_mesh(config_dict["arguments"], _canonical_ms)
+                none_keys = [
+                    k for k, v in args.items() if v is None and not (isinstance(k, str) and k.startswith("arg"))
+                ]
+                for k in none_keys:
+                    del args[k]
 
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
