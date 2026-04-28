@@ -165,15 +165,23 @@ def test_bcast_moe_reduce_pipeline(
     # Stage 1 is the MoE compute stage:
     #   entry_node_coord → forward entry column (receives data from stage 0)
     #   exit_node_coord  → reduce exit column (sends reduced output downstream)
+
+    if is_stage0:
+        for idx, config in enumerate(pipeline_config):
+            logger.info(
+                f"Pipeline config for mesh_id={idx}: entry_node_coord={config.entry_node_coord[1]} "
+                f"exit_node_coord={config.exit_node_coord[1]}"
+            )
+
     entry_column = 0
     reduce_exit_column = 0
     if len(pipeline_config) > 1:
         try:
-            entry_column = int(pipeline_config[1].entry_node_coord[1])
+            entry_column = int(pipeline_config[my_mesh_id].entry_node_coord[1])
         except Exception:
             entry_column = 0
         try:
-            reduce_exit_column = int(pipeline_config[1].exit_node_coord[1])
+            reduce_exit_column = int(pipeline_config[my_mesh_id].exit_node_coord[1])
         except Exception:
             reduce_exit_column = 0
     exit_column = entry_column
@@ -369,6 +377,10 @@ def test_bcast_moe_reduce_pipeline(
             all_entries.extend(hio._build_programs())
         exit_progs = exit_socket_interface.build_programs()
         combined_progs = entry_socket_interface.build_programs(base_programs=exit_progs)
+        # combined_dcs = {str(dc) for dc, _ in combined_progs}
+        # for dc, prog in exit_progs:
+        #    if str(dc) not in combined_dcs:
+        #        all_entries.append((dc, prog))
         all_entries.extend(exit_progs)
         all_entries.extend(combined_progs)
         stage0_program_entries = all_entries
@@ -1121,6 +1133,10 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             all_entries.extend(hio._build_programs())
         exit_progs = exit_socket_interface.build_programs()
         combined_progs = entry_socket_interface.build_programs(base_programs=exit_progs)
+        # combined_dcs = {str(dc) for dc, _ in combined_progs}
+        # for dc, prog in exit_progs:
+        #    if str(dc) not in combined_dcs:
+        #        all_entries.append((dc, prog))
         all_entries.extend(exit_progs)
         all_entries.extend(combined_progs)
         stage0_program_entries = all_entries

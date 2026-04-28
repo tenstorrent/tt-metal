@@ -455,17 +455,6 @@ struct ReduceToAllB1 {
                 volatile tt_l1_ptr uint32_t* r2_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
                 volatile tt_l1_ptr uint32_t* r3_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r3_sem_addr_val);
 
-                constexpr bool has_r3 = !CTArgs::is_exit_column || CTArgs::is_reduce_to_all;
-                // Build R3 sender eagerly (consuming its runtime args now) so we
-                // can open both connections at init before any fabric traffic.
-                auto r3_sender = [&]() {
-                    if constexpr (has_r3) {
-                        return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                            arg_idx);
-                    } else {
-                        return tt::tt_fabric::WorkerToFabricEdmSender{};
-                    }
-                }();
                 DPRINT << "FWD\n";
                 fwd_sender.open();
 
@@ -480,8 +469,13 @@ struct ReduceToAllB1 {
                     noc_semaphore_set(r1_sem, 0);
                     noc_semaphore_set(r2_sem, 0);
                 }
+                fwd_sender.close();
+                noc_async_full_barrier();
+
                 DPRINT << "FD\n";
-                if constexpr (has_r3) {
+                if constexpr (!CTArgs::is_exit_column || CTArgs::is_reduce_to_all) {
+                    auto r3_sender =
+                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                     r3_sender.open();
                     {
                         uint32_t r3_sent = 0;
@@ -497,7 +491,6 @@ struct ReduceToAllB1 {
                 } else {
                     DPRINT << "RD(exit)\n";
                 }
-                fwd_sender.close();
 
                 // Persistent next-iteration signal. On exit devices, all reduce
                 // workers bump this FC's wait_sem directly after finishing their
@@ -641,7 +634,7 @@ struct ReduceToAllB1 {
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
             DPRINT << "WR2d\n";
-
+            DPRINT << "CTArgs::is_exit_column = " << (uint32_t)CTArgs::is_exit_column << "\n";
             if constexpr (!CTArgs::is_exit_column) {
                 // Non-exit column: send R3 to FC for cross-column forwarding, then done
                 {
@@ -675,9 +668,12 @@ struct ReduceToAllB1 {
                 // Exit column: copy column sum to reload for TRISC R3 computation,
                 // then wait for global sum and write output
                 {
+                    DPRINT << "exit column: prepare R3 waiting for scratch cb " << (uint32_t)CTArgs::scratch_cb << "\n";
                     cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    DPRINT << "scratch_cb front ready\n";
                     uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
 
+                    DPRINT << "is_reduce_to_all = " << (uint32_t)CTArgs::is_reduce_to_all << "\n";
                     if constexpr (CTArgs::is_reduce_to_all) {
                         // Reduce-to-all: also send R3 to FC for cross-column forwarding
                         send_to_forwarder(
@@ -695,12 +691,14 @@ struct ReduceToAllB1 {
                             args.r3_sem_addr,
                             args.r3_slot_bit);
                     }
-
                     cb_reserve_back(CTArgs::reload_cb, CTArgs::num_tiles);
                     uint32_t reload_wr = get_write_ptr(CTArgs::reload_cb);
                     uint64_t reload_noc = get_noc_addr(my_noc_x, my_noc_y, reload_wr);
+                    DPRINT << "reload_wr = " << reload_wr << "\n";
                     noc_async_write(data_addr, reload_noc, CTArgs::num_tiles * CTArgs::compute_tile_size);
+                    DPRINT << "writing to reload for R3 \n";
                     noc_async_write_barrier();
+                    DPRINT << "write to reload for R3 done\n";
                     cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
                     cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 }
@@ -763,7 +761,9 @@ struct ReduceToAllB1 {
             // ================================================================
             // TRISC — 3-round add_tiles (same as reduce_to_one_b1)
             // ================================================================
+            DPRINT << "TR start\n";
             if constexpr (CTArgs::is_fabric_core) {
+                DPRINT << "TRd\n";
                 return;
             }
 
@@ -790,6 +790,7 @@ struct ReduceToAllB1 {
             }
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
+            DPRINT << "TR R1 done\n";
             // R2: reload(R1 sum) + received_R2
             add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
             cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
@@ -810,6 +811,7 @@ struct ReduceToAllB1 {
             }
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
+            DPRINT << "TR R2 done\n";
             if constexpr (CTArgs::is_exit_column) {
                 // R3: reload(column sum) + received_R3
                 add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
@@ -831,8 +833,8 @@ struct ReduceToAllB1 {
                 }
                 tile_regs_release();
                 cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-                // DPRINT << "TRd\n";
             }
+            DPRINT << "TRd\n";
 #endif
         }
     };

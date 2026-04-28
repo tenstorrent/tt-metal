@@ -182,6 +182,9 @@ void kernel_main() {
         downstream_data_packet_header_addr_2 = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
 
+        downstream_fabric_connection.open();
+        downstream_fabric_connection_2.open();
+
         DPRINT << "Setting unicast routes for downstream data packet headers\n";
 
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
@@ -190,7 +193,6 @@ void kernel_main() {
     if constexpr (use_fabric_on_receiver) {
         upstream_socket_packet_header_addr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             get_write_ptr(fabric_packet_header_cb_id) + 2 * sizeof(PACKET_HEADER_TYPE));
-
         fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
@@ -199,13 +201,6 @@ void kernel_main() {
         DPRINT << "Reserved page in sender socket\n";
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
-        }
-        if constexpr (use_fabric_on_sender) {
-            if (!fabric_sender_opened) {
-                downstream_fabric_connection.open();
-                downstream_fabric_connection_2.open();
-                fabric_sender_opened = true;
-            }
         }
         DPRINT << "Page available in receiver socket\n";
 
@@ -224,16 +219,14 @@ void kernel_main() {
         DPRINT << "Data sent over socket\n";
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
-            if (!fabric_receiver_opened) {
-                upstream_fabric_connection.open();
-                fabric_receiver_opened = true;
-            }
+            upstream_fabric_connection.open();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
-            noc_async_full_barrier();
+            upstream_fabric_connection.close();
+            DPRINT << "Sender socket notified\n";
         } else {
             DPRINT << "Notifying sender socket directly\n";
             socket_notify_sender(receiver_socket);
@@ -246,17 +239,9 @@ void kernel_main() {
     DPRINT << "Sockets updated\n";
 
     if constexpr (use_fabric_on_sender) {
-        if (fabric_sender_opened) {
-            downstream_fabric_connection.close();
-            downstream_fabric_connection_2.close();
-        }
+        downstream_fabric_connection.close();
+        downstream_fabric_connection_2.close();
         DPRINT << "Downstream fabric connections closed\n";
-    }
-    if constexpr (use_fabric_on_receiver) {
-        if (fabric_receiver_opened) {
-            upstream_fabric_connection.close();
-            noc_async_full_barrier();
-        }
     }
     DPRINT << "Finished d2d exchange kernel" << ENDL();
 }

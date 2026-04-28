@@ -236,17 +236,14 @@ void kernel_main() {
                 socket_pop_pages(receiver_sockets[worker_idx], 1);
 
                 if constexpr (use_fabric_on_receiver) {
-                    if (!fabric_receiver_opened) {
-                        upstream_fabric_connection.open();
-                        fabric_receiver_opened = true;
-                    }
                     fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_sockets[worker_idx]);
+                    upstream_fabric_connection.open();
                     fabric_socket_notify_sender_stateful(
                         receiver_sockets[worker_idx],
                         upstream_fabric_connection,
                         upstream_socket_packet_header_addr,
                         upstream_bytes_acked_noc_addrs[worker_idx]);
-                    noc_async_full_barrier();
+                    upstream_fabric_connection.close();
                 } else {
                     socket_notify_sender(receiver_sockets[worker_idx]);
                 }
@@ -278,12 +275,6 @@ void kernel_main() {
         if (fabric_sender_opened) {
             downstream_fabric_connection.close();
             downstream_fabric_connection_2.close();
-        }
-    }
-    if constexpr (use_fabric_on_receiver) {
-        if (fabric_receiver_opened) {
-            upstream_fabric_connection.close();
-            noc_async_full_barrier();
         }
     }
     DPRINT << "D2D_MU done\n";
