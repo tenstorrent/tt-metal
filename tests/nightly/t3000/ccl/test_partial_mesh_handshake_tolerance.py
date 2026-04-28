@@ -35,7 +35,7 @@ _QUIESCE_DEADLINE_S = 30
 @pytest.fixture
 def partial_mesh():
     # Open a 1x4 sub-mesh on T3K (leaves 4 devices outside the mesh)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), mesh_type=ttnn.MeshType.Ring)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
     yield mesh
     ttnn.close_mesh_device(mesh)
 

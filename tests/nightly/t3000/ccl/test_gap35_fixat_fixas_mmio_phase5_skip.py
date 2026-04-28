@@ -82,7 +82,7 @@ def _run_predecessor_and_kill():
     child_code = """
 import ttnn, time, signal, sys
 signal.signal(signal.SIGTERM, lambda *a: None)
-mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), dispatch_core_type=ttnn.DispatchCoreType.WORKER)
+mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
 print("PREDECESSOR_READY", flush=True)
 time.sleep(30)
 """
@@ -134,7 +134,6 @@ def test_fixat_phase5_skip_on_fixas_timeout(cycle):
     try:
         mesh = ttnn.open_mesh_device(
             ttnn.MeshShape(2, 4),
-            dispatch_core_type=ttnn.DispatchCoreType.WORKER,
         )
 
         # Small AllGather to exercise the quiesce path

@@ -34,7 +34,7 @@ def test_channels_not_ready_cleared_on_reinit():
     Tests the partial-mesh -> full-mesh transition that exercises FIX AM lifecycle.
     """
     # Phase 1: partial mesh — triggers FIX AK/AM on mesh-edge channels
-    partial = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), mesh_type=ttnn.MeshType.Ring)
+    partial = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
 
     if partial.get_num_devices() < 4:
         ttnn.close_mesh_device(partial)
@@ -53,7 +53,7 @@ def test_channels_not_ready_cleared_on_reinit():
     ttnn.close_mesh_device(partial)
 
     # Phase 2: full mesh — configure_fabric() must clear channels_not_ready flag
-    full = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), mesh_type=ttnn.MeshType.Ring)
+    full = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
 
     if full.get_num_devices() < 8:
         ttnn.close_mesh_device(full)

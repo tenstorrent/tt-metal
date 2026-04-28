@@ -34,7 +34,7 @@ _QUIESCE_DEADLINE_S = 30
 
 @pytest.fixture
 def mesh_device():
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), mesh_type=ttnn.MeshType.Ring)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
     yield mesh
     ttnn.close_mesh_device(mesh)
 
