@@ -18,7 +18,7 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
 from ttnn.operations.transformer import SDPAProgramConfig
 
 
@@ -210,6 +210,23 @@ class TTNNDotsVision2DRoPE:
         rot_mats = (cos_tt, sin_tt)
 
         return rot_mats, cu
+
+    def build_padded(
+        self,
+        grid_thw: torch.Tensor,
+        actual_seq_len: int,
+        bucket_size: int,
+    ) -> tuple[tuple, list[int]]:
+        """Build 2D RoPE cos/sin padded to bucket_size for trace compatibility."""
+        rot_mats, cu_seqlens = self.build(grid_thw, actual_seq_len)
+        cos_tt, sin_tt = rot_mats
+
+        if actual_seq_len < bucket_size:
+            pad_len = bucket_size - actual_seq_len
+            cos_tt = ttnn.pad(cos_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
+            sin_tt = ttnn.pad(sin_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
+
+        return (cos_tt, sin_tt), cu_seqlens
 
 
 # ---------------------------------------------------------------------------
@@ -1151,6 +1168,71 @@ class TTNNDotsPatchMerger(TTNNModule):
         return hidden_states
 
 
+class TTNNDotsVisionBlockStack(TTNNLayerStack):
+    """Trace-enabled stack of vision blocks + post-norm + merger.
+
+    Captures the entire vision encoder core as a single trace.
+    Different sequence length buckets get different traces automatically
+    via the cache key mechanism in TracedRun.
+    """
+
+    SEQ_LEN_BUCKETS = [256, 1024, 2048, 4096, 8192, 12288, 16384, 20480, 24576]
+
+    def __init__(self, blocks, *, post_trunk_norm=None, patch_merger=None):
+        super().__init__(blocks)
+        self.post_trunk_norm = post_trunk_norm
+        self.patch_merger = patch_merger
+        self._bypass_tensor_wrapping = True
+
+    @classmethod
+    def nearest_bucket(cls, seq_len: int) -> int:
+        for bucket in cls.SEQ_LEN_BUCKETS:
+            if seq_len <= bucket:
+                return bucket
+        return -1
+
+    def preprocess_weights_impl(self):
+        super().preprocess_weights_impl()
+        if self.post_trunk_norm is not None:
+            self.post_trunk_norm.preprocess_weights()
+        if self.patch_merger is not None:
+            self.patch_merger.preprocess_weights()
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        if self.post_trunk_norm is not None:
+            self.post_trunk_norm.move_weights_to_device()
+        if self.patch_merger is not None:
+            self.patch_merger.move_weights_to_device()
+
+    def to_device(self, device):
+        super().to_device(device)
+        if self.post_trunk_norm is not None:
+            self.post_trunk_norm.to_device(device)
+        if self.patch_merger is not None:
+            self.patch_merger.to_device(device)
+        return self
+
+    def forward(self, hidden_states, **kwargs):
+        rot_mats = kwargs.get("rot_mats")
+        cu_seqlens = kwargs.get("cu_seqlens")
+
+        for layer in self.layers:
+            hidden_states = layer.forward(
+                hidden_states,
+                rot_mats=rot_mats,
+                cu_seqlens=cu_seqlens,
+            )
+
+        if self.post_trunk_norm is not None:
+            hidden_states = self.post_trunk_norm.forward(hidden_states)
+
+        if self.patch_merger is not None:
+            hidden_states = self.patch_merger.forward(hidden_states)
+
+        return hidden_states
+
+
 # ---------------------------------------------------------------------------
 # Vision Tower (top-level)
 # ---------------------------------------------------------------------------
@@ -1170,6 +1252,8 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         self.post_trunk_norm = None
         self.patch_merger = None
         self.rope = None
+        self.block_stack = None
+        self._trace_enabled = True
         self.num_layers = 42
         self.hidden_size = 1536
         self.num_heads = 12
@@ -1239,27 +1323,39 @@ class TTNNDotsOCRVisionTower(TTNNModule):
                 spatial_merge_size=new_tower.spatial_merge_size,
             )
 
+        new_tower.block_stack = TTNNDotsVisionBlockStack(
+            new_tower.blocks,
+            post_trunk_norm=new_tower.post_trunk_norm,
+            patch_merger=new_tower.patch_merger,
+        )
+
         return new_tower
 
     def preprocess_weights_impl(self):
         if self.patch_embed is not None:
             self.patch_embed.preprocess_weights()
-        for block in self.blocks:
-            block.preprocess_weights()
-        if self.post_trunk_norm is not None:
-            self.post_trunk_norm.preprocess_weights()
-        if self.patch_merger is not None:
-            self.patch_merger.preprocess_weights()
+        if self.block_stack is not None:
+            self.block_stack.preprocess_weights()
+        else:
+            for block in self.blocks:
+                block.preprocess_weights()
+            if self.post_trunk_norm is not None:
+                self.post_trunk_norm.preprocess_weights()
+            if self.patch_merger is not None:
+                self.patch_merger.preprocess_weights()
 
     def move_weights_to_device_impl(self):
         if self.patch_embed is not None:
             self.patch_embed.move_weights_to_device()
-        for block in self.blocks:
-            block.move_weights_to_device()
-        if self.post_trunk_norm is not None:
-            self.post_trunk_norm.move_weights_to_device()
-        if self.patch_merger is not None:
-            self.patch_merger.move_weights_to_device()
+        if self.block_stack is not None:
+            self.block_stack.move_weights_to_device()
+        else:
+            for block in self.blocks:
+                block.move_weights_to_device()
+            if self.post_trunk_norm is not None:
+                self.post_trunk_norm.move_weights_to_device()
+            if self.patch_merger is not None:
+                self.patch_merger.move_weights_to_device()
 
         self.rope = TTNNDotsVision2DRoPE(
             device=self.device,
@@ -1271,12 +1367,15 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         super().to_device(device)
         if self.patch_embed is not None:
             self.patch_embed.to_device(device)
-        for block in self.blocks:
-            block.to_device(device)
-        if self.post_trunk_norm is not None:
-            self.post_trunk_norm.to_device(device)
-        if self.patch_merger is not None:
-            self.patch_merger.to_device(device)
+        if self.block_stack is not None:
+            self.block_stack.to_device(device)
+        else:
+            for block in self.blocks:
+                block.to_device(device)
+            if self.post_trunk_norm is not None:
+                self.post_trunk_norm.to_device(device)
+            if self.patch_merger is not None:
+                self.patch_merger.to_device(device)
         return self
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
@@ -1300,20 +1399,37 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         if len(x.shape) == 3:
             x = ttnn.reshape(x, (1, 1, x.shape[1], x.shape[2]))
 
-        seq_len = int(x.shape[2])
+        actual_seq_len = int(x.shape[2])
 
-        rot_mats, cu_seqlens = self.rope.build(grid_thw, seq_len)
-        # cu_seqlens is already a Python list from build(), so all 42 blocks
-        # skip the device-to-host sync in _cu_seqlens_to_list.
+        bucket = (
+            TTNNDotsVisionBlockStack.nearest_bucket(actual_seq_len)
+            if self._trace_enabled and self.block_stack is not None
+            else -1
+        )
 
-        for block in self.blocks:
-            x = block(x, rot_mats=rot_mats, cu_seqlens=cu_seqlens)
+        if bucket == -1:
+            rot_mats, cu_seqlens = self.rope.build(grid_thw, actual_seq_len)
 
-        if self.post_trunk_norm is not None:
-            x = self.post_trunk_norm(x)
+            for block in self.blocks:
+                x = block(x, rot_mats=rot_mats, cu_seqlens=cu_seqlens)
 
-        if self.patch_merger is not None:
-            x = self.patch_merger(x)
+            if self.post_trunk_norm is not None:
+                x = self.post_trunk_norm(x)
+
+            if self.patch_merger is not None:
+                x = self.patch_merger(x)
+        else:
+            if actual_seq_len < bucket:
+                pad_len = bucket - actual_seq_len
+                x = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
+
+            rot_mats, _ = self.rope.build_padded(grid_thw, actual_seq_len, bucket)
+
+            x = self.block_stack(x, rot_mats=rot_mats, cu_seqlens=None)
+
+            merged_seq_len = actual_seq_len // (self.spatial_merge_size**2)
+            if int(x.shape[2]) > merged_seq_len:
+                x = ttnn.slice(x, (0, 0, 0, 0), (int(x.shape[0]), int(x.shape[1]), merged_seq_len, int(x.shape[3])))
 
         composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
         result = ttnn.to_torch(x, mesh_composer=composer).to(torch.bfloat16)
