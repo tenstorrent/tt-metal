@@ -125,6 +125,34 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // Compute tilizes TILE_HEIGHT rows at a time, so vol2col_rm only needs to double-buffer
     // that many patches. The reader pushes in matching chunks.
     uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+
+    // When C_out_block was not explicitly set, find the largest divisor of padded_C_out
+    // (multiple of TILE_WIDTH) whose total static CB allocation fits within the L1 budget.
+    if (config.C_out_block == 0) {
+        const uint32_t l1_budget = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - 200 * 1024;
+        for (uint32_t trial = C_out_block; trial >= tt::constants::TILE_WIDTH;
+             trial -= tt::constants::TILE_WIDTH) {
+            if (padded_C_out % trial != 0) {
+                continue;
+            }
+            const uint32_t trial_N_t = trial / tt::constants::TILE_WIDTH;
+            // Over-estimate matmul_interm as fp32 (2x bf16 tile) for a conservative check.
+            const uint32_t total_cbs =
+                padded_patch_size_bytes * vol2col_rm_pages +   // vol2col_rm
+                tile_size * matmul_M_t * matmul_K_t +          // vol2col_tiled
+                tile_size * matmul_K_t * trial_N_t +           // weight_tiled
+                2 * tile_size * matmul_M_t * trial_N_t +       // matmul_interm (fp32 worst case)
+                tile_size * matmul_M_t * trial_N_t;            // matmul_result
+            if (total_cbs <= l1_budget) {
+                C_out_block = trial;
+                break;
+            }
+        }
+        C_out_num_blocks = padded_C_out / C_out_block;
+        matmul_N_t = C_out_block / tt::constants::TILE_WIDTH;
+        C_out_block_bytes = C_out_block * dtype_bytes;
+    }
+
     uint32_t cb_vol2col_rm_id = next_cb_index++;
     tt::tt_metal::create_cb(
         cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
