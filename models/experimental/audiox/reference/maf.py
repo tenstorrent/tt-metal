@@ -13,23 +13,27 @@ from typing import Dict
 
 
 class MAF_Block(nn.Module):
-    def __init__(self, dim: int, num_experts_per_modality: int, num_heads: int, num_fusion_layers: int, mlp_ratio: float = 4.0):
+    def __init__(
+        self, dim: int, num_experts_per_modality: int, num_heads: int, num_fusion_layers: int, mlp_ratio: float = 4.0
+    ):
         super().__init__()
         self.dim = dim
         self.num_experts_per_modality = num_experts_per_modality
         total_experts = num_experts_per_modality * 3
 
-        self.gating_network = nn.Sequential(
-            nn.Linear(dim * 3, dim), nn.GELU(), nn.Linear(dim, 3), nn.Sigmoid()
-        )
+        self.gating_network = nn.Sequential(nn.Linear(dim * 3, dim), nn.GELU(), nn.Linear(dim, 3), nn.Sigmoid())
 
         self.unified_experts = nn.Parameter(torch.randn(total_experts, dim))
 
         self.cross_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         self.norm1 = nn.LayerNorm(dim)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=dim, nhead=num_heads, dim_feedforward=int(dim * mlp_ratio),
-            activation=F.gelu, batch_first=True, norm_first=True
+            d_model=dim,
+            nhead=num_heads,
+            dim_feedforward=int(dim * mlp_ratio),
+            activation=F.gelu,
+            batch_first=True,
+            norm_first=True,
         )
         self.fusion_transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_fusion_layers)
 
@@ -43,18 +47,14 @@ class MAF_Block(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module):
-        if isinstance(m, nn.MultiheadAttention) and hasattr(m, 'out_proj'):
+        if isinstance(m, nn.MultiheadAttention) and hasattr(m, "out_proj"):
             torch.nn.init.zeros_(m.out_proj.weight)
             if m.out_proj.bias is not None:
                 torch.nn.init.zeros_(m.out_proj.bias)
 
     def forward(
-        self,
-        video_tokens: torch.Tensor,
-        text_tokens: torch.Tensor,
-        audio_tokens: torch.Tensor
+        self, video_tokens: torch.Tensor, text_tokens: torch.Tensor, audio_tokens: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
-
         batch_size = video_tokens.shape[0]
 
         v_global = video_tokens.mean(dim=1)

@@ -14,7 +14,7 @@ def _split_in_proj(in_proj_weight: torch.Tensor, in_proj_bias: torch.Tensor):
     """nn.MultiheadAttention packs Q/K/V into a single in_proj_weight of shape [3*dim, dim]."""
     dim = in_proj_weight.shape[1]
     qw, kw, vw = in_proj_weight.split(dim, dim=0)
-    qb, kb, vb = (in_proj_bias.split(dim, dim=0) if in_proj_bias is not None else (None, None, None))
+    qb, kb, vb = in_proj_bias.split(dim, dim=0) if in_proj_bias is not None else (None, None, None)
     return qw, kw, vw, qb, kb, vb
 
 
@@ -51,10 +51,17 @@ def _transformer_encoder_layer(x, layer_weights, num_heads):
     """A single nn.TransformerEncoderLayer with norm_first=True, gelu activation."""
     norm_x = ttnn.layer_norm(x, weight=layer_weights["ln1_w"], bias=layer_weights["ln1_b"])
     attn_out = _attention(
-        norm_x, norm_x, norm_x,
-        layer_weights["q_w"], layer_weights["k_w"], layer_weights["v_w"],
-        layer_weights["q_b"], layer_weights["k_b"], layer_weights["v_b"],
-        layer_weights["o_w"], layer_weights["o_b"],
+        norm_x,
+        norm_x,
+        norm_x,
+        layer_weights["q_w"],
+        layer_weights["k_w"],
+        layer_weights["v_w"],
+        layer_weights["q_b"],
+        layer_weights["k_b"],
+        layer_weights["v_b"],
+        layer_weights["o_w"],
+        layer_weights["o_b"],
         num_heads,
     )
     x = ttnn.add(x, attn_out)
@@ -69,15 +76,17 @@ def _transformer_encoder_layer(x, layer_weights, num_heads):
 class TtMAFBlock:
     """TTNN port of AudioX Multimodal Adaptive Fusion block."""
 
-    def __init__(self, mesh_device, state_dict: dict, dim: int, num_heads: int,
-                 num_experts_per_modality: int, num_fusion_layers: int, mlp_ratio: float = 4.0):
+    def __init__(
+        self,
+        mesh_device,
+        state_dict: dict,
+        num_heads: int,
+        num_fusion_layers: int,
+    ):
         self.mesh_device = mesh_device
-        self.dim = dim
         self.num_heads = num_heads
-        self.num_fusion_layers = num_fusion_layers
 
         sd = state_dict
-        ff_dim = int(dim * mlp_ratio)
 
         self.gating_w1 = _to_tt(_linear_weight(sd["gating_network.0.weight"]), mesh_device)
         self.gating_b1 = _to_tt(sd["gating_network.0.bias"], mesh_device)
@@ -102,25 +111,29 @@ class TtMAFBlock:
         self.fusion_layers = []
         for i in range(num_fusion_layers):
             p = f"fusion_transformer.layers.{i}"
-            qw, kw, vw, qb, kb, vb = _split_in_proj(sd[f"{p}.self_attn.in_proj_weight"], sd[f"{p}.self_attn.in_proj_bias"])
-            self.fusion_layers.append({
-                "q_w": _to_tt(_linear_weight(qw), mesh_device),
-                "k_w": _to_tt(_linear_weight(kw), mesh_device),
-                "v_w": _to_tt(_linear_weight(vw), mesh_device),
-                "q_b": _to_tt(qb, mesh_device),
-                "k_b": _to_tt(kb, mesh_device),
-                "v_b": _to_tt(vb, mesh_device),
-                "o_w": _to_tt(_linear_weight(sd[f"{p}.self_attn.out_proj.weight"]), mesh_device),
-                "o_b": _to_tt(sd[f"{p}.self_attn.out_proj.bias"], mesh_device),
-                "ff1_w": _to_tt(_linear_weight(sd[f"{p}.linear1.weight"]), mesh_device),
-                "ff1_b": _to_tt(sd[f"{p}.linear1.bias"], mesh_device),
-                "ff2_w": _to_tt(_linear_weight(sd[f"{p}.linear2.weight"]), mesh_device),
-                "ff2_b": _to_tt(sd[f"{p}.linear2.bias"], mesh_device),
-                "ln1_w": _to_tt(sd[f"{p}.norm1.weight"], mesh_device),
-                "ln1_b": _to_tt(sd[f"{p}.norm1.bias"], mesh_device),
-                "ln2_w": _to_tt(sd[f"{p}.norm2.weight"], mesh_device),
-                "ln2_b": _to_tt(sd[f"{p}.norm2.bias"], mesh_device),
-            })
+            qw, kw, vw, qb, kb, vb = _split_in_proj(
+                sd[f"{p}.self_attn.in_proj_weight"], sd[f"{p}.self_attn.in_proj_bias"]
+            )
+            self.fusion_layers.append(
+                {
+                    "q_w": _to_tt(_linear_weight(qw), mesh_device),
+                    "k_w": _to_tt(_linear_weight(kw), mesh_device),
+                    "v_w": _to_tt(_linear_weight(vw), mesh_device),
+                    "q_b": _to_tt(qb, mesh_device),
+                    "k_b": _to_tt(kb, mesh_device),
+                    "v_b": _to_tt(vb, mesh_device),
+                    "o_w": _to_tt(_linear_weight(sd[f"{p}.self_attn.out_proj.weight"]), mesh_device),
+                    "o_b": _to_tt(sd[f"{p}.self_attn.out_proj.bias"], mesh_device),
+                    "ff1_w": _to_tt(_linear_weight(sd[f"{p}.linear1.weight"]), mesh_device),
+                    "ff1_b": _to_tt(sd[f"{p}.linear1.bias"], mesh_device),
+                    "ff2_w": _to_tt(_linear_weight(sd[f"{p}.linear2.weight"]), mesh_device),
+                    "ff2_b": _to_tt(sd[f"{p}.linear2.bias"], mesh_device),
+                    "ln1_w": _to_tt(sd[f"{p}.norm1.weight"], mesh_device),
+                    "ln1_b": _to_tt(sd[f"{p}.norm1.bias"], mesh_device),
+                    "ln2_w": _to_tt(sd[f"{p}.norm2.weight"], mesh_device),
+                    "ln2_b": _to_tt(sd[f"{p}.norm2.bias"], mesh_device),
+                }
+            )
 
         self.norm_v2_w = _to_tt(sd["norm_v2.weight"], mesh_device)
         self.norm_v2_b = _to_tt(sd["norm_v2.bias"], mesh_device)
@@ -160,9 +173,18 @@ class TtMAFBlock:
         experts = ttnn.repeat(experts, ttnn.Shape([batch, 1, 1]))
 
         info = _attention(
-            experts, full_context, full_context,
-            self.ca_qw, self.ca_kw, self.ca_vw, self.ca_qb, self.ca_kb, self.ca_vb,
-            self.ca_ow, self.ca_ob, self.num_heads,
+            experts,
+            full_context,
+            full_context,
+            self.ca_qw,
+            self.ca_kw,
+            self.ca_vw,
+            self.ca_qb,
+            self.ca_kb,
+            self.ca_vb,
+            self.ca_ow,
+            self.ca_ob,
+            self.num_heads,
         )
         updated_experts = ttnn.layer_norm(ttnn.add(experts, info), weight=self.norm1_w, bias=self.norm1_b)
 
