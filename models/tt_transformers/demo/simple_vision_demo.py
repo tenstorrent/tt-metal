@@ -631,9 +631,10 @@ def test_multimodal_demo_text(
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, perf_targets)
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=f"{base_model_name}-Vision",
+            run_type="demo",
+            ml_model_name=f"{base_model_name}-vision",
             ml_model_type="vlm",
+            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
