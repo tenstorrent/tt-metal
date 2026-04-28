@@ -1,16 +1,16 @@
-# Granite TTM-R1
+# Granite Timeseries TTM-R1 (Tiny Time Mixer)
 
 ## Overview
 
 TTNN bring-up for [`ibm-granite/granite-timeseries-ttm-r1`](https://huggingface.co/ibm-granite/granite-timeseries-ttm-r1),
 a compact (805K-parameter) multivariate time-series forecasting model from IBM.
 
-**Hardware:** Tenstorrent Wormhole (N150/N300)
-**GitHub issue:** https://github.com/tenstorrent/tt-metal/issues/32142
+**Target Hardware:**
+* Tenstorrent Wormhole (N300s)
 
 ## Architecture Summary
 
-All components run natively on TTNN (no `TorchModuleFallback` in the forward path).
+All components run natively on TTNN.
 
 ```
 TinyTimeMixerForPrediction (805,280 params)
@@ -25,19 +25,6 @@ TinyTimeMixerForPrediction (805,280 params)
 
 Key dimensions: context_length=512, patch_length=64, num_patches=8,
 d_model=192, decoder_d_model=128, forecast_length=96.
-
-## Performance (Wormhole N300s)
-
-| Mode | Latency | Throughput |
-|------|---------|------------|
-| Eager (batch=1) | ~8.5 ms | ~117 seq/s |
-| Traced (batch=1) | **~1.82 ms** | **~550 seq/s** |
-| Traced (batch=8) | ~2.4 ms | **~3290 seq/s** |
-| Traced (batch=32) | ~3.7 ms | ~8760 seq/s |
-| Traced (batch=64) | ~6.1 ms | **~10500 seq/s** |
-| Traced (batch=64, bf8 weights) | ~5.7 ms | **~11260 seq/s** (peak) |
-
-See [PERF.md](PERF.md) for the full throughput-vs-batch table and methodology.
 
 ## Layout
 
@@ -86,49 +73,17 @@ models/demos/granite_ttm_r1/
     prepare_assets.py          # Download ETTh1 and other datasets
 ```
 
-## Zero-Shot Accuracy (Multi-Dataset)
-
-| Dataset | TTNN MSE | Published MSE | PCC vs Torch | Status |
-|---------|----------|---------------|-------------|--------|
-| ETTh1 | 0.4324 | 0.444 | 0.9999 | within 5% |
-| ETTh2 | 0.2284 | 0.337 | 0.9999 | within 5% |
-| ETTm1 | 0.4365 | 0.349 | 0.9999 | PyTorch also above (protocol difference) |
-| ETTm2 | 0.1748 | 0.198 | 0.9999 | within 5% |
-
-All datasets use 7-channel multivariate evaluation with per-channel train-set
-normalization. The ETTm1 gap is a difference in evaluation protocol between our
-standard sliding-window approach and the published results — the PyTorch
-reference model produces the same MSE as TTNN (PCC >= 0.99).
-
-Weather and Electricity datasets are not available (upstream URLs broken); the
-ETT family provides sufficient multi-dataset validation.
-
-## Few-Shot Fine-Tuning
-
-TTNN is an inference-only runtime. Few-shot fine-tuning uses a CPU → device
-deployment pattern:
-1. Fine-tune the PyTorch model on CPU (freeze backbone, train decoder head
-   with 5% of data)
-2. Deploy fine-tuned weights via `preprocess_parameters(finetuned_model, device)`
-3. Run TTNN inference — identical API as zero-shot
-
-Demonstrated in [`demo/ttm_getting_started.ipynb`](demo/ttm_getting_started.ipynb).
-
 ## Setup
-
 ```bash
+cd tt-metal/
+export PYTHONPATH=`pwd`
 source python_env/bin/activate
-uv pip install granite-tsfm
 
-# Download datasets for accuracy tests (optional)
-python models/demos/granite_ttm_r1/scripts/prepare_assets.py --datasets etthi etth2 ettm1 ettm2
+uv pip install granite-tsfm
 ```
 
 ## Running Tests
-
 ```bash
-export PYTHONPATH=/root/tt/tt-metal
-
 # All PCC tests (require Wormhole device)
 pytest models/demos/granite_ttm_r1/tests/pcc/ -v
 
@@ -149,86 +104,18 @@ pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_multi_model_ser
 
 # Streaming inference tests
 pytest models/demos/granite_ttm_r1/tests/perf/test_streaming.py -v
+```
+
+### Accuracy Tests (using Multiple External Datasets)
+```bash
+# Download datasets for accuracy tests (depended on by the accuracy test below)
+python models/demos/granite_ttm_r1/scripts/prepare_assets.py --datasets etthi etth2 ettm1 ettm2
 
 # Zero-shot accuracy (slow, requires datasets — run scripts/prepare_assets.py first)
 pytest models/demos/granite_ttm_r1/tests/accuracy/ -v -s
 ```
 
-## Trace-Compiled Inference
-
-For lowest latency, compile the model after construction:
-
-```python
-import ttnn
-from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_model import TtnnGraniteTTMModel
-
-device = ttnn.open_device(device_id=0)
-
-# Build model (once)
-model = TtnnGraniteTTMModel(parameters=parameters, config=model_config)
-model.compile(device, batch_size=1)   # warm-up + trace capture
-
-# Inference (fast path — single host command per call)
-output = model.execute_compiled(history_tensor)
-
-model.release_trace()
-ttnn.close_device(device)
-```
-
-## Multi-Model Serving
-
-Share a single pre-processed weight tree across many model instances:
-
-```python
-parameters = preprocess_parameters(hf_model, device)  # once
-
-instances = [
-    TtnnGraniteTTMModel.from_shared_parameters(parameters, model_config)
-    for _ in range(100)
-]
-# All 100 instances share the same device weight tensors.
-```
-
-## Streaming Inference
-
-For online (rolling-window) forecasting:
-
-```python
-from models.demos.granite_ttm_r1.tt.streaming import GraniteTTMStreamingForecaster
-
-forecaster = GraniteTTMStreamingForecaster(model, model_config, device)
-
-for new_obs in sensor_stream:          # new_obs: [n_new, num_channels]
-    forecast = forecaster.step(new_obs)  # [forecast_len, num_channels]
-```
-
-## Stage 4 Experiments
-
-Six optimisation experiments were run after Stage 3:
-
-| Experiment | Result |
-|---|---|
-| E1: Zero-shot ETTh1 accuracy | TTNN MSE 0.4324 vs published 0.444 (2.6% below, all 7 channels) |
-| E2: Pre-allocated host buffer | No gain — per-call allocation overhead negligible vs trace replay |
-| E3: LoFi math fidelity | No gain — model is dispatch-bound; HiFi2 retained |
-| E4: 2-CQ double-buffering | ~433 seq/s (xfail) — `synchronize_device` overhead exceeds H2D saving |
-| E5: batch=64 sweep | **~5723 seq/s peak** — saturation at batch=64; batch=128 drops |
-| E6: Streaming circular buffer | Eliminated `torch.roll` allocation; in-place indexed writes |
-
-## Stage 5 Optimisations
-
-Applied after reviewing TTNN model bringup guide and YOLOv4 tech report:
-
-| Optimisation | Result |
-|---|---|
-| Double warmup + D2D input copy | ~1.82 ms / ~550 seq/s at batch=1 (was ~2.3 ms / ~440 seq/s) |
-| Explicit `ttnn.deallocate()` for intermediates | Frees L1 earlier in scaler, time/channel mixers, de-normalisation |
-| `TTNN_WEIGHT_BF8=1` (bfloat8_b weights) | **~11260 seq/s at batch=64** — 7% gain; PCC >= 0.99 holds |
-| LoFi math fidelity | No gain — model dispatch-bound; available via `TTNN_LOFI=1` |
-| Sharding | Not applicable — tensors ~3 KB, too small for multi-core benefit |
-
 ## Architecture Inspection
-
 ```bash
 python -m models.demos.granite_ttm_r1.reference.model_summary
 ```
