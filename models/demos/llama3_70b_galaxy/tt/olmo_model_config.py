@@ -43,10 +43,12 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 class TtOlmoModelArgs(TtModelArgs):
     """OLMo-3.1-32B model configuration for TT Galaxy."""
 
-    # OLMo doesn't support batched prefill: batch*seq tensors (e.g. 32*128=4096)
-    # would fall through to ISL=4096 CCL buffers, which have a dtype mismatch
-    # with the bfloat16 QKV/WO buffers allocated for short ISLs.
-    supports_batched_prefill = False
+    # OLMo supports batched prefill (B32) up to max_batched_prefill_isl=2048.
+    # OLMo uses synchronous all_gather/reduce_scatter in prefill, so there is no
+    # CCL buffer dtype mismatch: the sync path doesn't use persistent buffers.
+    # The QK-norm (distributed RMSNorm) handles batch_size > 1 by merging the
+    # batch and sequence dims before the norm and unmerging after.
+    supports_batched_prefill = True
 
     OP_KEYS = (
         # Embedding

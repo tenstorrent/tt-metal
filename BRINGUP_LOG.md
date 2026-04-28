@@ -2,6 +2,26 @@
 
 ## Session: 2026-04-26
 
+### Status: OLMo 4K/B32 reverted to sequential prefill
+
+### Summary
+Reverted the OLMo ISL=4096/B32 batched prefill experiment. The 2xB16 traced path passed, but TTFT stayed essentially unchanged (~36.85s), so 4K/B32 now uses the original sequential prefill path again.
+
+Restored `long-4k-b32` paged KV cache provisioning to 4096 blocks, capped OLMo batched prefill eligibility back to ISL=128, removed the B16 warmup/trace path, and restored batched prefill page-table packing to B32-only.
+
+### Results
+| Test | TTFT | Decode tok/s/user | Throughput |
+|------|------|-------------------|------------|
+| long-4k-b32 | 38837.93 ms | 26.65 | 852.78 tok/s |
+
+### PCC
+N/A — demo perf run only.
+
+### Block Hash
+N/A — reverted 4K batching experiment.
+
+---
+
 ### Status: r1_aime24 batch-32 eval COMPLETE — 10% exact_match (3/30), no device hang, clean exit
 
 ### Summary

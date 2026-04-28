@@ -612,6 +612,8 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        slot_remap=None,  # Accepted for newer vllm tt_async_decode compatibility; not used by OLMo.
+        rope_deltas_all_users=None,  # Accepted for newer vllm tt_async_decode compatibility; OLMo doesn't use mrope.
     ):
         if sampling_params is None:
             return_logits = True
@@ -850,17 +852,34 @@ class Generator(WarmupForwardMixin):
                 tt_log_probs = tt_out[1]
                 tt_out = tt_out[0]
                 if tt_log_probs is not None:
-                    tt_log_probs_cpu = tt_log_probs.cpu()
+                    tt_log_probs_cpu = (
+                        [t.cpu() if t is not None else None for t in tt_log_probs]
+                        if isinstance(tt_log_probs, list)
+                        else tt_log_probs.cpu()
+                    )
 
+            # Newer vllm tt_model_runner wraps per-DP outputs as a list (length = data_parallel).
+            # OLMo Galaxy uses data_parallel=1, so a length-1 list arrives here; older flow passed
+            # the bare tensor. Handle both shapes.
+            if isinstance(tt_out, list):
+                return [t.cpu() for t in tt_out], tt_log_probs_cpu
             return tt_out.cpu(), tt_log_probs_cpu
 
         logits, log_probs, read_event = self.model.process_output_decode(tt_out)
         return (logits, log_probs), [read_event]
 
     def process_decode_output_host(self, tt_out, is_tokens=True):
+        # Newer vllm tt_model_runner wraps per-DP outputs as a list. OLMo uses data_parallel=1,
+        # so unwrap a single-element list. Same handling for the inner log-probs payload.
+        if isinstance(tt_out, list) and len(tt_out) == 1:
+            tt_out = tt_out[0]
         if isinstance(tt_out, tuple):
             tt_log_probs = tt_out[1]
             tt_out = tt_out[0]
+            if isinstance(tt_out, list) and len(tt_out) == 1:
+                tt_out = tt_out[0]
+            if isinstance(tt_log_probs, list) and len(tt_log_probs) == 1:
+                tt_log_probs = tt_log_probs[0]
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
             if tt_log_probs is not None:
                 tt_log_probs = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
