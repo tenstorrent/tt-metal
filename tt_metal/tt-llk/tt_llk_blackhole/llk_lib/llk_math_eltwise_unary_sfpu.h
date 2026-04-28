@@ -32,7 +32,7 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     }
         .set(ADDR_MOD_7);
 
-    if constexpr (sfpu_op == SfpuType::topk_local_sort)
+    if constexpr (sfpu_op == SfpuType::topk_local_sort || sfpu_op == SfpuType::topk_xl_local_sort)
     {
         addr_mod_t {
             .srca = {.incr = 0},

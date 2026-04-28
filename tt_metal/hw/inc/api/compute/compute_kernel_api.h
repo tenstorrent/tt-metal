@@ -596,6 +596,77 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  */
 ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>())); }
 
+#ifdef ARCH_BLACKHOLE
+// clang-format off
+/**
+ * Performs local sort stage of TopK algorithm for K = 2048.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * The algorithm used to implement TopK is found here:
+ * https://anilshanbhag.in/static/papers/gputopk_sigmod18.pdf
+ *
+ * Assumtions about data:
+ * - Data is put in 32-bit containers in DST register. Top 16 bits are Float16_b values, bottom 16 bits are UInt16 indices.
+ * - One input spans 2 consecutive tiles in DST register and is densely packed, starting at idst.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | ascending       | The sorting direction of the local sort                                    | bool     | true, false                                           | True     |
+ */
+// clang-format on
+ALWI void topk_xl_local_sort(uint32_t idst, bool ascending) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_local_sort<true>(idst, ascending)));
+}
+
+// clang-format off
+/**
+ * Performs merge stage of TopK algorithm for K = 2048.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Assumtions about data are same as for topk_xl_local_sort.
+ * The merge stage combines two consecutive length-2048 subsequences, starting at idst.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void topk_xl_merge(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_topk_xl_merge<true>(idst))); }
+
+// clang-format off
+/**
+ * Performs rebuild stage of TopK algorithm for K = 2048.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Assumtions about data are same as for topk_xl_local_sort.
+ * The rebuild stage sorts the length-2048 subsequence that starts at idst.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | ascending       | The sorting direction of the local sort                                    | bool     | true, false                                           | True     |
+ */
+// clang-format on
+ALWI void topk_xl_rebuild(uint32_t idst, bool ascending) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_rebuild<true>(idst, ascending)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void topk_xl_init() { MATH((llk_math_eltwise_unary_sfpu_topk_xl_init<true>())); }
+#endif
+
 // clang-format off
 /**
  * Performs MaxPool with indices algorithm on the data tile and index tile

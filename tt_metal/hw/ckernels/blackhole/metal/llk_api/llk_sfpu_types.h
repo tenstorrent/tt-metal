@@ -161,4 +161,7 @@ enum class SfpuType {
     lgamma,
     polygamma,
     ne,
+    topk_xl_local_sort,
+    topk_xl_merge,
+    topk_xl_rebuild,
 };
