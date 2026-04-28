@@ -152,7 +152,10 @@ def run(
     )(weight_shape_actual)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
+    # Golden function (torch.nn.functional.embedding) requires 2D weights,
+    # but the model uses 4D weights. Reshape for golden comparison only.
+    golden_weight = torch_weight_tensor.reshape(-1, torch_weight_tensor.shape[-1])
+    torch_output_tensor = golden_function(torch_input_tensor, golden_weight).squeeze()
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -216,6 +219,7 @@ def run(
         embedding_kwargs["memory_config"] = memory_config
     if layout is not None:
         from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
         parsed_layout = parse_dict_value("layout", layout) if isinstance(layout, dict) else layout
         if parsed_layout is not None:
             embedding_kwargs["layout"] = parsed_layout
