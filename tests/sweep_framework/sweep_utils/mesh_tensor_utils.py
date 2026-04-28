@@ -202,19 +202,10 @@ def _restore_topology(
         rows, cols = dist_parsed[0], dist_parsed[1]
         mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
     elif ndim == 1:
-        # 1D distribution — e.g. [32]
-        # Try 1D MeshShape first; if that fails, fall back to the actual
-        # mesh_shape_tuple (e.g. (4, 8)) so the topology uses a valid 2D
-        # distribution that is semantically equivalent.  Using (1, N) would
-        # create an invalid topology that corrupts downstream tensors.
-        total = dist_parsed[0]
-        is_2d_fallback = False
-        try:
-            dist_shape = ttnn.MeshShape(total)
-        except (TypeError, RuntimeError):
-            is_2d_fallback = True
-            # Use actual mesh shape — (4, 8) for Galaxy — instead of (1, 32)
-            dist_shape = ttnn.MeshShape(*mesh_shape_tuple)
+        # 1D distribution — e.g. [32].  Always expand to the actual 2D mesh
+        # shape (e.g. (4, 8)) so that the tracer records the canonical
+        # [rows, cols] distribution, matching the normalized master.
+        dist_shape = ttnn.MeshShape(*mesh_shape_tuple)
 
         placements = []
         for entry in placement_entries or []:
@@ -225,23 +216,44 @@ def _restore_topology(
                 placements.append(ttnn.PlacementReplicate())
         if not placements:
             placements.append(ttnn.PlacementReplicate())
-        # If we fell back to 2D MeshShape, ensure we have exactly 2 placements
-        if is_2d_fallback and len(placements) < 2:
+        if len(placements) < 2:
             placements.insert(0, ttnn.PlacementReplicate())
 
-        if not is_2d_fallback:
-            try:
-                mesh_coords = [ttnn.MeshCoordinate(i) for i in range(total)]
-            except (TypeError, RuntimeError):
-                mesh_coords = [ttnn.MeshCoordinate(0, i) for i in range(total)]
-        else:
-            rows, cols = mesh_shape_tuple[0], mesh_shape_tuple[1]
-            mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+        rows, cols = mesh_shape_tuple[0], mesh_shape_tuple[1]
+        mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
     else:
         return  # Nothing to restore
 
     topology = ttnn.TensorTopology(dist_shape, placements, mesh_coords)
     tensor.update_tensor_topology(topology)
+
+
+def apply_tensor_placement_topology(tensor, tensor_placement, mesh_shape_tuple):
+    """Apply topology from a tensor_placement config dict to a device tensor.
+
+    Use this for tensors created outside of ``create_tensor_on_mesh`` (e.g. in
+    decode-mode paths that use ``from_torch`` + ``interleaved_to_sharded``).
+    """
+    import ast as _ast
+
+    if not tensor_placement:
+        return
+    dist_raw = tensor_placement.get("distribution_shape", "")
+    if isinstance(dist_raw, str):
+        try:
+            dist_parsed = _ast.literal_eval(dist_raw)
+        except (ValueError, SyntaxError):
+            return
+    else:
+        dist_parsed = list(dist_raw) if dist_raw else []
+    if not dist_parsed:
+        return
+    placement_str = str(tensor_placement.get("placement", ""))
+    entries = re.findall(r"Placement(?:Shard\((?:dim=)?-?\d+\)|Replicate)", placement_str)
+    try:
+        _restore_topology(tensor, entries, dist_parsed, mesh_shape_tuple)
+    except Exception:
+        pass
 
 
 def replicate_with_topology(
