@@ -195,13 +195,15 @@ TEST_F(FixAvRelayBrokenSysmemGuardFixture, FixAvRelayBrokenSkipsSystemMemReset) 
         // ── Child process ──────────────────────────────────────────────────
         // Open FABRIC_2D to put ERISCs into ACTIVE relay state, then spin.
         try {
+            tt_fabric::SetFabricConfig(
+                tt_fabric::FabricConfig::FABRIC_2D,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
             auto dev = MeshDevice::create(
-                MeshDeviceConfig{
-                    .mesh_shape = MeshShape{1, static_cast<uint32_t>(
-                        MetalContext::instance().get_cluster().number_of_devices())},
-                    .num_command_queues = 1,
-                    .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
-                });
+                MeshDeviceConfig(MeshShape{1, static_cast<uint32_t>(
+                    MetalContext::instance().get_cluster().number_of_devices())}),
+                DEFAULT_L1_SMALL_SIZE,
+                DEFAULT_TRACE_REGION_SIZE,
+                /*num_command_queues=*/1);
             auto range = MeshCoordinateRange(dev->shape());
             auto workload = make_blank_workload_gap28(range);
             EnqueueMeshWorkload(dev->mesh_command_queue(0), workload, false);
@@ -247,13 +249,16 @@ TEST_F(FixAvRelayBrokenSysmemGuardFixture, FixAvRelayBrokenSkipsSystemMemReset) 
     // dead relay CMD queue of non-MMIO devices.
     const auto create_start = std::chrono::steady_clock::now();
     std::shared_ptr<MeshDevice> parent_dev;
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_NO_THROW({
-        parent_dev = MeshDevice::create(MeshDeviceConfig{
-            .mesh_shape = MeshShape{1, static_cast<uint32_t>(
-                MetalContext::instance().get_cluster().number_of_devices())},
-            .num_command_queues = 1,
-            .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
-        });
+        parent_dev = MeshDevice::create(
+            MeshDeviceConfig(MeshShape{1, static_cast<uint32_t>(
+                MetalContext::instance().get_cluster().number_of_devices())}),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            /*num_command_queues=*/1);
     }) << "MeshDevice::create() threw after SIGKILL predecessor — relay-broken init path failed";
     const auto create_elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(
