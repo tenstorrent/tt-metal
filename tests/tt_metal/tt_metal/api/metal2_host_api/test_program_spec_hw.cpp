@@ -372,7 +372,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             },
     };
 
-    // A WorkUnitSpec ties together the kernels that run on a shared set of nodes.
+    // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
     WorkUnitSpec work_unit{
         .unique_id = "work_unit_0",
         .kernels = {"producer", "consumer"},

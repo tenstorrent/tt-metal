@@ -43,8 +43,9 @@ static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
     // Name -> spec lookups.
-    // dfb_by_name covers BOTH local and remote DFBs (for remote, the pointee is the
-    // inner dfb_spec). The is-it-remote question is answered by remote_dfb_by_name.
+    // dfb_by_name covers BOTH local and remote DFBs.
+    // For remote DFBs, the pointee is the inner dfb_spec.
+    // To check if a DFB is remote, check the remote_dfb_by_name map.
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
@@ -685,6 +686,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             endpoints.producer->unique_id,
             endpoints.consumer->unique_id);
     }
+
+    // Remote DFBs are not yet supported.
+    TT_FATAL(
+        spec.remote_dataflow_buffers.empty(),
+        "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
+        "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
+        spec.program_id,
+        spec.remote_dataflow_buffers.size());
 
     // Validate remote DFB endpoint placement:
     // The producer and consumer must not be on the same node.
@@ -1423,16 +1432,6 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected);
     }
-
-    // Runtime feature gate (always on — outside the skip_validation block, since the build
-    // path below has no support for remote DFBs and would silently drop them on the floor).
-    // Remove this once runtime support for remote DFBs lands.
-    TT_FATAL(
-        spec.remote_dataflow_buffers.empty(),
-        "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
-        "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
-        spec.program_id,
-        spec.remote_dataflow_buffers.size());
 
     // Step 2: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically

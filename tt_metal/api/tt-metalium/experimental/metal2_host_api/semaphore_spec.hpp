@@ -25,14 +25,13 @@ using SemaphoreSpecName = std::string;
 // A SemaphoreSpec is a descriptor for a Tenstorrent semaphore,
 // which can be used for inter-kernel instance synchronization.
 //
-// Instancing: One SRAM cell per node in the set of target_nodes,
+// Instancing: One SRAM ("L1") cell per node in the set of target_nodes.
 //
-// Placement: Specified directly via target_nodes (unlike Dataflow Buffers, semaphores
-// placement is not derived from kernel bindings).
+// Placement: Specified directly via target_nodes. Unlike DFBs, semaphores are remote
+// resources for kernels. Placement cannot be inferred from kernel bindings..
 //
-// Binding scope: Program-scope. Any kernel can bind to any semaphore, regardless of
-// placement. Any kernel instance can signal or wait on any semaphore instance.
-// A SemaphoreSpec has *program-scope*, not per-node scope.
+// Binding scope: Any kernel can bind to any semaphore in the ProgramSpec, regardless of
+// location. Any kernel instance can signal or wait on any semaphore instance.
 //
 struct SemaphoreSpec {
     // Semaphore identifier: used to reference this Semaphore within the ProgramSpec

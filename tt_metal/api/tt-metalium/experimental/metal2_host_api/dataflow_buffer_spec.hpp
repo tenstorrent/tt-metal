@@ -98,20 +98,22 @@ struct DataflowBufferSpec {
     bool disable_implicit_sync = false;
 };
 
-// A RemoteDataflowBufferSpec describes a "remote" DFB: like DataflowBufferSpec, but
-// its producer and consumer kernels run on DIFFERENT nodes, with data flowing over
-// the NoC. The producer_consumer_map enumerates the (producer_node, consumer_node)
-// pairs.
+// A RemoteDataflowBufferSpec describes a "remote" DFB:
+// A DFB whose producer and consumer kernels run on different nodes, with data flowing
+// over the NoC.
 //
-// Invariant: Every entry in producer_consumer_map has producer_node != consumer_node.
-// (Same-node communication is structurally local and belongs in DataflowBufferSpec.)
-// Producer-WorkUnit and consumer-WorkUnit target_nodes are allowed to overlap, even
-// to be equal: e.g. an A↔B pattern (map = [(A, B), (B, A)]) is legal because every
-// pair is genuinely cross-node.
+// A RemoteDataflowBuffer Spec has all of the priorties of a DataflowBufferSpec,
+// but must additionally specify an explicit producer-consumer node relationships.
+// A local DFB instance "serves" the producer/consumer kernels instances on the same
+// node: the producer-consumer node instance relationships are structually implicit.
+// For a remote DFB, this cannot be inferred and must be explicit.
 //
-// Instancing: At runtime, one remote DFB instance is allocated per entry in
-// producer_consumer_map, mediating data flow between its named producer and consumer
-// nodes over the NoC.
+// Invariant: Every remote DFB instance has exactly one producer kernel instance and
+// one consumer kernel instance. The instances must not be on the same node.
+//
+// Instancing: At runtime, one remote DFB instance is allocated per entry in the
+// producer_consumer_map. The runtime infrastructure allocates SRAM ("L1") at both
+// endpoints.
 //
 // Placement: Specified directly via producer_consumer_map (rather than derived as
 // for local DFBs).

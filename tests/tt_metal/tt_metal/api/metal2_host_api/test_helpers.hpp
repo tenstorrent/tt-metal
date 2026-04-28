@@ -16,6 +16,13 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
+// This file contains shortcut helper functions to create minimal valid ProgramSpec
+// objects for unit tests. This cuts boilerplate in a unit testing context.
+//
+// This is NOT intended as a recommended pattern for production code!
+// See the Metal 2.0 Host API documentation and programming examples for
+// recommended patterns for constructing ProgramSpec objects in production code.
+
 namespace tt::tt_metal::experimental::metal2_host_api::test_helpers {
 
 // ============================================================================
@@ -29,7 +36,7 @@ inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 // Spec Creation Helpers
 // ============================================================================
 //
-// Note: KernelSpec and DataflowBufferSpec no longer carry target_nodes.
+// Note: KernelSpec and DataflowBufferSpec do not directly encode target_nodes.
 // Placement is stated on WorkUnitSpec; pass node sets to MakeMinimalWorkUnit instead.
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen2/Quasar)

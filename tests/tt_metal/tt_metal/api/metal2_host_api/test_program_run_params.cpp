@@ -2,17 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//---------------------------------------------------------------------------------
 // Unit tests for the Metal 2.0 Host API: ProgramRunParams and SetProgramRunParameters
+// These tests all use mock device (Quasar and Workhole) for API-level validation.
 //
 // Test categories:
 //   1. Validation tests (parameter validation errors)
 //   2. Success tests (basic functionality)
 //   3. Repeated call tests (calling SetProgramRunParameters multiple times)
 //
+//---------------------------------------------------------------------------------
 // NOTE: The current tests only attempt to set ProgramRunParams for a Program that has not yet been enqueued for
 // execution. The way Program currently works, dispatch data structures are not created until the first enqueue, which
 // makes the argument update pathways different the first time vs. subsequent times. This is patently insane. I plan to
 // fix this for ProgramSpec / Metal 2.0.
+//
+//---------------------------------------------------------------------------------
+// NOTE: These unit tests use shortcut functions to create minimal valid ProgramSpec
+// objects to cut repeated boilerplate (test_helpers.hpp)
+//
+// This is NOT intended as a recommended pattern for production code!
+// See the Metal 2.0 Host API documentation and programming examples for
+// recommended patterns for constructing ProgramSpec objects in production code.
+//---------------------------------------------------------------------------------
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>

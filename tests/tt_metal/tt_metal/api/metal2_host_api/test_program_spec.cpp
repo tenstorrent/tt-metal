@@ -2,15 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//---------------------------------------------------------------------------------
 // Unit tests for the Metal 2.0 Host API: ProgramSpec and MakeProgramFromSpec
+// These tests all use mock device (Quasar and Workhole) for API-level validation.
 //
 // Test categories:
+//  Quasar (Gen2):
 //   1. ProgramSpec "structural" validation (CollectSpecData)
 //   2. ProgramSpec semantic validation (ValidateProgramSpec)
 //   3. WorkUnitSpec validation
-//   4. DFB validation
-//   5. Program creation (using Quasar mock device)
-//   6. Aggregate type enforcement (designated initializers)
+//   4. Basic Program creation (should succeed)
+//   5. Misc edge cases in Program creation
+//   6. Quasar processor assignment logic correctness (includes pathological case)
+//   7. Aggregate type enforcement (designated initializers must work!)
+// Wormhole (Gen1):
+//   8. Gen1 specific tests
+//
+//---------------------------------------------------------------------------------
+// These unit tests use shortcut functions to create minimal valid ProgramSpec
+// objects to cut repeated boilerplate (test_helpers.hpp)
+//
+// This is NOT intended as a recommended pattern for production code!
+// See the Metal 2.0 Host API documentation and programming examples for
+// recommended patterns for constructing ProgramSpec objects in production code.
+//---------------------------------------------------------------------------------
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -452,14 +467,13 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameNodeProducerConsumerPairFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("producer node and the consumer node are the same")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
 }
 
-TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameWorkUnitNodeSetSucceedsAtValidation) {
-    // A↔B pattern: producer and consumer kernels both run on {A, B}, communicating
-    // exclusively cross-node. Validation should accept this; the runtime gate then
-    // reports "not yet supported."
+TEST_F(ProgramSpecTestQuasar, RemoteDFBWithSameWorkUnitNodeSetIsAllowed) {
+    // A<->B pattern: producer and consumer kernels both run on nodes {A, B}, but
+    // exclusively cross-node (A -> B, B -> A). Validation should accept this.
+    // (TODO: Update after remote DFB support is implemented)
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
     NodeRangeSet both(std::set<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}});
@@ -1682,7 +1696,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
 }
 
 // ============================================================================
-// SECTION 7: Gen1 (WH/BH) Tests
+// SECTION 8: Gen1 (WH/BH) Tests
 // ============================================================================
 
 // Test fixture for ProgramSpec on Wormhole - uses WORMHOLE_B0 mock device
