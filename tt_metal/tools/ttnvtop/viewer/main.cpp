@@ -37,7 +37,13 @@
 
 namespace {
 
-constexpr int kRenderHz = 4;
+// 10 Hz: each frame reflects ~100 ms of activity. The collector publishes
+// at 100 Hz (every 10 ms) and the LLK Hook B period is 5 ms, so the data
+// underneath is fresh every frame. Higher render rates (>30 Hz) start to
+// hit terminal redraw artifacts on most systems; lower rates (4 Hz) drop
+// most kernels — Llama decode kernels run at sub-ms cadence and 4 Hz blurs
+// 200+ kernels per frame into a single snapshot.
+constexpr int kRenderHz = 10;
 constexpr int kStaleThresholdMs = 2000;
 constexpr int kBarWidth = 4;    // bar is N pipes wide inside the box
 constexpr int kBoxInnerW = 10;  // 1 letter + bar + 1 sp + 4 pct = 10 visible chars
@@ -275,6 +281,27 @@ int main(int argc, char* argv[]) {
     // the same slot with refreshed cycles_in_window each drain.
     std::unordered_map<uint32_t, uint64_t> cycles_cache;
 
+    // Stage 1 (history pane): accumulate every program seen since the viewer
+    // started. The PROGRAMS table only shows what's *currently* dispatched on
+    // cores; this captures programs that ran briefly between viewer frames
+    // and would otherwise scroll past invisible. Each registrar slot
+    // ingested is one dispatch event; we count those plus track first/last
+    // observation timestamps and peak cycles_total seen.
+    struct HistoryEntry {
+        std::string name;
+        uint64_t first_seen_ms;
+        uint64_t last_seen_ms;
+        uint32_t dispatch_count;     // number of registry ingestions (= dispatches mod wrap)
+        uint64_t peak_cycles_total;  // monotonic upper bound of registry's cycles_total field
+    };
+    std::unordered_map<uint32_t, HistoryEntry> history_cache;
+    const auto session_start = std::chrono::steady_clock::now();
+    auto session_ms_now = [&]() -> uint64_t {
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - session_start)
+                .count());
+    };
+
     auto ingest_registry_entry = [&](const ttnvtop::RegistryEntry& e) {
         // The writer side (dispatch hooks) registers with the value it just
         // wrote into host_assigned_id. tt-metal has two encodings:
@@ -289,6 +316,22 @@ int main(int argc, char* argv[]) {
         }
         name_cache[e.runtime_id] = std::string(e.name, n);
         cycles_cache[e.runtime_id] = e.cycles_in_window;
+
+        // Stage 1: history accumulator. Each registrar-side fetch_add of
+        // write_cursor produces one fresh entry per `register_program` call,
+        // so seeing a slot under a runtime_id == one dispatch occurrence
+        // (modulo the 16k circular-buffer wrap).
+        const uint64_t now_ms = session_ms_now();
+        auto& h = history_cache[e.runtime_id];
+        if (h.dispatch_count == 0) {
+            h.name = std::string(e.name, n);
+            h.first_seen_ms = now_ms;
+        }
+        h.last_seen_ms = now_ms;
+        ++h.dispatch_count;
+        if (e.cycles_total > h.peak_cycles_total) {
+            h.peak_cycles_total = e.cycles_total;
+        }
     };
 
     auto refresh_registry = [&]() {
@@ -301,6 +344,7 @@ int main(int argc, char* argv[]) {
         const uint32_t cur_pid = registry.header->writer_pid;
         if (cur_pid != registry.last_writer_pid) {
             name_cache.clear();
+            history_cache.clear();
             registry.last_cursor = 0;
             registry.last_writer_pid = cur_pid;
         }
@@ -904,6 +948,59 @@ int main(int argc, char* argv[]) {
                 }
                 merged << "\n";
             }
+            // Stage 1 (history pane): every program seen since the viewer
+            // started, sorted most-recent first. The live PROGRAMS table
+            // above only reflects programs currently dispatched on cores —
+            // sub-period kernels run between frames and never appear there.
+            // The registry has 100% coverage; this view exposes it.
+            if (!history_cache.empty()) {
+                std::vector<std::pair<uint32_t, const HistoryEntry*>> entries;
+                entries.reserve(history_cache.size());
+                for (const auto& kv : history_cache) {
+                    entries.emplace_back(kv.first, &kv.second);
+                }
+                std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+                    if (a.second->last_seen_ms != b.second->last_seen_ms) {
+                        return a.second->last_seen_ms > b.second->last_seen_ms;
+                    }
+                    return a.first < b.first;
+                });
+                merged << "\nHISTORY (" << entries.size() << " unique programs since viewer start)\n";
+                merged << "      ID  NAME" << std::string(static_cast<size_t>(ttnvtop::kRegistryNameMax) - 4, ' ')
+                       << "      FIRST       LAST     DISP   CYCLES_TOTAL\n";
+                auto fmt_ms = [](uint64_t ms) {
+                    std::ostringstream o;
+                    const uint64_t s = ms / 1000;
+                    const uint64_t f = ms % 1000;
+                    const uint64_t mm = s / 60;
+                    const uint64_t ss = s % 60;
+                    o << std::setw(2) << std::setfill('0') << mm << ":" << std::setw(2) << std::setfill('0') << ss
+                      << "." << std::setw(3) << std::setfill('0') << f;
+                    return o.str();
+                };
+                const size_t kHistoryRowCap = 30;
+                const size_t shown = std::min(entries.size(), kHistoryRowCap);
+                for (size_t i = 0; i < shown; ++i) {
+                    const uint32_t rid = entries[i].first;
+                    const auto& h = *entries[i].second;
+                    std::string name_disp = h.name;
+                    if (name_disp.size() >= ttnvtop::kRegistryNameMax) {
+                        name_disp.resize(ttnvtop::kRegistryNameMax - 1);
+                    }
+                    if (name_disp.size() < ttnvtop::kRegistryNameMax) {
+                        name_disp.append(ttnvtop::kRegistryNameMax - name_disp.size(), ' ');
+                    }
+                    merged << "  " << std::setw(6) << std::setfill(' ') << rid << "  " << name_disp << "  "
+                           << fmt_ms(h.first_seen_ms) << "  " << fmt_ms(h.last_seen_ms) << "  " << std::setw(7)
+                           << std::setfill(' ') << h.dispatch_count << "  " << std::setw(13) << std::setfill(' ')
+                           << h.peak_cycles_total << "\n";
+                }
+                if (entries.size() > kHistoryRowCap) {
+                    merged << "  (" << (entries.size() - kHistoryRowCap) << " more — see "
+                           << "tt_program_registry.bin for the full list)\n";
+                }
+            }
+
             merged << "\n[Ctrl-C to exit]\n";
             std::cout << merged.str();
         }
