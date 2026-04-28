@@ -3,20 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Writer (BRISC) for moe_ungroup. Per core:
-//   1. Pre-zero my range of `ungrouped` DRAM rows.
+//   1. Pre-zero my range of `ungrouped` DRAM rows. With pre-zero, every
+//      expert iteration can do the same RMW path — the first expert to
+//      touch a row reads zero and effectively writes.
 //   2. Local handshake with NCRISC reader: signal "brisc_done", wait
 //      "brisc_release". Reader does the cross-core mcast barrier on NOC_0
 //      (matching moe_group's pattern of putting mcast in the NCRISC kernel).
 //   3. For e in 0..E_local:
-//        - Process this core's tile-row slice of expert e (chunks, scale-write
-//          for e==0, RMW for e>0).
+//        - Process this core's tile-row slice of expert e: read existing
+//          ungrouped rows, hand them to compute which adds the scaled
+//          expert contribution, write back.
 //        - If e+1 < E_local: another local handshake with NCRISC.
-//
-// NOTE on performance: the per-element bf16 RMW happens in BRISC scalar
-// ops. For wide H, this is the bottleneck. Future optimization: fp32
-// accumulator across experts to remove the K-1 intermediate bf16 round-trips.
 
 #include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/moe_ungroup_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
@@ -40,8 +40,7 @@ constexpr uint32_t brisc_release_sem_id = get_compile_time_arg_val(10);
 constexpr auto ungrouped_args = TensorAccessorArgs<11>();
 constexpr auto plan_args = TensorAccessorArgs<ungrouped_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
-constexpr auto counts_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
-constexpr auto metadata_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+constexpr auto metadata_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
 constexpr auto scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 constexpr auto leids_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
 
@@ -49,7 +48,6 @@ constexpr uint32_t md_aligned_page = decltype(metadata_args)::AlignedPageSize;
 constexpr uint32_t sc_aligned_page = decltype(scores_args)::AlignedPageSize;
 constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
-constexpr uint32_t cnt_page_bytes = decltype(counts_args)::AlignedPageSize;
 
 constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t TILE_W = 32U;
@@ -76,16 +74,14 @@ void kernel_main() {
     const uint32_t ungrouped_addr = get_arg_val<uint32_t>(0);
     const uint32_t plan_addr = get_arg_val<uint32_t>(1);
     const uint32_t offsets_addr = get_arg_val<uint32_t>(2);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(3);
-    const uint32_t metadata_addr = get_arg_val<uint32_t>(4);
-    const uint32_t scores_addr = get_arg_val<uint32_t>(5);
-    const uint32_t leids_addr = get_arg_val<uint32_t>(6);
-    const uint32_t my_core_idx = get_arg_val<uint32_t>(7);
+    const uint32_t metadata_addr = get_arg_val<uint32_t>(3);
+    const uint32_t scores_addr = get_arg_val<uint32_t>(4);
+    const uint32_t leids_addr = get_arg_val<uint32_t>(5);
+    const uint32_t my_core_idx = get_arg_val<uint32_t>(6);
 
     const auto ungrouped_addrgen = TensorAccessor(ungrouped_args, ungrouped_addr, h * 2U);
     const auto plan_addrgen = TensorAccessor(plan_args, plan_addr);
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
-    const auto counts_addrgen = TensorAccessor(counts_args, counts_addr);
     const auto md_addrgen = TensorAccessor(metadata_args, metadata_addr);
     const auto sc_addrgen = TensorAccessor(scores_args, scores_addr);
     const auto leids_addrgen = TensorAccessor(leids_args, leids_addr);
@@ -94,7 +90,6 @@ void kernel_main() {
     // L1 scratch layout in cb_scratch (BRISC):
     //   [zero_buf (h*2 bytes)]
     //   [offsets_buf ((e_local+1)*4 bytes, aligned 32)]
-    //   [counts_buf  (e_local*4 bytes,     aligned 32)]
     //   [leids_buf   (e_local*2 bytes,     aligned 32)]
     //   [plan_buf    (32*4 bytes)]
     //   [md_buf      (32*K*2 bytes per row, batched as needed)]
@@ -107,34 +102,30 @@ void kernel_main() {
     uint32_t off = 0U;
 
     uint32_t zero_buf_addr = scratch + off;
-    off += ((h * 2U) + 31U) & ~31U;
+    off += round_up(h * 2U, 32U);
 
     uint32_t offsets_buf_addr = scratch + off;
-    off += (((e_local + 1U) * 4U) + 31U) & ~31U;
+    off += round_up((e_local + 1U) * 4U, 32U);
     volatile tt_l1_ptr uint32_t* offsets_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_buf_addr);
 
-    uint32_t counts_buf_addr = scratch + off;
-    off += ((e_local * 4U) + 31U) & ~31U;
-    volatile tt_l1_ptr uint32_t* counts_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_buf_addr);
-
     uint32_t leids_buf_addr = scratch + off;
-    off += ((e_local * 2U) + 31U) & ~31U;
+    off += round_up(e_local * 2U, 32U);
     volatile tt_l1_ptr uint16_t* leids_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(leids_buf_addr);
 
     uint32_t plan_buf_addr = scratch + off;
-    off += (32U * 4U + 31U) & ~31U;
+    off += round_up(32U * 4U, 32U);
     volatile tt_l1_ptr uint32_t* plan_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_buf_addr);
 
     uint32_t md_buf_addr = scratch + off;
-    off += (32U * md_aligned_page + 31U) & ~31U;
+    off += round_up(32U * md_aligned_page, 32U);
     volatile tt_l1_ptr uint16_t* md_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(md_buf_addr);
 
     uint32_t sc_buf_addr = scratch + off;
-    off += (32U * sc_aligned_page + 31U) & ~31U;
+    off += round_up(32U * sc_aligned_page, 32U);
     volatile tt_l1_ptr uint16_t* sc_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sc_buf_addr);
 
     uint32_t w_buf_addr = scratch + off;
-    off += (32U * sizeof(uint16_t) + 31U) & ~31U;
+    off += round_up(32U * sizeof(uint16_t), 32U);
     volatile tt_l1_ptr uint16_t* w_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_buf_addr);
 
     // OPT 1: 32 contiguous slots of hidden_chunk_bytes each — one per row of
@@ -145,10 +136,9 @@ void kernel_main() {
 
     // Pre-zero: tokens whose top-K is entirely non-local never get touched by
     // any expert iteration, so without pre-zero those rows would read uninit
-    // DRAM. With pre-zero plus the per-row first-local detection below, every
-    // output row is correct: tokens with no local experts stay zero; tokens
-    // with K>=1 local experts get a pure scaled write from their first local
-    // expert and += from the rest.
+    // DRAM. With pre-zero, every expert iteration can do the same RMW path
+    // (the first to touch a row reads zero and effectively writes), and tokens
+    // with no local experts stay zero.
     fill_zeros_async(zero_buf_addr, h * 2U);
     noc_async_read_barrier();
     auto zero_slice = ttml::metal::moe_ungroup::slice_for_core(total_rows, num_total_cores, my_core_idx);
@@ -160,10 +150,9 @@ void kernel_main() {
     brisc_signal_done_wait_release();
 
     // ---------------------------------------------------------------
-    // Read offsets, counts, leids into L1 (one-shot).
+    // Read offsets and leids into L1 (one-shot).
     // ---------------------------------------------------------------
     noc_async_read(get_noc_addr(0, offsets_addrgen), offsets_buf_addr, off_page_bytes);
-    noc_async_read(get_noc_addr(0, counts_addrgen), counts_buf_addr, cnt_page_bytes);
     noc_async_read(get_noc_addr(0, leids_addrgen), leids_buf_addr, leids_aligned_page);
     noc_async_read_barrier();
 
@@ -179,16 +168,13 @@ void kernel_main() {
 
         uint32_t leid_e = leids_buf[e];
 
-        // is_first[r]: true if expert e is the FIRST local expert in
-        // metadata[plan[r], :K] (smallest leids index match). Drives the
-        // pure-write vs RMW choice without needing pre-zero — the first
-        // expert to touch a row writes, the rest accumulate.
-        bool is_first[TILE_H];
-
         for (uint32_t step = 0; step < my_real_count; ++step) {
             uint32_t tr_global = expert_start_tr + my_start_in_e + step;
 
-            // Pre-fetch plan slice + metadata + scores.
+            // Pre-fetch plan slice + metadata + scores, then derive w[r].
+            // Pre-zero of the output buffer makes the first-touch RMW read 0
+            // for every row, so we don't need a pure-write fast path — every
+            // expert just does scaled += and the first one effectively writes.
             {
                 uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tr_global * TILE_H * sizeof(uint32_t);
                 noc_async_read(plan_noc, plan_buf_addr, TILE_H * sizeof(uint32_t));
@@ -196,7 +182,6 @@ void kernel_main() {
 
                 for (uint32_t r = 0; r < TILE_H; ++r) {
                     uint32_t flat = plan_buf[r];
-                    uint32_t row_idx = tr_global * TILE_H + r;
                     if (flat == SENTINEL) {
                         continue;
                     }
@@ -205,13 +190,10 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
 
-                // Compute per-row weight w[r] AND is_first[r].
                 for (uint32_t r = 0; r < TILE_H; ++r) {
                     uint32_t flat = plan_buf[r];
-                    uint32_t row_idx = tr_global * TILE_H + r;
                     if (flat == SENTINEL) {
                         w_buf[r] = 0U;
-                        is_first[r] = false;
                         continue;
                     }
                     uint32_t md_off = r * MD_ROW_STRIDE_U16;
@@ -225,30 +207,7 @@ void kernel_main() {
                             break;
                         }
                     }
-                    if (!found) {
-                        w_buf[r] = 0U;
-                        is_first[r] = false;
-                        continue;
-                    }
-                    w_buf[r] = sc_buf[sc_off + k_slot];
-                    // First-local check: is this the first leid index `e` whose
-                    // value appears in metadata[flat, :K]? Scan other metadata
-                    // entries for any earlier local expert (leids[0..e-1]).
-                    bool has_earlier = false;
-                    for (uint32_t ki = 0; ki < k; ++ki) {
-                        if (ki == k_slot)
-                            continue;
-                        uint16_t md_val = md_buf[md_off + ki];
-                        for (uint32_t eprime = 0; eprime < e; ++eprime) {
-                            if (md_val == leids_buf[eprime]) {
-                                has_earlier = true;
-                                break;
-                            }
-                        }
-                        if (has_earlier)
-                            break;
-                    }
-                    is_first[r] = !has_earlier;
+                    w_buf[r] = found ? sc_buf[sc_off + k_slot] : static_cast<uint16_t>(0U);
                 }
             }
 
@@ -288,7 +247,6 @@ void kernel_main() {
                 uint32_t existing_l1 = get_write_ptr(cb_existing_rm);
                 for (uint32_t r = 0; r < TILE_H; ++r) {
                     uint32_t flat = plan_buf[r];
-                    uint32_t row_idx = tr_global * TILE_H + r;
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
                     if (flat == SENTINEL) {
                         // Skipped row — fill via NOC DMA so tilize sees zeros.
@@ -310,7 +268,6 @@ void kernel_main() {
                     uint32_t src_l1 = get_read_ptr(cb_out0);
                     for (uint32_t r = 0; r < TILE_H; ++r) {
                         uint32_t flat = plan_buf[r];
-                        uint32_t row_idx = tr_global * TILE_H + r;
                         if (flat == SENTINEL) {
                             continue;
                         }

@@ -19,6 +19,16 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(t.storage_type() == tt::tt_metal::StorageType::DEVICE, "moe_ungroup: {} must be on device", name);
             TT_FATAL(t.buffer() != nullptr, "moe_ungroup: {} buffer is null", name);
             TT_FATAL(
+                t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "moe_ungroup: {} must be in DRAM, got {}",
+                name,
+                enchantum::to_string(t.buffer()->buffer_type()));
+            TT_FATAL(
+                t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+                "moe_ungroup: {} must be INTERLEAVED, got {}",
+                name,
+                enchantum::to_string(t.memory_config().memory_layout()));
+            TT_FATAL(
                 t.layout() == layout,
                 "moe_ungroup: {} must be {} layout, got {}",
                 name,
@@ -35,7 +45,6 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
     check(args.expert_out, "expert_out", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check(args.plan, "plan", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
     check(args.offsets, "offsets", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
-    check(args.counts, "counts", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
     check(args.metadata, "metadata", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
     check(args.scores, "scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
     check(args.local_expert_ids, "local_expert_ids", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
@@ -48,21 +57,19 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
 
     const auto& ps = args.plan.logical_shape();
     TT_FATAL(
-        ps[ps.rank() - 1] == attrs.t_cap, "moe_ungroup: plan last dim {} != T_cap {}", ps[ps.rank() - 1], attrs.t_cap);
+        ps.rank() == 4U && ps[0] == 1U && ps[1] == 1U && ps[2] == 1U && ps[3] == attrs.t_cap,
+        "moe_ungroup: plan must be [1,1,1,T_cap={}], got rank={} shape={}",
+        attrs.t_cap,
+        ps.rank(),
+        ps);
 
     const auto& os = args.offsets.logical_shape();
     TT_FATAL(
-        os[os.rank() - 1] == attrs.e_local + 1U,
-        "moe_ungroup: offsets last dim {} != E_local+1 {}",
-        os[os.rank() - 1],
-        attrs.e_local + 1U);
-
-    const auto& cs = args.counts.logical_shape();
-    TT_FATAL(
-        cs[cs.rank() - 1] == attrs.e_local,
-        "moe_ungroup: counts last dim {} != E_local {}",
-        cs[cs.rank() - 1],
-        attrs.e_local);
+        os.rank() == 4U && os[0] == 1U && os[1] == 1U && os[2] == 1U && os[3] == attrs.e_local + 1U,
+        "moe_ungroup: offsets must be [1,1,1,E_local+1={}], got rank={} shape={}",
+        attrs.e_local + 1U,
+        os.rank(),
+        os);
 
     const auto& ms = args.metadata.logical_shape();
     TT_FATAL(ms.rank() == 4U, "moe_ungroup: metadata must be 4D [D,B,S,K]");
@@ -113,7 +120,6 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
     const ttnn::Tensor& expert_out,
     const ttnn::Tensor& plan,
     const ttnn::Tensor& offsets,
-    const ttnn::Tensor& counts,
     const ttnn::Tensor& metadata,
     const ttnn::Tensor& scores,
     const ttnn::Tensor& local_expert_ids,
@@ -141,7 +147,6 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
         .expert_out = expert_out,
         .plan = plan,
         .offsets = offsets,
-        .counts = counts,
         .metadata = metadata,
         .scores = scores,
         .local_expert_ids = local_expert_ids,

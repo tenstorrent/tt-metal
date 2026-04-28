@@ -12,7 +12,6 @@ ttnn::Tensor moe_ungroup(
     const ttnn::Tensor& expert_out,
     const ttnn::Tensor& plan,
     const ttnn::Tensor& offsets,
-    const ttnn::Tensor& counts,
     const ttnn::Tensor& metadata,
     const ttnn::Tensor& scores,
     const ttnn::Tensor& local_expert_ids,
@@ -22,7 +21,7 @@ ttnn::Tensor moe_ungroup(
     uint32_t b,
     uint32_t s) {
     return ttnn::prim::ttml_moe_ungroup(
-        expert_out, plan, offsets, counts, metadata, scores, local_expert_ids, e_local, k, d, b, s);
+        expert_out, plan, offsets, metadata, scores, local_expert_ids, e_local, k, d, b, s);
 }
 
 }  // namespace ttml::metal

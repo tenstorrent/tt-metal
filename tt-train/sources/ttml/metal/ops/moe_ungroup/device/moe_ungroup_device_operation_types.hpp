@@ -24,7 +24,6 @@ struct tensor_args_t {
     ttnn::Tensor expert_out;        // [1, 1, T_cap, H]   TILE  bf16
     ttnn::Tensor plan;              // [1, 1, 1, T_cap]   ROW_MAJOR uint32
     ttnn::Tensor offsets;           // [1, 1, 1, E_local+1] ROW_MAJOR uint32
-    ttnn::Tensor counts;            // [1, 1, 1, E_local] ROW_MAJOR uint32
     ttnn::Tensor metadata;          // [D, B, S, K]       ROW_MAJOR uint16
     ttnn::Tensor scores;            // [D, B, S, K]       ROW_MAJOR bf16
     ttnn::Tensor local_expert_ids;  // [E_local]          ROW_MAJOR uint16

@@ -36,7 +36,6 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
     const ttnn::Tensor& expert_out,
     const ttnn::Tensor& plan,
     const ttnn::Tensor& offsets,
-    const ttnn::Tensor& counts,
     const ttnn::Tensor& metadata,
     const ttnn::Tensor& scores,
     const ttnn::Tensor& local_expert_ids,

@@ -17,7 +17,6 @@ namespace ttml::metal {
 //   expert_out      : [1, 1, T_cap, H]      TILE bf16   — FFN output, packed-by-expert
 //   plan            : [1, 1, 1, T_cap]      uint32      — moe_group's plan (flat src row)
 //   offsets         : [1, 1, 1, E_local+1]  uint32      — moe_group's offsets
-//   counts          : [1, 1, 1, E_local]    uint32      — moe_group's counts
 //   metadata        : [D, B, S, K]          uint16      — top-K expert ids per source token
 //   scores          : [D, B, S, K]          bf16        — top-K weights per source token
 //   local_expert_ids: [E_local]             uint16      — global ids of this device's experts
@@ -27,19 +26,18 @@ namespace ttml::metal {
 //
 // Algorithm:
 //   - Outer loop over experts e in 0..E_local. Within one expert, the input
-//     rows [offsets[e], offsets[e]+counts[e]) target pairwise distinct output
-//     tokens (a token's top-K contains e at most once), so cores can scatter
-//     in parallel without atomics.
+//     rows offsets[e]..offsets[e+1] target pairwise distinct output tokens
+//     (a token's top-K contains e at most once), so cores can scatter in
+//     parallel without atomics.
 //   - Cross-expert collisions (a token whose top-K hits multiple local
 //     experts) are handled by inter-expert barriers: cores RMW-accumulate
 //     their per-expert contributions into the output, expert-by-expert.
-//   - Expert 0 writes (no DRAM read); subsequent experts RMW. Output is
-//     pre-zeroed by the kernel before the per-expert loop.
+//   - Output is pre-zeroed by the kernel before the per-expert loop, so the
+//     first expert to touch a row reads zero and effectively writes.
 ttnn::Tensor moe_ungroup(
     const ttnn::Tensor& expert_out,
     const ttnn::Tensor& plan,
     const ttnn::Tensor& offsets,
-    const ttnn::Tensor& counts,
     const ttnn::Tensor& metadata,
     const ttnn::Tensor& scores,
     const ttnn::Tensor& local_expert_ids,

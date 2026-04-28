@@ -114,8 +114,8 @@ void kernel_main() {
     //   my_real_count_per_expert[e] = my_end_in_e - my_start_in_e
     // so the per-expert loop below can derive tr_global directly from the
     // cached start without redoing the expert_total_tr / my_count_e math.
-    uint32_t tr_start_per_expert[64];       // upper bound on E_local
-    uint32_t my_real_count_per_expert[64];  // upper bound on E_local
+    uint32_t tr_start_per_expert[e_local];
+    uint32_t my_real_count_per_expert[e_local];
     uint32_t my_total_active_steps = 0U;
     for (uint32_t e = 0; e < e_local; ++e) {
         uint32_t expert_start_tr = offsets_l1[e] / TILE_H;

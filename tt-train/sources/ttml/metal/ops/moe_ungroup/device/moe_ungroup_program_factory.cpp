@@ -36,18 +36,28 @@ constexpr uint32_t kCbCtrl = tt::CBIndex::c_10;         // NCRISC->compute: per-
 
 constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 
+// Pick num_chunks such that:
+//   1. tiles_per_chunk = Wt / num_chunks divides Wt evenly (no last-chunk
+//      remainder — the kernels read/process exactly tiles_per_chunk tiles
+//      per chunk and have no per-chunk variable-size code path).
+//   2. The L1 strip (32 rows × tiles_per_chunk × 64 B) stays under
+//      kTargetChunkBytes when possible.
+// Falls back to the smallest divisor that respects the cap; for prime Wt
+// that may be 1 (single chunk covering all of Wt).
 uint32_t pick_num_chunks(uint32_t h) {
-    uint32_t row_bytes = h * 2U;
-    uint32_t strip_bytes = 32U * row_bytes;
-    uint32_t nc = (strip_bytes + kTargetChunkBytes - 1U) / kTargetChunkBytes;
-    if (nc == 0U) {
-        nc = 1U;
-    }
     uint32_t Wt = h / tt::constants::TILE_WIDTH;
-    if (nc > Wt) {
-        nc = Wt;
+    uint32_t tile_row_bytes = 32U * tt::constants::TILE_WIDTH * 2U;  // = 2 KiB per tile-column
+    uint32_t tpc_cap = kTargetChunkBytes / tile_row_bytes;
+    if (tpc_cap == 0U) {
+        tpc_cap = 1U;
     }
-    return nc;
+    // Smallest num_chunks that divides Wt and gives tiles_per_chunk <= cap.
+    for (uint32_t nc = 1U; nc <= Wt; ++nc) {
+        if (Wt % nc == 0U && (Wt / nc) <= tpc_cap) {
+            return nc;
+        }
+    }
+    return Wt;  // worst case: tiles_per_chunk = 1
 }
 
 }  // namespace
@@ -103,8 +113,10 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             .set_page_size(kCbOut, bf16_tile_bytes);
     CreateCircularBuffer(program, worker_all, cb_out_cfg);
 
-    // cb_zero: small reader scratch for offsets (32B aligned, holds (E_local+1)*4 + slack)
-    uint32_t cb_zero_bytes = ((h * 2U + 31U) & ~31U);  // up to h bf16 zeros (also used to hold offsets)
+    // cb_zero: reader scratch for the offsets DMA. Sized from (E_local+1)*4
+    // bytes (the offsets payload), L1-aligned for the NOC read.
+    const uint32_t kL1_ALIGN = tt::tt_metal::hal::get_l1_alignment();
+    uint32_t cb_zero_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
     tt::tt_metal::CircularBufferConfig cb_zero_cfg =
         tt::tt_metal::CircularBufferConfig(cb_zero_bytes, {{kCbZero, tt::DataFormat::UInt32}})
             .set_page_size(kCbZero, cb_zero_bytes);
@@ -158,25 +170,22 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             .set_page_size(kCbCtrl, cb_ctrl_bytes);
     CreateCircularBuffer(program, worker_all, cb_ctrl_cfg);
 
-    // cb_scratch: writer's big scratch — zero buf + offsets + counts + leids + plan + md + sc + w + rmw_buf
-    const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
-    auto round_up = [l1_align](uint32_t x) { return ((x + l1_align - 1U) / l1_align) * l1_align; };
+    // cb_scratch: writer's big scratch — zero buf + offsets + leids + plan + md + sc + w + rmw_buf
     uint32_t scratch_bytes = 0U;
-    scratch_bytes += round_up(h * 2U);                             // zero_buf
-    scratch_bytes += round_up((e_local + 1U) * sizeof(uint32_t));  // offsets_buf
-    scratch_bytes += round_up(e_local * sizeof(uint32_t));         // counts_buf
-    scratch_bytes += round_up(e_local * sizeof(uint16_t));         // leids_buf
-    scratch_bytes += round_up(32U * sizeof(uint32_t));             // plan_buf
+    scratch_bytes += tt::round_up(h * 2U, kL1_ALIGN);                             // zero_buf
+    scratch_bytes += tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);  // offsets_buf
+    scratch_bytes += tt::round_up(e_local * sizeof(uint16_t), kL1_ALIGN);         // leids_buf
+    scratch_bytes += tt::round_up(32U * sizeof(uint32_t), kL1_ALIGN);             // plan_buf
     // md_buf and sc_buf: 32 rows * aligned page each.
-    uint32_t md_aligned = round_up(k * sizeof(uint16_t));
-    scratch_bytes += round_up(32U * md_aligned);     // md_buf
-    scratch_bytes += round_up(32U * md_aligned);     // sc_buf (same row stride as md)
-    scratch_bytes += round_up(32U * sizeof(uint16_t));  // w_buf (bf16, copied from sc_buf)
+    uint32_t md_aligned = tt::round_up(k * sizeof(uint16_t), kL1_ALIGN);
+    scratch_bytes += tt::round_up(32U * md_aligned, kL1_ALIGN);        // md_buf
+    scratch_bytes += tt::round_up(32U * md_aligned, kL1_ALIGN);        // sc_buf (same row stride as md)
+    scratch_bytes += tt::round_up(32U * sizeof(uint16_t), kL1_ALIGN);  // w_buf (bf16, copied from sc_buf)
     // stage_buf: 32 contiguous slots of hidden_chunk_bytes — required by the
     // OPT 1 barrier-coalesced writer. Worst-case size: 32 * 128KB / 32 = 128KB
     // (chunk size is capped at kTargetChunkBytes).
-    scratch_bytes += round_up(32U * hidden_chunk_bytes);  // stage_buf
-    scratch_bytes = round_up(scratch_bytes);
+    scratch_bytes += tt::round_up(32U * hidden_chunk_bytes, kL1_ALIGN);  // stage_buf
+    scratch_bytes = tt::round_up(scratch_bytes, kL1_ALIGN);
 
     tt::tt_metal::CircularBufferConfig cb_scratch_cfg =
         tt::tt_metal::CircularBufferConfig(scratch_bytes, {{kCbScratch, tt::DataFormat::UInt32}})
@@ -203,7 +212,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     auto* ungrouped_buf = output.buffer();
     auto* plan_buf = args.plan.buffer();
     auto* offsets_buf = args.offsets.buffer();
-    auto* counts_buf = args.counts.buffer();
     auto* metadata_buf = args.metadata.buffer();
     auto* scores_buf = args.scores.buffer();
     auto* leids_buf = args.local_expert_ids.buffer();
@@ -270,7 +278,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(metadata_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(scores_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(leids_buf).append_to(writer_ct_args);
@@ -320,11 +327,10 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             ungrouped_buf->address(),  // 0
             plan_buf->address(),       // 1
             offsets_buf->address(),    // 2
-            counts_buf->address(),     // 3
-            metadata_buf->address(),   // 4
-            scores_buf->address(),     // 5
-            leids_buf->address(),      // 6
-            worker_idx,                // 7 my_core_idx
+            metadata_buf->address(),   // 3
+            scores_buf->address(),     // 4
+            leids_buf->address(),      // 5
+            worker_idx,                // 6 my_core_idx
         };
 
         SetRuntimeArgs(program, is_g1 ? reader_kernel_g1 : reader_kernel_g2, core, reader_rt);
@@ -356,7 +362,6 @@ void MoeUngroupProgramFactory::override_runtime_arguments(
     auto* ungrouped_buf = output.buffer();
     auto* plan_buf = tensor_args.plan.buffer();
     auto* offsets_buf = tensor_args.offsets.buffer();
-    auto* counts_buf = tensor_args.counts.buffer();
     auto* metadata_buf = tensor_args.metadata.buffer();
     auto* scores_buf = tensor_args.scores.buffer();
     auto* leids_buf = tensor_args.local_expert_ids.buffer();
@@ -373,10 +378,9 @@ void MoeUngroupProgramFactory::override_runtime_arguments(
         writer_rt[0] = ungrouped_buf->address();
         writer_rt[1] = plan_buf->address();
         writer_rt[2] = offsets_buf->address();
-        writer_rt[3] = counts_buf->address();
-        writer_rt[4] = metadata_buf->address();
-        writer_rt[5] = scores_buf->address();
-        writer_rt[6] = leids_buf->address();
+        writer_rt[3] = metadata_buf->address();
+        writer_rt[4] = scores_buf->address();
+        writer_rt[5] = leids_buf->address();
     }
 }
 
