@@ -66,7 +66,6 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
-    // SHARD SPEC VALIDATION
     if (a.is_sharded()) {
         const auto& shard_spec = a.shard_spec().value();
         const auto& shard_shape = shard_spec.shape;
@@ -76,7 +75,6 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         const auto program_grid =
             std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
 
-        // 1. Grid hierarchy: shard_spec.grid ⊆ program_config.grid ⊆ device.grid
         TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
 
         const CoreRange device_range(CoreCoord{0, 0}, CoreCoord{device_grid.x - 1, device_grid.y - 1});
@@ -94,25 +92,18 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             program_grid.x,
             program_grid.y);
 
-        // 2. Shard shape must be non-zero
         TT_FATAL(
             shard_shape[0] > 0 && shard_shape[1] > 0,
             "shard shape must be non-zero, got H={} W={}",
             shard_shape[0],
             shard_shape[1]);
 
-        // 3. Tile alignment.
-        //    Shard height (per_core_M) MUST be tile-aligned; the kernel divides exactly by tile_height.
-        //    Shard width  (per_core_N) is intentionally NOT enforced here: groupnorm_sharded_program_factory
-        //    handles non-tile-aligned widths via per_core_Nt = ceil(per_core_N / tile_width) and the
-        //    `reader_repack_output` path. Other normalization ops without that path must enforce it.
         TT_FATAL(
             shard_shape[0] % tile_height == 0,
             "shard height {} must be divisible by tile height {}",
             shard_shape[0],
             tile_height);
 
-        // 4. Total elements: num_cores * per-shard elements == physical tensor volume
         const auto num_cores = shard_grid.num_cores();
         const auto total_from_shards = static_cast<uint64_t>(num_cores) * shard_shape[0] * shard_shape[1];
         TT_FATAL(
