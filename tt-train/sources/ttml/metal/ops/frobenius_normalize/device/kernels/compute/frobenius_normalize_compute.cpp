@@ -35,6 +35,20 @@ constexpr auto cb_sq_partial = tt::CBIndex::c_7;
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
+inline void drain_padding_tiles() {
+    constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
+    if constexpr (padding > 0) {
+        cb_wait_front(cb_input, padding);
+        cb_pop_front(cb_input, padding);
+    }
+}
+
+inline void sfpu_reduce_sum_fp32(uint32_t dst_idx) {
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(dst_idx);
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(dst_idx);
+}
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t eps_u32 = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -69,14 +83,8 @@ void kernel_main() {
         }
     }
 
-    // Drain padding tiles
-    {
-        constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
-        if constexpr (padding > 0) {
-            cb_wait_front(cb_input, padding);
-            cb_pop_front(cb_input, padding);
-        }
-    }
+    // Drain Pass 1 padding tiles
+    drain_padding_tiles();
 
     // =========================================================================
     // Phase 2: sfpu_reduce → scalar. Pack to cb_sq_partial for reader to write to origin.
@@ -91,9 +99,7 @@ void kernel_main() {
         copy_tile(cb_sq_acc, 0, 0);
         cb_pop_front(cb_sq_acc, 1);
 
-        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
-        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+        sfpu_reduce_sum_fp32(0);
 
         tile_regs_commit();
         pack_and_push(0, cb_sq_partial);
@@ -115,9 +121,7 @@ void kernel_main() {
             copy_tile(cb_recv, 0, 0);
             cb_pop_front(cb_recv, 1);
 
-            sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-            sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
-            sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+            sfpu_reduce_sum_fp32(0);
 
             sqrt_tile_init();
             sqrt_tile(0);
@@ -160,10 +164,6 @@ void kernel_main() {
             pack_and_push_block(cb_output, current);
         }
         // Drain Pass 2 padding tiles
-        constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
-        if constexpr (padding > 0) {
-            cb_wait_front(cb_input, padding);
-            cb_pop_front(cb_input, padding);
-        }
+        drain_padding_tiles();
     }
 }
