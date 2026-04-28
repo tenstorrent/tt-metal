@@ -39,6 +39,8 @@ PERF_TARGETS = {
     2048: {"min_decode_tok_s": 4.0, "max_ttft_s": 5.0},
     4096: {"min_decode_tok_s": 2.0, "max_ttft_s": 10.0},
     8192: {"min_decode_tok_s": 1.0, "max_ttft_s": 20.0},
+    16384: {"min_decode_tok_s": 0.5, "max_ttft_s": 35.0},
+    32768: {"min_decode_tok_s": 0.5, "max_ttft_s": 70.0},
 }
 
 # Frankenstein prompt config: seqlen → json_index in eval_frankenstein_long.json.
@@ -175,6 +177,8 @@ MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K tok
         (4096, 100, False),
         (8192, 100, True),
         (8192, 100, False),
+        (16384, 100, True),
+        (32768, 100, True),
         (65536, 100, True),
         (65536, 100, False),
         (131072, 100, True),
@@ -186,6 +190,8 @@ MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K tok
         "paged_4k",
         "traced_8k",
         "paged_8k",
+        "traced_16k",
+        "traced_32k",
         "traced_64k",
         "paged_64k",
         "traced_128k",
