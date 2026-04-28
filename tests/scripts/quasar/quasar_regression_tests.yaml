@@ -47,6 +47,9 @@ unit_tests_legacy:
     env:
       TT_METAL_LOGGER_LEVEL: warning
 
+  - filter: "./build/test/tt_metal/unit_tests_legacy --gtest_filter=LegacyVsNonLegacyTest/LegacyVsNonLegacyTest.GlobalsAndTLS/Threaded"
+    config: 1x3
+
 unit_tests_debug_tools:
   - filter: "*WatcherAssertTests*Brisc"
     config: 1x3
