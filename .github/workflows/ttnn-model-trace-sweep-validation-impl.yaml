@@ -149,24 +149,6 @@ jobs:
             cat validation_artifacts/config_hash_preflight.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Normalize master JSON for comparison
-        run: |
-          python3 -c "
-          import json
-          from model_tracer.generic_ops_tracer import normalize_arguments_for_comparison
-
-          path = 'model_tracer/traced_operations/ttnn_operations_master.json'
-          with open(path) as f:
-              data = json.load(f)
-          for op_name, op_data in data.get('operations', {}).items():
-              for cfg in op_data.get('configurations', []):
-                  if 'arguments' in cfg:
-                      cfg['arguments'] = normalize_arguments_for_comparison(cfg['arguments'], op_name)
-          with open(path, 'w') as f:
-              json.dump(data, f, indent=2, sort_keys=True)
-          print('Normalized master JSON arguments for comparison')
-          "
-
       - name: Upload master JSON artifact
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
