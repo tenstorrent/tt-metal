@@ -968,6 +968,187 @@ def _build_prefill_device_program(
     )
 
 
+def _build_prefill_seq_major_device_program(
+    conv_out_dev,
+    a_dev,
+    b_dev,
+    neg_exp_A_dev,
+    dt_bias_dev,
+    norm_w_dev,
+    scale_dev,
+    rms_scale_dev,
+    rms_eps_dev,
+    state_dev,
+    output_dev,
+    num_pairs_total,
+    num_tokens,
+    num_cores,
+    grid,
+    state_in_l1=False,
+    Nv_TP=12,
+    Nk_TP=4,
+    repeat_factor=3,
+    key_dim_tp=512,
+):
+    """ProgramDescriptor for the seq-major GDN prefill variant.
+
+    Identical to _build_prefill_device_program except the compute kernel
+    path is COMPUTE_PREFILL_WITH_NORM_PATH (which folds in per-head RMSNorm
+    on the kernel's output before push to cb_out) and the writer path will
+    move to WRITER_PREFILL_SEQ_MAJOR_PATH in a later task.
+    """
+    max_cores = grid.x * grid.y
+    num_cores = min(num_cores, num_pairs_total, max_cores)
+    pairs_per_core = num_pairs_total // num_cores
+    remainder = num_pairs_total % num_cores
+
+    core_coords = []
+    for i in range(num_cores):
+        core_coords.append(ttnn.CoreCoord(i % grid.x, i // grid.x))
+
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_coords])
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    pair_offset = 0
+    core_pair_counts = []
+
+    for i, cc in enumerate(core_coords):
+        n = pairs_per_core + (1 if i < remainder else 0)
+        core_pair_counts.append(n)
+        reader_rt_args[cc.x][cc.y] = [
+            conv_out_dev.buffer_address(),  # 0
+            a_dev.buffer_address(),  # 1
+            b_dev.buffer_address(),  # 2
+            neg_exp_A_dev.buffer_address(),  # 3
+            dt_bias_dev.buffer_address(),  # 4
+            norm_w_dev.buffer_address(),  # 5
+            scale_dev.buffer_address(),  # 6
+            rms_scale_dev.buffer_address(),  # 7
+            state_dev.buffer_address(),  # 8
+            rms_eps_dev.buffer_address(),  # 9
+            pair_offset,  # 10
+            n,  # 11
+        ]
+        writer_rt_args[cc.x][cc.y] = [
+            output_dev.buffer_address(),
+            state_dev.buffer_address(),
+            pair_offset,
+            n,
+        ]
+        pair_offset += n
+
+    key_tile_off = key_dim_tp // 32
+    v_tile_off = 2 * key_tile_off
+    qkv_dim_tp = key_dim_tp * 2 + Nv_TP * (128)
+    conv_tiles_per_row = qkv_dim_tp // 32
+    ab_tiles_per_row = (Nv_TP + 31) // 32
+
+    cb_descriptors = [
+        _make_cb(0, Kt, core_ranges),  # cb_q_raw
+        _make_cb(1, Kt, core_ranges),  # cb_k_raw
+        _make_cb(2, Kt, core_ranges),  # cb_k_col
+        _make_cb(3, Vt, core_ranges),  # cb_v
+        _make_cb(4, 1, core_ranges),  # cb_g
+        _make_cb(5, 1, core_ranges),  # cb_beta
+        _make_cb(6, STATE_TILES, core_ranges),  # cb_state_in
+        _make_cb(7, STATE_TILES, core_ranges),  # cb_state_b
+        _make_cb(8, STATE_TILES, core_ranges),  # cb_state_out
+        _make_cb(9, 1, core_ranges),  # cb_a
+        _make_cb(10, 1, core_ranges),  # cb_b
+        _make_cb(12, 1, core_ranges),  # cb_neg_exp_A
+        _make_cb(13, 1, core_ranges),  # cb_dt_bias
+        _make_cb(14, Vt, core_ranges),  # cb_norm_w
+        _make_cb(15, 1, core_ranges),  # cb_scale
+        _make_cb(16, Vt, core_ranges),  # cb_out
+        _make_cb(17, Kt, core_ranges),  # cb_q
+        _make_cb(18, Kt, core_ranges),  # cb_k_row
+        _make_cb(21, 1, core_ranges),  # cb_scratch
+        _make_cb(24, 1, core_ranges),  # cb_exp_g
+        _make_cb(25, Vt, core_ranges),  # cb_kv_mem
+        _make_cb(26, Vt, core_ranges),  # cb_delta
+        _make_cb(27, Vt, core_ranges),  # cb_delta_s
+        _make_cb(28, Kt, core_ranges),  # cb_sq_acc
+        _make_cb(29, 1, core_ranges),  # cb_tmp
+        _make_cb(31, 1, core_ranges),  # cb_rms_scale
+        _make_cb(19, 1, core_ranges),  # cb_reduce_scaler
+        _make_cb(20, 1, core_ranges),  # cb_rms_eps
+    ]
+
+    state_l1_flag = 1 if state_in_l1 else 0
+    packed_reduce_scaler = 0x3F803F80
+
+    groups = {}
+    for i, cc in enumerate(core_coords):
+        n = core_pair_counts[i]
+        groups.setdefault(n, []).append(cc)
+
+    all_kernels = []
+    for n_pairs, cores in groups.items():
+        if n_pairs == 0:
+            continue
+
+        group_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+        group_reader_rt = ttnn.RuntimeArgs()
+        group_writer_rt = ttnn.RuntimeArgs()
+        for c in cores:
+            group_reader_rt[c.x][c.y] = list(reader_rt_args[c.x][c.y])
+            group_writer_rt[c.x][c.y] = list(writer_rt_args[c.x][c.y])
+
+        reader_ct = [
+            Kt,
+            Vt,
+            BF16_TILE_BYTES,
+            state_l1_flag,
+            packed_reduce_scaler,
+            Nv_TP,
+            Nk_TP,
+            repeat_factor,
+            key_tile_off,
+            v_tile_off,
+            num_tokens,
+            conv_tiles_per_row,
+            ab_tiles_per_row,
+        ]
+        # Writer compile-time args still match the OLD writer's layout for now.
+        # Task 4 swaps in the seq-major writer with its own compile-time args.
+        writer_ct = [Kt, Vt, BF16_TILE_BYTES, state_l1_flag, num_tokens]
+
+        reader_kd = ttnn.KernelDescriptor(
+            kernel_source=READER_PREFILL_PATH,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=reader_ct,
+            runtime_args=group_reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        writer_kd = ttnn.KernelDescriptor(
+            kernel_source=WRITER_PREFILL_PATH,  # OLD writer for Task 2-3; swapped in Task 4
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=writer_ct,
+            runtime_args=group_writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        compute_kd = ttnn.KernelDescriptor(
+            kernel_source=COMPUTE_PREFILL_WITH_NORM_PATH,  # NEW compute path
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=group_ranges,
+            compile_time_args=[Kt, Vt, n_pairs, num_tokens],
+            runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                dst_full_sync_en=False,
+            ),
+        )
+        all_kernels.extend([reader_kd, writer_kd, compute_kd])
+
+    return ttnn.ProgramDescriptor(kernels=all_kernels, cbs=cb_descriptors)
+
+
 def _gdn_prefill_fused(
     conv_out,
     a_fused,
@@ -1096,6 +1277,152 @@ def gdn_prefill_fused(
     """
     logger.debug(f"GDN prefill: num_pairs={num_pairs}, num_tokens={num_tokens}")
     _gdn_prefill_fused(
+        conv_out,
+        a_fused,
+        b_fused,
+        neg_exp_A,
+        dt_bias,
+        norm_w,
+        scale_tt,
+        rms_scale_tt,
+        rms_eps_tt,
+        state,
+        output,
+        num_pairs_total=num_pairs,
+        num_tokens=num_tokens,
+        num_cores=num_cores,
+        Nv_TP=Nv_TP,
+        Nk_TP=Nk_TP,
+        repeat_factor=repeat_factor,
+        key_dim_tp=key_dim_tp,
+    )
+
+
+def _gdn_prefill_fused_seq_major(
+    conv_out,
+    a_fused,
+    b_fused,
+    neg_exp_A,
+    dt_bias,
+    norm_w,
+    scale_tt,
+    rms_scale_tt,
+    rms_eps_tt,
+    state,
+    output,
+    num_pairs_total,
+    num_tokens,
+    num_cores=12,
+    Nv_TP=12,
+    Nk_TP=4,
+    repeat_factor=3,
+    key_dim_tp=512,
+):
+    """Execute the seq-major prefill GDN kernel (fused-norm compute + seq-major writer)."""
+    mesh_device = conv_out.device()
+    mesh_shape = mesh_device.shape
+    num_devices = mesh_shape[0] * mesh_shape[1]
+
+    state_in_l1 = state.memory_config().buffer_type == ttnn.BufferType.L1
+
+    all_tensors = [
+        conv_out,
+        a_fused,
+        b_fused,
+        neg_exp_A,
+        dt_bias,
+        norm_w,
+        scale_tt,
+        rms_scale_tt,
+        rms_eps_tt,
+        state,
+        output,
+    ]
+
+    if num_devices == 1:
+        devs = [ttnn.get_device_tensors(t)[0] for t in all_tensors]
+        grid = devs[0].device().compute_with_storage_grid_size()
+        program = _build_prefill_seq_major_device_program(
+            *devs,
+            num_pairs_total,
+            num_tokens,
+            num_cores,
+            grid,
+            state_in_l1=state_in_l1,
+            Nv_TP=Nv_TP,
+            Nk_TP=Nk_TP,
+            repeat_factor=repeat_factor,
+            key_dim_tp=key_dim_tp,
+        )
+        return ttnn.generic_op(all_tensors, program)
+
+    per_device = [ttnn.get_device_tensors(t) for t in all_tensors]
+    mesh_program = ttnn.MeshProgramDescriptor()
+    for row in range(mesh_shape[0]):
+        for col in range(mesh_shape[1]):
+            device_idx = row * mesh_shape[1] + col
+            coord = ttnn.MeshCoordinate(row, col)
+            devs = [per_device[i][device_idx] for i in range(len(all_tensors))]
+            grid = devs[0].device().compute_with_storage_grid_size()
+            program = _build_prefill_seq_major_device_program(
+                *devs,
+                num_pairs_total,
+                num_tokens,
+                num_cores,
+                grid,
+                state_in_l1=state_in_l1,
+                Nv_TP=Nv_TP,
+                Nk_TP=Nk_TP,
+                repeat_factor=repeat_factor,
+                key_dim_tp=key_dim_tp,
+            )
+            mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
+
+    return ttnn.generic_op(all_tensors, mesh_program)
+
+
+def gdn_prefill_fused_seq_major(
+    conv_out,
+    a_fused,
+    b_fused,
+    neg_exp_A,
+    dt_bias,
+    norm_w,
+    scale_tt,
+    rms_scale_tt,
+    rms_eps_tt,
+    state,
+    output,
+    num_pairs,
+    num_tokens,
+    num_cores=12,
+    Nv_TP=12,
+    Nk_TP=4,
+    repeat_factor=3,
+    key_dim_tp=512,
+):
+    """Prefill GDN with fused per-head RMSNorm and seq-major dense output.
+
+    Args:
+      conv_out:   [1, N, qkv_dim_tp]              TILE BFLOAT16 DRAM
+      a_fused:    [1, N, Nv_TP]                   TILE BFLOAT16 DRAM
+      b_fused:    [1, N, Nv_TP]                   TILE BFLOAT16 DRAM
+      neg_exp_A:  [1, 1, Nv_TP]                   TILE BFLOAT16
+      dt_bias:    [1, 1, Nv_TP]                   TILE BFLOAT16
+      norm_w:     [1, 1, Dv]                      TILE BFLOAT16  (CONSUMED by the
+                  compute kernel as the per-head RMSNorm weight — no longer
+                  unused-for-API-compat as in gdn_prefill_fused.)
+      scale_tt:   [1, 1, 1]                       TILE BFLOAT16
+      rms_scale_tt:[1, 1, 1]                      TILE BFLOAT16  (consumed)
+      rms_eps_tt: [1, 1, 1]                       TILE BFLOAT16  (consumed,
+                  expected to equal Dv * 1e-6)
+      state:      [num_pairs, Dk, Dv]             TILE BFLOAT16  (in-place)
+      output:     [1, 1, num_tokens, num_pairs*Dv] TILE BFLOAT16 DRAM
+                  (NOTE: shape differs from gdn_prefill_fused, which uses
+                  [num_pairs*N, 1, Dv].)
+    """
+    logger.debug(f"GDN prefill seq-major: num_pairs={num_pairs}, num_tokens={num_tokens}")
+    _gdn_prefill_fused_seq_major(
         conv_out,
         a_fused,
         b_fused,
