@@ -43,6 +43,10 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
         len(step_time_matches),
         len(mfu_matches),
     )
+    # Make MFU optional for now
+    if not mfu_len:
+        mfu_matches = step_len * [None]
+        mfu_len = len(mfu_matches)
     if not (step_len == loss_len == step_time_len == mfu_len):
         raise ValueError(
             f"Length of pattern matches not equal. step: {step_len}, loss: {loss_len}, step_time: {step_time_len}, mfu: {mfu_len}"
@@ -50,7 +54,8 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
 
     step_summary = []
     for step, loss, step_time, mfu in zip(step_matches, loss_matches, step_time_matches, mfu_matches):
-        step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time), "mfu": float(mfu)})
+        mfu = float(mfu) if mfu is not None else None
+        step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time), "mfu": mfu})
 
     return step_summary
 
@@ -102,6 +107,7 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
 
     # Get last MFU value
     mfu = summary[-1]["mfu"]
+    mfu_fmt = str(f"{mfu:,.2f}%") if mfu is not None else str("None")
 
     print("\n--- Step Information ---")
     print(f"  Total steps:   {num_steps}")
@@ -111,7 +117,7 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
     print(f"  Median step time:   {step_time_p50:,.2f} ms")
     print(f"  Step time at P95:   {step_time_p95:,.2f} ms")
     print(f"  Step time at P99:   {step_time_p99:,.2f} ms")
-    print(f"  MFU:                {mfu:,.2f}%")
+    print(f"  MFU:                {mfu_fmt}")
 
     breakdown = {
         "last_loss": last_loss,
