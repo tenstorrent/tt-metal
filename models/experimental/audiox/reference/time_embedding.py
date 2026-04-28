@@ -1,11 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-#
-# PyTorch reference for the AudioX DiT timestep embedding -- the
-# `FourierFeatures` block (audiox/models/blocks.py) followed by the
-# `to_timestep_embed` MLP defined inline in audiox/models/dit.py
-# (DiffusionTransformer.__init__). Reproduced here for parity testing.
 
 import math
 

@@ -1,12 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-#
-# PyTorch reference for AudioX rectified-flow samplers, distilled from the
-# upstream AudioX repository (https://github.com/ZeyueT/AudioX,
-# audiox/inference/sampling.py) for parity testing. Only the rectified-flow
-# path is reproduced here -- the v-diffusion / k-diffusion sampler depends on
-# the external `k_diffusion` package and is out of scope for this port.
 
 import torch
 

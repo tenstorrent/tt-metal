@@ -1,13 +1,10 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
 
-
-def _to_tt(t: torch.Tensor, mesh_device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-    return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+from models.experimental.audiox.tt.common import to_tt
 
 
 def precompute_rotary_cos_sin(
@@ -29,7 +26,7 @@ def precompute_rotary_cos_sin(
     freqs = torch.cat((freqs, freqs), dim=-1)
     cos = freqs.cos().unsqueeze(0).unsqueeze(0)
     sin = freqs.sin().unsqueeze(0).unsqueeze(0)
-    return _to_tt(cos, mesh_device, dtype=dtype), _to_tt(sin, mesh_device, dtype=dtype)
+    return to_tt(cos, mesh_device, dtype=dtype), to_tt(sin, mesh_device, dtype=dtype)
 
 
 def apply_rotary_pos_emb(t: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
