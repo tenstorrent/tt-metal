@@ -131,7 +131,6 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
-            num_layers=int(os.environ.get("GPT_OSS_NUM_LAYERS", 0)) or None,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -756,12 +755,6 @@ def test_gpt_oss_demo(
             logger.info(f"Prefill finished")
 
         logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
-
-        if os.environ.get("GPT_OSS_SKIP_DECODE", "0") == "1":
-            logger.warning("GPT_OSS_SKIP_DECODE=1: returning after prefill (no decode loop)")
-            compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
-            logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
-            return
 
         # Initialize generation state like tt_transformers
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
