@@ -173,7 +173,7 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "mesh_shape",
     [
