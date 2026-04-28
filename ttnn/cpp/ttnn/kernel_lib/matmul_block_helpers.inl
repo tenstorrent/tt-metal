@@ -26,6 +26,7 @@ template <
     bool pack_last_to_interm,
     bool pack_relu,
     OutputLayout layout,
+    matmul_config::InitMode init_mode,
     typename PostComputeFn,
     typename PreKBlockFn,
     typename Buf>
@@ -56,6 +57,14 @@ ALWI void matmul_block(
     const uint32_t block_w = shape.in0_block_w;
     const uint32_t num_k_blocks = shape.num_k_blocks;
     const uint32_t batch = shape.batch;
+
+    // Init dispatch: helper owns mm_block_init / mm_block_init_short. Caller does
+    // compute_kernel_hw_startup once at boot; everything else is internal.
+    if constexpr (init_mode == matmul_config::InitMode::Full) {
+        mm_block_init(in0_cb_id, in1_cb_id, interm_cb_id, transpose, out_subblock_w, out_subblock_h, block_w);
+    } else if constexpr (init_mode == matmul_config::InitMode::Short) {
+        mm_block_init_short(in0_cb_id, in1_cb_id, transpose, out_subblock_w, out_subblock_h, block_w);
+    }
 
     const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
     const uint32_t in0_subblock_num_tiles = out_subblock_h * block_w;

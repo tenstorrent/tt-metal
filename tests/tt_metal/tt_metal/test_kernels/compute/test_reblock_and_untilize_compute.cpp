@@ -45,16 +45,16 @@ void kernel_main() {
     // Bootstrap compute infrastructure for the untilize-only pipeline.
     compute_kernel_hw_startup(interm_cb, out_cb);
 
-    // Helper prereqs: pack_untilize_dest_init + copy_tile_to_dst_init_short
-    // must be called once before the first invocation, and pack_untilize_uninit
-    // after the last. Mirrors the production caller.
-    pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb);
-    copy_tile_to_dst_init_short(interm_cb);
-
+    // Helper owns its own init/uninit. Use the standalone init/uninit + Neither
+    // mode pattern (same as the production fused-bias kernel) so the row-group
+    // loop pays init cost only once.
+    compute_kernel_lib::reblock_and_untilize_init<out_subblock_w, out_block_w>(interm_buf, out_buf);
     for (uint32_t g = 0; g < num_row_groups; g++) {
-        compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
+        compute_kernel_lib::reblock_and_untilize<
+            out_subblock_w,
+            out_block_w,
+            compute_kernel_lib::reblock_untilize_config::InitUninitMode::Neither>(
             num_subblocks_w, out_subblock_num_tiles, out_subblock_h, interm_buf, out_buf);
     }
-
-    pack_untilize_uninit(interm_cb);
+    compute_kernel_lib::reblock_and_untilize_uninit(interm_buf);
 }

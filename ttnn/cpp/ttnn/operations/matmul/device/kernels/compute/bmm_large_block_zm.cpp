@@ -34,8 +34,6 @@ void kernel_main() {
         compute_kernel_lib::OutputLayout::SubblockMajor;
 #endif
 
-    mm_block_init(cb_in0, cb_in1, cb_intermed0, false, out_subblock_w, out_subblock_h, in0_block_w);
-
     for (uint32_t b = 0; b < batch; b++) {
         compute_kernel_lib::matmul_block<
             /*transpose=*/false,

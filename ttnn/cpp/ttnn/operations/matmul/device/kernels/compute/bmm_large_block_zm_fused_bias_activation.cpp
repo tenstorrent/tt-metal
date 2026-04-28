@@ -174,9 +174,7 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
-
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // matmul_block + reblock_and_untilize own their own init/uninit (default modes).
 
     // ── Main loop: batch × output blocks ────────────────────────────────
     for (uint32_t b = 0; b < batch; b++) {
@@ -235,6 +233,7 @@ void kernel_main() {
                         pack_last_to_interm,
                         do_relu,
                         output_layout,
+                        matmul_config::InitMode::Full,
                         PostFn,
                         XposeFn>(
                         in0_buf,
@@ -254,6 +253,7 @@ void kernel_main() {
                         pack_last_to_interm,
                         do_relu,
                         output_layout,
+                        matmul_config::InitMode::Full,
                         PostFn,
                         NoPreKBlock>(
                         in0_buf,
@@ -322,13 +322,15 @@ void kernel_main() {
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif  // !FUSE_BIAS
-                    pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(mm_partials_cb_id);
+                    reblock_and_untilize_init<out_subblock_w, out_block_w>(mm_partials_buf, out_buf);
                     for (uint32_t i = 0; i < in0_num_subblocks; ++i) {
-                        reblock_and_untilize<out_subblock_w, out_block_w>(
+                        reblock_and_untilize<
+                            out_subblock_w,
+                            out_block_w,
+                            reblock_untilize_config::InitUninitMode::Neither>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_buf, out_buf);
                     }
-                    pack_untilize_uninit(mm_partials_cb_id);
+                    reblock_and_untilize_uninit(mm_partials_buf);
                 }
 
                 // ── Reconfigure for next output block ───────────────────

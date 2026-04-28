@@ -113,14 +113,18 @@ void kernel_main() {
     constexpr compute_kernel_lib::OutputLayout output_layout = compute_kernel_lib::OutputLayout::SubblockMajor;
 #endif
 
-    mm_block_init(in0_cb, in1_cb, interm_cb, transpose, out_subblock_w, out_subblock_h, in0_block_w);
-
+    // matmul_block owns mm_block_init via the default init_mode=Full.
     const auto shape = compute_kernel_lib::MatmulBlockShape::of(
         in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_w, num_k_blocks, batch);
 #ifdef HELPER_POST_COMPUTE_RELU
-    compute_kernel_lib::
-        matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, output_layout, ReluPostCompute>(
-            in0_buf, in1_buf, out_buf, interm_buf, shape, ReluPostCompute{});
+    compute_kernel_lib::matmul_block<
+        transpose,
+        packer_l1_acc,
+        pack_last_to_interm,
+        pack_relu,
+        output_layout,
+        compute_kernel_lib::matmul_config::InitMode::Full,
+        ReluPostCompute>(in0_buf, in1_buf, out_buf, interm_buf, shape, ReluPostCompute{});
 #else
     compute_kernel_lib::matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, output_layout>(
         in0_buf, in1_buf, out_buf, interm_buf, shape);

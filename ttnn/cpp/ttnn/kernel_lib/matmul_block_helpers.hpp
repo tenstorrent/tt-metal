@@ -29,6 +29,29 @@ namespace compute_kernel_lib {
  */
 enum class OutputLayout { SubblockMajor, RowMajor };
 
+namespace matmul_config {
+
+/**
+ * Init lifecycle for matmul_block.
+ *
+ * The helper owns matmul-state setup so callers don't have to pair every call site with a
+ * matching mm_block_init. Mirrors the InitUninitMode convention used by untilize_helpers
+ * for back-to-back invocations.
+ *
+ * Full          (default) Helper calls mm_block_init at the start. Use for the first matmul
+ *               invocation after compute_kernel_hw_startup or after any intervening op
+ *               (eltwise, reduce, untilize) that disturbed matmul LLK state.
+ * Short         Helper calls mm_block_init_short — cheaper restore for chains of matmul
+ *               calls where the previous helper already configured matmul state and only
+ *               the per-call shape/cb might have changed.
+ * None          Helper skips init entirely. Use only when the caller has just executed a
+ *               compatible matmul_block in the same configuration and no other op has
+ *               touched matmul state.
+ */
+enum class InitMode : uint8_t { Full, Short, None };
+
+}  // namespace matmul_config
+
 /**
  * Block-shape specification for matmul_block.
  *
@@ -98,7 +121,10 @@ struct NoPreKBlock {
  *   packer_l1_acc=false: Software spill/reload via interm_cb
  *   packer_l1_acc=true:  Hardware L1 accumulation via packer (no spill/reload)
  *
- * PREREQUISITE: Caller must call mm_block_init() before invoking this helper.
+ * Init handling: by default the helper calls mm_block_init() itself (init_mode=Full).
+ * The caller's only init responsibility is one compute_kernel_hw_startup() at boot.
+ * For back-to-back chains, init_mode=Short uses mm_block_init_short (cheap restore);
+ * init_mode=None skips init entirely. See matmul_config::InitMode.
  *
  * SKIP_COMPUTE: When this macro is defined by the calling TU (microbenchmark path),
  * the inner ckernel::matmul_block() call is omitted. All other pipeline work (waits,
@@ -117,6 +143,8 @@ struct NoPreKBlock {
  *                     from interm_cb.
  *   pack_relu         Enable PACK_RELU on the last K-block when !pack_last_to_interm.
  *   layout            OutputLayout: SubblockMajor (default) or RowMajor (see above).
+ *   init_mode         matmul_config::InitMode: Full (default), Short, or None.
+ *                     Controls whether the helper itself calls mm_block_init / _short.
  *   PostComputeFn     Functor called per output sub-block on the last K-block,
  *                     after matmul but before packing. Receives out_subblock_num_tiles.
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
@@ -155,15 +183,15 @@ struct NoPreKBlock {
  *                      growth); those factories must pass the larger pack stride here.
  *
  * @example
- *   // Simple K=1 non-blocked matmul, defaults everywhere (SubblockMajor pack).
- *   // Caller constructs experimental::CircularBuffer (or DataflowBuffer) once and
- *   // passes the object; the helper wraps sync calls (wait_front / pop_front /
- *   // reserve_back / push_back) on it.
+ *   // Simple K=1 non-blocked matmul, defaults everywhere (SubblockMajor pack,
+ *   // init_mode=Full). Caller constructs experimental::CircularBuffer (or
+ *   // DataflowBuffer) once and passes the object; the helper wraps sync calls
+ *   // (wait_front / pop_front / reserve_back / push_back) on it and issues
+ *   // mm_block_init internally.
  *   experimental::CircularBuffer in0_buf(cb_in0);
  *   experimental::CircularBuffer in1_buf(cb_in1);
  *   experimental::CircularBuffer out_buf(cb_out);
  *   experimental::CircularBuffer interm_buf(cb_intermed0);
- *   mm_block_init(cb_in0, cb_in1, cb_intermed0, false, out_subblock_w, out_subblock_h, in0_block_w);
  *   matmul_block<>(in0_buf, in1_buf, out_buf, interm_buf,
  *                  MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                                        out_subblock_h, out_subblock_w,
@@ -181,8 +209,9 @@ struct NoPreKBlock {
  *
  * @example
  *   // SDPA-style: row-major pack, retain_in0 to reuse Q across K chunks, masked post-compute.
+ *   // init_mode=Short cheap-restores matmul state between successive matmul_block calls.
  *   matmul_block<transpose, false, false, false, OutputLayout::RowMajor,
- *                OptionalMaskPostCompute>(
+ *                matmul_config::InitMode::Short, OptionalMaskPostCompute>(
  *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             subblock_h, subblock_w, in0_block_w, num_blocks),
@@ -195,7 +224,7 @@ struct NoPreKBlock {
  *   // DRAM-sharded passes explicit in1_per_core_w (shard width) and
  *   // out_row_width (padded pack width).
  *   matmul_block<in1_transpose_tile, l1_acc, true, false,
- *                output_layout, PostFn, PreFn>(
+ *                output_layout, matmul_config::InitMode::Full, PostFn, PreFn>(
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
@@ -211,6 +240,7 @@ template <
     bool pack_last_to_interm = false,
     bool pack_relu = false,
     OutputLayout layout = OutputLayout::SubblockMajor,
+    matmul_config::InitMode init_mode = matmul_config::InitMode::Full,
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock,
     typename Buf = ::experimental::CircularBuffer>

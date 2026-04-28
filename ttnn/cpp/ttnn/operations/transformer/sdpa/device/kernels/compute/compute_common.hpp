@@ -1235,6 +1235,10 @@ ALWI void matmul_blocks(
 
     // num_blocks == 1 in SDPA, so the helper's K-accumulation path is inert; in0_cb is
     // forwarded as the interm_cb placeholder — it is unused when num_k_blocks == 1.
+    // This wrapper does its own init+reconfig pair (in the [init, reconfig] order used
+    // throughout SDPA — same as matmul_reduce_inplace.inl and OptionalMaskPostCompute) and
+    // then asks the helper to skip init via InitMode::None. The wrapper is the SDPA-side
+    // single source of init truth; reordering would diverge from the established pattern.
     mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
     reconfig_data_format(in1_cb, in0_cb);
 
@@ -1248,6 +1252,7 @@ ALWI void matmul_blocks(
         /*pack_last_to_interm=*/false,
         /*pack_relu=*/false,
         compute_kernel_lib::OutputLayout::RowMajor,
+        compute_kernel_lib::matmul_config::InitMode::None,
         OptionalMaskPostCompute,
         compute_kernel_lib::NoPreKBlock>(
         in0_buf,
