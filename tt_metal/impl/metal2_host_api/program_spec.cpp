@@ -42,12 +42,16 @@ static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
-    // Name -> spec lookups
+    // Name -> spec lookups.
+    // dfb_by_name covers BOTH local and remote DFBs (for remote, the pointee is the
+    // inner dfb_spec). The is-it-remote question is answered by remote_dfb_by_name.
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
+    std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
 
-    // DFB endpoint info (derived from kernel bindings)
+    // DFB endpoint info (derived from kernel bindings).
+    // Populated for both local and remote DFBs.
     struct DFBEndpointInfo {
         const KernelSpec* producer = nullptr;
         const KernelSpec* consumer = nullptr;
@@ -55,6 +59,15 @@ struct CollectedSpecData {
         const KernelSpec::DFBBinding* consumer_binding = nullptr;
     };
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
+
+    // Worker membership: a kernel may belong to multiple WorkerSpecs.
+    std::unordered_map<KernelSpecName, std::vector<const WorkerSpec*>> kernel_workers;
+
+    // Derived node sets:
+    //  - kernel_node_set: union of containing WorkerSpec target_nodes
+    //  - dfb_node_set: union of binding-kernels' node sets (local DFBs only).
+    std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
+    std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
 };
 
 // Bitmask for tracking processor allocation on a node
@@ -141,40 +154,6 @@ bool nodes_intersect(
     return a_set.intersects(b_set);
 }
 
-bool nodes_contains(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset) {
-    NodeRangeSet superset_node_range_set = to_node_range_set(superset);
-    NodeRangeSet subset_node_range_set = to_node_range_set(subset);
-    return superset_node_range_set.contains(subset_node_range_set);
-}
-
-// Compare two node specifications for semantic equality (same set of nodes).
-// This normalizes both sides before comparison because CoreRangeSet structural
-// equality can fail even when both sets cover identical nodes (e.g., two adjacent
-// single-node ranges vs. one merged range).
-bool nodes_equal(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b) {
-    NodeRangeSet a_normalized = to_node_range_set(a).merge_ranges();
-    NodeRangeSet b_normalized = to_node_range_set(b).merge_ranges();
-    return a_normalized == b_normalized;
-}
-
-// Accumulate nodes into a map, merging with any existing entry.
-// Used to collect the union of all worker nodes for a given kernel/DFB.
-void accumulate_nodes(
-    std::unordered_map<std::string, NodeRangeSet>& node_map,
-    const std::string& key,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes_to_add) {
-    NodeRangeSet nodes = to_node_range_set(nodes_to_add);
-    if (node_map.contains(key)) {
-        node_map[key] = node_map[key].merge(nodes);
-    } else {
-        node_map[key] = nodes;
-    }
-}
-
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
 // They are used verbatim in the generated kernel source code.
 // TODO: Move this to ttsl in a follow up PR
@@ -253,10 +232,21 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(inserted, "Duplicate KernelSpec name '{}'", kernel.unique_id);
     }
 
-    // Collect DataflowBufferSpecs
+    // Collect DataflowBufferSpecs (local DFBs)
     for (const auto& dfb : spec.dataflow_buffers) {
         auto [it, inserted] = collected.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
         TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
+    }
+
+    // Collect RemoteDataflowBufferSpecs (remote DFBs).
+    // Remote DFBs share the DFB name space with local DFBs, since kernel bindings
+    // refer to either kind by the same DFBSpecName.
+    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
+        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
+        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &remote_dfb.dfb_spec);
+        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and remote DFBs)", name);
+        auto [it2, inserted2] = collected.remote_dfb_by_name.try_emplace(name, &remote_dfb);
+        TT_FATAL(inserted2, "Duplicate RemoteDataflowBufferSpec name '{}'", name);
     }
 
     // Build DFB endpoint info from kernel bindings
@@ -313,12 +303,19 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(endpoint_info.consumer != nullptr, "DFB '{}' has no consumer", dfb_name);
     }
 
-    // Referential integrity: every declared DFB must be bound by some kernel
+    // Referential integrity: every declared DFB (local or remote) must be bound by some kernel
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             collected.dfb_endpoints.contains(dfb.unique_id),
             "DFB '{}' is defined but not bound by any kernel",
             dfb.unique_id);
+    }
+    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
+        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
+        TT_FATAL(
+            collected.dfb_endpoints.contains(name),
+            "RemoteDataflowBufferSpec '{}' is defined but not bound by any kernel",
+            name);
     }
 
     // Collect SemaphoreSpecs
@@ -350,13 +347,53 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         }
     }
 
-    // Check for duplicate WorkerSpec unique_ids (not collected)
-    if (spec.workers.has_value()) {
+    // Check for duplicate WorkerSpec unique_ids
+    {
         std::unordered_set<WorkerSpecName> worker_names;
-        for (const auto& worker : *spec.workers) {
+        for (const auto& worker : spec.workers) {
             auto [it, inserted] = worker_names.insert(worker.unique_id);
             TT_FATAL(inserted, "Duplicate WorkerSpec name '{}'", worker.unique_id);
         }
+    }
+
+    // Build WorkerSpec membership for each kernel, validating references along the way.
+    // A kernel may belong to multiple WorkerSpecs; its effective target node set is the union.
+    for (const auto& worker : spec.workers) {
+        for (const auto& kernel_name : worker.kernels) {
+            TT_FATAL(
+                collected.kernel_by_name.contains(kernel_name),
+                "WorkerSpec '{}' references unknown kernel '{}'",
+                worker.unique_id,
+                kernel_name);
+            collected.kernel_workers[kernel_name].push_back(&worker);
+        }
+    }
+
+    // Every declared kernel must be referenced by at least one WorkerSpec
+    // (otherwise, it has no node placement and would never run).
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            collected.kernel_workers.contains(kernel.unique_id),
+            "Kernel '{}' is not referenced by any WorkerSpec",
+            kernel.unique_id);
+    }
+
+    // Derive each kernel's effective target node set: union of containing WorkerSpec target_nodes.
+    for (const auto& [kernel_name, workers] : collected.kernel_workers) {
+        NodeRangeSet node_set;
+        for (const WorkerSpec* worker : workers) {
+            node_set = node_set.merge(to_node_range_set(worker->target_nodes));
+        }
+        collected.kernel_node_set[kernel_name] = node_set;
+    }
+
+    // Derive each local DFB's allocation node set: union of binding-kernels' node sets.
+    // (Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.)
+    for (const auto& dfb : spec.dataflow_buffers) {
+        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+        NodeRangeSet node_set = collected.kernel_node_set.at(endpoints.producer->unique_id);
+        node_set = node_set.merge(collected.kernel_node_set.at(endpoints.consumer->unique_id));
+        collected.dfb_node_set[dfb.unique_id] = node_set;
     }
 
     return collected;
@@ -366,11 +403,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // ValidateNodeBounds: Node coordinate bounds checking
 // ----------------------------------------------------------------------------
 //
-// Validates that every NodeCoord referenced in kernels, DFBs, and semaphores
+// Validates that every NodeCoord referenced by a WorkerSpec or SemaphoreSpec
 // is within the compute worker grid on this device.
+// (Kernel and DFB placement is derived from WorkerSpec membership, so
+// bounds-checking the WorkerSpecs covers them too.)
 //
-// NOTE: We're dealing in logical coordinates, so harvesting is handled
-// transparently at the UMD coordinate-translation layer.
+// NOTE: We're dealing in logical coordinates. (Harvesting is handled by UMD.)
 //
 // ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
 // representative of every device in the mesh.
@@ -420,11 +458,8 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
         }
     };
 
-    for (const auto& kernel : spec.kernels) {
-        check_target_nodes(kernel.target_nodes, "KernelSpec", kernel.unique_id);
-    }
-    for (const auto& dfb : spec.dataflow_buffers) {
-        check_target_nodes(dfb.target_nodes, "DataflowBufferSpec", dfb.unique_id);
+    for (const auto& worker : spec.workers) {
+        check_target_nodes(worker.target_nodes, "WorkerSpec", worker.unique_id);
     }
     for (const auto& sem : spec.semaphores) {
         check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
@@ -581,6 +616,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // On Gen1 (WH/BH), check that no two DM kernels on the same node claim the same processor.
+    // (The kernel's effective node set is derived from WorkerSpec membership.)
     if (is_gen1_arch()) {
         // Maps (node, processor) -> the kernel that already claimed it
         std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
@@ -590,7 +626,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
             const auto& gen1 = dm_config.gen1_data_movement_config.value();
-            const NodeRangeSet nodes = to_node_range_set(kernel.target_nodes);
+            const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
                     auto key = std::make_pair(node, gen1.processor);
@@ -625,12 +661,48 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DataflowBufferSpecs
     //////////////////////////////////
 
-    // Remote DFBs are not supported yet
+    // Validate local DFB endpoint placement:
+    // A local DFB's producer and consumer kernels must be on the same node (sharing SRAM memory).
+    // For this to be true, the producer and consumer kernels need IDENTICAL WorkerSpec membership.
+    auto kernel_worker_set = [&](const KernelSpecName& name) {
+        std::set<const WorkerSpec*> workers;
+        for (const WorkerSpec* w : collected.kernel_workers.at(name)) {
+            workers.insert(w);
+        }
+        return workers;
+    };
     for (const auto& dfb : spec.dataflow_buffers) {
-        TT_FATAL(!dfb.remote_dfb_info.has_value(), "Remote DFBs are not supported yet");
+        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+        const auto producer_workers = kernel_worker_set(endpoints.producer->unique_id);
+        const auto consumer_workers = kernel_worker_set(endpoints.consumer->unique_id);
+        TT_FATAL(
+            producer_workers == consumer_workers,
+            "Local DFB '{}' is bound by producer kernel '{}' and consumer kernel '{}', but they "
+            "do not share identical WorkerSpec membership. Local DFBs require both endpoints to "
+            "live on the same set of WorkerSpecs; either refactor the placement, or model this as "
+            "a RemoteDataflowBufferSpec.",
+            dfb.unique_id,
+            endpoints.producer->unique_id,
+            endpoints.consumer->unique_id);
     }
 
-    // Borrowed memory is not supported yet
+    // Validate remote DFB endpoint placement:
+    // The producer and consumer must not be on the same node.
+    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
+        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
+        for (const auto& [p_node, c_node] : remote_dfb.producer_consumer_map) {
+            TT_FATAL(
+                p_node != c_node,
+                "RemoteDataflowBufferSpec '{}' has a producer-consumer map entry where the "
+                "producer node and the consumer node are the same ({}, {}). Same-node "
+                "communication should be modeled as a (local) DataflowBufferSpec.",
+                name,
+                p_node.x,
+                p_node.y);
+        }
+    }
+
+    // Borrowed memory is not yet implemented
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             !dfb.uses_borrowed_memory,
@@ -706,12 +778,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate WorkerSpecs
     //////////////////////////////
 
-    // WorkerSpecs are now required for all architectures.
-    // NOTE: WorkerSpec data is strictly redundant, but improves clarity and messaging.
-    //       If it's hated, we can make it optional, and derive the WorkerSpec if absent.
-    //       (Only on WH/BH though, I definitely want to require it on Quasar.)
-    TT_FATAL(spec.workers.has_value(), "Workers are required");
-    const auto& workers = spec.workers.value();
+    // WorkerSpec is required: a valid ProgramSpec has at least one WorkerSpec.
+    const auto& workers = spec.workers;
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
 
     // WorkerSpecs may not overlap in their target nodes
@@ -733,31 +801,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // A WorkerSpec must have at least one kernel
     for (const auto& worker : workers) {
         TT_FATAL(!worker.kernels.empty(), "WorkerSpec '{}' has no kernels", worker.unique_id);
-    }
-
-    // WorkerSpec kernel/DFB/semaphore references must exist
-    for (const auto& worker : workers) {
-        for (const auto& kernel_name : worker.kernels) {
-            TT_FATAL(
-                collected.kernel_by_name.contains(kernel_name),
-                "WorkerSpec '{}' references unknown kernel '{}'",
-                worker.unique_id,
-                kernel_name);
-        }
-        for (const auto& dfb_name : worker.dataflow_buffers) {
-            TT_FATAL(
-                collected.dfb_by_name.contains(dfb_name),
-                "WorkerSpec '{}' references unknown DFB '{}'",
-                worker.unique_id,
-                dfb_name);
-        }
-        for (const auto& semaphore_name : worker.semaphores) {
-            TT_FATAL(
-                collected.semaphore_by_name.contains(semaphore_name),
-                "WorkerSpec '{}' references unknown semaphore '{}'",
-                worker.unique_id,
-                semaphore_name);
-        }
     }
 
     // Does the Worker have enough cores to run all of its kernels?
@@ -813,74 +856,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         TT_FATAL(num_compute_kernels <= 1, "WorkerSpec '{}' has more than one compute kernel", worker.unique_id);
     }
 
-    // Kernels in a WorkerSpec must contain the WorkerSpec's target nodes
-    for (const auto& worker : workers) {
-        for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
-            TT_FATAL(
-                nodes_contains(kernel_spec->target_nodes, worker.target_nodes),
-                "Kernel '{}' target nodes must contain WorkerSpec '{}' target nodes",
-                kernel_name,
-                worker.unique_id);
-        }
-    }
-
-    // DFBs in a WorkerSpec must contain the WorkerSpec's target nodes
-    for (const auto& worker : workers) {
-        for (const auto& dfb_name : worker.dataflow_buffers) {
-            const auto& dfb_spec = collected.dfb_by_name.at(dfb_name);
-            TT_FATAL(
-                nodes_contains(dfb_spec->target_nodes, worker.target_nodes),
-                "DFB '{}' target nodes must contain WorkerSpec '{}' target nodes",
-                dfb_name,
-                worker.unique_id);
-        }
-    }
-
-    // Semaphores in a WorkerSpec must contain the WorkerSpec's target nodes
-    for (const auto& worker : workers) {
-        for (const auto& semaphore_name : worker.semaphores) {
-            const auto& semaphore_spec = collected.semaphore_by_name.at(semaphore_name);
-            TT_FATAL(
-                nodes_contains(semaphore_spec->target_nodes, worker.target_nodes),
-                "Semaphore '{}' target nodes must contain WorkerSpec '{}' target nodes",
-                semaphore_name,
-                worker.unique_id);
-        }
-    }
-
-    // Check that all kernel target nodes are "accounted for" by a WorkerSpec
-    std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_ranges;
-    for (const auto& worker : workers) {
-        for (const auto& kernel_name : worker.kernels) {
-            accumulate_nodes(kernel_node_ranges, kernel_name, worker.target_nodes);
-        }
-    }
-    for (const auto& kernel : spec.kernels) {
-        KernelSpecName kernel_name = kernel.unique_id;
-        TT_FATAL(kernel_node_ranges.contains(kernel_name), "Kernel '{}' is not part of any WorkerSpec", kernel_name);
-        TT_FATAL(
-            nodes_equal(kernel_node_ranges.at(kernel_name), kernel.target_nodes),
-            "Kernel '{}' has target nodes that are not accounted for by any WorkerSpec",
-            kernel_name);
-    }
-
-    // Check that all DFB target nodes are "accounted for" by a WorkerSpec
-    // (May revisit this, depending on how remote DFBs are implemented)
-    std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_ranges;
-    for (const auto& worker : workers) {
-        for (const auto& dfb_name : worker.dataflow_buffers) {
-            accumulate_nodes(dfb_node_ranges, dfb_name, worker.target_nodes);
-        }
-    }
-    for (const auto& dfb : spec.dataflow_buffers) {
-        DFBSpecName dfb_name = dfb.unique_id;
-        TT_FATAL(dfb_node_ranges.contains(dfb_name), "DFB '{}' is not part of any WorkerSpec", dfb_name);
-        TT_FATAL(
-            nodes_equal(dfb_node_ranges.at(dfb_name), dfb.target_nodes),
-            "DFB '{}' has target nodes that are not accounted for by any WorkerSpec",
-            dfb_name);
-    }
+    // NOTE:
+    // Placement consistency between kernels, DFBs, and WorkerSpecs is now structural,
+    // not validated:
+    //  - Kernels' effective node sets ARE the union of their containing WorkerSpecs' target_nodes
+    //  - DFBs' allocation node sets are the union of their binding kernels' node sets
 }
 
 // ============================================================================
@@ -983,6 +963,10 @@ ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const K
 
 namespace dm_solver {
 
+// Map from kernel name to its derived effective node set (union of containing
+// WorkerSpec target_nodes). Used by the solver to read each kernel's placement.
+using KernelNodeSetMap = std::unordered_map<KernelSpecName, NodeRangeSet>;
+
 // State for tracking per-node processor usage
 class NodeUsageTracker {
 public:
@@ -1028,18 +1012,17 @@ private:
     std::map<NodeCoord, DMProcessorMask> node_used_masks_;
 };
 
-// Constraint score for sorting: higher = more constrained (should be assigned earlier)
-int ConstraintScore(const KernelSpec* k) {
-    NodeRangeSet nodes = to_node_range_set(k->target_nodes);
-    int node_count = static_cast<int>(nodes.num_cores());
+// Constraint score for sorting: higher = more constrained (RISC cores should be assigned earlier)
+int ConstraintScore(const KernelSpec* k, const NodeRangeSet& kernel_nodes) {
+    int node_count = static_cast<int>(kernel_nodes.num_cores());
     int thread_count = k->num_threads;
     return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
 }
 
-void SortByConstraint(std::vector<const KernelSpec*>& kernels) {
-    std::sort(kernels.begin(), kernels.end(), [](const KernelSpec* a, const KernelSpec* b) {
-        int score_a = ConstraintScore(a);
-        int score_b = ConstraintScore(b);
+void SortByConstraint(std::vector<const KernelSpec*>& kernels, const KernelNodeSetMap& kernel_node_set) {
+    std::sort(kernels.begin(), kernels.end(), [&kernel_node_set](const KernelSpec* a, const KernelSpec* b) {
+        int score_a = ConstraintScore(a, kernel_node_set.at(a->unique_id));
+        int score_b = ConstraintScore(b, kernel_node_set.at(b->unique_id));
         if (score_a != score_b) {
             return score_a > score_b;  // Higher score first
         }
@@ -1051,9 +1034,12 @@ void SortByConstraint(std::vector<const KernelSpec*>& kernels) {
 // Try to assign all kernels in the given order using greedy selection
 // Returns true if successful, populates result map
 bool TryGreedyAssignment(
-    const std::vector<const KernelSpec*>& kernel_order, NodeUsageTracker& tracker, DMProcessorMaskMap& result) {
+    const std::vector<const KernelSpec*>& kernel_order,
+    const KernelNodeSetMap& kernel_node_set,
+    NodeUsageTracker& tracker,
+    DMProcessorMaskMap& result) {
     for (const KernelSpec* kernel : kernel_order) {
-        NodeRangeSet target_nodes = to_node_range_set(kernel->target_nodes);
+        const NodeRangeSet& target_nodes = kernel_node_set.at(kernel->unique_id);
         DMProcessorMask combined_used = tracker.get_combined_used_mask(target_nodes);
 
         auto selected = ReserveProcessors(kernel->num_threads, combined_used);
@@ -1076,10 +1062,11 @@ bool TryGreedyAssignment(
 //       We can revisit if this ever becomes a problem.
 bool SolveWithOrderingBacktrack(
     std::vector<const KernelSpec*> kernels,  // by value - we'll permute it
+    const KernelNodeSetMap& kernel_node_set,
     NodeUsageTracker& tracker,
     DMProcessorMaskMap& result) {
     // Try current ordering
-    if (TryGreedyAssignment(kernels, tracker, result)) {
+    if (TryGreedyAssignment(kernels, kernel_node_set, tracker, result)) {
         return true;
     }
 
@@ -1091,7 +1078,7 @@ bool SolveWithOrderingBacktrack(
     do {
         tracker.reset();
         result.clear();
-        if (TryGreedyAssignment(kernels, tracker, result)) {
+        if (TryGreedyAssignment(kernels, kernel_node_set, tracker, result)) {
             return true;
         }
     } while (std::next_permutation(kernels.begin(), kernels.end(), by_name));
@@ -1103,7 +1090,7 @@ bool SolveWithOrderingBacktrack(
 
 // Gen2 (Quasar) processor assignment: runs the backtracking DM solver and returns
 // a KernelRiscMaskMap using the Gen2 bit encoding (DM: bits 0-7, compute: bits 8-15).
-KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec) {
+KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const CollectedSpecData& collected) {
     DMProcessorMaskMap dm_assignments;
     ComputeEngineMaskMap compute_assignments;
 
@@ -1121,12 +1108,13 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec) {
     // Sort by constraint score (most constrained first)
     constexpr bool kSortByConstraint = true;  // Toggle to disable upfront sorting
     if constexpr (kSortByConstraint) {
-        dm_solver::SortByConstraint(dm_kernels);
+        dm_solver::SortByConstraint(dm_kernels, collected.kernel_node_set);
     }
 
     // Solve DM assignments
     dm_solver::NodeUsageTracker tracker;
-    bool success = dm_solver::SolveWithOrderingBacktrack(dm_kernels, tracker, dm_assignments);
+    bool success =
+        dm_solver::SolveWithOrderingBacktrack(dm_kernels, collected.kernel_node_set, tracker, dm_assignments);
 
     TT_FATAL(
         success,
@@ -1436,11 +1424,21 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         ValidateProgramSpec(spec, collected);
     }
 
+    // Runtime feature gate (always on — outside the skip_validation block, since the build
+    // path below has no support for remote DFBs and would silently drop them on the floor).
+    // Remove this once runtime support for remote DFBs lands.
+    TT_FATAL(
+        spec.remote_dataflow_buffers.empty(),
+        "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
+        "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
+        spec.program_id,
+        spec.remote_dataflow_buffers.size());
+
     // Step 2: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically
     //  - Gen1: processor is user-specified in Gen1DataMovementConfig
     KernelRiscMaskMap kernel_to_risc_mask =
-        is_gen2_arch() ? SolveGen2KernelRiscMasks(spec) : BuildGen1KernelRiscMasks(spec);
+        is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
     // Step 3: Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
@@ -1455,8 +1453,9 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         const experimental::dfb::DataflowBufferConfig config =
             MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
 
-        // Add the DFB to the ProgramImpl, and register the name -> handle mapping
-        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec.target_nodes), config);
+        // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
+        // Allocation nodes are derived from binding kernels' WorkerSpec membership.
+        uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name, dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
     }
@@ -1475,7 +1474,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
-        NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
+        const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
         // Make the local accessor name -> DFB ID map for this kernel
         const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
@@ -1571,8 +1570,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         runtime_schema.named_runtime_args = user_schema.named_runtime_args;
         runtime_schema.named_common_runtime_args = user_schema.named_common_runtime_args;
         if (user_schema.num_runtime_varargs > 0) {
-            const NodeRangeSet target_nodes = to_node_range_set(kernel_spec.target_nodes);
-            for (const NodeRange& range : target_nodes.ranges()) {
+            for (const NodeRange& range : node_ranges.ranges()) {
                 for (const NodeCoord& node : range) {
                     runtime_schema.num_runtime_varargs_per_node[node] = user_schema.num_runtime_varargs;
                 }

@@ -82,17 +82,19 @@ struct KernelSpec {
     };
     std::variant<SourceFilePath, SourceCode> source;
 
-    // Target nodes
-    // The logical coordinates for the set of device nodes on which the kernel will run
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    Nodes target_nodes;
+    // NOTE: The kernel's target node set is a DERIVED property, based on the
+    //       WorkerSpec(s) that include this kernel.
 
-    // Threading
-    // Number of kernel threads (this can be specified globally or per-node)
+    // Kernel threading:
+    // Number of kernel threads
     uint8_t num_threads = 1;
-    // Optional per-node thread count specification (overrides global num_threads)
-    // This is currently unsupported, and an open question if we ever want to support it.
-    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
+
+    // OPTIONAL per-node thread count specification
+    // The default threading is num_threads. However, you may override this on a per-node basis.
+    // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
+    //       Here as a placeholder; specifying it will trigger a runtime error.
+    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
+    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 

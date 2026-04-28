@@ -26,13 +26,11 @@ using DFBSpecName = std::string;
 
 enum class DFBAccessPattern { STRIDED, BLOCKED, CONTIGUOUS };
 
+// A DataflowBufferSpec describes a "local" Dataflow Buffer (DFB):
+// Its producer and consumer kernels run on the SAME node, and the DFB is allocated in that node's local SRAM.
 struct DataflowBufferSpec {
     // DFB identifier: used to reference this DFB within the ProgramSpec
     DFBSpecName unique_id;
-
-    // Target nodes
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    Nodes target_nodes;
 
     // Backing memory
     uint32_t entry_size = 0;  // in bytes
@@ -41,21 +39,13 @@ struct DataflowBufferSpec {
 
     // Endpoint info
     // Configuring a DFB requires endpoint-specific info.
-    // This is specified when the DFB is bound to a kernel:
+    // This endpoint info is specified at the DFB binding site in the KernelSpec:
     //   - Producer and consumer kernel identity
     //   - Number of producer threads, number of consumer threads
     //   - Producer and consumer access patterns
 
-    // Remote DFB
-    // A DFB is "local" by default. Its producer and consumer kernels are on the same node,
-    // sharing common L1 memory.
-    // A "remote DFB" has its producer and consumer kernels on different nodes.
-    // For a remote DFB, you must specify the producer-consumer map.
-    struct RemoteDFBInfo {
-        using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
-        ProducerConsumerMap producer_consumer_map;
-    };
-    std::optional<RemoteDFBInfo> remote_dfb_info = std::nullopt;
+    // Target nodes
+    // This is a derived property, based on the kernel bindings for this DFB
 
     ////////////////////////////////////
     // Entry format metadata
@@ -89,6 +79,18 @@ struct DataflowBufferSpec {
     // Implicit sync is handled via ISR (available on Gen2 only)
     // Disabling may be useful in niche cases for fine tuning performance or performance debug.
     bool disable_implicit_sync = false;
+};
+
+// A RemoteDataflowBufferSpec describes a "remote" DFB:
+// Its producer and consumer kernels run on DIFFERENT nodes, and data is transferred over the NOC.
+struct RemoteDataflowBufferSpec {
+    // A remote DFB has all of the same properties as a local DFB
+    DataflowBufferSpec dfb_spec;
+
+    // You must additionally specify a producer-consumer node mapping:
+    // This specifies which producer node communicates with which consumer node.
+    using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
+    ProducerConsumerMap producer_consumer_map;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

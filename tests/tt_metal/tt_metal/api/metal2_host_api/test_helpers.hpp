@@ -28,14 +28,15 @@ inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 // ============================================================================
 // Spec Creation Helpers
 // ============================================================================
+//
+// Note: KernelSpec and DataflowBufferSpec no longer carry target_nodes.
+// Placement is stated on WorkerSpec; pass node sets to MakeMinimalWorker instead.
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen2/Quasar)
-inline KernelSpec MakeMinimalDMKernel(
-    const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
+inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
-        .target_nodes = nodes,
         .num_threads = num_threads,
         .config_spec =
             DataMovementConfiguration{
@@ -47,12 +48,10 @@ inline KernelSpec MakeMinimalDMKernel(
 // Helper to create a minimal valid KernelSpec for data movement (Gen1/WH/BH)
 inline KernelSpec MakeMinimalGen1DMKernel(
     const std::string& name,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
-        .target_nodes = nodes,
         .num_threads = 1,
         .config_spec =
             DataMovementConfiguration{
@@ -65,12 +64,10 @@ inline KernelSpec MakeMinimalGen1DMKernel(
 }
 
 // Helper to create a minimal valid KernelSpec for compute
-inline KernelSpec MakeMinimalComputeKernel(
-    const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
+inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
-        .target_nodes = nodes,
         .num_threads = num_threads,
         .config_spec = ComputeConfiguration{},
     };
@@ -78,13 +75,9 @@ inline KernelSpec MakeMinimalComputeKernel(
 
 // Helper to create a minimal valid DataflowBufferSpec
 inline DataflowBufferSpec MakeMinimalDFB(
-    const std::string& name,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
-    uint32_t entry_size = 1024,
-    uint32_t num_entries = 2) {
+    const std::string& name, uint32_t entry_size = 1024, uint32_t num_entries = 2) {
     return DataflowBufferSpec{
         .unique_id = name,
-        .target_nodes = nodes,
         .entry_size = entry_size,
         .num_entries = num_entries,
     };
@@ -94,12 +87,10 @@ inline DataflowBufferSpec MakeMinimalDFB(
 inline WorkerSpec MakeMinimalWorker(
     const std::string& name,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
-    const std::vector<KernelSpecName>& kernels,
-    const std::vector<DFBSpecName>& dfbs = {}) {
+    const std::vector<KernelSpecName>& kernels) {
     return WorkerSpec{
         .unique_id = name,
         .kernels = kernels,
-        .dataflow_buffers = dfbs,
         .target_nodes = nodes,
     };
 }
@@ -126,10 +117,10 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", node, tt::tt_metal::DataMovementProcessor::RISCV_0);
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel", node);
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
 
-    auto dfb = MakeMinimalDFB("dfb_0", node);
+    auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
@@ -137,8 +128,7 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"}, {"dfb_0"})};
+    spec.workers = {MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"})};
 
     return spec;
 }
@@ -151,11 +141,11 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     spec.program_id = "test_program";
 
     // Create a DM kernel (producer) and compute kernel (consumer)
-    auto dm_kernel = MakeMinimalDMKernel("dm_kernel", node);
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel", node);
+    auto dm_kernel = MakeMinimalDMKernel("dm_kernel");
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
 
     // Create a DFB with data format (required for compute endpoint)
-    auto dfb = MakeMinimalDFB("dfb_0", node);
+    auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     // Bind the DFB
@@ -166,8 +156,7 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     spec.dataflow_buffers = {dfb};
 
     // Create a WorkerSpec
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"}, {"dfb_0"})};
+    spec.workers = {MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"})};
 
     return spec;
 }
