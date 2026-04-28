@@ -12,6 +12,71 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
 
+namespace {
+
+// Temporary standalone-only profiling split to make reduce_to_one traces
+// self-describing by device role while we debug ROOT3 behavior.
+template <typename CTArgs, typename OpT, typename RTArgs>
+inline void run_reduce_to_one_reader_zone(OpT& op, const RTArgs& rt_args) {
+    if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_ROOT3) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_READER_ROOT3");
+        op(rt_args);
+    } else if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_ROOT2) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_READER_ROOT2");
+        op(rt_args);
+    } else {
+        DeviceZoneScopedN("REDUCE_TO_ONE_READER_ROOT1");
+        op(rt_args);
+    }
+}
+
+template <typename CTArgs, typename OpT, typename RTArgs>
+inline void run_reduce_to_one_writer_zone(OpT& op, const RTArgs& rt_args) {
+    if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_LEAF) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_WRITER_LEAF");
+        op(rt_args);
+    } else if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_ROOT3) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_WRITER_ROOT3");
+        op(rt_args);
+    } else if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_ROOT2) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_WRITER_ROOT2");
+        op(rt_args);
+    } else {
+        DeviceZoneScopedN("REDUCE_TO_ONE_WRITER_ROOT1");
+        op(rt_args);
+    }
+}
+
+template <typename CTArgs, typename OpT, typename RTArgs>
+inline void run_reduce_to_one_forwarder_zone(OpT& op, const RTArgs& rt_args) {
+    if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_LEAF) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_FORWARDER_LEAF");
+        op(rt_args);
+    } else if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_ROOT3) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_FORWARDER_ROOT3");
+        op(rt_args);
+    } else {
+        DeviceZoneScopedN("REDUCE_TO_ONE_FORWARDER_ROOT2");
+        op(rt_args);
+    }
+}
+
+template <typename CTArgs, typename OpT, typename RTArgs>
+inline void run_reduce_to_one_compute_zone(OpT& op, const RTArgs& rt_args) {
+    if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_ROOT3) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_COMPUTE_ROOT3");
+        op(rt_args);
+    } else if constexpr (CTArgs::device_role == deepseek_b1_ops::MESH_ROOT2) {
+        DeviceZoneScopedN("REDUCE_TO_ONE_COMPUTE_ROOT2");
+        op(rt_args);
+    } else {
+        DeviceZoneScopedN("REDUCE_TO_ONE_COMPUTE_ROOT1");
+        op(rt_args);
+    }
+}
+
+}  // namespace
+
 void kernel_main() {
     using ReduceToOne = deepseek_b1_ops::ReduceToOneB1;
 
@@ -112,28 +177,24 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (!CTArgs::is_fabric_core && CTArgs::device_role != deepseek_b1_ops::MESH_LEAF) {
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
-            DeviceZoneScopedN("REDUCE_TO_ONE_READER");
-            op(rt_args);
+            run_reduce_to_one_reader_zone<CTArgs>(op, rt_args);
         }
     }
 #elif defined(COMPILE_FOR_BRISC)
     if constexpr (!CTArgs::is_fabric_core) {
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
-            DeviceZoneScopedN("REDUCE_TO_ONE_WRITER");
-            op(rt_args);
+            run_reduce_to_one_writer_zone<CTArgs>(op, rt_args);
         }
     } else if constexpr (CTArgs::device_role != deepseek_b1_ops::MESH_ROOT1) {
         // The standalone micro-op does not enable the fused persistent ROOT1 fabric signal path.
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
-            DeviceZoneScopedN("REDUCE_TO_ONE_FORWARDER");
-            op(rt_args);
+            run_reduce_to_one_forwarder_zone<CTArgs>(op, rt_args);
         }
     }
 #elif defined(COMPILE_FOR_TRISC)
     if constexpr (!CTArgs::is_fabric_core && CTArgs::device_role != deepseek_b1_ops::MESH_LEAF) {
         for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
-            DeviceZoneScopedN("REDUCE_TO_ONE_COMPUTE");
-            op(rt_args);
+            run_reduce_to_one_compute_zone<CTArgs>(op, rt_args);
         }
     }
 #endif

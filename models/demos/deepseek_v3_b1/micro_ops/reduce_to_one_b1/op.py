@@ -560,6 +560,7 @@ class ReduceToOneB1:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=brisc_per_core_args,
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()

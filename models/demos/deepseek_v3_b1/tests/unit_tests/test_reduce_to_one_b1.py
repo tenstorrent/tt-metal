@@ -8,29 +8,107 @@ Unit tests for ReduceToOneB1 operation.
 This test validates the 3-level reduction tree for a 4x2 mesh
 """
 
+from typing import Any
+
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import ReduceToOneB1
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions, RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    capture_trace,
+    compile_trace_op,
     create_fabric_router_config,
     get_env_int,
-    run_trace_benchmark,
 )
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 ENV_MAX_PAYLOAD_SIZE = "CCL_REDUCE_TO_ONE_MAX_PAYLOAD_SIZE_BYTES"
 TRACE_MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
+ENV_TRACE_NUM_WARMUP_SAMPLES = "CCL_REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES"
+ENV_TRACE_NUM_PERF_SAMPLES = "CCL_REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES"
+TRACE_REPLAY_BLOCKING = True
+ROTATED_ROOT_COORDS = ((1, 0), (1, 1), (2, 0), (2, 1))
 
 NUM_WORKERS = RoutedExpert.NUM_CORES
 VALID_TOTAL_WIDTH = LogicalModelDimensions.HIDDEN_SIZE
 PADDED_WIDTH_PER_CORE = RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE
 VALID_WIDTH_PER_CORE = VALID_TOTAL_WIDTH // NUM_WORKERS
 PADDED_TOTAL_WIDTH = PADDED_WIDTH_PER_CORE * NUM_WORKERS
+
+
+def _build_reduce_to_one_op(config: dict, *, root_coord: tuple[int, int], exit_coord: tuple[int, int], is_torus: bool):
+    input_tensor = config["input_tensor"]
+    intermediate_tensor = config["intermediate_tensor"]
+    output_tensor_preallocated = config["output_tensor"]
+    semaphores = config["semaphores"]
+    worker_fabric_ready_semaphore = config["worker_fabric_ready_semaphore"]
+
+    def run_reduce_to_one_op():
+        return ReduceToOneB1.op(
+            input_tensor,
+            intermediate_tensor,
+            output_tensor_preallocated,
+            semaphores,
+            ttnn.MeshCoordinate(root_coord),
+            exit_coord=ttnn.MeshCoordinate(exit_coord),
+            num_iterations=1,
+            is_torus=is_torus,
+            worker_fabric_ready_semaphore=worker_fabric_ready_semaphore,
+        )
+
+    return run_reduce_to_one_op
+
+
+def _capture_rotated_trace_sets(
+    mesh_device,
+    ops_by_root: dict[tuple[int, int], Any],
+    *,
+    phase_name: str,
+    num_samples: int,
+) -> tuple[list[dict[tuple[int, int], Any]], Any]:
+    roots = list(ROTATED_ROOT_COORDS)
+    trace_sets: list[dict[tuple[int, int], Any]] = []
+    output_tensor = None
+    total_traces = len(roots) * num_samples
+    progress_step = 1 if num_samples <= 3 else max(1, num_samples // 3)
+    logger.info(
+        "Capturing {} trace sets: roots={}, samples_per_root={}, total_traces={}",
+        phase_name,
+        roots,
+        num_samples,
+        total_traces,
+    )
+    for sample_idx in range(num_samples):
+        trace_ids_by_root = {}
+        for root_coord in roots:
+            trace_id, output_tensor = capture_trace(mesh_device, ops_by_root[root_coord], trace_body_iters=1)
+            trace_ids_by_root[root_coord] = trace_id
+        trace_sets.append(trace_ids_by_root)
+        completed_samples = sample_idx + 1
+        if completed_samples % progress_step == 0 or completed_samples == num_samples:
+            logger.info("Captured {} trace sets: {}/{}", phase_name, completed_samples, num_samples)
+    return trace_sets, output_tensor
+
+
+def _execute_rotated_interleaved_fresh_trace_schedule(
+    mesh_device,
+    trace_sets_by_sample: list[dict[tuple[int, int], Any]],
+) -> None:
+    roots = list(ROTATED_ROOT_COORDS)
+    num_roots = len(roots)
+    for sample_idx, trace_ids_by_root in enumerate(trace_sets_by_sample):
+        offset = sample_idx % num_roots
+        ordered_roots = roots[offset:] + roots[:offset]
+        for root_coord in ordered_roots:
+            trace_id = trace_ids_by_root[root_coord]
+            ttnn.execute_trace(mesh_device, trace_id, blocking=TRACE_REPLAY_BLOCKING)
+            ttnn.release_trace(mesh_device, trace_id)
 
 
 def _pad_reduce_shards(valid_tensor: torch.Tensor) -> torch.Tensor:
@@ -298,44 +376,84 @@ def run_reduce_to_one_with_trace(
     num_warmup_iter=15,
     num_iter=30,
 ):
-    """Run reduce_to_one with trace capture/replay using the shared CCL helper."""
+    """Run reduce_to_one with the fixed rotated-fresh blocking benchmark strategy."""
     print(f"\n=== Testing reduce_to_one with trace ===")
+
+    num_warmup_samples = get_env_int(ENV_TRACE_NUM_WARMUP_SAMPLES, num_warmup_iter)
+    num_perf_samples = get_env_int(ENV_TRACE_NUM_PERF_SAMPLES, num_iter)
 
     config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
     submesh_device = config["submesh_device"]
-    input_tensor = config["input_tensor"]
-    intermediate_tensor = config["intermediate_tensor"]
-    output_tensor_preallocated = config["output_tensor"]
-    root_coord = config["root_coord"]
-    exit_coord = config["exit_coord"]
-    semaphores = config["semaphores"]
+    root_coords_to_verify = list(ROTATED_ROOT_COORDS)
 
     logger.info(
-        "Running reduce_to_one trace: max_payload_size_bytes={}",
+        "Running reduce_to_one trace benchmark: max_payload_size_bytes={}, roots={}, "
+        "warmup_samples_per_root={}, perf_samples_per_root={}, replay_blocking={}",
         TRACE_MAX_PAYLOAD_SIZE,
+        root_coords_to_verify,
+        num_warmup_samples,
+        num_perf_samples,
+        TRACE_REPLAY_BLOCKING,
     )
 
-    def run_reduce_to_one_op():
-        return ReduceToOneB1.op(
-            input_tensor,
-            intermediate_tensor,
-            output_tensor_preallocated,
-            semaphores,
-            ttnn.MeshCoordinate(root_coord),
-            exit_coord=ttnn.MeshCoordinate(exit_coord),
-            num_iterations=1,
-            is_torus=is_torus,
-            worker_fabric_ready_semaphore=config["worker_fabric_ready_semaphore"],
-        )
+    ops_by_root = {
+        root: _build_reduce_to_one_op(config, root_coord=root, exit_coord=root, is_torus=is_torus)
+        for root in root_coords_to_verify
+    }
 
-    output_tensor = run_trace_benchmark(
+    output_tensor = None
+    logger.info("Compiling reduce_to_one trace variants for roots={}", root_coords_to_verify)
+    for root in root_coords_to_verify:
+        output_tensor = compile_trace_op(submesh_device, ops_by_root[root])
+
+    warmup_trace_sets, output_tensor = _capture_rotated_trace_sets(
         submesh_device,
-        run_reduce_to_one_op,
-        num_warmup_iter=num_warmup_iter,
-        num_iter=num_iter,
-        profiler_name="deepseek-reduce-to-one",
+        ops_by_root,
+        phase_name="warmup",
+        num_samples=num_warmup_samples,
     )
-    return output_tensor, config
+    perf_trace_sets, output_tensor = _capture_rotated_trace_sets(
+        submesh_device,
+        ops_by_root,
+        phase_name="perf",
+        num_samples=num_perf_samples,
+    )
+
+    profiler = BenchmarkProfiler()
+    logger.info(
+        "Replaying warmup trace sets: samples_per_root={}, total_replays={}, replay_blocking={}",
+        num_warmup_samples,
+        len(root_coords_to_verify) * num_warmup_samples,
+        TRACE_REPLAY_BLOCKING,
+    )
+    profiler.start("deepseek-reduce-to-one-warmup")
+    _execute_rotated_interleaved_fresh_trace_schedule(
+        submesh_device,
+        warmup_trace_sets,
+    )
+    ttnn.synchronize_device(submesh_device)
+    profiler.end("deepseek-reduce-to-one-warmup")
+
+    logger.info(
+        "Replaying perf trace sets: samples_per_root={}, total_replays={}, replay_blocking={}",
+        num_perf_samples,
+        len(root_coords_to_verify) * num_perf_samples,
+        TRACE_REPLAY_BLOCKING,
+    )
+    signpost("start")
+    try:
+        profiler.start("deepseek-reduce-to-one-trace")
+        _execute_rotated_interleaved_fresh_trace_schedule(
+            submesh_device,
+            perf_trace_sets,
+        )
+        ttnn.synchronize_device(submesh_device)
+        profiler.end("deepseek-reduce-to-one-trace")
+    finally:
+        signpost("stop")
+
+    config["root_coords_to_verify"] = root_coords_to_verify
+    return output_tensor or config["output_tensor"], config
 
 
 # === Basic Tests ===
@@ -395,12 +513,12 @@ def test_reduce_to_one_trace(
     )
 
     print("\nVerifying trace output...")
-    match = verify_output(
-        output_tensor,
-        config["submesh_device"],
-        config["root_coord"],
-        config["ref_output"],
-    )
-
-    assert match, "Output tensor does not match reference after trace execution"
+    for root_coord in config.get("root_coords_to_verify", [config["root_coord"]]):
+        match = verify_output(
+            output_tensor,
+            config["submesh_device"],
+            root_coord,
+            config["ref_output"],
+        )
+        assert match, f"Output tensor does not match reference after trace execution for root_coord={root_coord}"
     print("Trace test passed!")

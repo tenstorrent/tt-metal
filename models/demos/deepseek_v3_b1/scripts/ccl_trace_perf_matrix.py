@@ -7,11 +7,13 @@ Run DeepSeek CCL trace tests under tracy for per-CCL parameter sweeps, then
 summarize top-level zone durations from profile_log_device.csv.
 
 Op time definition:
-- Parse only trace id 1 from profile_log_device.csv.
+- Most CCLs parse only trace id 1 from profile_log_device.csv.
 - Most CCLs: for each top-level (RISC processor type, zone) bucket, average
   across all devices; op time is the max of those per-bucket averages.
-- reduce_to_one: keep only per-device averaging across iterations, then report
-  the slowest device's slowest top-level bucket.
+- reduce_to_one uses a fixed rotated fresh-trace benchmark: capture one
+  single-iteration trace per root per sample, replay once with blocking=True,
+  interleave roots across samples, then report the average of interleaved
+  cycle means.
 """
 
 import argparse
@@ -23,7 +25,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -42,6 +44,14 @@ DEFAULT_SDPA_COMPUTE_BLOCK_SIZES = [4, 8]
 SUPPORTED_SDPA_COMPUTE_BLOCK_SIZES = [1, 2, 4, 8]
 TRACE_ID = 1
 CHIP_FREQ_RE = re.compile(r"CHIP_FREQ\[MHz\]:\s*(\d+(?:\.\d+)?)")
+REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES_ENV = "CCL_REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES"
+REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES_ENV = "CCL_REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES"
+REDUCE_TO_ONE_TRACE_MODE = "single_trace_fresh_replay"
+REDUCE_TO_ONE_ROOT_MODE = "rotate_interleaved"
+REDUCE_TO_ONE_TRACE_BLOCKING = True
+REDUCE_TO_ONE_ROTATED_ROOTS = ((1, 0), (1, 1), (2, 0), (2, 1))
+DEFAULT_REDUCE_TO_ONE_NUM_WARMUP_SAMPLES = 15
+DEFAULT_REDUCE_TO_ONE_NUM_PERF_SAMPLES = 30
 
 SDPA_TRACE_NUM_CORES = 8
 SDPA_TRACE_NUM_LINKS = 2
@@ -98,12 +108,36 @@ class RunResult:
     chip_freq_mhz: float
     device_stats: dict[tuple[str, str, str], BucketStat]
     bucket_stats: dict[tuple[str, str], BucketStat]
-    op_bucket: tuple[str, str]
+    op_bucket: tuple[str, str] | None
     op_cycles: float
     op_device: str | None = None
     num_l_chunks: int | None = None
     tiles_per_l_chunk: int | None = None
     block_size: int | None = None
+    setup_details: tuple[str, ...] = ()
+    analysis_description: str | None = None
+    sample_count: int | None = None
+    root_spread_cycles: float | None = None
+    notes: tuple[str, ...] = ()
+    sample_op_stats: tuple["SampleOpStat", ...] = ()
+    root_device_stats: dict[str, dict[tuple[str, str, str], BucketStat]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SampleOpStat:
+    trace_id: int
+    iter_key: str
+    sample_index: int | None
+    root_label: str | None
+    op_cycles: float
+    op_bucket: tuple[str, str]
+    op_device: str
+
+
+@dataclass(frozen=True)
+class ReduceToOneTraceConfig:
+    num_warmup_samples: int
+    num_perf_samples: int
 
 
 CCL_CONFIGS = {
@@ -150,20 +184,39 @@ CCL_CONFIGS = {
         env_num_links=None,
         env_max_payload_size="CCL_REDUCE_TO_ONE_MAX_PAYLOAD_SIZE_BYTES",
         top_level_zones=(
-            "REDUCE_TO_ONE_READER",
-            "REDUCE_TO_ONE_WRITER",
-            "REDUCE_TO_ONE_FORWARDER",
-            "REDUCE_TO_ONE_COMPUTE",
+            "REDUCE_TO_ONE_READER_ROOT3",
+            "REDUCE_TO_ONE_READER_ROOT2",
+            "REDUCE_TO_ONE_READER_ROOT1",
+            "REDUCE_TO_ONE_WRITER_LEAF",
+            "REDUCE_TO_ONE_WRITER_ROOT3",
+            "REDUCE_TO_ONE_WRITER_ROOT2",
+            "REDUCE_TO_ONE_WRITER_ROOT1",
+            "REDUCE_TO_ONE_FORWARDER_LEAF",
+            "REDUCE_TO_ONE_FORWARDER_ROOT3",
+            "REDUCE_TO_ONE_FORWARDER_ROOT2",
+            "REDUCE_TO_ONE_COMPUTE_ROOT3",
+            "REDUCE_TO_ONE_COMPUTE_ROOT2",
+            "REDUCE_TO_ONE_COMPUTE_ROOT1",
         ),
         zone_labels={
-            "REDUCE_TO_ONE_READER": "reader",
-            "REDUCE_TO_ONE_WRITER": "writer",
-            "REDUCE_TO_ONE_FORWARDER": "forwarder",
-            "REDUCE_TO_ONE_COMPUTE": "compute",
+            "REDUCE_TO_ONE_READER_ROOT3": "reader_root3",
+            "REDUCE_TO_ONE_READER_ROOT2": "reader_root2",
+            "REDUCE_TO_ONE_READER_ROOT1": "reader_root1",
+            "REDUCE_TO_ONE_WRITER_LEAF": "writer_leaf",
+            "REDUCE_TO_ONE_WRITER_ROOT3": "writer_root3",
+            "REDUCE_TO_ONE_WRITER_ROOT2": "writer_root2",
+            "REDUCE_TO_ONE_WRITER_ROOT1": "writer_root1",
+            "REDUCE_TO_ONE_FORWARDER_LEAF": "forwarder_leaf",
+            "REDUCE_TO_ONE_FORWARDER_ROOT3": "forwarder_root3",
+            "REDUCE_TO_ONE_FORWARDER_ROOT2": "forwarder_root2",
+            "REDUCE_TO_ONE_COMPUTE_ROOT3": "compute_root3",
+            "REDUCE_TO_ONE_COMPUTE_ROOT2": "compute_root2",
+            "REDUCE_TO_ONE_COMPUTE_ROOT1": "compute_root1",
         },
         fixed_setup_description=(
             "2D only; standalone padded 8-shard geometry with pinned workers "
-            "(1024 elems per shard) and 2 local reduce forwarders per device."
+            "(1024 elems per shard) and 2 local reduce forwarders per device. "
+            "Temporary role-tagged top-level zones are enabled for ROOT3 diagnosis."
         ),
         show_num_links_in_report=False,
         op_time_aggregation="max_device_bucket",
@@ -272,6 +325,18 @@ def parse_args() -> argparse.Namespace:
         default="generated/profiler",
         help="Directory to write markdown summaries (default: generated/profiler).",
     )
+    parser.add_argument(
+        "--reduce-to-one-num-warmup-samples",
+        type=int,
+        default=DEFAULT_REDUCE_TO_ONE_NUM_WARMUP_SAMPLES,
+        help="Warmup samples per root for reduce_to_one's fixed rotated-fresh benchmark (default: 15).",
+    )
+    parser.add_argument(
+        "--reduce-to-one-num-perf-samples",
+        type=int,
+        default=DEFAULT_REDUCE_TO_ONE_NUM_PERF_SAMPLES,
+        help="Perf samples per root for reduce_to_one's fixed rotated-fresh benchmark (default: 30).",
+    )
     return parser.parse_args()
 
 
@@ -289,6 +354,46 @@ def parse_int_list(raw: str) -> list[int]:
             raise ValueError(f"Values must be > 0, got {parsed}")
         result.append(parsed)
     return result
+
+
+def format_root_coord(root_coord: tuple[int, int]) -> str:
+    return f"({root_coord[0]},{root_coord[1]})"
+
+
+def build_reduce_to_one_trace_config(args: argparse.Namespace) -> ReduceToOneTraceConfig:
+    config = ReduceToOneTraceConfig(
+        num_warmup_samples=args.reduce_to_one_num_warmup_samples,
+        num_perf_samples=args.reduce_to_one_num_perf_samples,
+    )
+    if config.num_warmup_samples <= 0:
+        raise RuntimeError(f"--reduce-to-one-num-warmup-samples must be > 0, got {config.num_warmup_samples}")
+    if config.num_perf_samples <= 0:
+        raise RuntimeError(f"--reduce-to-one-num-perf-samples must be > 0, got {config.num_perf_samples}")
+    return config
+
+
+def reduce_to_one_setup_details(trace_config: ReduceToOneTraceConfig) -> tuple[str, ...]:
+    return (
+        f"Reduce-to-one trace mode: {REDUCE_TO_ONE_TRACE_MODE}",
+        f"Reduce-to-one root mode: {REDUCE_TO_ONE_ROOT_MODE}",
+        f"Reduce-to-one blocking replay: {'true' if REDUCE_TO_ONE_TRACE_BLOCKING else 'false'}",
+        f"Reduce-to-one warmup samples per root: {trace_config.num_warmup_samples}",
+        f"Reduce-to-one perf samples per root: {trace_config.num_perf_samples}",
+    )
+
+
+def resolve_reduce_to_one_perf_trace_map(trace_config: ReduceToOneTraceConfig) -> dict[int, str]:
+    warmup_trace_count = len(REDUCE_TO_ONE_ROTATED_ROOTS) * trace_config.num_warmup_samples
+    perf_start = warmup_trace_count
+    trace_map = {}
+    trace_id = perf_start
+    # The benchmark captures traces sample-major: for each sample, capture one
+    # fresh trace per root in root order.
+    for _sample_idx in range(trace_config.num_perf_samples):
+        for root_coord in REDUCE_TO_ONE_ROTATED_ROOTS:
+            trace_map[trace_id] = format_root_coord(root_coord)
+            trace_id += 1
+    return trace_map
 
 
 def list_profile_logs(report_root: Path) -> list[Path]:
@@ -515,6 +620,23 @@ def op_time_description(config: CCLConfig) -> str:
     raise ValueError(f"Unsupported op_time_aggregation: {config.op_time_aggregation}")
 
 
+def resolve_op_time_description(config: CCLConfig, results: list[RunResult]) -> str:
+    for result in results:
+        if result.analysis_description:
+            return result.analysis_description
+    return op_time_description(config)
+
+
+def is_reduce_to_one_config(config: CCLConfig) -> bool:
+    return "test_reduce_to_one_b1.py" in config.test_target
+
+
+def resolve_trace_reference_line(config: CCLConfig) -> str | None:
+    if is_reduce_to_one_config(config):
+        return None
+    return f"Trace id: {TRACE_ID}"
+
+
 def parse_chip_freq_mhz(profile_log: Path) -> float:
     with profile_log.open(encoding="utf-8") as handle:
         first_line = handle.readline()
@@ -543,19 +665,46 @@ def make_bucket_stat(values: list[float]) -> BucketStat:
     )
 
 
+def drop_extrema(values: list[float], *, count_per_side: int) -> list[float]:
+    if count_per_side < 0:
+        raise ValueError(f"count_per_side must be >= 0, got {count_per_side}")
+    sorted_values = sorted(values)
+    if count_per_side == 0 or len(sorted_values) <= 2 * count_per_side:
+        return sorted_values
+    return sorted_values[count_per_side:-count_per_side]
+
+
+def resolve_profile_iter_key(trace_counter: str, run_host_id: str, fallback: str) -> tuple[str, int | None]:
+    # `trace id counter` tracks replay iteration for a captured trace. Prefer it
+    # when present so one replay stays one sample; `run host ID` can vary per
+    # device stream and would otherwise collapse multiple replays into a single
+    # pseudo-sample.
+    if trace_counter:
+        return trace_counter, parse_int(trace_counter)
+    if run_host_id:
+        return run_host_id, parse_int(run_host_id)
+    return fallback, None
+
+
 def summarize_profile_log(
     profile_log: Path,
     config: CCLConfig,
+    *,
+    trace_ids: set[int] | None = None,
+    trace_id_to_root_label: dict[int, str] | None = None,
 ) -> tuple[
     float,
     dict[tuple[str, str, str], BucketStat],
     dict[tuple[str, str], BucketStat],
     str | None,
-    tuple[str, str],
+    tuple[str, str] | None,
     float,
+    list[SampleOpStat],
+    dict[str, dict[tuple[str, str, str], BucketStat]],
 ]:
     chip_freq_mhz = parse_chip_freq_mhz(profile_log)
     zone_set = set(config.top_level_zones)
+    selected_trace_ids = {TRACE_ID} if trace_ids is None else set(trace_ids)
 
     with profile_log.open(newline="", encoding="utf-8") as handle:
         handle.readline()
@@ -570,7 +719,7 @@ def summarize_profile_log(
 
         run_host_idx = header_index.get("run host ID")
         stacks: dict[tuple[str, str, str, str, str, str, str], list[tuple[str, int]]] = defaultdict(list)
-        durations_by_core_iter: dict[tuple[str, str, str, str, str, str], int] = defaultdict(int)
+        durations_by_core_iter: dict[tuple[int, str, str, str, str, str, str], int] = defaultdict(int)
         unmatched_ends = 0
         unmatched_starts = 0
         mismatched_ends = 0
@@ -581,7 +730,7 @@ def summarize_profile_log(
                 continue
 
             trace_id = parse_int(row[header_index["trace id"]])
-            if trace_id is None or trace_id != TRACE_ID:
+            if trace_id is None or trace_id not in selected_trace_ids:
                 continue
 
             zone_name = row[header_index["zone name"]].strip()
@@ -602,7 +751,11 @@ def summarize_profile_log(
             risc_type = row[header_index["RISC processor type"]].strip()
             trace_counter = row[header_index["trace id counter"]].strip()
             run_host_id = row[run_host_idx].strip() if run_host_idx is not None and run_host_idx < len(row) else ""
-            iter_key = run_host_id or trace_counter or row[header_index["time[cycles since reset]"]].strip()
+            iter_key, _sample_index = resolve_profile_iter_key(
+                trace_counter,
+                run_host_id,
+                row[header_index["time[cycles since reset]"]].strip(),
+            )
             stream_key = (
                 device_id,
                 core_x,
@@ -633,7 +786,7 @@ def summarize_profile_log(
                 negative_durations += 1
                 continue
 
-            durations_by_core_iter[(device_id, risc_type, zone_name, iter_key, core_x, core_y)] += duration
+            durations_by_core_iter[(trace_id, device_id, risc_type, zone_name, iter_key, core_x, core_y)] += duration
 
         for stack in stacks.values():
             unmatched_starts += len(stack)
@@ -651,19 +804,68 @@ def summarize_profile_log(
         )
 
     if not durations_by_core_iter:
-        raise RuntimeError(f"No matching top-level zone durations found in {profile_log} for trace id {TRACE_ID}")
+        trace_list = ", ".join(str(trace_id) for trace_id in sorted(selected_trace_ids))
+        raise RuntimeError(
+            f"No matching top-level zone durations found in {profile_log} for trace ids {{{trace_list}}}"
+        )
 
-    per_iter_totals: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
-    for (device_id, risc_type, zone_name, iter_key, _core_x, _core_y), total_cycles in durations_by_core_iter.items():
-        per_iter_totals[(device_id, risc_type, zone_name, iter_key)].append(total_cycles)
+    per_iter_totals: dict[tuple[int, str, str, str, str], list[int]] = defaultdict(list)
+    for (
+        trace_id,
+        device_id,
+        risc_type,
+        zone_name,
+        iter_key,
+        _core_x,
+        _core_y,
+    ), total_cycles in durations_by_core_iter.items():
+        per_iter_totals[(trace_id, device_id, risc_type, zone_name, iter_key)].append(total_cycles)
 
     device_bucket_values: dict[tuple[str, str, str], list[float]] = defaultdict(list)
-    for (device_id, risc_type, zone_name, _iter_key), core_totals in per_iter_totals.items():
-        device_bucket_values[(device_id, risc_type, zone_name)].append(float(max(core_totals)))
+    root_device_bucket_values: dict[str, dict[tuple[str, str, str], list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    per_sample_bucket_values: dict[tuple[int, str], dict[tuple[str, str, str], float]] = defaultdict(dict)
+    for (trace_id, device_id, risc_type, zone_name, iter_key), core_totals in per_iter_totals.items():
+        bucket_cycles = float(max(core_totals))
+        device_bucket_values[(device_id, risc_type, zone_name)].append(bucket_cycles)
+        if trace_id_to_root_label is not None and trace_id in trace_id_to_root_label:
+            root_label = trace_id_to_root_label[trace_id]
+            root_device_bucket_values[root_label][(device_id, risc_type, zone_name)].append(bucket_cycles)
+        per_sample_bucket_values[(trace_id, iter_key)][(device_id, risc_type, zone_name)] = bucket_cycles
 
     device_stats = {key: make_bucket_stat(values) for key, values in device_bucket_values.items()}
     if not device_stats:
         raise RuntimeError(f"No per-device stats produced from {profile_log}")
+    root_device_stats = {
+        root_label: {key: make_bucket_stat(values) for key, values in bucket_values.items()}
+        for root_label, bucket_values in root_device_bucket_values.items()
+    }
+
+    sample_op_stats = []
+    for (trace_id, iter_key), sample_bucket_values in per_sample_bucket_values.items():
+        (device_id, risc_type, zone_name), op_cycles = max(sample_bucket_values.items(), key=lambda item: item[1])
+        sample_index = parse_int(iter_key)
+        sample_op_stats.append(
+            SampleOpStat(
+                trace_id=trace_id,
+                iter_key=iter_key,
+                sample_index=sample_index,
+                root_label=trace_id_to_root_label.get(trace_id) if trace_id_to_root_label is not None else None,
+                op_cycles=op_cycles,
+                op_bucket=(risc_type, zone_name),
+                op_device=device_id,
+            )
+        )
+
+    sample_op_stats.sort(
+        key=lambda stat: (
+            stat.sample_index is None,
+            stat.sample_index if stat.sample_index is not None else 0,
+            stat.trace_id,
+            stat.iter_key,
+        )
+    )
 
     if config.op_time_aggregation == "max_device_bucket":
         (op_device, op_risc_type, op_zone_name), op_stat = max(
@@ -672,7 +874,16 @@ def summarize_profile_log(
         bucket_stats: dict[tuple[str, str], BucketStat] = {}
         op_bucket = (op_risc_type, op_zone_name)
         op_cycles = op_stat.avg_cycles
-        return chip_freq_mhz, device_stats, bucket_stats, op_device, op_bucket, op_cycles
+        return (
+            chip_freq_mhz,
+            device_stats,
+            bucket_stats,
+            op_device,
+            op_bucket,
+            op_cycles,
+            sample_op_stats,
+            root_device_stats,
+        )
 
     if config.op_time_aggregation == "cross_device_bucket_avg":
         bucket_device_averages: dict[tuple[str, str], list[float]] = defaultdict(list)
@@ -685,9 +896,247 @@ def summarize_profile_log(
 
         op_bucket = max(bucket_stats, key=lambda key: bucket_stats[key].avg_cycles)
         op_cycles = bucket_stats[op_bucket].avg_cycles
-        return chip_freq_mhz, device_stats, bucket_stats, None, op_bucket, op_cycles
+        return chip_freq_mhz, device_stats, bucket_stats, None, op_bucket, op_cycles, sample_op_stats, root_device_stats
 
     raise ValueError(f"Unsupported op_time_aggregation: {config.op_time_aggregation}")
+
+
+def build_reduce_to_one_run_result(
+    base_result: RunResult,
+    trace_config: ReduceToOneTraceConfig,
+    sample_op_stats: list[SampleOpStat],
+) -> RunResult:
+    if not sample_op_stats:
+        raise RuntimeError("reduce_to_one sample analysis requires at least one per-replay sample")
+
+    setup_details = reduce_to_one_setup_details(trace_config)
+    notes = [
+        f"Perf replay samples analyzed: {len(sample_op_stats)}",
+    ]
+
+    op_cycles = base_result.op_cycles
+    op_bucket = base_result.op_bucket
+    op_device = base_result.op_device
+    analysis_description = None
+    root_spread_cycles = None
+
+    per_root_values: dict[str, list[float]] = defaultdict(list)
+    for sample in sample_op_stats:
+        if sample.root_label is None:
+            raise RuntimeError("reduce_to_one rotated root analysis needs trace_id -> root mapping")
+        per_root_values[sample.root_label].append(sample.op_cycles)
+
+    expected_root_labels = [format_root_coord(root_coord) for root_coord in REDUCE_TO_ONE_ROTATED_ROOTS]
+    missing_root_labels = [label for label in expected_root_labels if label not in per_root_values]
+    if missing_root_labels:
+        raise RuntimeError("Missing reduce_to_one perf samples for rotated roots: " + ", ".join(missing_root_labels))
+
+    root_averages = {label: statistics.mean(per_root_values[label]) for label in expected_root_labels}
+    root_spread_cycles = max(root_averages.values()) - min(root_averages.values())
+    notes.append(
+        "Per-root averages [cycles]: "
+        + ", ".join(f"{label}={format_float(root_averages[label], 1)}" for label in expected_root_labels)
+    )
+    notes.append(
+        "Root spread: {} cycles ({} us)".format(
+            format_float(root_spread_cycles, 1),
+            format_float(cycles_to_us(root_spread_cycles, base_result.chip_freq_mhz), 3),
+        )
+    )
+
+    op_bucket = None
+    op_device = None
+    ordered_root_sequences = [per_root_values[label] for label in expected_root_labels]
+    cycle_count = min(len(sequence) for sequence in ordered_root_sequences)
+    if cycle_count <= 0:
+        raise RuntimeError("No interleaved reduce_to_one root cycles were captured")
+    cycle_means = [
+        sum(sequence[idx] for sequence in ordered_root_sequences) / len(ordered_root_sequences)
+        for idx in range(cycle_count)
+    ]
+    cycle_stat = make_bucket_stat(cycle_means)
+    trimmed_cycle_means = drop_extrema(cycle_means, count_per_side=1)
+    trimmed_cycle_stat = make_bucket_stat(trimmed_cycle_means)
+    op_cycles = trimmed_cycle_stat.avg_cycles
+    analysis_description = (
+        "Op time = trimmed mean of per-cycle means across interleaved roots, dropping the single highest and "
+        "single lowest cycle mean and averaging the remainder, using per-replay slowest-device buckets."
+    )
+    notes.append(
+        "Interleaved cycle means [cycles]: count={}, trimmed_avg={}, avg={}, median={}, min={}, max={}".format(
+            cycle_stat.count,
+            format_float(trimmed_cycle_stat.avg_cycles, 1),
+            format_float(cycle_stat.avg_cycles, 1),
+            format_float(cycle_stat.median_cycles, 1),
+            format_float(cycle_stat.min_cycles, 1),
+            format_float(max(cycle_means), 1),
+        )
+    )
+
+    return replace(
+        base_result,
+        op_bucket=op_bucket,
+        op_cycles=op_cycles,
+        op_device=op_device,
+        setup_details=setup_details,
+        analysis_description=analysis_description,
+        sample_count=len(sample_op_stats),
+        root_spread_cycles=root_spread_cycles,
+        notes=tuple(notes),
+        sample_op_stats=tuple(sample_op_stats),
+    )
+
+
+def collect_reduce_to_one_root_labels(result: RunResult) -> list[str]:
+    root_labels = {sample.root_label for sample in result.sample_op_stats if sample.root_label is not None}
+    ordered = [format_root_coord(root_coord) for root_coord in REDUCE_TO_ONE_ROTATED_ROOTS]
+    return [label for label in ordered if label in root_labels] + sorted(
+        label for label in root_labels if label not in ordered
+    )
+
+
+def group_reduce_to_one_samples_by_root(result: RunResult) -> dict[str, list[SampleOpStat]]:
+    grouped: dict[str, list[SampleOpStat]] = defaultdict(list)
+    for sample in result.sample_op_stats:
+        if sample.root_label is None:
+            continue
+        grouped[sample.root_label].append(sample)
+    for root_label in grouped:
+        grouped[root_label].sort(
+            key=lambda sample: (
+                sample.sample_index is None,
+                sample.sample_index if sample.sample_index is not None else 0,
+                sample.trace_id,
+                sample.iter_key,
+            )
+        )
+    return dict(grouped)
+
+
+def render_reduce_to_one_rotated_sections(result: RunResult) -> list[str]:
+    root_labels = collect_reduce_to_one_root_labels(result)
+    if len(root_labels) <= 1:
+        return []
+
+    grouped = group_reduce_to_one_samples_by_root(result)
+    lines = []
+
+    root_summary_headers = [
+        "ROOT",
+        "SAMPLE_COUNT",
+        "AVG_CYCLES",
+        "STDDEV_CYCLES",
+        "AVG_US",
+        "MIN_CYCLES",
+        "MEDIAN_CYCLES",
+        "MAX_CYCLES",
+    ]
+    root_summary_rows = []
+    for root_label in root_labels:
+        samples = grouped.get(root_label, [])
+        if not samples:
+            continue
+        cycles = [sample.op_cycles for sample in samples]
+        stat = make_bucket_stat(cycles)
+        stddev_cycles = statistics.stdev(cycles) if len(cycles) > 1 else 0.0
+        root_summary_rows.append(
+            [
+                root_label,
+                str(stat.count),
+                format_float(stat.avg_cycles, 1),
+                format_float(stddev_cycles, 1),
+                format_float(cycles_to_us(stat.avg_cycles, result.chip_freq_mhz), 3),
+                format_float(stat.min_cycles, 1),
+                format_float(stat.median_cycles, 1),
+                format_float(max(cycles), 1),
+            ]
+        )
+
+    lines.append("#### Per-root replay summaries")
+    lines.append("")
+    lines.append(format_markdown_table(root_summary_headers, root_summary_rows))
+    lines.append("")
+
+    cycle_count = min(len(grouped.get(root_label, [])) for root_label in root_labels)
+    cycle_headers = ["CYCLE"] + root_labels + ["MEAN_CYCLES", "MEAN_US"]
+    cycle_rows = []
+    for cycle_idx in range(cycle_count):
+        root_cycles = [grouped[root_label][cycle_idx].op_cycles for root_label in root_labels]
+        mean_cycles = sum(root_cycles) / len(root_cycles)
+        cycle_rows.append(
+            [str(cycle_idx + 1)]
+            + [format_float(cycles, 1) for cycles in root_cycles]
+            + [format_float(mean_cycles, 1), format_float(cycles_to_us(mean_cycles, result.chip_freq_mhz), 3)]
+        )
+    lines.append("#### Interleaved cycle means")
+    lines.append("")
+    lines.append(format_markdown_table(cycle_headers, cycle_rows))
+    lines.append("")
+
+    return lines
+
+
+def build_device_rows(
+    device_stats: dict[tuple[str, str, str], BucketStat],
+    *,
+    chip_freq_mhz: float,
+    config: CCLConfig,
+) -> list[list[str]]:
+    rows = []
+    for (device_id, risc_type, zone_name), stat in sorted(
+        device_stats.items(),
+        key=lambda item: (
+            device_sort_key(item[0][0]),
+            bucket_sort_key((item[0][1], item[0][2]), config),
+        ),
+    ):
+        rows.append(
+            [
+                device_id,
+                risc_type,
+                zone_name,
+                str(stat.count),
+                format_float(stat.avg_cycles, 1),
+                format_float(cycles_to_ns(stat.avg_cycles, chip_freq_mhz), 3),
+                format_float(cycles_to_us(stat.avg_cycles, chip_freq_mhz), 3),
+                format_float(stat.min_cycles, 1),
+                format_float(stat.median_cycles, 1),
+            ]
+        )
+    return rows
+
+
+def render_reduce_to_one_rotated_device_tables(result: RunResult, config: CCLConfig) -> list[str]:
+    if not result.root_device_stats:
+        return []
+
+    root_labels = collect_reduce_to_one_root_labels(result)
+    device_headers = [
+        "PCIe slot",
+        "RISC processor type",
+        "ZONE",
+        "COUNT",
+        "AVG_CYCLES",
+        "AVG_NS",
+        "AVG_US",
+        "MIN_CYCLES",
+        "MEDIAN_CYCLES",
+    ]
+    lines = []
+    for root_label in root_labels:
+        root_stats = result.root_device_stats.get(root_label)
+        if not root_stats:
+            continue
+        lines.append(f"#### Per-device averages for root {root_label}")
+        lines.append("")
+        lines.append(
+            format_markdown_table(
+                device_headers,
+                build_device_rows(root_stats, chip_freq_mhz=result.chip_freq_mhz, config=config),
+            )
+        )
+        lines.append("")
+    return lines
 
 
 def collect_bucket_order(results: list[RunResult], config: CCLConfig) -> list[tuple[str, str]]:
@@ -726,16 +1175,21 @@ def render_summary_section(
             "Invalid cells are shown as n/a when a forced L chunk payload exceeds the configured fabric max payload "
             "or a compute block size does not divide the total L tiles."
         )
+    trace_reference_line = resolve_trace_reference_line(config)
+    if trace_reference_line is not None:
+        lines.append(trace_reference_line)
     lines.extend(
         [
-            f"Trace id: {TRACE_ID}",
             "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
             "Conversion: us = cycles / CHIP_FREQ[MHz], ns = cycles * 1000 / CHIP_FREQ[MHz].",
-            op_time_description(config),
+            resolve_op_time_description(config, results),
             f"Top-level zones: {', '.join(config.top_level_zones)}",
             "",
         ]
     )
+    if results and results[0].setup_details:
+        lines.extend(results[0].setup_details)
+        lines.append("")
     if not config.render_cross_device_bucket_averages:
         lines.append("Cross-device bucket averages are omitted for this CCL.")
         lines.append("")
@@ -751,6 +1205,14 @@ def render_summary_section(
 
     summary_rows = []
     sorted_results = sort_results_for_display(config, results)
+    include_sample_count = any(result.sample_count is not None for result in sorted_results)
+    include_root_spread = any(result.root_spread_cycles is not None for result in sorted_results)
+    include_op_bucket = all(result.op_bucket is not None for result in sorted_results)
+    include_op_device = (
+        uses_max_device_bucket_op_time(config)
+        and include_op_bucket
+        and any(result.op_device is not None for result in sorted_results)
+    )
     if is_sdpa_chunk_sweep(config):
         summary_headers = [
             "num_l_chunks",
@@ -759,10 +1221,15 @@ def render_summary_section(
             "max_payload_size_bytes",
             "op_time_us",
             "op_cycles",
-            "op_bucket",
         ]
-        if uses_max_device_bucket_op_time(config):
-            summary_headers.insert(-1, "op_device")
+        if include_sample_count:
+            summary_headers.append("sample_count")
+        if include_root_spread:
+            summary_headers.append("root_spread_us")
+        if include_op_device:
+            summary_headers.append("op_device")
+        if include_op_bucket:
+            summary_headers.append("op_bucket")
         result_lookup = {}
         for result in sorted_results:
             row = [
@@ -772,10 +1239,20 @@ def render_summary_section(
                 str(result.max_payload_size),
                 format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
                 format_float(result.op_cycles, 1),
-                bucket_display(result.op_bucket, config),
             ]
-            if uses_max_device_bucket_op_time(config):
-                row.insert(-1, result.op_device or "-")
+            if include_sample_count:
+                row.append(str(result.sample_count) if result.sample_count is not None else "n/a")
+            if include_root_spread:
+                spread_us = (
+                    cycles_to_us(result.root_spread_cycles, result.chip_freq_mhz)
+                    if result.root_spread_cycles is not None
+                    else None
+                )
+                row.append(format_float(spread_us, 3))
+            if include_op_device:
+                row.append(result.op_device or "-")
+            if include_op_bucket:
+                row.append(bucket_display(result.op_bucket, config) if result.op_bucket is not None else "-")
             summary_rows.append(row)
             result_lookup[(result.num_l_chunks, result.block_size, result.max_payload_size)] = result
 
@@ -800,9 +1277,15 @@ def render_summary_section(
                 matrix_rows_us.append(row_us)
                 matrix_rows_cycles.append(row_cycles)
     elif config.show_num_links_in_report:
-        summary_headers = ["num_links", "max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
-        if uses_max_device_bucket_op_time(config):
-            summary_headers.insert(-1, "op_device")
+        summary_headers = ["num_links", "max_payload_size_bytes", "op_time_us", "op_cycles"]
+        if include_sample_count:
+            summary_headers.append("sample_count")
+        if include_root_spread:
+            summary_headers.append("root_spread_us")
+        if include_op_device:
+            summary_headers.append("op_device")
+        if include_op_bucket:
+            summary_headers.append("op_bucket")
         result_lookup = {}
         for result in sorted_results:
             row = [
@@ -810,10 +1293,20 @@ def render_summary_section(
                 str(result.max_payload_size),
                 format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
                 format_float(result.op_cycles, 1),
-                bucket_display(result.op_bucket, config),
             ]
-            if uses_max_device_bucket_op_time(config):
-                row.insert(-1, result.op_device or "-")
+            if include_sample_count:
+                row.append(str(result.sample_count) if result.sample_count is not None else "n/a")
+            if include_root_spread:
+                spread_us = (
+                    cycles_to_us(result.root_spread_cycles, result.chip_freq_mhz)
+                    if result.root_spread_cycles is not None
+                    else None
+                )
+                row.append(format_float(spread_us, 3))
+            if include_op_device:
+                row.append(result.op_device or "-")
+            if include_op_bucket:
+                row.append(bucket_display(result.op_bucket, config) if result.op_bucket is not None else "-")
             summary_rows.append(row)
             result_lookup[(result.num_links, result.max_payload_size)] = result
 
@@ -832,19 +1325,35 @@ def render_summary_section(
             matrix_rows_us.append(row_us)
             matrix_rows_cycles.append(row_cycles)
     else:
-        summary_headers = ["max_payload_size_bytes", "op_time_us", "op_cycles", "op_bucket"]
-        if uses_max_device_bucket_op_time(config):
-            summary_headers.insert(-1, "op_device")
+        summary_headers = ["max_payload_size_bytes", "op_time_us", "op_cycles"]
+        if include_sample_count:
+            summary_headers.append("sample_count")
+        if include_root_spread:
+            summary_headers.append("root_spread_us")
+        if include_op_device:
+            summary_headers.append("op_device")
+        if include_op_bucket:
+            summary_headers.append("op_bucket")
         result_lookup = {}
         for result in sorted_results:
             row = [
                 str(result.max_payload_size),
                 format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
                 format_float(result.op_cycles, 1),
-                bucket_display(result.op_bucket, config),
             ]
-            if uses_max_device_bucket_op_time(config):
-                row.insert(-1, result.op_device or "-")
+            if include_sample_count:
+                row.append(str(result.sample_count) if result.sample_count is not None else "n/a")
+            if include_root_spread:
+                spread_us = (
+                    cycles_to_us(result.root_spread_cycles, result.chip_freq_mhz)
+                    if result.root_spread_cycles is not None
+                    else None
+                )
+                row.append(format_float(spread_us, 3))
+            if include_op_device:
+                row.append(result.op_device or "-")
+            if include_op_bucket:
+                row.append(bucket_display(result.op_bucket, config) if result.op_bucket is not None else "-")
             summary_rows.append(row)
             result_lookup[result.max_payload_size] = result
 
@@ -946,14 +1455,19 @@ def render_details_section(
             "Invalid cells are shown as n/a when a forced L chunk payload exceeds the configured fabric max payload "
             "or a compute block size does not divide the total L tiles."
         )
+    trace_reference_line = resolve_trace_reference_line(config)
+    if trace_reference_line is not None:
+        lines.append(trace_reference_line)
     lines.extend(
         [
-            f"Trace id: {TRACE_ID}",
             "Source: profile_log_device.csv only (top-level zones only; no micro-profiling).",
-            op_time_description(config),
+            resolve_op_time_description(config, results),
             "",
         ]
     )
+    if results and results[0].setup_details:
+        lines.extend(results[0].setup_details)
+        lines.append("")
     if not config.render_cross_device_bucket_averages:
         lines.append("Cross-device bucket averages are omitted for this CCL.")
         lines.append("")
@@ -983,6 +1497,17 @@ def render_details_section(
         lines.append(f"CHIP_FREQ[MHz]: {format_float(result.chip_freq_mhz, 3)}")
         lines.append("")
 
+        if result.notes:
+            lines.append("#### Trace Analysis")
+            lines.append("")
+            for note in result.notes:
+                lines.append(f"- {note}")
+            lines.append("")
+
+        rotated_lines = render_reduce_to_one_rotated_sections(result)
+        if rotated_lines:
+            lines.extend(rotated_lines)
+
         device_headers = [
             "PCIe slot",
             "RISC processor type",
@@ -994,32 +1519,19 @@ def render_details_section(
             "MIN_CYCLES",
             "MEDIAN_CYCLES",
         ]
-        device_rows = []
-        for (device_id, risc_type, zone_name), stat in sorted(
-            result.device_stats.items(),
-            key=lambda item: (
-                device_sort_key(item[0][0]),
-                bucket_sort_key((item[0][1], item[0][2]), config),
-            ),
-        ):
-            device_rows.append(
-                [
-                    device_id,
-                    risc_type,
-                    zone_name,
-                    str(stat.count),
-                    format_float(stat.avg_cycles, 1),
-                    format_float(cycles_to_ns(stat.avg_cycles, result.chip_freq_mhz), 3),
-                    format_float(cycles_to_us(stat.avg_cycles, result.chip_freq_mhz), 3),
-                    format_float(stat.min_cycles, 1),
-                    format_float(stat.median_cycles, 1),
-                ]
+        rotated_device_lines = render_reduce_to_one_rotated_device_tables(result, config)
+        if rotated_device_lines:
+            lines.extend(rotated_device_lines)
+        else:
+            lines.append("#### Per-device averages")
+            lines.append("")
+            lines.append(
+                format_markdown_table(
+                    device_headers,
+                    build_device_rows(result.device_stats, chip_freq_mhz=result.chip_freq_mhz, config=config),
+                )
             )
-
-        lines.append("#### Per-device averages")
-        lines.append("")
-        lines.append(format_markdown_table(device_headers, device_rows))
-        lines.append("")
+            lines.append("")
 
         if config.render_cross_device_bucket_averages:
             bucket_headers = [
@@ -1055,7 +1567,14 @@ def render_details_section(
             lines.append("")
             lines.append(format_markdown_table(bucket_headers, bucket_rows))
             lines.append("")
-        if uses_max_device_bucket_op_time(config):
+        if result.op_bucket is None:
+            lines.append(
+                "Final op time: {} us ({} cycles)".format(
+                    format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
+                    format_float(result.op_cycles, 1),
+                )
+            )
+        elif uses_max_device_bucket_op_time(config):
             lines.append(
                 "Final op time: {} us ({} cycles), device={}, bucket={}".format(
                     format_float(cycles_to_us(result.op_cycles, result.chip_freq_mhz), 3),
@@ -1118,6 +1637,7 @@ def main() -> int:
     selected_ccls = get_selected_ccls(args.ccl)
     if len(selected_ccls) > 1 and args.test_target is not None:
         raise RuntimeError("--test-target requires --ccl when profiling multiple CCLs")
+    reduce_to_one_trace_config = build_reduce_to_one_trace_config(args)
 
     max_payload_sizes = parse_int_list(args.max_payload_sizes)
     if not max_payload_sizes:
@@ -1224,6 +1744,13 @@ def main() -> int:
                             env[config.env_num_l_chunks] = str(num_l_chunks)
                         if config.env_compute_block_size is not None and compute_block_size is not None:
                             env[config.env_compute_block_size] = str(compute_block_size)
+                        if ccl == "reduce_to_one":
+                            env[REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES_ENV] = str(
+                                reduce_to_one_trace_config.num_warmup_samples
+                            )
+                            env[REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES_ENV] = str(
+                                reduce_to_one_trace_config.num_perf_samples
+                            )
 
                         before = set(list_profile_logs(report_root))
                         run_start = time.time()
@@ -1253,9 +1780,21 @@ def main() -> int:
                             op_device,
                             op_bucket,
                             op_cycles,
+                            sample_op_stats,
+                            root_device_stats,
                         ) = summarize_profile_log(
                             profile_log,
                             config,
+                            trace_ids=(
+                                set(resolve_reduce_to_one_perf_trace_map(reduce_to_one_trace_config))
+                                if ccl == "reduce_to_one"
+                                else None
+                            ),
+                            trace_id_to_root_label=(
+                                resolve_reduce_to_one_perf_trace_map(reduce_to_one_trace_config)
+                                if ccl == "reduce_to_one"
+                                else None
+                            ),
                         )
                         tiles_per_l_chunk = None
                         block_size = None
@@ -1266,23 +1805,29 @@ def main() -> int:
                                 _l_chunk_size_bytes,
                                 block_size,
                             ) = derive_sdpa_sweep_metadata(config, num_l_chunks, compute_block_size, max_payload)
-                        results_by_ccl[ccl].append(
-                            RunResult(
-                                ccl=ccl,
-                                num_links=num_links,
-                                max_payload_size=max_payload,
-                                report_path=profile_log_rel,
-                                chip_freq_mhz=chip_freq_mhz,
-                                device_stats=device_stats,
-                                bucket_stats=bucket_stats,
-                                op_bucket=op_bucket,
-                                op_cycles=op_cycles,
-                                op_device=op_device,
-                                num_l_chunks=num_l_chunks,
-                                tiles_per_l_chunk=tiles_per_l_chunk,
-                                block_size=block_size,
-                            )
+                        run_result = RunResult(
+                            ccl=ccl,
+                            num_links=num_links,
+                            max_payload_size=max_payload,
+                            report_path=profile_log_rel,
+                            chip_freq_mhz=chip_freq_mhz,
+                            device_stats=device_stats,
+                            bucket_stats=bucket_stats,
+                            op_bucket=op_bucket,
+                            op_cycles=op_cycles,
+                            op_device=op_device,
+                            num_l_chunks=num_l_chunks,
+                            tiles_per_l_chunk=tiles_per_l_chunk,
+                            block_size=block_size,
+                            root_device_stats=root_device_stats,
                         )
+                        if ccl == "reduce_to_one":
+                            run_result = build_reduce_to_one_run_result(
+                                run_result,
+                                reduce_to_one_trace_config,
+                                sample_op_stats,
+                            )
+                        results_by_ccl[ccl].append(run_result)
 
                         summary_text = render_summary(
                             selected_ccls=selected_ccls,
@@ -1315,8 +1860,8 @@ def main() -> int:
                                     num_l_chunks,
                                     compute_block_size,
                                     max_payload,
-                                    format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
-                                    op_cycles,
+                                    format_float(cycles_to_us(run_result.op_cycles, chip_freq_mhz), 3),
+                                    run_result.op_cycles,
                                 )
                             )
                         elif config.show_num_links_in_report:
@@ -1325,8 +1870,8 @@ def main() -> int:
                                     ccl,
                                     num_links,
                                     max_payload,
-                                    format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
-                                    op_cycles,
+                                    format_float(cycles_to_us(run_result.op_cycles, chip_freq_mhz), 3),
+                                    run_result.op_cycles,
                                 )
                             )
                         else:
@@ -1334,8 +1879,8 @@ def main() -> int:
                                 "Updated reports after ccl={}, max_payload_size_bytes={}: op_time={} us ({:.1f} cycles)".format(
                                     ccl,
                                     max_payload,
-                                    format_float(cycles_to_us(op_cycles, chip_freq_mhz), 3),
-                                    op_cycles,
+                                    format_float(cycles_to_us(run_result.op_cycles, chip_freq_mhz), 3),
+                                    run_result.op_cycles,
                                 )
                             )
 
