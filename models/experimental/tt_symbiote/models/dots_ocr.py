@@ -156,17 +156,27 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # bypass=True to all children.
 
         embedding = TTNNEmbedding.from_torch(hf_model.model.embed_tokens)
+        embedding._unique_name = "model.embed_tokens"
+
         vision_tower = TTNNDotsOCRVisionTower.from_torch(hf_model.vision_tower)
+        vision_tower._unique_name = "vision_tower"
+        vision_tower.override_children_module_names()
 
         decoder_layers = []
-        for hf_layer in hf_model.model.layers:
-            decoder_layers.append(TTNNDotsOCRDecoderLayer.from_torch(hf_layer))
+        for i, hf_layer in enumerate(hf_model.model.layers):
+            layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer)
+            layer._unique_name = f"model.layers.{i}"
+            layer.override_children_module_names()
+            decoder_layers.append(layer)
         decoder_stack = TTNNDotsOCRLayerStack(decoder_layers)
+        decoder_stack._unique_name = "model.layer_stack"
 
         final_norm = TTNNDistributedRMSNorm.from_torch(hf_model.model.norm)
+        final_norm._unique_name = "model.norm"
 
         # AllReduced gives full vocab on each device for argmax
         lm_head = TTNNLinearIColShardedWAllReduced.from_torch(hf_model.lm_head)
+        lm_head._unique_name = "lm_head"
 
         # Paged KV cache
         paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
@@ -196,6 +206,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             device=device,
             config=config,
         )
+        pipeline._unique_name = "dots_ocr_pipeline"
 
         # Set device and preprocess weights
         pipeline._set_device_and_preprocess(device)
