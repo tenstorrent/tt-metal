@@ -9,6 +9,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 
 namespace {
 
@@ -30,7 +31,6 @@ class FrobeniusNormalizeTest : public ::testing::TestWithParam<FrobeniusCase> {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
-        xt::random::seed(42);
     }
 
     void TearDown() override {
@@ -44,7 +44,8 @@ TEST_P(FrobeniusNormalizeTest, MatchesCpuReference) {
     const auto& c = GetParam();
     constexpr float kEps = 1e-7f;
 
-    const xt::xarray<float> data = xt::random::randn<float>(c.shape, 0.0f, 1.0f);
+    const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(c.name));
+    const auto data = ttml::test_utils::make_uniform_xarray<float>(c.shape, -1.0f, 1.0f, seed);
     const auto input_tensor = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, &autograd::ctx().get_device());
 
     const auto bf16_data = core::to_xtensor(input_tensor);
