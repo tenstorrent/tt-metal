@@ -19,8 +19,10 @@
  * via DST registers (unpack → datacopy → pack). Handles DEST register
  * management, circular buffer synchronization, and data format reconfiguration.
  *
- * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
- * start of your kernel before using this function.
+ * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) exactly once
+ * at the start of your kernel before using this function. Do NOT re-call it later
+ * (and never inside a loop) — re-running mid-kernel can race the compute pipeline
+ * and produce undefined behavior.
  *
  * ## What this replaces
  *

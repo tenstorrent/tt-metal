@@ -62,11 +62,12 @@ enum class Fp32Mode : uint8_t {
  * Automatically selects fast_tilize at compile time when hardware supports it
  * (32x32 tiles, Float32/Float16_b format, half-sync dest mode).
  *
- * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
- * start of your kernel before using this function, unless another init or
- * compute_kernel_hw_startup has already been called. The two-argument overload
- * sets srcA=srcB=input_cb. Use the three-argument form
- * compute_kernel_hw_startup(icb0, icb1, ocb) when srcA and srcB differ.
+ * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) exactly once
+ * at the start of your kernel before using this function. Do NOT re-call it later
+ * (and never inside a loop) — re-running mid-kernel can race the compute pipeline
+ * and produce undefined behavior. The two-argument overload sets srcA=srcB=input_cb.
+ * Use the three-argument form compute_kernel_hw_startup(icb0, icb1, ocb) when
+ * srcA and srcB differ.
  *
  * ── Template Parameters (compile-time) ──────────────────────────────────────
  *
