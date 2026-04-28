@@ -434,7 +434,7 @@ void kernel_main() {
     // pulling and merging. Currently unused (cores_per_head_arg == 1 means the
     // kernel runs the legacy single-core path with no cross-core sync needed).
     [[maybe_unused]] const uint32_t reducer_semaphore_id = get_arg_val<uint32_t>(9);
-    [[maybe_unused]] const bool is_reducer = (core_idx_in_group_arg == 0);
+    const bool is_reducer = (core_idx_in_group_arg == 0);
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -480,9 +480,9 @@ void kernel_main() {
     constexpr uint32_t cb_v_norms_bf16 = tt::CBIndex::c_17;  // BFP8→BF16 typecast scratch (V)
     // Tier 2A Phase 2.3 — cross-core partial-state CBs. Workers pack their final
     // (max, sum, out) here; the writer kernel NoC-sends to the reducer's L1.
-    [[maybe_unused]] constexpr uint32_t cb_partial_max = tt::CBIndex::c_18;
-    [[maybe_unused]] constexpr uint32_t cb_partial_sum = tt::CBIndex::c_19;
-    [[maybe_unused]] constexpr uint32_t cb_partial_out = tt::CBIndex::c_20;
+    constexpr uint32_t cb_partial_max = tt::CBIndex::c_18;
+    constexpr uint32_t cb_partial_sum = tt::CBIndex::c_19;
+    constexpr uint32_t cb_partial_out = tt::CBIndex::c_20;
     // Reducer-side mirrors — the writer NoC-pushes peer partials into these.
     [[maybe_unused]] constexpr uint32_t cb_remote_max = tt::CBIndex::c_21;
     [[maybe_unused]] constexpr uint32_t cb_remote_sum = tt::CBIndex::c_22;
@@ -757,6 +757,68 @@ void kernel_main() {
                 {
                     DeviceZoneScopedN("TQ_FINAL_NORMALIZE");
                     matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+
+                    // ── Tier 2A Phase 2.3 step 2c: worker pack-and-skip path ──
+                    // When this core is a worker (idx > 0 in a K > 1 group), it must NOT
+                    // finalize the output. Instead pack the local (max, sum, out) into
+                    // cb_partial_max/sum/out — the writer kernel NoC-sends these to the
+                    // reducer's L1 (Phase 2.3 step 3) and the reducer's compute kernel
+                    // merges them via online-softmax correction (Phase 2.3 step 4).
+                    //
+                    // Skipped at K=1 since `cores_per_head_arg > 1` is false.
+                    if (cores_per_head_arg > 1 && !is_reducer) {
+                        cb_wait_front(alias_prev_max, Sq_chunk_t);
+                        cb_wait_front(alias_prev_sum, Sq_chunk_t);
+                        cb_wait_front(alias_mm2_prev_out, out_chunk_tiles);
+
+                        // alias_prev_max → cb_partial_max
+                        cb_reserve_back(cb_partial_max, Sq_chunk_t);
+                        for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+                            tile_regs_acquire();
+                            copy_tile_to_dst_init_short(alias_prev_max);
+                            copy_tile(alias_prev_max, i, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_partial_max);
+                            pack_tile(0, cb_partial_max);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_partial_max, Sq_chunk_t);
+
+                        // alias_prev_sum → cb_partial_sum
+                        cb_reserve_back(cb_partial_sum, Sq_chunk_t);
+                        for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+                            tile_regs_acquire();
+                            copy_tile_to_dst_init_short(alias_prev_sum);
+                            copy_tile(alias_prev_sum, i, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_partial_sum);
+                            pack_tile(0, cb_partial_sum);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_partial_sum, Sq_chunk_t);
+
+                        // alias_mm2_prev_out → cb_partial_out (out_chunk_tiles tiles)
+                        cb_reserve_back(cb_partial_out, out_chunk_tiles);
+                        for (uint32_t i = 0; i < out_chunk_tiles; ++i) {
+                            tile_regs_acquire();
+                            copy_tile_to_dst_init_short(alias_mm2_prev_out);
+                            copy_tile(alias_mm2_prev_out, i, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_partial_out);
+                            pack_tile(0, cb_partial_out);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_partial_out, out_chunk_tiles);
+
+                        cb_pop_front(alias_prev_max, Sq_chunk_t);
+                        cb_pop_front(alias_prev_sum, Sq_chunk_t);
+                        cb_pop_front(alias_mm2_prev_out, out_chunk_tiles);
+                        cb_pop_front(cb_q_in, q_chunk_tiles);
+                        continue;  // skip dilution / recip / normalize / write
+                    }
 
                     // ── Softmax-denominator correction for unfilled K positions ──
                     // The chunk loop iterates fixed k_chunk_size_tokens (=128) positions
