@@ -216,6 +216,7 @@ def compute_math_utilization(
     core_count,
     is_causal=False,
     arch="blackhole",
+    ring_iter_mode=None,
 ):
     """
     Compute math utilization as a percentage (0-100).
@@ -230,9 +231,21 @@ def compute_math_utilization(
         core_count: Number of compute cores used.
         is_causal: Whether causal masking is used.
         arch: Architecture name ("blackhole" or "wormhole_b0").
+        ring_iter_mode: Debug knob for ring-iter gating ("all" / None, "iter0",
+            "skip_iter0"). Scales FLOPs by the fraction of ring iters actually
+            executed. Assumes work is uniform across iters (correct for
+            balanced-causal and non-causal; approximate otherwise).
     """
     constants = ARCH_CONSTANTS[arch]
     mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+
+    if ring_iter_mode in ("iter0", "skip_iter0") and local_seqlen > 0:
+        ring_size = total_seqlen // local_seqlen
+        if ring_size > 1:
+            if ring_iter_mode == "iter0":
+                mm_flops = mm_flops // ring_size
+            else:  # skip_iter0
+                mm_flops = mm_flops * (ring_size - 1) // ring_size
 
     cycles = duration_ns * constants["clock_ghz"]
     theoretical_flops = core_count * cycles * constants["mm_flops_per_cycle_per_core"]

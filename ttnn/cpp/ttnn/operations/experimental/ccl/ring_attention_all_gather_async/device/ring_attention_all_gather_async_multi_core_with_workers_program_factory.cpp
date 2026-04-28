@@ -21,6 +21,8 @@
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -258,10 +260,28 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t num_inputs = input_tensor.size();
 
     uint32_t tiles_to_write_per_packet = 1;
+
+    // Debug knob (perf-only): TT_RING_JOINT_SDPA_DISABLE_CCL=1 makes the all-gather
+    // reader/writer kernels return immediately. Pair with the matching env var read
+    // by the SDPA program factory (which no-ops the SDPA reader's sync wait) so the
+    // ring joint SDPA op runs without any cross-chip traffic. Output buffers retain
+    // whatever was there (zeros from the test harness) — accuracy is not valid.
+    std::map<std::string, std::string> ag_kernel_defines;
+    {
+        const char* env = std::getenv("TT_RING_JOINT_SDPA_DISABLE_CCL");
+        bool disable_ccl = (env != nullptr) && (std::strcmp(env, "0") != 0) && (env[0] != '\0');
+        if (disable_ccl) {
+            log_info(
+                tt::LogOp, "Ring attention all-gather: CCL disabled — kernels will return early (perf debug knob)");
+        }
+        ag_kernel_defines["RING_JOINT_SDPA_DISABLE_CCL"] = disable_ccl ? "1" : "0";
+    }
+
     // KERNEL CREATION
     // Forward Direction
     // Reader
     auto sender_reader_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    sender_reader_forward_kernel_config.defines = ag_kernel_defines;
     sender_reader_forward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_forward_cb_index,          // cb_forward_id
@@ -295,6 +315,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // Writer
     auto sender_writer_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    sender_writer_forward_kernel_config.defines = ag_kernel_defines;
     sender_writer_forward_kernel_config.compile_args = {
         ring_index,                               // my_chip_id
         reserved_packet_header_forward_CB_index,  // reserved_packet_header_cb_id
@@ -328,6 +349,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Backward Direction
     // Reader
     auto sender_reader_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    sender_reader_backward_kernel_config.defines = ag_kernel_defines;
     sender_reader_backward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_backward_cb_index,         // cb_backward_id
@@ -361,6 +383,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // Writer
     auto sender_writer_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    sender_writer_backward_kernel_config.defines = ag_kernel_defines;
     sender_writer_backward_kernel_config.compile_args = {
         ring_index,                                // my_chip_id
         reserved_packet_header_backward_CB_index,  // reserved_packet_header_cb_id

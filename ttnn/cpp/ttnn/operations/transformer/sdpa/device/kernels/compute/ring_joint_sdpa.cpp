@@ -151,6 +151,22 @@ void kernel_main() {
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+
+        // Debug knob: gate per-iter compute work via a host-side env var. Sync above must
+        // always run so the fused-op fabric / all-gather still progresses; we only skip
+        // the SDPA work for the gated iterations. See program factory for env-var wiring.
+#if defined(RING_JOINT_SDPA_RING_ITER_MODE)
+#if RING_JOINT_SDPA_RING_ITER_MODE == 1
+        if (ring_iter > 0) {
+            continue;
+        }
+#elif RING_JOINT_SDPA_RING_ITER_MODE == 2
+        if (ring_iter == 0) {
+            continue;
+        }
+#endif
+#endif
+
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 

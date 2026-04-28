@@ -76,6 +76,11 @@ FORCE_INLINE void prefetch_batch_read_tiles(
 }
 
 void kernel_main() {
+#if defined(RING_JOINT_SDPA_DISABLE_CCL) && RING_JOINT_SDPA_DISABLE_CCL == 1
+    // Perf debug knob: skip all CCL work when paired with the matching SDPA-side
+    // sync no-op. No semaphores will be incremented; SDPA receivers must not wait.
+    return;
+#endif
     constexpr uint32_t page_size_base_idx = 11;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<

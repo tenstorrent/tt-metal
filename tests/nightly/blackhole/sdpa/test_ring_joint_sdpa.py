@@ -1074,8 +1074,17 @@ def test_ring_joint_attention_create_perf_table(model_name):
             # Math utilization
             effective_cores = measured_core_count - measured_core_count % 10
             heads_per_device = local_nhq
+            ring_iter_mode = os.environ.get("TT_RING_JOINT_SDPA_RING_ITER_MODE", "all")
             utilization = compute_ring_joint_utilization(
-                local_seq_len, s, d_q, d_v, heads_per_device, duration_ns, effective_cores, is_causal
+                local_seq_len,
+                s,
+                d_q,
+                d_v,
+                heads_per_device,
+                duration_ns,
+                effective_cores,
+                is_causal,
+                ring_iter_mode=ring_iter_mode,
             )
 
             ring_efficiency = (cores_used * 100.0) / total_cores

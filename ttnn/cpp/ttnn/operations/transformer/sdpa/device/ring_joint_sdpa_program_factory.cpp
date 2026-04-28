@@ -6,6 +6,8 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <cmath>
 #include <string>
@@ -569,6 +571,49 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+
+    // Debug knob (perf-only, not for accuracy):
+    //   TT_RING_JOINT_SDPA_RING_ITER_MODE=all         -> run all ring iters (default, 0)
+    //   TT_RING_JOINT_SDPA_RING_ITER_MODE=iter0       -> run only ring_iter == 0  (1)
+    //   TT_RING_JOINT_SDPA_RING_ITER_MODE=skip_iter0  -> skip ring_iter == 0      (2)
+    // The skip is applied after the per-iter ring sync in all three kernels, so the
+    // all-gather / fabric still progresses — only SDPA's per-iter compute work is gated.
+    {
+        uint32_t ring_iter_mode = 0;
+        const char* env = std::getenv("TT_RING_JOINT_SDPA_RING_ITER_MODE");
+        if (env != nullptr) {
+            if (std::strcmp(env, "all") == 0) {
+                ring_iter_mode = 0;
+            } else if (std::strcmp(env, "iter0") == 0) {
+                ring_iter_mode = 1;
+            } else if (std::strcmp(env, "skip_iter0") == 0) {
+                ring_iter_mode = 2;
+            } else {
+                log_warning(
+                    tt::LogOp,
+                    "TT_RING_JOINT_SDPA_RING_ITER_MODE='{}' not recognized (expected all|iter0|skip_iter0); "
+                    "defaulting to 'all'.",
+                    env);
+            }
+            if (ring_iter_mode != 0) {
+                log_info(tt::LogOp, "Ring joint SDPA ring-iter mode: {} ({})", env, ring_iter_mode);
+            }
+        }
+        defines["RING_JOINT_SDPA_RING_ITER_MODE"] = std::to_string(ring_iter_mode);
+    }
+
+    // Debug knob (perf-only): TT_RING_JOINT_SDPA_DISABLE_CCL=1 makes the SDPA reader's
+    // sync wait a no-op. Pair with the matching env var read by the all-gather program
+    // factory (which short-circuits the AG kernels) so neither side hangs. K/V data on
+    // ring_iter > 0 is garbage with this on — accuracy must not be checked.
+    {
+        const char* env = std::getenv("TT_RING_JOINT_SDPA_DISABLE_CCL");
+        bool disable_ccl = (env != nullptr) && (std::strcmp(env, "0") != 0) && (env[0] != '\0');
+        if (disable_ccl) {
+            log_info(tt::LogOp, "Ring joint SDPA: CCL sync disabled (perf debug knob)");
+        }
+        defines["RING_JOINT_SDPA_DISABLE_CCL"] = disable_ccl ? "1" : "0";
+    }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.

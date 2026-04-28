@@ -39,9 +39,16 @@ struct RingSDPAOpReceiver {
     uint32_t get_next_ring_id_and_sync() {
         ASSERT(initialized);
         return seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
+#if defined(RING_JOINT_SDPA_DISABLE_CCL) && RING_JOINT_SDPA_DISABLE_CCL == 1
+            // CCL disabled (perf debug knob): the all-gather kernels return early and
+            // never increment the op semaphore, so this wait would hang. Skip it.
+            (void)dir;
+            (void)val;
+#else
             if (this->wait_for_op_signal) {
                 noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[dir], val);
             }
+#endif
         });
     }
 };

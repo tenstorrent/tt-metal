@@ -244,6 +244,20 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+
+        // Debug knob: see program factory / compute kernel for description.
+#if defined(RING_JOINT_SDPA_RING_ITER_MODE)
+#if RING_JOINT_SDPA_RING_ITER_MODE == 1
+        if (ring_iter > 0) {
+            continue;
+        }
+#elif RING_JOINT_SDPA_RING_ITER_MODE == 2
+        if (ring_iter == 0) {
+            continue;
+        }
+#endif
+#endif
+
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;

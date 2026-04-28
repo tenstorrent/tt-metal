@@ -35,6 +35,11 @@ constexpr uint32_t num_inputs = get_compile_time_arg_val(12);
 constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
 
 void kernel_main() {
+#if defined(RING_JOINT_SDPA_DISABLE_CCL) && RING_JOINT_SDPA_DISABLE_CCL == 1
+    // Perf debug knob: skip all CCL work when paired with the matching SDPA-side
+    // sync no-op. No semaphores will be incremented; SDPA receivers must not wait.
+    return;
+#endif
     constexpr uint32_t page_size_base_idx = 14;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
 
