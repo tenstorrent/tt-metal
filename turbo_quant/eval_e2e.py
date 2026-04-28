@@ -353,6 +353,19 @@ def main():
         if not use_trace:
             ttnn.deallocate(tt_logits)
 
+        # DEBUG: print logit stats at step 41 (= last prompt token, predicts first
+        # generated token). This is the most important step to compare across
+        # configs. logits shape: [batch, 1, vocab_size]
+        if step == 41:
+            l = logits[0, 0]
+            top5_v, top5_i = torch.topk(l, 5)
+            print(
+                f"  [LOGITS step={step}] mean={l.mean().item():.4f} std={l.std().item():.4f} "
+                f"max={l.max().item():.4f} min={l.min().item():.4f} top5_idx={top5_i.tolist()} "
+                f"top5_val={[round(v.item(), 3) for v in top5_v]}",
+                flush=True,
+            )
+
         _, next_tok = sample_host(logits, temperature=0, top_p=0.8)
         # next_tok shape: [batch, 1]. Extract token id per batch slot.
         next_tok_ids = [int(next_tok[b].squeeze().item()) for b in range(batch)]

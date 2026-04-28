@@ -93,18 +93,68 @@ between the kernel and the rest of the model — possibly:
 - Some compounding precision / per-layer drift across 32 layers that
   exceeds what 0.99 cos suggests.
 
-**Diagnostic infra added (commit pending):** `api/debug/dprint.h`
-include in compute kernel for future DPRINT debug. To use, set
-`TT_METAL_DPRINT_CORES='(1,1)'` and uncomment the relevant DPRINT
-statements (the V-side DPRINTs hung trace capture last attempt — may
-need to wrap with proper push/pop semantics or use sub_core_grids).
+### 🎯 ROOT CAUSE FOUND (2026-04-28): missing positional mask
 
-**Next debug step (when resuming):** dump the actual SDPA OUTPUT tile
-(`cb_out` final values) for layer 0 step 0 and compare against a
-torch-computed reference using the same K/V/Q values dumped in
-parallel. If they match, the bug is downstream of SDPA. If they
-diverge, the bug is in the kernel's softmax + matmul math under some
-condition the unit tests miss.
+Logits comparison at step 41 (first generated token):
+
+| | Baseline BFP8 | TQ Full Dequant |
+|---|---|---|
+| max | 33.5 | **9.5** |
+| std | 2.39 | 1.77 |
+| top-5 idx | 791="The", 60704, … | 20066="OO", 102470, … |
+
+TQ logits are ~3× smaller magnitude with shifted mean. Post-mortem:
+
+The fused-SDPA kernel iterates a fixed `k_chunk_size_tokens = 128`
+positions per chunk. With `cur_pos=41` and `valid_k_chunks=1`, only
+positions 0-41 in chunk 0 have real data; 42-127 are zero (paged_update_cache
+never wrote them). For zero K/V positions:
+
+- Q · 0 = 0 → score = 0
+- exp((0 - real_max) * scale) ≈ exp(-0.66) ≈ 0.52 per zero position
+- 86 zero positions × 0.52 = 44.7 added to softmax denominator
+- 42 real positions contribute ≈ 21 to denominator
+- Real positions get 21/65.7 ≈ 32 % of total weight (instead of ~100%)
+
+V[zero] = 0 contributes nothing to output direction. So OUTPUT
+DIRECTION is correct (matches torch ref → cos > 0.99 in unit tests),
+but OUTPUT MAGNITUDE is ~32 % of correct.
+
+LayerNorm partially compensates per-layer, but the consistent
+~32 % bias compounds across 32 layers, eventually pushing the
+residual stream into garbage. Std SDPA avoids this via the
+`apply_mask` / `apply_causal_mask_lightweight` helpers which set
+masked QK scores to -inf so exp() = 0. **Our fused TQ kernel has no
+such mask.**
+
+This explains every observation:
+- All kernel inputs (cur_pos, Q, K_idx, K_norms, V_idx, V_norms) verified
+  correct via DPRINT — kernel reads what it expects.
+- Unit test cos > 0.99 — cosine is magnitude-insensitive, masks the bug.
+- E2E garbage output — 32 layers of magnitude bias compound.
+- BFP4 paged path works — std SDPA uses `cur_pos` to apply causal/padding
+  mask, zeroing exp() contributions from positions > cur_pos.
+
+### Fix plan
+
+Add positional masking in the fused-SDPA kernel: after Q·K^T matmul
+and before softmax, set scores at columns > cur_pos to -inf in the
+last iterated chunk. Approaches in order of complexity:
+
+1. **Reader-side mask CB** (chosen): allocate `cb_attn_mask` with one
+   tile per Sk_chunk_t position. Reader computes mask from cur_pos
+   and writes -inf (e.g. -1e10) for positions > cur_pos, 0 otherwise.
+   Compute does `add_block_inplace(cb_qk_im, cb_attn_mask)` after
+   matmul, before sub_exp.
+2. **Compute-side mask via SFPU**: generate column-index tile in
+   compute, apply `unary_ge_tile(col_idx, valid_cols)` × -1e10. More
+   self-contained but needs more SFPU code.
+3. **Iterate fewer K tiles per chunk**: clamp Sk_chunk_t dynamically
+   to ceil((cur_pos+1)/32) tiles. Doesn't fix within-tile partial
+   masking but reduces compute. Combine with (1) or (2) for the last
+   tile.
+
+Approach (1) is being implemented next.
 
 ### Bottleneck diagnosis trail (for posterity)
 
