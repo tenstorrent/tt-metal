@@ -171,6 +171,69 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             bbox_num_cores,
             bbox.end_coord.x - bbox.start_coord.x + 1,
             bbox.end_coord.y - bbox.start_coord.y + 1);
+
+        // SHARD SPEC VALIDATION
+        {
+            const auto& shard_shape = shard_spec.shape;
+            const auto& shard_grid = shard_spec.grid;
+
+            // When sharded, layernorm always selects LayerNormShardedMultiCoreProgramConfig.
+            const auto& sharded_pc =
+                std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+            const auto device_grid = a.device()->compute_with_storage_grid_size();
+            const auto program_grid = sharded_pc.compute_with_storage_grid_size;
+
+            // 1. Grid hierarchy: shard_spec.grid ⊆ program_config.grid ⊆ device.grid
+            TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
+
+            const CoreRange device_range(CoreCoord{0, 0}, CoreCoord{device_grid.x - 1, device_grid.y - 1});
+            const CoreRange program_range(CoreCoord{0, 0}, CoreCoord{program_grid.x - 1, program_grid.y - 1});
+            TT_FATAL(
+                device_range.contains(program_range),
+                "program_config grid ({}x{}) must be contained within device grid ({}x{})",
+                program_grid.x,
+                program_grid.y,
+                device_grid.x,
+                device_grid.y);
+            TT_FATAL(
+                program_range.contains(shard_grid),
+                "shard_spec.grid is not contained within program_config grid ({}x{})",
+                program_grid.x,
+                program_grid.y);
+
+            // 2. Shard shape must be non-zero
+            TT_FATAL(
+                shard_shape[0] > 0 && shard_shape[1] > 0,
+                "shard shape must be non-zero, got H={} W={}",
+                shard_shape[0],
+                shard_shape[1]);
+
+            // 3. Tile alignment. Sharded layernorm derives block_h = shard_h / tile_height and
+            //    block_w = shard_w / tile_width as integer divisions; both shard dims must be tile-aligned
+            //    (no repack path, unlike group_norm).
+            TT_FATAL(
+                shard_shape[0] % tile_height == 0,
+                "shard height {} must be divisible by tile height {}",
+                shard_shape[0],
+                tile_height);
+            TT_FATAL(
+                shard_shape[1] % tile_width == 0,
+                "shard width {} must be divisible by tile width {}",
+                shard_shape[1],
+                tile_width);
+
+            // 4. Total elements: num_cores * per-shard elements == physical tensor volume
+            const auto num_cores = shard_grid.num_cores();
+            const auto total_from_shards = static_cast<uint64_t>(num_cores) * shard_shape[0] * shard_shape[1];
+            TT_FATAL(
+                total_from_shards == a.physical_volume(),
+                "Total elements from shards ({} cores * {}x{}) = {} does not match tensor physical volume {}",
+                num_cores,
+                shard_shape[0],
+                shard_shape[1],
+                total_from_shards,
+                a.physical_volume());
+        }
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
