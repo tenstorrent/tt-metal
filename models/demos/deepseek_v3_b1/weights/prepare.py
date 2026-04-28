@@ -21,6 +21,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import replace as _dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
 )
-from models.demos.deepseek_v3_b1.weights.upload import UploadableMixin
+from models.demos.deepseek_v3_b1.weights.upload import UploadableMixin, eager_upload_l1_lockstep
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
@@ -1833,6 +1834,14 @@ def _compute_sram_trim_budget(
         l1_top_addr    = worker_l1_unreserved_base + worker_l1_size
         boundary_addr  = l1_top_addr - combined_attn_sram_cap_bytes
 
+    ``initial_lowest_addr`` is bootstrapped from real allocator addresses
+    of the persistent attn/shared L1 tensors -- callers must therefore
+    ensure those tensors are on device *before* invoking this helper
+    (cache-backed providers go through :func:`eager_upload_l1_lockstep`
+    in :func:`prepare_moe_layer_weights`).  This guarantees the
+    "attn-first, SRAM-below" allocation order the per-core invariant
+    ``attn[c] + sram[c] <= cap`` relies on.
+
     The returned triple is the input contract of
     :func:`prepare_compressed_sram_slots`.
     """
@@ -2778,32 +2787,59 @@ def prepare_moe_layer_weights(
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
 
-    sram_slots = None
+    result = DeepSeekV3MoELayerWeights(
+        q_a_proj=attn.q_a_proj,
+        q_b_proj=attn.q_b_proj,
+        kv_a_proj=attn.kv_a_proj,
+        o_proj=attn.o_proj,
+        gate_mm=attn.gate_mm,
+        attn_norm=attn.attn_norm,
+        q_norm=attn.q_norm,
+        kv_norm=attn.kv_norm,
+        ffn_norm=attn.ffn_norm,
+        gate_bias=attn.gate_bias,
+        kv_b1_proj=attn.kv_b1_proj,
+        kv_b2_proj=attn.kv_b2_proj,
+        shared_gate_proj=shared.shared_gate_proj,
+        shared_up_proj=shared.shared_up_proj,
+        shared_down_proj=shared.shared_down_proj,
+        routed_gate_proj=routed.routed_gate_proj,
+        routed_up_proj=routed.routed_up_proj,
+        routed_down_proj=routed.routed_down_proj,
+        sram_slots=None,
+    )
+
     sram_expert_indices = (sram_hot_experts or {}).get(layer_idx)
     if sram_expert_indices:
         assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
         assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
         assert worker_l1_size is not None, "worker_l1_size required when sram_hot_experts specifies this layer"
 
+        # Attn-first regime: stage the persistent L1 lockstep tensors on
+        # device *now* so the SRAM trim sees real allocator addresses.
+        # DRAM tensors stay host-staged for the caller's two_phase_upload.
+        if not move_to_device:
+            result = eager_upload_l1_lockstep(device, result)
+
         persistent_attn_tensors = [
-            attn.q_a_proj,
-            attn.q_b_proj,
-            attn.kv_a_proj,
-            attn.o_proj,
-            attn.gate_mm,
-            attn.attn_norm,
-            attn.q_norm,
-            attn.kv_norm,
-            attn.ffn_norm,
-            attn.gate_bias,
-            attn.kv_b1_proj,
-            attn.kv_b2_proj,
-            shared.shared_gate_proj,
-            shared.shared_up_proj,
-            shared.shared_down_proj,
-            routed.routed_gate_proj,
-            routed.routed_up_proj,
-            routed.routed_down_proj,
+            result.q_a_proj,
+            result.q_b_proj,
+            result.kv_a_proj,
+            result.o_proj,
+            result.gate_mm,
+            result.attn_norm,
+            result.q_norm,
+            result.kv_norm,
+            result.ffn_norm,
+            result.gate_bias,
+            result.kv_b1_proj,
+            result.kv_b2_proj,
+            result.shared_gate_proj,
+            result.shared_up_proj,
+            result.shared_down_proj,
+            result.routed_gate_proj,
+            result.routed_up_proj,
+            result.routed_down_proj,
         ]
         boundary_addr, attn_lowest_addr, l1_top_addr = _compute_sram_trim_budget(
             device,
@@ -2845,28 +2881,8 @@ def prepare_moe_layer_weights(
             initial_lowest_addr=attn_lowest_addr,
             l1_top_addr=l1_top_addr,
         )
+        result = _dataclass_replace(result, sram_slots=sram_slots)
 
-    result = DeepSeekV3MoELayerWeights(
-        q_a_proj=attn.q_a_proj,
-        q_b_proj=attn.q_b_proj,
-        kv_a_proj=attn.kv_a_proj,
-        o_proj=attn.o_proj,
-        gate_mm=attn.gate_mm,
-        attn_norm=attn.attn_norm,
-        q_norm=attn.q_norm,
-        kv_norm=attn.kv_norm,
-        ffn_norm=attn.ffn_norm,
-        gate_bias=attn.gate_bias,
-        kv_b1_proj=attn.kv_b1_proj,
-        kv_b2_proj=attn.kv_b2_proj,
-        shared_gate_proj=shared.shared_gate_proj,
-        shared_up_proj=shared.shared_up_proj,
-        shared_down_proj=shared.shared_down_proj,
-        routed_gate_proj=routed.routed_gate_proj,
-        routed_up_proj=routed.routed_up_proj,
-        routed_down_proj=routed.routed_down_proj,
-        sram_slots=sram_slots,
-    )
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result
 
