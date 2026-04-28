@@ -1697,31 +1697,42 @@ class MLA1D(AbstractModule):
         )  # [1, num_heads, seq_len, kv_lora_rank], valid only on mesh_coords device
         ttnn.deallocate(tt_q)
 
-        # Per-coord scatter via host roundtrip: pull the full valid tensor from mesh_coords,
-        # then re-upload as a mesh tensor sharded on dim=1 across cluster_axis=1, so col c
-        # ends up with heads [c*num_heads_local, (c+1)*num_heads_local) — matching tt_q's
-        # original layout. cluster_axis=0 is replicated.
+        # On-device scatter via masked all_reduce: zero out non-sender shards by
+        # multiplying with a tiny per-device mask (1 on sender_coord, 0 elsewhere),
+        # then all_reduce(sum) so every device holds the sender's valid attn_out.
+        # Finally mesh_partition heads on dim=1 across cluster_axis=1 — col c gets
+        # heads [c*num_heads_local, (c+1)*num_heads_local), replicated on cluster_axis=0,
+        # matching tt_q's original heads-sharded layout.
         sender_coord = next(iter(mesh_coords))
-        attn_out_host = attn_out.cpu()
-        host_shards = ttnn.get_device_tensors(attn_out_host)
-        host_coords = attn_out_host.tensor_topology().mesh_coords()
-        sender_torch = None
-        for shard, coord in zip(host_shards, host_coords):
-            if (int(coord[0]), int(coord[1])) == (int(sender_coord[0]), int(sender_coord[1])):
-                sender_torch = ttnn.to_torch(shard)
-                break
-        assert sender_torch is not None, f"sender_coord {sender_coord} not found in mesh shards"
-
-        attn_out_sharded = ttnn.from_torch(
-            sender_torch,
+        mesh_shape_tup = tuple(device.shape)
+        mask_torch = torch.zeros(1, 1, mesh_shape_tup[0], mesh_shape_tup[1])
+        mask_torch[0, 0, int(sender_coord[0]), int(sender_coord[1])] = 1.0
+        mask = ttnn.from_torch(
+            mask_torch,
             dtype=attn_out.dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=cfg["flash_mla"]["memory_config"],
-            mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 1), mesh_shape=tuple(device.shape)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(-2, -1), mesh_shape=mesh_shape_tup),
         )
+
+        attn_out_masked = ttnn.multiply(attn_out, mask)
         ttnn.deallocate(attn_out)
-        attn_out = attn_out_sharded
+        ttnn.deallocate(mask)
+
+        attn_out_full = ttnn.all_reduce(
+            attn_out_masked,
+            memory_config=cfg["flash_mla"]["memory_config"],
+        )
+        ttnn.deallocate(attn_out_masked)
+
+        attn_out = ttnn.mesh_partition(
+            attn_out_full,
+            dim=1,
+            cluster_axis=1,
+            memory_config=cfg["flash_mla"]["memory_config"],
+        )
+        ttnn.deallocate(attn_out_full)
 
         wkv_b2_ag_prefill_runtime_args = ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
         num_heads_padded = pad_batch_to_dram_banks(num_heads)
@@ -1956,10 +1967,10 @@ class MLA1D(AbstractModule):
                 )
 
             if row_batched_prefill:
-                for dp_col_idx in range(sdpa_dp_factor):
-                    batch_start_idx = dp_col_idx * batch_size_per_dp_shard
+                for dp_col_idx in range(sdpa_dp_factor):  # 0..7
+                    batch_start_idx = dp_col_idx * batch_size_per_dp_shard  # 0, 4, 8, ...
                     mesh_coords = set(get_mesh_coords(mesh_shape, row_idx, dp_col_idx))
-                    for local_user_idx in range(batch_size_per_dp_shard):
+                    for local_user_idx in range(batch_size_per_dp_shard):  # 0..4
                         user_batch_idx = batch_start_idx + local_user_idx
                         tt_kvpe_user = ttnn.slice(
                             tt_kvpe_chunk,
