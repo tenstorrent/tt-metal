@@ -1203,6 +1203,7 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
 
     return {
+        {"IS_CQ_DRAM_BACKED", "0"},
         {"DISPATCH_CB_BASE", std::to_string(l1_buf_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
@@ -1210,6 +1211,7 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
         {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
         {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
+        {"DISPATCH_D_SHUTDOWN_SEM_ID", "0"},  // no dispatch_s in SD; disables dispatch_s_enabled path
         {"COMMAND_QUEUE_BASE_ADDR", "0"},
         {"COMPLETION_QUEUE_BASE_ADDR", "0"},
         {"COMPLETION_QUEUE_SIZE", "0"},
