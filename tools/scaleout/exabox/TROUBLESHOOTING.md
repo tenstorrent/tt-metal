@@ -22,7 +22,10 @@ Real issues encountered and their solutions.
   - [Tensix Stall Issue (Requires Power Cycle)](#tensix-stall-issue-requires-power-cycle)
 - [Hardware Issues (GDDR/ASIC)](#hardware-issues-gddrasic)
   - [GDDR Issue on Chip](#gddr-issue-on-chip)
+  - [GDDR Training Failure](#gddr-training-failure)
   - [Missing ASIC After Reboot](#missing-asic-after-reboot)
+  - [ASIC Enumeration Issue (PCIe Device Not Detected)](#asic-enumeration-issue-pcie-device-not-detected)
+  - [ASIC Locations All Reporting 0 (SPI Fwtable Not Programmed)](#asic-locations-all-reporting-0-spi-fwtable-not-programmed)
   - [Do NOT Update Firmware on Cluster Machines](#do-not-update-firmware-on-cluster-machines)
 - [Ethernet & Connectivity](#ethernet--connectivity)
   - [Hostname Not Found in FSD](#hostname-not-found-in-fsd)
@@ -32,6 +35,7 @@ Real issues encountered and their solutions.
   - [Transient Ethernet Connectivity Loss](#transient-ethernet-connectivity-loss)
   - [Z Ports Showing Down](#z-ports-showing-down)
   - [Trace Connections Hanging After Reset](#trace-connections-hanging-after-reset-30-failure-rate)
+  - [ETH Hang or Training Failure](#eth-hang-or-training-failure)
 - [Fabric Tests](#fabric-tests)
   - [Fabric Test Fails with "Graph could not fit in physical topology"](#fabric-test-fails-with-graph-could-not-fit-in-physical-topology)
   - [Fabric Test Fails with "Failed to initialize FW"](#fabric-test-fails-with-failed-to-initialize-fw)
@@ -460,6 +464,43 @@ If GDDR issue persists after power cycle, it's a hardware problem that may requi
 
 ---
 
+### GDDR Training Failure
+
+**Symptom**: One or more GDDR controllers on a BH ASIC fail to reach a valid trained state after boot or reset. `TAG_GDDR_STATUS` shows error bits instead of the expected `0x5555…` pattern and `hw_init_status` is marked as error.
+
+How this surfaces:
+- SLT: `GDDR_TRAINING_FAIL` (E04) for training, `GDDR_MEMORY_CHECK_FAIL` (E05) for data/BIST
+- Funtest: `DDR_TRAIN_FAIL` (ET), failing `gddr_training_check` step
+- GDDR qual/stress: `FAILED: GDDR TRAINING` with per-controller `wrcal` errors
+
+**Cause**: At boot/reset, each BH ASIC runs MRISC-based GDDR training per controller/DRAM to calibrate clocks, delays, and margins. Failure modes include:
+
+- **Per-controller / per-GDDR failure (most common)** — A specific controller can't complete training after retries (e.g. "Controller 3 training failures on UBB4 Chip2"). Usually indicates bad ASIC/controller or bad DRAM connectivity/solder/WCK issue on the board.
+- **All controllers fail on a device (catastrophic)** — All 8 controllers (0–7) fail training. Tied to bad ASIC or severe board power/clock issue. Classified as hard failure, not candidate for DC deployment.
+- **Intermittent failure that recovers after retrain** — Occasional training failure on one controller that recovers after directed retrain via CMFW message or MRISC reset. After retrain, `GDDR_STATUS` returns to `0x5555…` and margins pass. On newer FW + UMD, automated retrain attempts happen before killing the workload.
+- **Training passes but BIST/data fails** — Training completes but CRC/EDC/BIST errors appear on a controller or DRAM. Newer FW encodes both training and BIST in `TAG_GDDR_STATUS` ([0:15] training, [16:31] BIST). Treat as bad DRAM / marginal channel, not a pure training issue.
+- **Thermal degradation under stress** — Systems pass initially but after extended GDDR stress (~3 days), specific controllers become consistently untrainable; failing DRAMs tend to be the hottest in telemetry.
+
+**Solution**:
+
+1. Identify which BDF / UBB / controller / GDDR are failing from funtest or qual logs. Check `TAG_GDDR_STATUS` for the specific error pattern.
+
+2. Power cycle and re-run a modest number of loops (5–10), ideally at both nominal and downgraded speeds (16 G vs 12 G) to check if the failure is frequency-sensitive:
+
+```bash
+sudo ipmitool chassis power cycle
+```
+
+3. If supported by the FW on that host, exercise directed retrain (CMFW `TT_SMC_MSG_TOGGLE_GDDR_RESET` with GDDR ID) and check if `GDDR_STATUS` returns to `0x5555…` and stress passes afterward.
+
+4. Classify the failure:
+   - **Intermittent, recovers with retrain, low frequency** → track as marginal; allowed if covered by qual policy and retrain is in the stack.
+   - **Same controller on same ASIC fails most loops** (e.g. 4/5, 5/5) even across speeds → bad controller/ASIC. Remove from DC pool.
+   - **All 8 controllers fail and stay bad across retries** → catastrophic. Bad ASIC or serious board issue. Hard failure.
+   - **Training passes but BIST/data/CRC/EDC fail** → not a training issue; follow the GDDR data-integrity path (typically bad DRAM / marginal channel).
+
+---
+
 ### Missing ASIC After Reboot
 
 **Symptom**: Only 31 chips visible after `tt-smi reset` instead of 32. One ASIC doesn't come up.
@@ -481,6 +522,55 @@ After power cycle, verify all 32 chips come up:
 ```bash
 tt-smi -l  # should show 32 devices
 ```
+
+---
+
+### ASIC Enumeration Issue (PCIe Device Not Detected)
+
+**Symptom**: One or more ASICs never show up as PCIe devices after boot/reset. Tools like `lspci`, `tt-smi`, funtest, and MDG see fewer chips than expected (e.g. funtest `ASIC BDF:01:00.0 not Enum`, error E010 on QB2, `tt-smi` showing 30/32 on Galaxy).
+
+**Cause**: The CPU's PCIe root port failed to train/link to the ASIC, so the OS never sees a device at that BDF. Can be permanent (HW problem) or intermittent (shows up after warm resets, GDDR runs, or MDG loops). Common root causes include:
+
+- **PCIe SI / retimer / board-path** — RevB GLX/Quanta failures cluster on UBB2 (retimer FW, PCIe path between UBB2 and PDB). Galaxy SC4/SC5 trays drop enumeration after `tt-smi -glx_reset` loops; reseating UBBs or PDB FW updates help. On Quanta MDG, some cases required PDB or motherboard replacement.
+- **Firmware bugs** — P300C warm-boot: ASIC stops enumerating after 1–2 hrs of cycles (Zephyr I2C / DMC watchdog); fixed in fw >= 19.8.0-rc2. Bad boardcfg/SERDES on some BH cards forced CMFW into recovery mode.
+- **Tooling / version mismatches** — RevC Galaxy on fw 19.8.1.0 + KMD 2.7: `tt-smi -glx_reset` failures fixed by upgrading to `tt-smi` v5. KMD 2.7 link-retrain worsened drops on some trays; KMD 2.5 or 2.7.0-noretrain improved stability.
+- **Manufacturing (QB2/Quanta)** — E010 = "1+ ASICs do not enumerate" on P300C. Post-Quanta failures are almost always downstream (chassis, FW, DC host), not card manufacturing.
+
+**Solution**:
+
+1. Confirm the symptom — compare chip count to platform spec, locate the missing BDF:
+
+```bash
+tt-smi                                    # or tt-smi -glx for Galaxy
+lspci | grep -i tenstorrent
+dmesg | egrep -i 'pcie|aer|tenstorrent'
+```
+
+2. Cold A/C power cycle and re-run MDG/funtest. If the same ASIC keeps dropping within < 20 cycles, treat it as a real issue:
+
+```bash
+sudo ipmitool chassis power cycle
+```
+
+3. Check FW/KMD/tt-smi versions are at the recommended combo for that platform. If on a known-flaky version combo, fix versions first before doing hardware swaps.
+
+4. If versions are good, localize hardware: reseat UBB/cables → swap UBB to known-good chassis → replace PDB → suspect MB/chassis backplane. Check if the failure follows a specific slot position (common with RevB/RevC). Once clearly hardware-position-specific, pull the host from the pool and file against the appropriate JIRA.
+
+---
+
+### ASIC Locations All Reporting 0 (SPI Fwtable Not Programmed)
+
+**Symptom**: Querying SPI data tables shows all ASICs reporting `asic_location = 0` instead of the expected non-zero values for the platform (e.g. `{1,8}` on UBB).
+
+```bash
+for pci in {0..31}; do
+  ./funtest_bh/tenstorrent/scripts/script-cli.py tensix_sm spi-get-spi-data-table --interface pci:${pci}
+done
+```
+
+**Cause**: The SPI read-only fwtable is unprogrammed or not loaded. On UBB, `asic_location` is populated in the SPI fwtable and returned from `read_only_table.asic_location`. If the fwtable/flash is missing or not loaded, the driver returns the default value `0` for all non-P300 boards. On P300, `asic_location` is derived from GPIO6 (left/right) and is expected to be `0` or `1`; validation code checks each P300 card has locations `{0,1}` and treats "both same / both 0" as an error.
+
+**Solution**: Run `ft1.sh` from FunTest to (re)program the SPI tables including `asic_location`, then rerun the check. After programming, per-ASIC `asic_location` values should be non-zero and match the expected pattern for the platform.
 
 ---
 
@@ -726,6 +816,52 @@ Only investigate if Z ports are supposed to be connected in your topology.
 ```bash
 export TT_METAL_DISABLE_MULTI_AERISC=1
 ```
+
+---
+
+### ETH Hang or Training Failure
+
+**Symptom**: Either links never come up (training failure) or links trained successfully but ETH cores get stuck later (hang).
+
+Training failure looks like:
+- `eth_train_status` shows `PORT_DOWN`, `LINK_TRAIN_TIMEOUT_*`
+- Funtest error codes: E34 `ETH_TRAIN_FAIL_ALL`, E050 `ETH_TEST_FAIL`, E051 `ETH_TRAIN_STATUS_FAIL`
+
+ETH hang looks like:
+- `Device N: Timeout ... waiting for physical cores to finish (x=..,y=25)` during FW init / `open_mesh_device`
+- WAN CCL test hangs; watcher shows ETH core stuck and/or TXQ permanently busy
+- `eth_postcode = 0xc0deb000 (FAIL)`, core in soft reset
+
+**Cause**: Multiple distinct root causes depending on the failure mode:
+
+- **ETH cores stuck after asymmetric reset (ExaBox)** — Single-sided reset of one node in a multi-Galaxy cluster leaves ETH cores connected to non-reserved QSFP links in a failed train / soft-reset state. tt-metal FW init waits on those cores indefinitely. Fix: update to a tt-metal version that skips inactive ETH cores during FW init.
+- **WAN CCL hang / BH RX packet buffer overflow** — Under high noise, MAC/PCS merges small erroneous packets into oversized ones that overflow the ETH RX packet buffer AFIFO. The error-recovery FSM fails to drop subsequent bad packets, feeding corrupted data (0xfefefefe patterns in L1) downstream. Links show `PORT_UP` / `LINK_TRAIN_PASS` but TXQ stays busy. Mitigations: run at AICLK 1150–1200 MHz instead of Fmax 1350 MHz; use FW 19.8.1 as recommended stable config.
+- **QSFP / retimer training issues** — Intermittent `FAIL_DUMMY_PACKET` training failures on WH 6U Galaxy / QSFP-DD paths when training both retimer legs asynchronously. Fixed by ETH FW 7.0.2 with Alphalink/retimer CDR tuning.
+- **Per-ASIC reset training failures (WH)** — Stress with per-ASIC resets causes intermittent training failures between paired ports; retrain API alone doesn't recover. Fix: adjusted training sequence and increased chip_info resend frequency in ERISC FW 7.5.0.
+- **P300 intermittent training** — ~5–8% failure rate at 1350 MHz with AICLK PPM enabled. Improved to < 0.5% with updated eth_params/eth_init FW in 19.3.0.
+
+**Solution**:
+
+1. Confirm the failure type — check ETH status, capture error codes, and identify which ASIC/port indices fail. For hangs, enable watcher so stuck ETH cores are logged: `export TT_METAL_WATCHER=1`
+
+2. Cold power cycle and re-run. One-off failures that don't recur in tens of cycles are usually marginal SI / transient reset noise. Same port failing consistently within a few cycles is a real issue.
+
+```bash
+sudo ipmitool chassis power cycle
+```
+
+3. Check FW/KMD/tt-smi/tt-metal versions. Many ETH training issues are fixed in specific FW versions:
+   - ExaBox ETH init hang → tt-metal version with skip-inactive-ETH-cores fix
+   - WH QSFP dummy packet → ETH FW >= 7.0.2
+   - P300 intermittent training → FW >= 19.3.0
+   - WAN hang → FW 19.8.1 + AICLK <= 1200 MHz
+
+4. Run `run_validation.sh` with `--rerun-on-retrain` before fabric/WAN tests. This recovers links that came up down after `tt-smi -glx_reset`. If validation passes but WAN workloads hang → likely WAN ETH bug, not training. If validation itself fails after retrain → hardware/infra (cabling, retimers, bad UBB).
+
+5. Distinguish hardware vs firmware vs WAN bug:
+   - **Hardware**: training fails deterministically on a given port/board across multiple resets and hosts, even after clean re-flash. `LINK_SIGDET_FAILED` or training never passes AN/PCS. Reseat cables → swap UBB → swap PDB.
+   - **Firmware**: updating to recommended FW/ETH FW/KMD combo changes behaviour from regular failures to rare/none.
+   - **WAN ETH bug**: training is fine but WAN CCL hangs under load with L1 corruption, RX buffer overflow, or stuck TXQ. Use blessed FW bundle and Fmax settings; treat as covered by the global erratum.
 
 ---
 
