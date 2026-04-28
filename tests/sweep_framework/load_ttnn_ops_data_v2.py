@@ -39,6 +39,25 @@ _POSITIONAL_TO_NAMED_REMAP = {
     },
 }
 
+# Ops where the model trace captured args as named kwargs but the sweep
+# module passes them positionally (due to API evolution adding required
+# positional params like semaphores).  During reconstruction we convert
+# the master to match the sweep's calling convention.
+_NAMED_TO_POSITIONAL_REMAP = {
+    "ttnn.experimental.all_gather_async": {
+        "dim": "arg2",
+    },
+}
+
+# Runtime-only CCL infrastructure args that the sweep module must pass
+# but were not present in the original model trace.  Adding arg1=None
+# (persistent_output_buffer) aligns the master with what the sweep produces.
+_CCL_INFRASTRUCTURE_DEFAULTS = {
+    "ttnn.experimental.all_gather_async": {
+        "arg1": None,
+    },
+}
+
 # Default manifest path (relative to repo root)
 _DEFAULT_MANIFEST = "model_tracer/trace_selection_registry.yaml"
 
@@ -1445,6 +1464,24 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                         args[new_key] = args.pop(old_key)
                 if op_name == "ttnn.slice" and "starts" in args and "steps" not in args:
                     args["steps"] = [1] * len(args["starts"])
+
+            # Named-to-positional remap (API evolution: named kwargs in master
+            # become positional in sweep due to new required params).
+            rev_remap = _NAMED_TO_POSITIONAL_REMAP.get(op_name)
+            if rev_remap and "arguments" in config_dict:
+                args = config_dict["arguments"]
+                for old_key, new_key in rev_remap.items():
+                    if old_key in args and new_key not in args:
+                        args[new_key] = args.pop(old_key)
+
+            # Add CCL infrastructure defaults that the sweep produces but
+            # were absent from the original model trace.
+            ccl_defaults = _CCL_INFRASTRUCTURE_DEFAULTS.get(op_name)
+            if ccl_defaults and "arguments" in config_dict:
+                args = config_dict["arguments"]
+                for key, default_val in ccl_defaults.items():
+                    if key not in args:
+                        args[key] = default_val
 
             if "arguments" in config_dict:
                 args = config_dict["arguments"]
