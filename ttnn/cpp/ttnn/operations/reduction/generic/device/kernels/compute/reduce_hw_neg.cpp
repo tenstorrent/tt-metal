@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -40,13 +40,15 @@ void kernel_main() {
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // Negate input tile: cb_input -> -x -> cb_ineg
-                // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce
-                compute_kernel_lib::sfpu_op<
-                    cb_input,
-                    compute_kernel_lib::SfpuBatching::Disabled,
-                    compute_kernel_lib::SfpuInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::SfpuOutputPolicy::PerTile,
-                    compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT>(cb_ineg, 1, compute_kernel_lib::Neg<>{});
+                // OUTPUT reconfig: packer was configured for cb_output/cb_acc by startup/reduce
+                compute_kernel_lib::eltwise::eltwise_pipeline<
+                    compute_kernel_lib::eltwise::EltwiseOutputPolicy::PerTile,
+                    compute_kernel_lib::eltwise::EltwiseDataFormatReconfig::OUTPUT>(
+                    compute_kernel_lib::eltwise::eltwise_chain(
+                        compute_kernel_lib::eltwise::CopyTile<cb_input, compute_kernel_lib::eltwise::Dst::D0>{},
+                        compute_kernel_lib::eltwise::Neg<>{}),
+                    cb_ineg,
+                    1);
 
                 acquire_dst();
                 if (wt > 0 || ht > 0) {
@@ -72,6 +74,11 @@ void kernel_main() {
 
         // Negate accumulated result: cb_acc -> -acc -> cb_output
         // INPUT_AND_OUTPUT (default): reduce left unpacker/packer on different CBs
-        compute_kernel_lib::sfpu_op<cb_acc>(cb_output, 1, compute_kernel_lib::Neg<>{});
+        compute_kernel_lib::eltwise::eltwise_pipeline(
+            compute_kernel_lib::eltwise::eltwise_chain(
+                compute_kernel_lib::eltwise::CopyTile<cb_acc, compute_kernel_lib::eltwise::Dst::D0>{},
+                compute_kernel_lib::eltwise::Neg<>{}),
+            cb_output,
+            1);
     }  // nc
 }
