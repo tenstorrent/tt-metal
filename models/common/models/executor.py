@@ -40,6 +40,41 @@ from models.tt_transformers.tt.common import (
 )
 
 # =============================================================================
+# Page Table Helpers
+# =============================================================================
+
+
+def make_contiguous_page_table(
+    batch_size: int,
+    max_seq_len: int,
+    block_size: int,
+) -> torch.Tensor:
+    """Create a simple contiguous page table for demos/tests.
+
+    Returns page_table [batch_size, num_blocks] where each user gets contiguous
+    blocks: user 0 -> [0,1,2,...], user 1 -> [N,N+1,...], etc.
+
+    This is the simplest allocation strategy. For advanced use cases:
+    - Shared prefix: multiple users can point to the same physical blocks
+    - Pooled allocation: vLLM-style dynamic block allocation from a shared pool
+
+    Args:
+        batch_size: Number of users/sequences.
+        max_seq_len: Maximum sequence length per user.
+        block_size: KV cache block size (tokens per block).
+
+    Returns:
+        Page table tensor [batch_size, num_blocks], dtype int32.
+    """
+    num_blocks_per_user = (max_seq_len + block_size - 1) // block_size
+    page_table = torch.zeros(batch_size, num_blocks_per_user, dtype=torch.int32)
+    for user_id in range(batch_size):
+        start_block = user_id * num_blocks_per_user
+        page_table[user_id] = torch.arange(start_block, start_block + num_blocks_per_user, dtype=torch.int32)
+    return page_table
+
+
+# =============================================================================
 # Protocol: LLMModel
 # =============================================================================
 # The engine expects a model with these attributes/methods. This is a duck-typed
@@ -202,9 +237,17 @@ class EagerLLMExecutor:
     # =========================================================================
 
     def _prepare_prefill_device_inputs(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
+        self, tokens, page_table, start_pos=0, chunk_page_table=None, last_token_idx=None
     ):
-        """Prepare eager prefill device inputs. Returns (tokens_embd, cos, sin, page_table_tt, chunk_page_table_tt)."""
+        """Prepare eager prefill device inputs. Returns (tokens_embd, cos, sin, page_table_tt, chunk_page_table_tt).
+
+        Args:
+            tokens: Input tokens [1, seq_len].
+            page_table: Page table for paged attention [1, num_blocks]. Required.
+            start_pos: Starting position for prefix caching.
+            chunk_page_table: Chunk page table for chunked prefill (optional, derived from page_table).
+            last_token_idx: Index of last token for output extraction.
+        """
         assert tokens.dim() == 2, "tokens must be 2D"
         tokens_reshaped = tokens.reshape(1, 1, 1, -1)
         S = tokens_reshaped.shape[-1]
@@ -240,16 +283,13 @@ class EagerLLMExecutor:
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
 
-        # todo)) make this into a composable feature?
-        tt_page_table = None
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table,
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        tt_page_table = ttnn.from_torch(
+            page_table,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
         # NOTE: this is a dynamic feature because it depends on seq_len
         tt_chunk_page_table = None
@@ -270,8 +310,14 @@ class EagerLLMExecutor:
             tt_chunk_page_table,
         )
 
-    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        """Prepare decode inputs as host tensors. Returns (tokens, current_pos, rope_idxs, page_table)."""
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table):
+        """Prepare decode inputs as host tensors. Returns (tokens, current_pos, rope_idxs, page_table).
+
+        Args:
+            tokens: Input tokens [batch_size].
+            current_pos: Current position per user [batch_size].
+            page_table: Page table for paged attention [batch_size, max_blocks]. Required.
+        """
         B = tokens.shape[0]
         max_batch = self.model_args.max_batch_size if self.model_args else B
         assert B == max_batch, f"Batch size {B} must equal max_batch_size {max_batch}"
@@ -300,23 +346,21 @@ class EagerLLMExecutor:
             ),
         )
 
-        tt_page_table = None
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table,
-                device=None,
-                dtype=ttnn.int32,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=(None, None),
-                    mesh_shape=cluster_shape,
-                ),
-            )
+        tt_page_table = ttnn.from_torch(
+            page_table,
+            device=None,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, None),
+                mesh_shape=cluster_shape,
+            ),
+        )
 
         return tokens_tt, current_pos_tt, rope_idxs, tt_page_table
 
     # todo)) inline this function
-    def prepare_decode_inputs_device(self, tokens, current_pos, page_table=None):
+    def prepare_decode_inputs_device(self, tokens, current_pos, page_table):
         """Prepare decode inputs on device. Returns device tensors."""
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         return copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
@@ -329,7 +373,7 @@ class EagerLLMExecutor:
         self,
         *,
         tokens: torch.Tensor,  # [batch_size, seq_len], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
@@ -341,7 +385,7 @@ class EagerLLMExecutor:
 
         Args:
             tokens: Input token IDs, shape [batch_size, seq_len].
-            page_table: Page table for paged attention, shape [batch_size, max_blocks].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
             kv_cache: Per-layer KV cache from allocate_kv_cache().
             prompt_lens: Actual prompt length per user, shape [batch_size].
             empty_slots: List of user IDs to prefill.
@@ -352,8 +396,7 @@ class EagerLLMExecutor:
         """
         # Boundary assertions
         assert tokens.dim() == 2, f"tokens must be [batch_size, seq_len], got {tokens.dim()}D"
-        if page_table is not None:
-            assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
         if prompt_lens is not None:
             assert prompt_lens.dim() == 1, f"prompt_lens must be [batch_size], got {prompt_lens.dim()}D"
         if start_pos is not None:
@@ -385,7 +428,7 @@ class EagerLLMExecutor:
         *,
         tokens: torch.Tensor,  # [batch_size], int64
         start_pos: torch.Tensor,  # [batch_size], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         sampling_params: SamplingParams | None = None,
     ) -> None:
@@ -396,15 +439,14 @@ class EagerLLMExecutor:
         Args:
             tokens: Input token IDs, shape [batch_size].
             start_pos: Current position per user, shape [batch_size].
-            page_table: Page table for paged attention, shape [batch_size, max_blocks].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
             kv_cache: Per-layer KV cache from allocate_kv_cache().
             sampling_params: Sampling parameters for on-device sampling.
         """
         # Boundary assertions
         assert tokens.dim() == 1, f"tokens must be [batch_size], got {tokens.dim()}D"
         assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
-        if page_table is not None:
-            assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
 
         output = self.decode_forward(
             tokens,
@@ -428,7 +470,7 @@ class EagerLLMExecutor:
     def prefill_forward(
         self,
         tokens: torch.Tensor,  # [batch_size, seq_len], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
@@ -439,7 +481,7 @@ class EagerLLMExecutor:
 
         Args:
             tokens: Input token IDs, shape [batch_size, seq_len].
-            page_table: Page table for paged attention, shape [batch_size, max_blocks].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
             kv_cache: Per-layer KV cache from allocate_kv_cache().
             prompt_lens: Actual prompt length per user, shape [batch_size].
             empty_slots: List of user IDs to prefill.
@@ -451,8 +493,7 @@ class EagerLLMExecutor:
         """
         # Boundary assertions
         assert tokens.dim() == 2, f"tokens must be [batch_size, seq_len], got {tokens.dim()}D"
-        if page_table is not None:
-            assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
         if prompt_lens is not None:
             assert prompt_lens.dim() == 1, f"prompt_lens must be [batch_size], got {prompt_lens.dim()}D"
         if start_pos is not None:
@@ -494,20 +535,16 @@ class EagerLLMExecutor:
                 dim=-1,
             )
 
-            page_table_user = (
-                _get_prefill_user_page_table(
-                    page_table[idx : idx + 1],
-                    kv_cache,
-                    seq_len,
-                )
-                if page_table is not None
-                else None
+            page_table_user = _get_prefill_user_page_table(
+                page_table[idx : idx + 1],
+                kv_cache,
+                seq_len,
             )
 
             logits = self._prefill_single_user(
                 prefill_ids,
                 page_table=page_table_user,
-                user_id=0 if page_table is not None else user_id,
+                user_id=0,  # Always 0 with paged attention (page table handles user mapping)
                 last_token_idx=last_token_idx,
                 num_cached_tokens=num_cached_tokens,
             )
@@ -534,7 +571,15 @@ class EagerLLMExecutor:
         return output_tensor
 
     def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, num_cached_tokens=0):
-        """Prefill a single user with chunked prefill support."""
+        """Prefill a single user with chunked prefill support.
+
+        Args:
+            tokens: Input tokens [1, seq_len].
+            page_table: Page table for this user [1, num_blocks]. Required.
+            user_id: User ID (always 0 with paged attention).
+            last_token_idx: Index of last token for output extraction.
+            num_cached_tokens: Number of tokens already in KV cache (prefix caching).
+        """
         seq_len = tokens.shape[-1]
         max_chunk = self.model_args.max_prefill_chunk_size if self.model_args else seq_len
         use_chunked = seq_len > max_chunk
@@ -542,7 +587,7 @@ class EagerLLMExecutor:
 
         # todo)) refactor this to be more readable?
         if use_chunked or use_prefix_caching:
-            assert page_table is not None and self._kv_cache is not None
+            assert self._kv_cache is not None, "KV cache must be allocated for chunked prefill or prefix caching"
             chunk_size = get_max_prefill_chunk_size(seq_len, max_chunk) if use_chunked else seq_len
 
             last_token_in_seq = last_token_idx - num_cached_tokens
@@ -609,7 +654,7 @@ class EagerLLMExecutor:
         self,
         tokens: torch.Tensor,  # [batch_size], int64
         start_pos: torch.Tensor,  # [batch_size], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         read_from_device: bool = True,
         sampling_params: SamplingParams | None = None,
@@ -619,7 +664,7 @@ class EagerLLMExecutor:
         Args:
             tokens: Input token IDs, shape [batch_size].
             start_pos: Current position per user, shape [batch_size].
-            page_table: Page table for paged attention, shape [batch_size, max_blocks].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
             kv_cache: Per-layer KV cache (for identity assertion).
             read_from_device: Whether to return host tensors.
             sampling_params: Sampling parameters for on-device sampling.
@@ -632,8 +677,7 @@ class EagerLLMExecutor:
         # Boundary assertions
         assert tokens.dim() == 1, f"tokens must be [batch_size], got {tokens.dim()}D"
         assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
-        if page_table is not None:
-            assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
         self.mode = Mode.DECODE
         self._assert_kv_cache_identity(kv_cache)
         B = tokens.shape[0]
@@ -770,14 +814,14 @@ class TracedLLMExecutor:
         self,
         seq_lens: list[int],
         make_tokens,  # Callable[[int], torch.Tensor] — seq_len -> tokens [1, seq_len]
-        make_page_table,  # Callable[[int], torch.Tensor | None] — seq_len -> page_table [1, num_blocks]
+        make_page_table,  # Callable[[int], torch.Tensor] — seq_len -> page_table [1, num_blocks]
     ) -> None:
         """Compile prefill for multiple sequence lengths. Caller provides input factories.
 
         Args:
             seq_lens: List of sequence lengths to compile.
             make_tokens: Factory function: seq_len -> tokens tensor [1, seq_len].
-            make_page_table: Factory function: seq_len -> page_table tensor or None.
+            make_page_table: Factory function: seq_len -> page_table tensor [1, num_blocks].
         """
         for seq_len in seq_lens:
             tokens = make_tokens(seq_len)
@@ -797,9 +841,17 @@ class TracedLLMExecutor:
         return sampling_params is not None
 
     def _prepare_prefill_trace_inputs_host(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
+        self, tokens, page_table, start_pos=0, chunk_page_table=None, last_token_idx=None
     ):
-        """Prepare traced prefill host inputs for copy_host_to_device replay."""
+        """Prepare traced prefill host inputs for copy_host_to_device replay.
+
+        Args:
+            tokens: Input tokens [1, seq_len].
+            page_table: Page table for paged attention [1, num_blocks]. Required.
+            start_pos: Starting position for prefix caching.
+            chunk_page_table: Chunk page table for chunked prefill (optional).
+            last_token_idx: Index of last token for output extraction.
+        """
         assert tokens.dim() == 2, "tokens must be 2D"
         tokens_reshaped = tokens.reshape(1, 1, 1, -1)
         S = tokens_reshaped.shape[-1]
@@ -830,15 +882,13 @@ class TracedLLMExecutor:
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
 
-        tt_page_table = None
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table,
-                device=None,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        tt_page_table = ttnn.from_torch(
+            page_table,
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
         tt_chunk_page_table = None
         if chunk_page_table is not None:
@@ -856,12 +906,11 @@ class TracedLLMExecutor:
     # Compile (delegates to eager, captures output specs)
     # =========================================================================
 
-    # todo)) trace capture is not done in compile_prefill() yet --> violates the design doc!
     def compile_prefill(
         self,
         *,
         tokens: torch.Tensor,  # [batch_size, seq_len], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
@@ -871,11 +920,18 @@ class TracedLLMExecutor:
 
         Returns None if trace for this seq_len already exists (no work needed).
         Also captures output spec for multi-CQ pre-allocation.
+
+        Args:
+            tokens: Input token IDs, shape [batch_size, seq_len].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
+            kv_cache: Per-layer KV cache from allocate_kv_cache().
+            prompt_lens: Actual prompt length per user, shape [batch_size].
+            empty_slots: List of user IDs to prefill.
+            start_pos: Starting position for prefix caching, shape [batch_size].
         """
         # Boundary assertions
         assert tokens.dim() == 2, f"tokens must be [batch_size, seq_len], got {tokens.dim()}D"
-        if page_table is not None:
-            assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
 
         # Skip if already compiled for this seq_len
         trace_key = self._get_prefill_trace_key(tokens)
@@ -902,13 +958,12 @@ class TracedLLMExecutor:
 
         return logits
 
-    # todo)) trace capture is not done in compile_decode() yet --> violates the design doc!
     def compile_decode(
         self,
         *,
         tokens: torch.Tensor,  # [batch_size], int64
         start_pos: torch.Tensor,  # [batch_size], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         sampling_params: SamplingParams | None = None,
     ) -> None:
@@ -916,10 +971,18 @@ class TracedLLMExecutor:
 
         Skips if trace for this sampling mode already exists.
         Also captures output spec for multi-CQ pre-allocation.
+
+        Args:
+            tokens: Input token IDs, shape [batch_size].
+            start_pos: Current position per user, shape [batch_size].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
+            kv_cache: Per-layer KV cache from allocate_kv_cache().
+            sampling_params: Sampling parameters for on-device sampling.
         """
         # Boundary assertions
         assert tokens.dim() == 1, f"tokens must be [batch_size], got {tokens.dim()}D"
         assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
 
         # Skip if already compiled for this sampling mode
         trace_key = self._get_decode_trace_key(sampling_params)
@@ -948,7 +1011,7 @@ class TracedLLMExecutor:
     def prefill_forward(
         self,
         tokens: torch.Tensor,  # [batch_size, seq_len], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
@@ -960,7 +1023,7 @@ class TracedLLMExecutor:
 
         Args:
             tokens: Input token IDs, shape [batch_size, seq_len].
-            page_table: Page table for paged attention, shape [batch_size, max_blocks].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
             kv_cache: Per-layer KV cache from allocate_kv_cache().
             prompt_lens: Actual prompt length per user, shape [batch_size].
             empty_slots: List of user IDs to prefill.
@@ -972,8 +1035,7 @@ class TracedLLMExecutor:
         """
         # Boundary assertions
         assert tokens.dim() == 2, f"tokens must be [batch_size, seq_len], got {tokens.dim()}D"
-        if page_table is not None:
-            assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
         if prompt_lens is not None:
             assert prompt_lens.dim() == 1, f"prompt_lens must be [batch_size], got {prompt_lens.dim()}D"
         if start_pos is not None:
@@ -1014,26 +1076,20 @@ class TracedLLMExecutor:
                 dim=-1,
             )
 
-            can_trace = (
-                page_table is not None
-                and self.model_args
-                and self.model_args.can_enable_trace(prefill_seq_len, num_cached_tokens)
-            )
+            can_trace = self.model_args and self.model_args.can_enable_trace(prefill_seq_len, num_cached_tokens)
 
-            page_table_user = None
-            if page_table is not None:
-                if can_trace:
-                    page_table_user = _get_prefill_trace_user_page_table(
-                        page_table[idx : idx + 1],
-                        kv_cache,
-                        prefill_seq_len,
-                    )
-                else:
-                    page_table_user = _get_prefill_user_page_table(
-                        page_table[idx : idx + 1],
-                        kv_cache,
-                        seq_len,
-                    )
+            if can_trace:
+                page_table_user = _get_prefill_trace_user_page_table(
+                    page_table[idx : idx + 1],
+                    kv_cache,
+                    prefill_seq_len,
+                )
+            else:
+                page_table_user = _get_prefill_user_page_table(
+                    page_table[idx : idx + 1],
+                    kv_cache,
+                    seq_len,
+                )
 
             # todo)) there should be warning message about prefill that cannot be traced!
             if can_trace:
@@ -1050,7 +1106,7 @@ class TracedLLMExecutor:
                 logits = self._eager._prefill_single_user(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=0 if page_table is not None else user_id,
+                    user_id=0,  # Always 0 with paged attention
                     last_token_idx=last_token_idx,
                     num_cached_tokens=num_cached_tokens,
                 )
@@ -1151,7 +1207,7 @@ class TracedLLMExecutor:
         self,
         tokens: torch.Tensor,  # [batch_size], int64
         start_pos: torch.Tensor,  # [batch_size], int64
-        page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
+        page_table: torch.Tensor,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         read_from_device: bool = True,
         sampling_params: SamplingParams | None = None,
@@ -1161,7 +1217,7 @@ class TracedLLMExecutor:
         Args:
             tokens: Input token IDs, shape [batch_size].
             start_pos: Current position per user, shape [batch_size].
-            page_table: Page table for paged attention, shape [batch_size, max_blocks].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks]. Required.
             kv_cache: Per-layer KV cache (for identity assertion).
             read_from_device: Whether to return host tensors.
             sampling_params: Sampling parameters for on-device sampling.
@@ -1174,8 +1230,7 @@ class TracedLLMExecutor:
         # Boundary assertions
         assert tokens.dim() == 1, f"tokens must be [batch_size], got {tokens.dim()}D"
         assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
-        if page_table is not None:
-            assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
+        assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
 
         self.mode = Mode.DECODE
         self._eager._assert_kv_cache_identity(kv_cache)
@@ -1323,7 +1378,7 @@ def _compile_prefill_and_decode(
     executor: EagerLLMExecutor | TracedLLMExecutor,
     *,
     prefill_tokens: torch.Tensor,
-    prefill_page_table: torch.Tensor | None = None,
+    prefill_page_table: torch.Tensor,  # Required
     kv_cache: list[list[ttnn.Tensor]] | None = None,
     prompt_lens: torch.Tensor | None = None,
     empty_slots: list[int] | None = None,
@@ -1333,6 +1388,9 @@ def _compile_prefill_and_decode(
 ) -> None:
     """Internal convenience helper for one-shot prefill+decode warmup."""
     assert prefill_tokens.dim() == 2, f"prefill_tokens must be [batch_size, seq_len], got {prefill_tokens.dim()}D"
+    assert (
+        prefill_page_table.dim() == 2
+    ), f"prefill_page_table must be [batch_size, max_blocks], got {prefill_page_table.dim()}D"
 
     prefill_context = (
         _get_validation_context(executor, mode="prefill") if validate_configs else contextlib.nullcontext()
@@ -1392,7 +1450,6 @@ class TeacherForceResult:
         return matches / len(self.predicted_tokens)
 
 
-# todo)) add type hints
 def run_teacher_forcing(
     executor: EagerLLMExecutor | TracedLLMExecutor,
     *,
@@ -1400,7 +1457,7 @@ def run_teacher_forcing(
     reference_tokens: torch.Tensor,
     top5_tokens: torch.Tensor,
     kv_cache: list,
-    page_table: torch.Tensor | None = None,
+    page_table: torch.Tensor,  # Required
     max_batch_size: int = 1,
 ) -> TeacherForceResult:
     """Run teacher-forcing accuracy measurement.
@@ -1414,7 +1471,7 @@ def run_teacher_forcing(
         reference_tokens: Full reference sequence (prompt + target), shape [total_len].
         top5_tokens: Top-5 reference tokens per position, shape [num_target_tokens, 5].
         kv_cache: Per-layer KV cache from allocate_kv_cache().
-        page_table: Page table for paged attention, or None.
+        page_table: Page table for paged attention. Required.
         max_batch_size: Maximum batch size. Must match prompt_tokens.shape[0].
 
     Returns:
@@ -1523,7 +1580,7 @@ def run_perf_benchmark(
     *,
     tokens: torch.Tensor,
     kv_cache: list,
-    page_table: torch.Tensor | None = None,
+    page_table: torch.Tensor,  # Required
     num_decode_tokens: int = 128,
     max_batch_size: int = 1,
     prompt_lens: torch.Tensor | None = None,
@@ -1539,7 +1596,7 @@ def run_perf_benchmark(
         executor: Any executor with prefill_forward() and decode_forward() methods.
         tokens: Input token IDs, shape [batch_size, seq_len].
         kv_cache: Per-layer KV cache from allocate_kv_cache().
-        page_table: Page table for paged attention, or None.
+        page_table: Page table for paged attention. Required.
         num_decode_tokens: Number of decode tokens to generate.
         max_batch_size: Maximum batch size.
         prompt_lens: Actual prompt length per user, shape [batch_size].

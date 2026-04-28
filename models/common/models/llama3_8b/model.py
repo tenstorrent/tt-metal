@@ -685,10 +685,10 @@ class EagerLlamaExecutor:
     def _assert_kv_cache_identity(self, kv_cache):
         return self._engine._assert_kv_cache_identity(kv_cache)
 
-    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table):
         return self._engine.prepare_decode_inputs_host(tokens, current_pos, page_table)
 
-    def prepare_decode_inputs_device(self, tokens, current_pos, page_table=None):
+    def prepare_decode_inputs_device(self, tokens, current_pos, page_table):
         return self._engine.prepare_decode_inputs_device(tokens, current_pos, page_table)
 
     # =========================================================================
@@ -699,7 +699,7 @@ class EagerLlamaExecutor:
         self,
         *,
         tokens,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
@@ -719,7 +719,7 @@ class EagerLlamaExecutor:
         *,
         tokens,
         start_pos,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         sampling_params=None,
     ):
@@ -738,7 +738,7 @@ class EagerLlamaExecutor:
     def prefill_forward(
         self,
         tokens,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
@@ -762,7 +762,7 @@ class EagerLlamaExecutor:
         self,
         tokens,
         start_pos,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         read_from_device=True,
         sampling_params=None,
@@ -865,7 +865,7 @@ class TracedLlamaExecutor:
         self,
         *,
         tokens,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
@@ -885,7 +885,7 @@ class TracedLlamaExecutor:
         *,
         tokens,
         start_pos,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         sampling_params=None,
     ):
@@ -904,7 +904,7 @@ class TracedLlamaExecutor:
     def prefill_forward(
         self,
         tokens,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
@@ -927,7 +927,7 @@ class TracedLlamaExecutor:
         self,
         tokens,
         start_pos,
-        page_table=None,
+        page_table,  # Required
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
