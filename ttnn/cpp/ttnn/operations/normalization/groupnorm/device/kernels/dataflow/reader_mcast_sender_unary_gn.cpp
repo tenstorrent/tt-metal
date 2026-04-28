@@ -11,6 +11,7 @@
 #include "experimental/tensor.h"
 #include "experimental/endpoints.h"
 #include "experimental/core_local_mem.h"
+#include "groupnorm_zero_fill.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -215,7 +216,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_out0(cb_out0_id);
     experimental::CircularBuffer cb_reread_out(cb_reread_out_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
+    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(cb_out0_id);
     const uint32_t num_bytes_read = datum_size_bytes;
 
@@ -236,37 +237,46 @@ void kernel_main() {
     }
 #endif
 
-    uint32_t out_block_h_normal = block_h / num_out_blocks;
-    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
-    uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
-    uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
-    const uint32_t num_reads_of_input = 3;
-    if constexpr (block_h % num_out_blocks != 0) {
-        extra_out_block = true;
-        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
-        num_out_blocks_padded += (residual / out_block_h_normal + 1);
-        out_block_h_last = residual % out_block_h_normal;
-        out_block_hw_last = out_block_h_last * block_w;
-    }
-    uint32_t cb_ex_external_tiles_required = num_out_blocks_padded * num_mcast_cores * 16 / single_tile_size_bytes;
-    if ((num_out_blocks_padded * num_mcast_cores * 16) % single_tile_size_bytes) {
-        cb_ex_external_tiles_required++;
-    }
+    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
+    constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    constexpr bool extra_out_block = (block_h % num_out_blocks != 0);
+    // residual is meaningful only when extra_out_block is true; when false it
+    // evaluates to 0 and feeds the false branch of the ternaries below, which
+    // never use it.
+    constexpr uint32_t residual = block_h - num_out_blocks * out_block_h_normal;
+    constexpr uint32_t num_out_blocks_padded =
+        extra_out_block ? (num_out_blocks + residual / out_block_h_normal + 1) : num_out_blocks;
+    constexpr uint32_t out_block_h_last = extra_out_block ? (residual % out_block_h_normal) : out_block_h_normal;
+    constexpr uint32_t out_block_hw_last = out_block_h_last * block_w;
+    constexpr uint32_t num_reads_of_input = 3;
+    constexpr uint32_t cb_ex_external_data_bytes = num_out_blocks_padded * num_mcast_cores * 16;
+    constexpr uint32_t cb_ex_external_tiles_required = (cb_ex_external_data_bytes / single_tile_size_bytes) +
+                                                       ((cb_ex_external_data_bytes % single_tile_size_bytes) != 0);
 
-    // Whether the cb_ex_external buffer needs to be zero-filled before each
-    // pass. Two independent sources of stale CB contents:
+    // Whether the cb_ex_external buffer needs to be zero-filled. Two
+    // independent sources of stale CB contents:
     //   (A) intra-slot gap: each per-core slot is 16 bytes wide but the NOC
     //       read writes only the first datum_size_bytes; bytes
     //       [datum_size_bytes, 16) of every used slot need to be zero.
     //       Required iff datum_size_bytes < 16 (compile-time check).
     //   (B) trailing tile gap: when the meaningful data does not fill the last
     //       tile exactly, the tail bytes need to be zero.
-    bool needs_cb_ex_external_zero_fill = true;
-    if constexpr (datum_size_bytes >= 16) {
-        needs_cb_ex_external_zero_fill = (num_out_blocks_padded * num_mcast_cores * 16) <
-                                         cb_ex_external_tiles_required * single_tile_size_bytes;
+    constexpr bool needs_cb_ex_external_zero_fill =
+        (datum_size_bytes < 16) || (cb_ex_external_data_bytes < cb_ex_external_tiles_required * single_tile_size_bytes);
+
+    // Zero-fill cb_ex_external ONCE at kernel startup. The per-iteration
+    // writes below only touch the per-core slot data positions (the first
+    // datum_size_bytes of every slot at offset out_block_index * num_mcast_cores * 16
+    // + core_index * 16); the gap bytes are never written by this kernel,
+    // and the consumer (compute kernel's reduce_tile) is read-only on this
+    // CB. So the gap bytes stay zero across every iteration, with no
+    // per-iter NOC traffic. This relies on the program factory sizing
+    // cb_ex_external such that the producer reservations cycle back to the
+    // same L1 region on every iteration; the helper sizes itself from the
+    // runtime CB interface so it remains correct even if the CB is later
+    // resized.
+    if constexpr (needs_cb_ex_external_zero_fill) {
+        zero_whole_cb(cb_ex_external_id, noc, noc_coord_x[0], noc_coord_y[0]);
     }
 
         index_b_offset = 0;
@@ -284,29 +294,6 @@ void kernel_main() {
                     uint32_t out_block_start_id_offset = 0;
                     cb_ex_external.reserve_back(cb_ex_external_tiles_required);
                     uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
-
-                    // Zero-fill the reserved cb_ex_external region so that bytes not written
-                    // by the per-core NOC reads do not corrupt the downstream reduce_tile sum.
-                    // cur_read_iteration == 2 does not write to cb_ex_external (no matching
-                    // push_back below) so skip the zero-fill there.
-                    if (needs_cb_ex_external_zero_fill && (cur_read_iteration == 0 || cur_read_iteration == 1)) {
-                        experimental::UnicastEndpoint zeros_ep;
-                        uint32_t zero_dst_addr = l1_write_addr_external;
-                        uint32_t bytes_remaining = cb_ex_external_tiles_required * single_tile_size_bytes;
-                        while (bytes_remaining > 0) {
-                            const uint32_t chunk =
-                                bytes_remaining > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_remaining;
-                            noc.async_read(
-                                zeros_ep,
-                                experimental::CoreLocalMem<uint32_t>(zero_dst_addr),
-                                chunk,
-                                {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = MEM_ZEROS_BASE},
-                                {});
-                            zero_dst_addr += chunk;
-                            bytes_remaining -= chunk;
-                        }
-                        noc.async_read_barrier();
-                    }
 
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual, out_block_hw_actual;
@@ -350,11 +337,12 @@ void kernel_main() {
                             // other core's slot (datum_size_bytes wide, advancing by 16).
                             // Bytes [datum_size_bytes, 16) of the slot, plus any trailing tile
                             // bytes past the last used slot, must read as zero so they don't
-                            // pollute the downstream reduce_tile sum.  Either the conditional
-                            // zero-fill above (when needs_cb_ex_external_zero_fill is true) has
-                            // already cleared them, or the slot pitch (16) equals the per-write
-                            // size (datum_size_bytes == 16) AND the used slots tile exactly,
-                            // so there are no untouched bytes to worry about.
+                            // pollute the downstream reduce_tile sum. Either the kernel-startup
+                            // zero_whole_cb above (when needs_cb_ex_external_zero_fill is true)
+                            // has already cleared them and per-iter writes only touch slot data
+                            // positions so they remain zero, or the slot pitch (16) equals the
+                            // per-write size (datum_size_bytes == 16) AND the used slots tile
+                            // exactly, so there are no untouched bytes to worry about.
                             uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? cb_ex_partial.get_read_ptr() : cb_ex2_partial.get_read_ptr();
                             experimental::UnicastEndpoint remote_ep;

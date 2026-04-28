@@ -10,6 +10,7 @@
 #include "experimental/noc_semaphore.h"
 #include "experimental/endpoints.h"
 #include "experimental/core_local_mem.h"
+#include "groupnorm_zero_fill.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -28,6 +29,11 @@ void kernel_main() {
     // datum_size_bytes into its slot, so datum_size_bytes > 16 would overflow
     // into the next core's slot and silently corrupt the reduction.  The slot
     // pitch itself would need to grow to support larger datums.
+    //
+    // Bytes [datum_size_bytes, 16) of every slot, plus any trailing tile bytes
+    // past the last used slot, are read by the downstream reduce_tile sum but
+    // never written by this kernel. Those gap bytes are kept zero by the
+    // kernel-startup zero_whole_cb call below (see needs_cb_ex_external_zero_fill).
     static_assert(
         datum_size_bytes <= 16,
         "cb_ex_external slot pitch is hardcoded to 16 bytes; "
@@ -126,7 +132,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_repack_out(cb_repack_out_id);
     experimental::CircularBuffer cb_out0(cb_out0_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
+    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat data_format = get_dataformat(cb_ex_partial_id);
     const uint32_t num_bytes_read = datum_size_bytes;
 
@@ -152,6 +158,35 @@ void kernel_main() {
     }
 #endif
 
+    // Whether cb_ex_external needs to be zero-filled. Symmetric with the mcast
+    // reader. Two independent sources of stale CB contents:
+    //   (A) intra-slot gap: each per-core slot is 16 bytes wide but the NOC
+    //       read writes only the first datum_size_bytes; bytes
+    //       [datum_size_bytes, 16) of every used slot need to be zero.
+    //       Required iff datum_size_bytes < 16 (compile-time check). In this
+    //       sharded reader datum_size_bytes is hardcoded <= 16 (see the
+    //       static_assert above), and is in practice == 2, so this branch is
+    //       always taken.
+    //   (B) trailing tile gap: when the meaningful data (num_mcast_cores * 16
+    //       bytes) does not fill the single reserved tile exactly, the tail
+    //       bytes need to be zero.
+    constexpr bool needs_cb_ex_external_zero_fill =
+        (datum_size_bytes < 16) || ((num_mcast_cores * 16) < single_tile_size_bytes);
+
+    // Zero-fill cb_ex_external ONCE at kernel startup. The per-iteration
+    // writes inside the loop below only touch the per-core slot data positions
+    // (the first datum_size_bytes of every 16-byte slot); the gap bytes are
+    // never written by this kernel, and the consumer (compute kernel's
+    // reduce_tile) is read-only on this CB, so the gap bytes stay zero across
+    // every iteration with no per-iter NOC traffic. The helper sizes itself
+    // from the runtime CB interface so it remains correct even if the CB is
+    // later resized. When num_mcast_cores == 1 the if constexpr block below
+    // is skipped and cb_ex_external is unused; the helper call is then a
+    // small unconditional cost on a CB whose contents are never read.
+    if constexpr (needs_cb_ex_external_zero_fill) {
+        zero_whole_cb(cb_ex_external_id, noc, noc_coord_x[0], noc_coord_y[0]);
+    }
+
     if constexpr (num_mcast_cores > 1) {
         for (uint32_t m = 0; m < num_batch_group; ++m) {
             for (uint32_t n = 0; n < 2; ++n) {
@@ -160,11 +195,17 @@ void kernel_main() {
                 uint32_t l1_read_addr_ex_par = cb_ex_partial.get_read_ptr();
                 cb_ex_external.reserve_back(1);
                 uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
+                // read self Ex partial - this slot is treated the same as every
+                // other core's slot (datum_size_bytes wide, advancing by 16).
+                // Bytes [datum_size_bytes, 16) of the slot, plus any trailing
+                // tile bytes past the last used slot, are kept zero by the
+                // kernel-startup zero_whole_cb above so they do not pollute the
+                // downstream reduce_tile sum.
                 experimental::UnicastEndpoint remote_ep;
                 noc.async_read(
                     remote_ep,
                     experimental::CoreLocalMem<uint32_t>(l1_write_addr_external),
-                    single_tile_size_bytes,
+                    num_bytes_read,
                     {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par},
                     {});
                 l1_write_addr_external += 16;

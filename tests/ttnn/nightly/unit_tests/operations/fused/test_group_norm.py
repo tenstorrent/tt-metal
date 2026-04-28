@@ -63,3 +63,109 @@ def test_group_norm_large_ex_external_cb(device, specify_grid):
         atol=0.322,
         frobenius_threshold=0.043,
     )
+
+
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_sharded_ex_external_cb_zero_fill(device, specify_grid):
+    """Sharded analog of test_group_norm_large_ex_external_cb (regression for #41690).
+
+    Stresses the cb_ex_external zero-fill on the sharded reader path
+    (reader_mcast_sender_unary_sharded_gn_v2.cpp). cb_ex_external is sized as
+    a single tile, into which each per-core slot writes only datum_size_bytes
+    at a 16-byte pitch; the rest of the tile is read by the downstream
+    reduce_tile sum and must be zero.
+
+    This shape exercises both gap-byte categories on the sharded path:
+      (A) Intra-slot gap: bfloat16 input (datum_size_bytes == 2 < 16) leaves
+          14 untouched bytes inside every per-core slot.
+      (B) Trailing tile gap: with num_mcast_cores == grid.y == 4 the used
+          slots span 4 * 16 == 64 bytes, leaving 2048 - 64 == 1984 bytes of
+          unused tile tail.
+
+    Multiple groups-per-core × the n=0,1 sub-passes cycle the producer through
+    the cb_ex_external L1 region many times, so any per-iter zero-fill bug
+    (or removal of the kernel-startup zero_whole_cb) compounds across
+    iterations and corrupts the per-group mean/var reduction enough to fail
+    the tight numeric tolerances below.
+    """
+    torch.manual_seed(0)
+
+    grid_size = ttnn.CoreGrid(y=4, x=8)
+
+    N, C, H, W, num_groups = 1, 1280, 16, 16, 32
+    eps = 1e-5
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=eps
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
+
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Block-shard input across grid: COL_MAJOR orientation puts cores in the
+    # same column on the same channel slice, so the partial-sum reduction
+    # (cb_ex_partial -> cb_ex_external) mcasts across grid_y == 4 cores.
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = N * H * W // grid_size.x, C // grid_size.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        epsilon=eps,
+        input_mask=input_mask_tensor,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size if specify_grid else None,
+        use_welford=False,  # exercise the v2 reader (which has the cb_ex_external slot pattern); welford uses a different reader.
+    )
+
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.015,
+    )
