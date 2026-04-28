@@ -16,6 +16,7 @@
 namespace tt::tt_metal {
 
 class IDevice;
+class Program;
 class RealtimeProfilerTracyHandler;
 
 namespace distributed {
@@ -71,6 +72,12 @@ private:
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
         std::unique_ptr<D2HSocket> socket;
+        // Owns the host-side Program for the BRISC+NCRISC RT-profiler kernels on this
+        // device's reserved core. Must outlive the kernels running on the device so that
+        // inspector / triage / watcher continue to see the program as live; destroying
+        // the Program too early emits program_destroyed and the kernels become invisible
+        // to debugging tools even though they're still executing on the core.
+        std::unique_ptr<Program> rt_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         uint64_t first_timestamp = 0;
         int64_t sync_host_start = 0;

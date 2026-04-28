@@ -223,6 +223,7 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     mesh_coord(std::move(o.mesh_coord)),
     realtime_profiler_core(o.realtime_profiler_core),
     socket(std::move(o.socket)),
+    rt_program(std::move(o.rt_program)),
     core_l1(o.core_l1),
     first_timestamp(o.first_timestamp),
     sync_host_start(o.sync_host_start),
@@ -433,8 +434,11 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         }
 
         // Compile and launch real-time profiler kernels (BRISC reader + NCRISC pusher).
+        // The Program is stored on dev_state so it outlives this scope; destroying it now
+        // would emit program_destroyed and hide the kernels from inspector/triage/watcher.
         {
-            Program realtime_profiler_program;
+            dev_state.rt_program = std::make_unique<Program>();
+            Program& realtime_profiler_program = *dev_state.rt_program;
 
             uint32_t dispatch_core_noc_x = 0;
             uint32_t dispatch_core_noc_y = 0;
