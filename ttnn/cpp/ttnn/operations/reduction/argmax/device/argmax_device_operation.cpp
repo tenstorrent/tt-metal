@@ -6,6 +6,9 @@
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
 
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -57,8 +60,32 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 }
 
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.use_multicore) {
+        // Intermediate CBs in the multi-core factory are sized as
+        //   round_up_to_mul32(output_last_dim * unit_size) * num_total_cores
+        // This scales with the full device grid and can overflow L1 for large
+        // output_last_dim values.  Fall back to single-core in that case.
+        const auto& input = tensor_args.input;
+        const auto& input_shape = input.padded_shape();
+        const auto rank = input_shape.rank();
+        const bool reduce_all = not args.dim.has_value();
+        const uint32_t output_last_dim = (reduce_all || args.keepdim || rank < 2) ? 1u : input_shape[rank - 2];
+        const uint32_t input_unit_size = input.element_size();
+        constexpr uint32_t output_unit_size = sizeof(uint32_t);  // output dtype is always UINT32
+
+        const auto* device = input.device();
+        const auto grid = device->compute_with_storage_grid_size();
+        const uint32_t max_cores = grid.x * grid.y;
+        const uint32_t l1_size = device->l1_size_per_core();
+
+        // Each core holds one copy of the full intermediate reduction buffers
+        const uint32_t per_worker =
+            round_up_to_mul32(output_last_dim * output_unit_size) +
+            round_up_to_mul32(output_last_dim * input_unit_size);
+        if (per_worker > 0 && per_worker * max_cores > l1_size) {
+            return ArgMaxSingleCoreProgramFactory{};
+        }
         return ArgMaxMultiCoreProgramFactory{};
     }
     return ArgMaxSingleCoreProgramFactory{};
