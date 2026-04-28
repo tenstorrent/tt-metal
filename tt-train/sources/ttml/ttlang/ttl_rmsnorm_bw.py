@@ -65,7 +65,7 @@ def make_kernel(
     # rb: how many tile-rows each core processes per outer strip.
     rb = rpc // n_row_strip
 
-    @ttl.operation(grid=(col_cores, row_cores))
+    @ttl.operation(grid=(col_cores, row_cores), fp32_dest_acc_en=True)
     def rmsnorm_bw_colsplit(
         inp, gamma, rms, dL, dL_da_out, dL_dg_out
     ):
