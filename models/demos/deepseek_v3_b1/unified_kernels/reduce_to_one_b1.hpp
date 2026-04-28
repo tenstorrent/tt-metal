@@ -190,24 +190,41 @@ struct ReduceToOneB1 {
 #if defined(COMPILE_FOR_BRISC)
         static constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
         static constexpr uint32_t slot_size_bytes = packet_header_size_bytes + CTArgs::payload_size_bytes;
+        static constexpr bool use_posted_transport_writes = true;
 
         template <typename FabricConnection>
         static FORCE_INLINE uint32_t process_ready_slots(
-            volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t sent_mask, uint32_t buffer_base, FabricConnection& conn) {
+            volatile tt_l1_ptr uint32_t* sem_ptr,
+            uint32_t sent_mask,
+            uint32_t buffer_base,
+            FabricConnection& conn,
+            uint32_t& cached_free_write_slots) {
             uint32_t sem_value = *sem_ptr;
             uint32_t pending = sem_value & ~sent_mask;
+
             while (pending != 0) {
+                if (cached_free_write_slots == 0) {
+                    do {
+                        invalidate_l1_cache();
+                        cached_free_write_slots = conn.get_num_free_write_slots();
+                    } while (cached_free_write_slots == 0);
+                }
+
                 uint32_t slot = __builtin_ctz(pending);
                 uint32_t slot_addr = buffer_base + slot * slot_size_bytes;
-                conn.wait_for_empty_write_slot();
-                conn.send_payload_flush_non_blocking_from_address(slot_addr, slot_size_bytes);
+
+                conn.template send_current_slot_stateful_non_blocking_from_address<use_posted_transport_writes>(
+                    slot_addr, slot_size_bytes);
+
                 sent_mask |= (1u << slot);
+                cached_free_write_slots--;
                 pending &= pending - 1;
             }
             return sent_mask;
         }
 
-        // Template helper for routing - allows if constexpr to work for both 1D and 2D fabric
+        // Generic routing helper for paths that still determine the destination
+        // at runtime (for example the persistent ROOT1 control path).
         template <typename packet_header_t>
         static FORCE_INLINE void set_unicast_route(
             volatile tt_l1_ptr packet_header_t* header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t num_hops) {
@@ -215,6 +232,24 @@ struct ReduceToOneB1 {
                 fabric_set_unicast_route(header, dst_dev_id, dst_mesh_id);
             } else {
                 fabric_set_unicast_route<false>(header, num_hops);
+            }
+        }
+
+        // Worker-path routing helper: derive the fixed destination from CTArgs
+        // and use the single-hop fast path when the worker send contract allows it.
+        template <typename packet_header_t>
+        static FORCE_INLINE void set_unicast_route(volatile tt_l1_ptr packet_header_t* header) {
+            [[maybe_unused]] constexpr uint16_t dst_dev_id = static_cast<uint16_t>(CTArgs::dst_fabric_node_chip_id);
+            [[maybe_unused]] constexpr uint16_t dst_mesh_id = static_cast<uint16_t>(CTArgs::dst_fabric_node_mesh_id);
+
+            if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
+                if constexpr (CTArgs::num_hops == 1) {
+                    fabric_set_single_hop_unicast_route(header, dst_dev_id, dst_mesh_id);
+                } else {
+                    set_unicast_route(header, dst_dev_id, dst_mesh_id, static_cast<uint16_t>(CTArgs::num_hops));
+                }
+            } else {
+                set_unicast_route(header, dst_dev_id, dst_mesh_id, static_cast<uint16_t>(CTArgs::num_hops));
             }
         }
 
@@ -318,20 +353,35 @@ struct ReduceToOneB1 {
 
                 size_t arg_idx = CTArgs::fabric_rt_arg_base;
                 const uint32_t ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
                 auto fabric_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-                fabric_sender.open();
+
+                fabric_sender.open_start();
+                const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
+                fabric_sender.open_finish();
+
+                fabric_sender.template setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
+
                 volatile tt_l1_ptr uint32_t* ready_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem_addr);
                 uint32_t sent_mask = 0;
+                uint32_t cached_free_write_slots = 0;
+
                 do {
                     invalidate_l1_cache();
-                    sent_mask = process_ready_slots(ready_sem_ptr, sent_mask, packet_buffer_addr, fabric_sender);
+                    sent_mask = process_ready_slots(
+                        ready_sem_ptr, sent_mask, packet_buffer_addr, fabric_sender, cached_free_write_slots);
                 } while (sent_mask != CTArgs::all_sent_mask);
+
+                if constexpr (use_posted_transport_writes) {
+                    noc_async_posted_writes_flushed();
+                } else {
+                    noc_async_writes_flushed();
+                }
+
                 noc_semaphore_set(ready_sem_ptr, 0);
+
                 fabric_sender.close();
-                noc_async_write_barrier();
                 return;
             }
 
@@ -425,11 +475,7 @@ struct ReduceToOneB1 {
             auto* packet_header = PacketHeaderPool::allocate_header(1);
 
             // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
-            set_unicast_route(
-                packet_header,
-                static_cast<uint16_t>(CTArgs::dst_fabric_node_chip_id),
-                static_cast<uint16_t>(CTArgs::dst_fabric_node_mesh_id),
-                static_cast<uint16_t>(CTArgs::num_hops));
+            set_unicast_route(packet_header);
 
             // Set up fused write + atomic inc
             uint64_t dst_noc_addr = get_noc_addr(my_noc_x, my_noc_y, args.dst_l1_addr);
