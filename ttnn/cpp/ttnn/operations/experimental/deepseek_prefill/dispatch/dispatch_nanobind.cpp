@@ -23,48 +23,61 @@ void bind_dispatch(nb::module_& mod) {
     ttnn::bind_function<"dispatch", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        Prefill dispatch operation for DeepSeek MoE models.
+        Routes input tokens to destination device dispatch buffers based on top-k expert indices.
 
-        Routes tokens from their original positions to expert-specific buffers.
-        Each token is routed to multiple experts based on router indices.
-        Tokens are gathered into per-expert buffers with metadata tracking their origin.
+        For each token on each source device, the kernel looks up the destination device for
+        each of its top-k experts via expert_dispatch_table_tensor, then writes the token
+        embedding at the token index given by expert_offsets_tensor in the destination
+        device's flat dispatch buffer. Writes to the local device use NOC; writes to remote
+        devices in the dispatch group use fabric. A metadata entry is written alongside each
+        token for later recombination by the combine op.
+
+        Each destination device accumulates a flat dispatch buffer: all experts_per_chip experts
+        are packed contiguously in a single token dimension, with each expert's region starting
+        at a TILE_HEIGHT-aligned token index.
 
         Args:
-            input_tensor (ttnn.Tensor): Input tensor of shape (dispatch_group_size, seq_len, hidden_dim)
-            weights_tensor (ttnn.Tensor): Router weights of shape (dispatch_group_size, seq_len, num_experts_per_tok)
-            indices_tensor (ttnn.Tensor): Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
-            expert_offsets_tensor (ttnn.Tensor): Base offset for each expert from each chip in the dispatched buffer, shape (dispatch_group_size, num_routed_experts), dtype int32
-            expert_dispatch_table_tensor (ttnn.Tensor): Expert dispatch table mapping expert ID to destination chip ID, shape (dispatch_group_size_rep, num_routed_experts), dtype int32
+            input_tensor (ttnn.Tensor): Input token embeddings.
+                Shape per device: (1, seq_len_per_chip, hidden_dim).
+            weights_tensor (ttnn.Tensor): Router weights for each token's top-k experts.
+                Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
+            indices_tensor (ttnn.Tensor): Top-k expert indices for each token.
+                Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
+            expert_offsets_tensor (ttnn.Tensor): Starting token index per source device per expert
+                in the destination device's flat dispatch buffer.
+                Shape per device: (1, num_routed_experts).
+            expert_dispatch_table_tensor (ttnn.Tensor): Maps each expert ID to the destination
+                chip ID within the dispatch group. Values >= 0 are destination chip IDs; -1
+                means the expert is absent from this dispatch group.
+                Shape per device: (1, num_routed_experts).
 
         Keyword Args:
-            dispatch_group_size (int): Number of chips in the system
-            experts_per_chip (int): Number of experts per chip
-            num_routed_experts (int): Total number of routed experts across all chips
-            num_experts_per_tok (int): Number of experts each token is routed to
-            metadata_len (int): Length of metadata per token (stores: chip, token, topk_indice, routed_expert, weight)
-            max_dispatched_tokens_per_expert (int): Maximum number of tokens that can be dispatched to each expert
-            memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to None.
-            subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation. Defaults to None.
-            cluster_axis (int, optional): Mesh axis to operate along (0=rows, 1=cols). Defaults to 0. Currently only 0 is tested.
-            num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
-            topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
+            dispatch_group_size (int): Number of devices in the dispatch group.
+            experts_per_chip (int): Number of experts hosted on each destination device.
+            num_routed_experts (int): Total number of routed experts across all devices.
+            num_experts_per_tok (int): Number of experts each token is routed to (top-k).
+            metadata_len (int): Number of fields per token in the metadata buffer (5:
+                linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight).
+            max_dispatch_buffer_token_size (int): Total token capacity of the flat dispatch
+                buffer per chip (shared across all local experts via dynamic offsets).
+                Used as the in-kernel bounds check ceiling.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation.
+            cluster_axis (int, optional): Mesh axis along which dispatch communicates
+                (0 = SP/dispatch axis). Defaults to 0.
+            num_links (int, optional): Number of fabric links for remote token writes.
+                Defaults to 1.
+            topology (ttnn.Topology, optional): Fabric topology for remote writes.
+                Defaults to Linear.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
-                - dispatched: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
-                - metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
-
-        Example:
-            >>> dispatched, metadata = ttnn.experimental.deepseek_prefill.dispatch(
-                    input_tensor,
-                    weights_tensor,
-                    indices_tensor,
-                    expert_offsets_tensor,
-                    dispatch_group_size=2,
-                    experts_per_chip=8,
-                    num_routed_experts=16,
-                    metadata_len=5,
-                    max_dispatched_tokens_per_expert=256)
+                dispatched_buffer: Flat expert-centric token buffer on each destination device.
+                    Shape per device: (1, 1, max_dispatch_buffer_token_size, hidden_dim).
+                metadata: Per-token metadata written alongside dispatched_buffer.
+                    Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5).
+                    Fields: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+                    Used by the combine op to route processed tokens back to their origin.
         )doc",
         &dispatch,
         nb::arg("input_tensor").noconvert(),
@@ -78,7 +91,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("num_routed_experts"),
         nb::arg("num_experts_per_tok"),
         nb::arg("metadata_len"),
-        nb::arg("max_dispatched_tokens_per_expert"),
+        nb::arg("max_dispatch_buffer_token_size"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
