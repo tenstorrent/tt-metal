@@ -271,7 +271,24 @@ class VectorExportSource(VectorSource):
         if not board_type or not device_series or not isinstance(card_count, int):
             return None
 
-        return (str(board_type).lower(), str(device_series).lower(), card_count)
+        return (
+            self._normalize_hardware_token(board_type),
+            self._normalize_hardware_token(device_series),
+            card_count,
+        )
+
+    @staticmethod
+    def _normalize_hardware_token(value: str | None) -> str | None:
+        """Normalize hardware identifiers for robust policy matching.
+
+        The routing policy uses underscore-delimited identifiers (e.g. ``tt_galaxy_wh``),
+        while runtime machine info may report dash-delimited values
+        (e.g. ``tt-galaxy-wh``). Normalize both forms to the same token.
+        """
+        if value is None:
+            return None
+        normalized = str(value).strip().lower().replace("-", "_")
+        return normalized
 
     @staticmethod
     def _normalize_traced_machine_entries(vector_data: dict) -> list[dict]:
@@ -326,8 +343,8 @@ class VectorExportSource(VectorSource):
         if not board_type and not device_series and card_count is None:
             return None
 
-        normalized_board = str(board_type).lower() if board_type else None
-        normalized_series = str(device_series).lower() if device_series else None
+        normalized_board = VectorExportSource._normalize_hardware_token(board_type)
+        normalized_series = VectorExportSource._normalize_hardware_token(device_series)
         normalized_cards = card_count if isinstance(card_count, int) else None
         return (normalized_board, normalized_series, normalized_cards)
 
@@ -477,7 +494,7 @@ class VectorExportSource(VectorSource):
 
         test_group_name = self._resolve_runtime_test_group_name(run_type, current_machine_info)
         explicit_test_group_name = os.environ.get("TEST_GROUP_NAME", "").strip()
-        capability_profile = None
+        capability_profile = {}
         if test_group_name:
             capability_profile = get_test_group_capability_profile(run_type, test_group_name)
 

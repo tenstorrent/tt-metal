@@ -34,21 +34,31 @@ def _load_lead_models_from_manifest():
     try:
         import yaml
 
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        manifest_path = os.path.join(repo_root, "model_tracer", "trace_selection_registry.yaml")
-        if os.path.exists(manifest_path):
+        current = os.path.abspath(__file__)
+        manifest_path = None
+        while True:
+            current = os.path.dirname(current)
+            candidate = os.path.join(current, "model_tracer", "trace_selection_registry.yaml")
+            if os.path.exists(candidate):
+                manifest_path = candidate
+                break
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+
+        if manifest_path:
             with open(manifest_path) as f:
                 data = yaml.safe_load(f) or {}
-            lead_entries = data.get("targets", {}).get("lead_models", [])
-            patterns = []
-            for t in lead_entries:
-                m = t.get("model")
-                if isinstance(m, list):
-                    patterns.extend(m)
-                elif m:
-                    patterns.append(m)
-            if patterns:
-                return patterns
+                lead_entries = data.get("targets", {}).get("lead_models", [])
+                patterns = []
+                for t in lead_entries:
+                    m = t.get("model")
+                    if isinstance(m, list):
+                        patterns.extend(m)
+                    elif m:
+                        patterns.append(m)
+                if patterns:
+                    return patterns
     except Exception as e:
         logger.debug("Could not load LEAD_MODELS from manifest: %s", e)
     return ["deepseek_v3"]
