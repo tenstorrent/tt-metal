@@ -40,9 +40,7 @@ def test_maf_pcc(device, batch, seq, dim, num_heads, num_experts_per_modality, n
     tt_model = TtMAFBlock(
         mesh_device=device,
         state_dict=reference.state_dict(),
-        dim=dim,
         num_heads=num_heads,
-        num_experts_per_modality=num_experts_per_modality,
         num_fusion_layers=num_fusion_layers,
     )
 
