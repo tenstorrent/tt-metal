@@ -54,7 +54,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     tt::DataFormat bf16_format = tt::DataFormat::Float16_b;
     tt::DataFormat fp32_format = tt::DataFormat::Float32;
 
-    [[maybe_unused]] uint32_t bf16_tile_size = tt::tile_size(bf16_format);
+    uint32_t bf16_tile_size = tt::tile_size(bf16_format);
     uint32_t fp32_tile_size = tt::tile_size(fp32_format);
 
     uint32_t total_tiles = input.physical_volume() / tt::constants::TILE_HW;
