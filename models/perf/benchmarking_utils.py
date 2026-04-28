@@ -18,6 +18,7 @@ if IS_CI_ENV:
 else:
     logger.warning("Skipping import of pydantic_models for benchmarking since not running in CI environment")
 
+# Map tt-metal device names to unified names used in benchmark database
 UNIFIED_DEVICE_NAME_MAP = {
     # Blackhole
     "P100": "p100",
