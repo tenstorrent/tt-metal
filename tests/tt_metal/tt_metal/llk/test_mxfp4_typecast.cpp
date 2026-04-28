@@ -471,16 +471,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
     EXPECT_EQ(mxfp4_tc::classify_bf16(mxfp4_tc::bf16_raw_at(result, 64)), Cls::PosInf);
     EXPECT_EQ(mxfp4_tc::classify_bf16(mxfp4_tc::bf16_raw_at(result, 65)), Cls::NegInf);
     EXPECT_EQ(mxfp4_tc::bf16_raw_at(result, 96), 0x3F80u);  // +1.0
-    {
-        const auto bits_pos = mxfp4_tc::bf16_raw_at(result, 128);
-        const auto cls_pos = mxfp4_tc::classify_bf16(bits_pos);
-        EXPECT_TRUE(cls_pos == Cls::Zero || cls_pos == Cls::Subnormal)
-            << "elem 128 expected Zero/Subnormal, got bits=0x" << std::hex << bits_pos;
-        const auto bits_neg = mxfp4_tc::bf16_raw_at(result, 129);
-        const auto cls_neg = mxfp4_tc::classify_bf16(bits_neg);
-        EXPECT_TRUE(cls_neg == Cls::Zero || cls_neg == Cls::Subnormal)
-            << "elem 129 expected Zero/Subnormal, got bits=0x" << std::hex << bits_neg;
-    }
+
+    const auto bits_pos = mxfp4_tc::bf16_raw_at(result, 128);
+    const auto cls_pos = mxfp4_tc::classify_bf16(bits_pos);
+    EXPECT_TRUE(cls_pos == Cls::Zero || cls_pos == Cls::Subnormal)
+        << "elem 128 expected Zero/Subnormal, got bits=0x" << std::hex << bits_pos;
+    const auto bits_neg = mxfp4_tc::bf16_raw_at(result, 129);
+    const auto cls_neg = mxfp4_tc::classify_bf16(bits_neg);
+    EXPECT_TRUE(cls_neg == Cls::Zero || cls_neg == Cls::Subnormal)
+        << "elem 129 expected Zero/Subnormal, got bits=0x" << std::hex << bits_neg;
 }
 
 }  // namespace tt::tt_metal
