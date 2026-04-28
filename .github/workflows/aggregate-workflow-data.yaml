@@ -273,6 +273,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
+      slack_ts_map: ${{ steps.slack-report.outputs.slack_ts_map }}
       slack_notification_status: ${{ steps.slack-status.outputs.status }}
     steps:
       - uses: actions/checkout@v4
@@ -294,7 +295,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          channel_id: C08SJ7MGESY
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           alert_all_message_path: ${{ github.workspace }}/regression-notification-inputs/alert-all-message.txt
         env:
@@ -337,6 +338,7 @@ jobs:
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
-          slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          slack_ts_map: ${{ needs.handle-failures.outputs.slack_ts_map }}
+          slack_channel_id: C08SJ7MGESY
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true

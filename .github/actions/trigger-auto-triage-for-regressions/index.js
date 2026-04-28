@@ -80,6 +80,19 @@ async function run() {
     // The action.yml default is true, so we default to 'true' string here.
     const sendSlackMessageFlag = core.getInput('send-slack-message') || 'true';
 
+    // Per-pipeline Slack thread timestamps.  Keys are the pipeline display name
+    // (workflow.name from the regression JSON, same value used as the map key
+    // when the slack-report action sends each regression as a separate message).
+    // Falls back to the global slackTs when a pipeline-specific ts is absent.
+    const slackTsMapRaw = core.getInput('slack_ts_map') || '{}';
+    let slackTsMap = {};
+    try {
+      slackTsMap = JSON.parse(slackTsMapRaw);
+      core.info(`Parsed slack_ts_map with ${Object.keys(slackTsMap).length} entries`);
+    } catch (e) {
+      core.warning(`Failed to parse slack_ts_map, falling back to global slack_ts: ${e.message}`);
+    }
+
     // Use the same ref as the workflow that is invoking this action so that
     // auto-triage.yml runs on the same branch (and picks up any in-branch changes),
     // while still defaulting to main when invoked from main.
@@ -95,7 +108,7 @@ async function run() {
 
     core.info(`Found ${regressedWorkflows.length} regressed workflow(s)`);
     if (slackTs) {
-      core.info(`Slack timestamp provided: ${slackTs}`);
+      core.info(`Global Slack timestamp (fallback): ${slackTs}`);
     }
 
     for (const workflow of regressedWorkflows) {
@@ -106,6 +119,14 @@ async function run() {
         .replace(/^\.github\/workflows\//, '')
         .replace(/\.ya?ml$/i, '');
 
+      // Resolve the Slack thread ts for this specific pipeline.
+      // The slack-report action keys the map by workflow.name (display name).
+      // Fall back to the global slackTs for backward compatibility.
+      const pipelineTs = slackTsMap[workflow.name] || slackTsMap[workflowFileName] || slackTs;
+      if (pipelineTs !== slackTs) {
+        core.info(`Using pipeline-specific ts=${pipelineTs} for ${workflow.name}`);
+      }
+
       const allFailingJobs = workflow.failing_jobs || [];
 
       core.info(`Processing workflow: ${workflowFileName} with ${allFailingJobs.length} failing job(s)`);
@@ -114,10 +135,10 @@ async function run() {
         core.warning(`No failing jobs found for workflow: ${workflowFileName}`);
 
         // Send Slack notification if credentials are available
-        if (slackTs && slackChannelId && slackBotToken) {
+        if (pipelineTs && slackChannelId && slackBotToken) {
           try {
             const message = `⚠️ Failed to find failing jobs for workflow: \`${workflowFileName}\``;
-            await sendSlackMessage(slackChannelId, slackBotToken, message, slackTs);
+            await sendSlackMessage(slackChannelId, slackBotToken, message, pipelineTs);
           } catch (error) {
             // Log but don't fail the workflow if Slack message fails
             core.warning(`Failed to send Slack notification: ${error.message}`);
@@ -129,11 +150,11 @@ async function run() {
       const failingJobs = allFailingJobs.slice(0, MAX_JOBS_PER_WORKFLOW);
       if (allFailingJobs.length > MAX_JOBS_PER_WORKFLOW) {
         core.warning(`Workflow ${workflowFileName} has ${allFailingJobs.length} failing jobs, capping auto-triage to first ${MAX_JOBS_PER_WORKFLOW} to control cost`);
-        if (slackTs && slackChannelId && slackBotToken) {
+        if (pipelineTs && slackChannelId && slackBotToken) {
           try {
             const skipped = allFailingJobs.length - MAX_JOBS_PER_WORKFLOW;
             const message = `⚠️ \`${workflowFileName}\` has ${allFailingJobs.length} failing jobs. Auto-triage capped to ${MAX_JOBS_PER_WORKFLOW} jobs (${skipped} skipped). This usually indicates a systemic issue or shared root cause.`;
-            await sendSlackMessage(slackChannelId, slackBotToken, message, slackTs);
+            await sendSlackMessage(slackChannelId, slackBotToken, message, pipelineTs);
           } catch (error) {
             core.warning(`Failed to send Slack cap notification: ${error.message}`);
           }
@@ -154,7 +175,7 @@ async function run() {
             inputs: {
               workflow_name: workflowFileName,
               job_name: jobName,
-              slack_ts: slackTs,
+              slack_ts: pipelineTs,
               'send-slack-message': sendSlackMessageFlag,
               slack_channel_id: slackChannelId
             }

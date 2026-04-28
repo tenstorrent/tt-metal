@@ -8,7 +8,10 @@ inputs:
     description: 'GitHub token for triggering workflows'
     required: true
   slack_ts:
-    description: 'Slack message timestamp for threading replies'
+    description: 'Slack message timestamp for threading replies (fallback when slack_ts_map has no entry for a pipeline)'
+    required: false
+  slack_ts_map:
+    description: 'JSON map of pipeline name to Slack thread timestamp (e.g. {"galaxy-perf-tests": "1234567890.123456"}). When provided, each auto-triage dispatch uses its pipeline-specific ts so replies thread under the correct message.'
     required: false
   slack_channel_id:
     description: 'Slack channel ID for sending notifications'

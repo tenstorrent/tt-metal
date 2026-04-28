@@ -15,8 +15,11 @@ inputs:
     required: false
 outputs:
   slack_ts:
-    description: "The timestamp of the sent Slack message (only available when using Bot Token)"
+    description: "The timestamp of the first sent Slack message (only available when using Bot Token)"
     value: ${{ steps.slack_send.outputs.ts }}
+  slack_ts_map:
+    description: "JSON map of regression pipeline name to its Slack thread timestamp (Bot Token only)"
+    value: ${{ steps.slack_send.outputs.slack_ts_map }}
 runs:
   using: "composite"
   steps:
@@ -130,6 +133,18 @@ runs:
           failing_jobs_count=$(echo "$regression" | jq -r '.failing_jobs | if type == "array" then length else 0 end')
 
           echo "Processing regression $((i + 1)): $regression_name with $failing_jobs_count failing jobs"
+
+          # Flush accumulated content from previous regressions so each pipeline
+          # starts on its own top-level Slack message.
+          if [ -n "$current_chunk_text" ]; then
+            echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
+            chunk_index=$((chunk_index + 1))
+            current_chunk_text=""
+          fi
+          # Mark this chunk index as the start of a new regression.
+          # The slack_send step uses these boundary files to decide when to open
+          # a new top-level message vs. reply in an existing thread.
+          echo "$regression_name" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
 
           if [ "$failing_jobs_count" -eq 0 ]; then
             # No failing jobs, just add the header
@@ -410,6 +425,12 @@ runs:
 
         if [ -n "${SLACK_BOT_TOKEN:-}" ] && [ -n "${CHANNEL_ID:-}" ]; then
           # Using Bot Token method - supports threading
+          # TS_MAP tracks {pipeline_name: slack_ts} for per-pipeline thread routing.
+          TS_MAP="{}"
+          # CURRENT_REGRESSION_TS holds the top-level ts for the regression currently
+          # being sent; reset to "" whenever a boundary file is found for a new regression.
+          CURRENT_REGRESSION_TS=""
+
           # Temporarily disable exit on error for the loop so we can send all messages even if one fails
           set +e
           for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
@@ -447,15 +468,28 @@ runs:
               continue
             fi
 
+            # Check for a regression boundary marker written by the build step.
+            # When present, this chunk is the first message for a new pipeline, so
+            # it must be sent as a top-level message (no thread_ts).
+            boundary_file="${GITHUB_WORKSPACE}/slack_regression_boundary_${i}.txt"
+            boundary_regression_name=""
+            if [ -f "$boundary_file" ]; then
+              boundary_regression_name=$(cat "$boundary_file" 2>/dev/null || echo "")
+              CURRENT_REGRESSION_TS=""
+              echo "New regression boundary for: $boundary_regression_name"
+            fi
+
             # Build request body with channel and optional thread_ts
             REQUEST_BODY=""
-            if [ -z "$FIRST_TS" ]; then
+            if [ -z "$CURRENT_REGRESSION_TS" ]; then
+              # Top-level message (first chunk of a regression, or legacy single-message mode)
               REQUEST_BODY=$(echo "$PAYLOAD" | \
                 jq -c --arg channel "$CHANNEL_ID" \
                 '. + {channel: $channel}' 2>/dev/null || echo "")
             else
+              # Continuation chunk — thread under the regression's top-level message
               REQUEST_BODY=$(echo "$PAYLOAD" | \
-                jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" \
+                jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$CURRENT_REGRESSION_TS" \
                 '. + {channel: $channel, thread_ts: $thread_ts}' 2>/dev/null || echo "")
             fi
 
@@ -471,11 +505,21 @@ runs:
               -d "$REQUEST_BODY" 2>/dev/null || echo '{"ok":false,"error":"curl_failed"}')
 
             # Extract timestamp for threading subsequent messages
-            if [ -z "$FIRST_TS" ]; then
-              FIRST_TS=$(echo "$RESPONSE" | jq -r '.ts // empty' 2>/dev/null || echo "")
-              if [ -n "$FIRST_TS" ] && [ "$FIRST_TS" != "null" ] && [ "$FIRST_TS" != "" ]; then
+            MSG_TS=$(echo "$RESPONSE" | jq -r '.ts // empty' 2>/dev/null || echo "")
+            if [ -z "$CURRENT_REGRESSION_TS" ] && [ -n "$MSG_TS" ] && [ "$MSG_TS" != "null" ]; then
+              CURRENT_REGRESSION_TS="$MSG_TS"
+              # Record the first-ever ts for backward-compat output
+              if [ -z "$FIRST_TS" ]; then
+                FIRST_TS="$MSG_TS"
                 echo "ts=$FIRST_TS" >> "$GITHUB_OUTPUT"
                 echo "First message timestamp: $FIRST_TS"
+              fi
+              # Add this regression's ts to the per-pipeline map
+              if [ -n "$boundary_regression_name" ]; then
+                TS_MAP=$(echo "$TS_MAP" | \
+                  jq -c --arg name "$boundary_regression_name" --arg ts "$MSG_TS" \
+                  '. + {($name): $ts}' 2>/dev/null || echo "$TS_MAP")
+                echo "Recorded ts=$MSG_TS for pipeline: $boundary_regression_name"
               fi
             fi
 
@@ -493,6 +537,10 @@ runs:
             fi
           done
           set -e
+
+          # Output the per-pipeline ts map for downstream steps
+          echo "slack_ts_map=$(echo "$TS_MAP" | jq -c .)" >> "$GITHUB_OUTPUT"
+          echo "Final slack_ts_map: $(echo "$TS_MAP" | jq -c .)"
 
           if [ "$SEND_ERRORS" -gt 0 ]; then
             echo "⚠️ Warning: $SEND_ERRORS out of $TOTAL_CHUNKS messages failed to send"
