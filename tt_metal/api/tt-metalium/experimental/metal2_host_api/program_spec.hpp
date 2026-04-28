@@ -25,22 +25,25 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // Reusing a single constant helps catch typos and errors at compile time.
 using ProgramSpecName = std::string;
 
-// A name identifying a WorkerSpec within a ProgramSpec.
+// A name identifying a WorkUnitSpec within a ProgramSpec.
 // CONVENTION: define names as `constexpr const char*` constants (see above).
-using WorkerSpecName = std::string;
+using WorkUnitSpecName = std::string;
 
 //------------------------------------------------
-// ProgramSpec & WorkerSpec
+// ProgramSpec & WorkUnitSpec
 //------------------------------------------------
 
-// WorkerSpec describes the configuration of a worker node
-struct WorkerSpec {
-    WorkerSpecName unique_id;
+// A WorkUnitSpec names a unit of execution: a set of kernels that run together on a
+// shared set of compute worker nodes. It is the sole source of placement for kernels;
+// DFB placement is derived from kernel bindings, and semaphores carry their own
+// program-scope target_nodes.
+struct WorkUnitSpec {
+    WorkUnitSpecName unique_id;
 
-    // The kernels that run on this WorkerSpec's nodes.
+    // The kernels that run on this WorkUnitSpec's nodes.
     std::vector<KernelSpecName> kernels;
 
-    // The set of nodes configured by this WorkerSpec.
+    // The set of nodes configured by this WorkUnitSpec.
     std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
 };
 
@@ -56,10 +59,10 @@ struct ProgramSpec {
     std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
 
-    // Worker specifications. Required: a valid ProgramSpec has at least one WorkerSpec.
-    // Each kernel must be referenced by at least one WorkerSpec; the kernel's effective
-    // node set is the union of those WorkerSpecs' target_nodes.
-    std::vector<WorkerSpec> workers;
+    // WorkUnit specifications. Required: a valid ProgramSpec has at least one WorkUnitSpec.
+    // Each kernel must be referenced by at least one WorkUnitSpec; the kernel's effective
+    // node set is the union of those WorkUnitSpecs' target_nodes.
+    std::vector<WorkUnitSpec> work_units;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

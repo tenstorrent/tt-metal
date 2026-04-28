@@ -33,7 +33,7 @@ namespace {
 using test_helpers::BindDFBToKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
-using test_helpers::MakeMinimalWorker;
+using test_helpers::MakeMinimalWorkUnit;
 
 // ============================================================================
 // Test Fixture
@@ -115,7 +115,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     // -------------------------------------------------------
     // Create Program
@@ -255,7 +255,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -372,9 +372,9 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             },
     };
 
-    // A WorkerSpec ties together the kernels that run on a shared set of nodes.
-    WorkerSpec worker{
-        .unique_id = "worker_0",
+    // A WorkUnitSpec ties together the kernels that run on a shared set of nodes.
+    WorkUnitSpec work_unit{
+        .unique_id = "work_unit_0",
         .kernels = {"producer", "consumer"},
         .target_nodes = node,
     };
@@ -384,7 +384,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .program_id = "semaphore_accessor_loopback",
         .kernels = {producer, consumer},
         .semaphores = {sem},
-        .workers = std::vector<WorkerSpec>{worker},
+        .work_units = std::vector<WorkUnitSpec>{work_unit},
     };
 
     Program program = MakeProgramFromSpec(spec);

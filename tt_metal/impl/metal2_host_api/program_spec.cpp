@@ -60,11 +60,11 @@ struct CollectedSpecData {
     };
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 
-    // Worker membership: a kernel may belong to multiple WorkerSpecs.
-    std::unordered_map<KernelSpecName, std::vector<const WorkerSpec*>> kernel_workers;
+    // WorkUnit membership: a kernel may belong to multiple WorkUnitSpecs.
+    std::unordered_map<KernelSpecName, std::vector<const WorkUnitSpec*>> kernel_work_units;
 
     // Derived node sets:
-    //  - kernel_node_set: union of containing WorkerSpec target_nodes
+    //  - kernel_node_set: union of containing WorkUnitSpec target_nodes
     //  - dfb_node_set: union of binding-kernels' node sets (local DFBs only).
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
@@ -347,42 +347,42 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         }
     }
 
-    // Check for duplicate WorkerSpec unique_ids
+    // Check for duplicate WorkUnitSpec unique_ids
     {
-        std::unordered_set<WorkerSpecName> worker_names;
-        for (const auto& worker : spec.workers) {
-            auto [it, inserted] = worker_names.insert(worker.unique_id);
-            TT_FATAL(inserted, "Duplicate WorkerSpec name '{}'", worker.unique_id);
+        std::unordered_set<WorkUnitSpecName> work_unit_names;
+        for (const auto& work_unit : spec.work_units) {
+            auto [it, inserted] = work_unit_names.insert(work_unit.unique_id);
+            TT_FATAL(inserted, "Duplicate WorkUnitSpec name '{}'", work_unit.unique_id);
         }
     }
 
-    // Build WorkerSpec membership for each kernel, validating references along the way.
-    // A kernel may belong to multiple WorkerSpecs; its effective target node set is the union.
-    for (const auto& worker : spec.workers) {
-        for (const auto& kernel_name : worker.kernels) {
+    // Build WorkUnitSpec membership for each kernel, validating references along the way.
+    // A kernel may belong to multiple WorkUnitSpecs; its effective target node set is the union.
+    for (const auto& work_unit : spec.work_units) {
+        for (const auto& kernel_name : work_unit.kernels) {
             TT_FATAL(
                 collected.kernel_by_name.contains(kernel_name),
-                "WorkerSpec '{}' references unknown kernel '{}'",
-                worker.unique_id,
+                "WorkUnitSpec '{}' references unknown kernel '{}'",
+                work_unit.unique_id,
                 kernel_name);
-            collected.kernel_workers[kernel_name].push_back(&worker);
+            collected.kernel_work_units[kernel_name].push_back(&work_unit);
         }
     }
 
-    // Every declared kernel must be referenced by at least one WorkerSpec
+    // Every declared kernel must be referenced by at least one WorkUnitSpec
     // (otherwise, it has no node placement and would never run).
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            collected.kernel_workers.contains(kernel.unique_id),
-            "Kernel '{}' is not referenced by any WorkerSpec",
+            collected.kernel_work_units.contains(kernel.unique_id),
+            "Kernel '{}' is not referenced by any WorkUnitSpec",
             kernel.unique_id);
     }
 
-    // Derive each kernel's effective target node set: union of containing WorkerSpec target_nodes.
-    for (const auto& [kernel_name, workers] : collected.kernel_workers) {
+    // Derive each kernel's effective target node set: union of containing WorkUnitSpec target_nodes.
+    for (const auto& [kernel_name, work_units] : collected.kernel_work_units) {
         NodeRangeSet node_set;
-        for (const WorkerSpec* worker : workers) {
-            node_set = node_set.merge(to_node_range_set(worker->target_nodes));
+        for (const WorkUnitSpec* work_unit : work_units) {
+            node_set = node_set.merge(to_node_range_set(work_unit->target_nodes));
         }
         collected.kernel_node_set[kernel_name] = node_set;
     }
@@ -403,10 +403,10 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // ValidateNodeBounds: Node coordinate bounds checking
 // ----------------------------------------------------------------------------
 //
-// Validates that every NodeCoord referenced by a WorkerSpec or SemaphoreSpec
+// Validates that every NodeCoord referenced by a WorkUnitSpec or SemaphoreSpec
 // is within the compute worker grid on this device.
-// (Kernel and DFB placement is derived from WorkerSpec membership, so
-// bounds-checking the WorkerSpecs covers them too.)
+// (Kernel and DFB placement is derived from WorkUnitSpec membership, so
+// bounds-checking the WorkUnitSpecs covers them too.)
 //
 // NOTE: We're dealing in logical coordinates. (Harvesting is handled by UMD.)
 //
@@ -458,8 +458,8 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
         }
     };
 
-    for (const auto& worker : spec.workers) {
-        check_target_nodes(worker.target_nodes, "WorkerSpec", worker.unique_id);
+    for (const auto& work_unit : spec.work_units) {
+        check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.unique_id);
     }
     for (const auto& sem : spec.semaphores) {
         check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
@@ -473,7 +473,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
 //   - Architecture requirements
 //   - Resource limits
 //   - Feature support
-//   - Target node constraints (worker overlap, node coverage, node validity)
+//   - Target node constraints (work_unit overlap, node coverage, node validity)
 //
 // Assumes CollectedSpecData is already built.
 
@@ -616,7 +616,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // On Gen1 (WH/BH), check that no two DM kernels on the same node claim the same processor.
-    // (The kernel's effective node set is derived from WorkerSpec membership.)
+    // (The kernel's effective node set is derived from WorkUnitSpec membership.)
     if (is_gen1_arch()) {
         // Maps (node, processor) -> the kernel that already claimed it
         std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
@@ -663,23 +663,23 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Validate local DFB endpoint placement:
     // A local DFB's producer and consumer kernels must be on the same node (sharing SRAM memory).
-    // For this to be true, the producer and consumer kernels need IDENTICAL WorkerSpec membership.
-    auto kernel_worker_set = [&](const KernelSpecName& name) {
-        std::set<const WorkerSpec*> workers;
-        for (const WorkerSpec* w : collected.kernel_workers.at(name)) {
-            workers.insert(w);
+    // For this to be true, the producer and consumer kernels need IDENTICAL WorkUnitSpec membership.
+    auto kernel_work_unit_set = [&](const KernelSpecName& name) {
+        std::set<const WorkUnitSpec*> work_units;
+        for (const WorkUnitSpec* w : collected.kernel_work_units.at(name)) {
+            work_units.insert(w);
         }
-        return workers;
+        return work_units;
     };
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
-        const auto producer_workers = kernel_worker_set(endpoints.producer->unique_id);
-        const auto consumer_workers = kernel_worker_set(endpoints.consumer->unique_id);
+        const auto producer_work_units = kernel_work_unit_set(endpoints.producer->unique_id);
+        const auto consumer_work_units = kernel_work_unit_set(endpoints.consumer->unique_id);
         TT_FATAL(
-            producer_workers == consumer_workers,
+            producer_work_units == consumer_work_units,
             "Local DFB '{}' is bound by producer kernel '{}' and consumer kernel '{}', but they "
-            "do not share identical WorkerSpec membership. Local DFBs require both endpoints to "
-            "live on the same set of WorkerSpecs; either refactor the placement, or model this as "
+            "do not share identical WorkUnitSpec membership. Local DFBs require both endpoints to "
+            "live on the same set of WorkUnitSpecs; either refactor the placement, or model this as "
             "a RemoteDataflowBufferSpec.",
             dfb.unique_id,
             endpoints.producer->unique_id,
@@ -775,39 +775,39 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     //////////////////////////////
-    // Validate WorkerSpecs
+    // Validate WorkUnitSpecs
     //////////////////////////////
 
-    // WorkerSpec is required: a valid ProgramSpec has at least one WorkerSpec.
-    const auto& workers = spec.workers;
-    TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
+    // WorkUnitSpec is required: a valid ProgramSpec has at least one WorkUnitSpec.
+    const auto& work_units = spec.work_units;
+    TT_FATAL(!work_units.empty(), "At least one WorkUnitSpec is required");
 
-    // WorkerSpecs may not overlap in their target nodes
-    for (const auto& worker : workers) {
-        for (const auto& other_worker : workers) {
-            if (worker.unique_id == other_worker.unique_id) {
+    // WorkUnitSpecs may not overlap in their target nodes
+    for (const auto& work_unit : work_units) {
+        for (const auto& other_work_unit : work_units) {
+            if (work_unit.unique_id == other_work_unit.unique_id) {
                 continue;
             }
-            if (nodes_intersect(worker.target_nodes, other_worker.target_nodes)) {
+            if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
                     false,
-                    "WorkerSpecs '{}' and '{}' overlap in target nodes",
-                    worker.unique_id,
-                    other_worker.unique_id);
+                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
+                    work_unit.unique_id,
+                    other_work_unit.unique_id);
             }
         }
     }
 
-    // A WorkerSpec must have at least one kernel
-    for (const auto& worker : workers) {
-        TT_FATAL(!worker.kernels.empty(), "WorkerSpec '{}' has no kernels", worker.unique_id);
+    // A WorkUnitSpec must have at least one kernel
+    for (const auto& work_unit : work_units) {
+        TT_FATAL(!work_unit.kernels.empty(), "WorkUnitSpec '{}' has no kernels", work_unit.unique_id);
     }
 
-    // Does the Worker have enough cores to run all of its kernels?
-    for (const auto& worker : workers) {
+    // Does the WorkUnit have enough cores to run all of its kernels?
+    for (const auto& work_unit : work_units) {
         uint32_t dm_cores_needed = 0;
         uint32_t compute_engines_needed = 0;
-        for (const auto& kernel_name : worker.kernels) {
+        for (const auto& kernel_name : work_unit.kernels) {
             const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
                 compute_engines_needed += kernel_spec->num_threads;
@@ -819,47 +819,47 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (is_gen2_arch()) {
             TT_FATAL(
                 compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
-                "WorkerSpec '{}' needs {} Tensix engines, but only {} are available",
-                worker.unique_id,
+                "WorkUnitSpec '{}' needs {} Tensix engines, but only {} are available",
+                work_unit.unique_id,
                 compute_engines_needed,
                 QUASAR_TENSIX_ENGINES_PER_NODE);
             TT_FATAL(
                 dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
-                "WorkerSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
-                worker.unique_id,
+                "WorkUnitSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
+                work_unit.unique_id,
                 dm_cores_needed,
                 QUASAR_USER_DM_CORES_PER_NODE);
         }
         if (is_gen1_arch()) {
             TT_FATAL(
                 compute_engines_needed <= 1,
-                "WorkerSpec '{}' has {} compute kernels. The target architecture supports at most one.",
-                worker.unique_id,
+                "WorkUnitSpec '{}' has {} compute kernels. The target architecture supports at most one.",
+                work_unit.unique_id,
                 compute_engines_needed);
             TT_FATAL(
                 dm_cores_needed <= 2,
-                "WorkerSpec '{}' has {} data movement kernels. The target architecture supports at most two.",
-                worker.unique_id,
+                "WorkUnitSpec '{}' has {} data movement kernels. The target architecture supports at most two.",
+                work_unit.unique_id,
                 dm_cores_needed);
         }
     }
 
-    // A worker can have at most one compute kernel
-    for (const auto& worker : workers) {
+    // A work_unit can have at most one compute kernel
+    for (const auto& work_unit : work_units) {
         uint32_t num_compute_kernels = 0;
-        for (const auto& kernel_name : worker.kernels) {
+        for (const auto& kernel_name : work_unit.kernels) {
             const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
                 num_compute_kernels++;
             }
         }
-        TT_FATAL(num_compute_kernels <= 1, "WorkerSpec '{}' has more than one compute kernel", worker.unique_id);
+        TT_FATAL(num_compute_kernels <= 1, "WorkUnitSpec '{}' has more than one compute kernel", work_unit.unique_id);
     }
 
     // NOTE:
-    // Placement consistency between kernels, DFBs, and WorkerSpecs is now structural,
+    // Placement consistency between kernels, DFBs, and WorkUnitSpecs is now structural,
     // not validated:
-    //  - Kernels' effective node sets ARE the union of their containing WorkerSpecs' target_nodes
+    //  - Kernels' effective node sets ARE the union of their containing WorkUnitSpecs' target_nodes
     //  - DFBs' allocation node sets are the union of their binding kernels' node sets
 }
 
@@ -894,28 +894,28 @@ std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const Proce
     return newly_reserved;
 }
 
-// Reserve DM processors for a kernel on a WorkerSpec.
+// Reserve DM processors for a kernel on a WorkUnitSpec.
 // Returns {this_kernel_mask, updated_cumulative_mask}
 // Throws TT_FATAL on conflict or allocation failure (see simplifying assumption notes)
 std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     const KernelSpec* kernel_spec,
     std::optional<DMProcessorMask> existing_mask,
     DMProcessorMask cumulative_mask,
-    const WorkerSpecName& worker_id) {
-    // Was this kernel already assigned a mask from a previous WorkerSpec?
+    const WorkUnitSpecName& work_unit_id) {
+    // Was this kernel already assigned a mask from a previous WorkUnitSpec?
     if (existing_mask.has_value()) {
         DMProcessorMask existing = existing_mask.value();
 
-        // Check for conflict with what's already allocated on the current WorkerSpec
+        // Check for conflict with what's already allocated on the current WorkUnitSpec
         TT_FATAL(
             !existing.conflicts_with(cumulative_mask),
-            "Kernel '{}' requires processors already in use on WorkerSpec '{}'. "
+            "Kernel '{}' requires processors already in use on WorkUnitSpec '{}'. "
             "One of the following must be true: \n"
             " - The ProgramSpec is invalid, and the legality checks were bypassed. \n"
             " - A solution exists, but the greedy algorithm failed to find it. \n"
             " - The runtime's \"common DM cores\" assumption has been violated!",
             kernel_spec->unique_id,
-            worker_id);
+            work_unit_id);
 
         // Return existing mask and updated cumulative
         return {existing, cumulative_mask | existing};
@@ -925,10 +925,10 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     std::optional<DMProcessorMask> reserved = ReserveProcessors(kernel_spec->num_threads, cumulative_mask);
     TT_FATAL(
         reserved.has_value(),
-        "Failed to reserve processors for DM kernel '{}' on WorkerSpec '{}'. "
+        "Failed to reserve processors for DM kernel '{}' on WorkUnitSpec '{}'. "
         "The \"common DM cores\" assumption has been violated!",
         kernel_spec->unique_id,
-        worker_id);
+        work_unit_id);
 
     DMProcessorMask mask = reserved.value();
     return {mask, cumulative_mask | mask};
@@ -964,7 +964,7 @@ ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const K
 namespace dm_solver {
 
 // Map from kernel name to its derived effective node set (union of containing
-// WorkerSpec target_nodes). Used by the solver to read each kernel's placement.
+// WorkUnitSpec target_nodes). Used by the solver to read each kernel's placement.
 using KernelNodeSetMap = std::unordered_map<KernelSpecName, NodeRangeSet>;
 
 // State for tracking per-node processor usage
@@ -1454,7 +1454,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
             MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
-        // Allocation nodes are derived from binding kernels' WorkerSpec membership.
+        // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name, dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
