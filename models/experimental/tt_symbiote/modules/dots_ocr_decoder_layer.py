@@ -95,6 +95,19 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
         filtered = {k: kwds[k] for k in ("past_key_value", "cache_position") if k in kwds}
         return super().call(*args, **filtered)
 
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        shared_buf = None
+        for layer in self.layers:
+            attn = getattr(layer, "self_attn", None)
+            if attn is not None and hasattr(attn, "_decode_cur_pos") and attn._decode_cur_pos is not None:
+                if shared_buf is None:
+                    shared_buf = attn._decode_cur_pos
+                else:
+                    ttnn.deallocate(attn._decode_cur_pos)
+                    attn._decode_cur_pos = shared_buf
+        self._shared_decode_cur_pos = shared_buf
+
     def forward(self, hidden_states, **kwargs):
         for layer in self.layers:
             layer_output = layer.forward(hidden_states, **kwargs)
@@ -116,13 +129,17 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                 total *= d
             cp = ttnn.reshape(cp, (total,))
 
+        if cp.shape[0] > 1:
+            cp = ttnn.slice(cp, [0], [1])
+
+        if hasattr(self, "_shared_decode_cur_pos") and self._shared_decode_cur_pos is not None:
+            ttnn.copy(cp, self._shared_decode_cur_pos)
+            return
+
         for layer in self.layers:
             attn = getattr(layer, "self_attn", None)
             if attn is not None and hasattr(attn, "_decode_cur_pos") and attn._decode_cur_pos is not None:
-                cur = cp
-                if cur.shape[0] > 1:
-                    cur = ttnn.slice(cur, [0], [1])
-                ttnn.copy(cur, attn._decode_cur_pos)
+                ttnn.copy(cp, attn._decode_cur_pos)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
         past_key_value = func_kwargs.get("past_key_value")
