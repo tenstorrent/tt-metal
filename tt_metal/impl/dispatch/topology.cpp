@@ -436,10 +436,21 @@ DispatchTopology::DispatchTopology(
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
+    bool are_fd_kernels_on_same_core = descriptor_.cluster().arch() == tt::ARCH::QUASAR && descriptor_.num_cqs() == 1;
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, descriptor_.rtoptions());
+        CoreType::WORKER,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        are_fd_kernels_on_same_core,
+        descriptor_.rtoptions());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, descriptor_.rtoptions());
+        CoreType::ETH,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        /*are_fd_kernels_on_same_core=*/false,
+        descriptor_.rtoptions());
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
