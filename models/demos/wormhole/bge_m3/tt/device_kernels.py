@@ -187,7 +187,7 @@ def bge_m3_mlp_wi_compute_kernel_config(
 ) -> ttnn.WormholeComputeKernelConfig:
     """MLP ``Wi`` matmul compute config.
 
-    B1/S512 is an isolated performance sweep: ``Wi`` is the repeated slow BFP8 x BFP8 matmul, so test HiFi2
+    B1/S512 is an isolated performance sweep: ``Wi`` is the repeated slow BFP8 x BFP8 matmul, so test LoFi
     there while keeping FP32 destination accumulation and leaving attention/``Wo`` matmuls on the default policy.
     """
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
@@ -198,7 +198,7 @@ def bge_m3_mlp_wi_compute_kernel_config(
                 packer_l1_acc = False
         return ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=packer_l1_acc,
