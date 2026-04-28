@@ -67,6 +67,8 @@ _TENSOR_PREFIXES = (
     "input_tensor_k",
     "input_tensor_v",
     "page_table_tensor",
+    "cur_pos_tensor",
+    "attn_mask",
 )
 
 

@@ -16,7 +16,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 import re
 
 
@@ -120,14 +124,9 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Use named memory_config for output if output_memory_config not set
-    if output_memory_config is None and "memory_config" in op_kwargs:
-        output_memory_config = op_kwargs.pop("memory_config")
-    # If output_memory_config is explicitly set, remove duplicate memory_config from op_kwargs
-    elif "memory_config" in op_kwargs:
-        op_kwargs.pop("memory_config")
-    if output_memory_config is not None:
-        op_kwargs["memory_config"] = output_memory_config
+    # Do NOT inject memory_config — the master trace only records it when the model
+    # explicitly passed it as a kwarg.  Injecting from vector metadata causes
+    # extra_key diffs in validation.
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

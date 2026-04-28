@@ -6,6 +6,7 @@ import ast
 import json
 import os
 import pathlib
+import re
 from abc import ABC, abstractmethod
 
 from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
@@ -272,8 +273,8 @@ class VectorExportSource(VectorSource):
             return None
 
         return (
-            self._normalize_hardware_token(board_type),
-            self._normalize_hardware_token(device_series),
+            VectorExportSource._normalize_hardware_token(board_type),
+            VectorExportSource._normalize_hardware_token(device_series),
             card_count,
         )
 
@@ -281,14 +282,14 @@ class VectorExportSource(VectorSource):
     def _normalize_hardware_token(value: str | None) -> str | None:
         """Normalize hardware identifiers for robust policy matching.
 
-        The routing policy uses underscore-delimited identifiers (e.g. ``tt_galaxy_wh``),
-        while runtime machine info may report dash-delimited values
-        (e.g. ``tt-galaxy-wh``). Normalize both forms to the same token.
+        Routing rules use underscore tokens (e.g. ``tt_galaxy_wh``); machine info
+        and traces may use dashes or other punctuation. Collapse to a single
+        comparable token (same approach as filename sanitization).
         """
         if value is None:
             return None
-        normalized = str(value).strip().lower().replace("-", "_")
-        return normalized
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+        return normalized or None
 
     @staticmethod
     def _normalize_traced_machine_entries(vector_data: dict) -> list[dict]:

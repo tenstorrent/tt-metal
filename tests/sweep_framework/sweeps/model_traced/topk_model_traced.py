@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, extract_named_tensor_kwargs
 
 TIMEOUT = 300
 
@@ -133,8 +133,33 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Create pre-allocated indices_tensor if the traced config had one
+    indices_tensor_info = extract_named_tensor_kwargs(kwargs, "indices_tensor")
+    ttnn_indices_tensor = None
+    if indices_tensor_info and indices_tensor_info["shape"] is not None:
+        idx_shape = tuple(indices_tensor_info["shape"]) if isinstance(indices_tensor_info["shape"], (list, tuple)) else indices_tensor_info["shape"]
+        idx_dtype = indices_tensor_info.get("dtype") or ttnn.uint16
+        idx_layout = indices_tensor_info.get("layout") or ttnn.TILE_LAYOUT
+        idx_mem = indices_tensor_info.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+        idx_placement = indices_tensor_info.get("tensor_placement")
+        torch_indices = torch.zeros(idx_shape, dtype=torch.int32)
+        if not is_host:
+            if is_mesh_device and idx_placement:
+                ttnn_indices_tensor = create_tensor_on_mesh(
+                    torch_indices, device, idx_dtype, idx_layout, idx_mem, idx_placement,
+                )
+            else:
+                ttnn_indices_tensor = ttnn.from_torch(
+                    torch_indices, dtype=idx_dtype, layout=idx_layout, device=device, memory_config=idx_mem,
+                )
+        else:
+            ttnn_indices_tensor = ttnn.from_torch(torch_indices, dtype=idx_dtype, layout=idx_layout)
+
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, **op_kwargs)
+    topk_kwargs = dict(op_kwargs)
+    if ttnn_indices_tensor is not None:
+        topk_kwargs["indices_tensor"] = ttnn_indices_tensor
+    topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **topk_kwargs)
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

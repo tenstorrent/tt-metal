@@ -10,10 +10,12 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    replicate_with_topology,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import master config loader for traced model configurations
@@ -41,25 +43,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -85,16 +73,24 @@ def run(
     else:
         shape = input_a_shape
 
-    # num_heads is required - try to infer from shape if missing
+    # num_heads is required - try to get from op_kwargs first, then kwargs, then infer.
+    # op_kwargs is the authoritative source because it mirrors the master trace kwargs.
     if num_heads is None:
-        # Try to infer from input shape: [B, 1, H, D] where H might be num_heads or head_dim
-        # For nlp_concat_heads_decode, input is typically [1, 1, num_heads, head_dim]
+        num_heads = op_kwargs.pop("num_heads", None)
+    if num_heads is None:
+        num_heads = kwargs.get("num_heads", None)
+    if num_heads is None:
+        # Fallback: infer from input shape (may be tile-padded — less reliable)
         if len(shape) == 4 and shape[1] == 1:
-            # Use shape[2] as num_heads (third dimension)
             num_heads = shape[2]
         else:
-            # Default fallback
             num_heads = 16
+
+    # The V2 vector may contain a tile-padded shape (e.g. dim-2 = 32) while the
+    # master trace records the original logical shape (e.g. dim-2 = 8 = num_heads).
+    # Override dim-2 with the true num_heads so the tracer records the correct shape.
+    if len(shape) == 4 and num_heads is not None and shape[2] != num_heads:
+        shape = (shape[0], shape[1], num_heads, shape[3])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
@@ -118,7 +114,13 @@ def run(
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
-            input_tensor_a = create_tensor_on_mesh(
+            # The input tensor shape is (1, batch, num_heads, head_dim) per-device.
+            # The master model creates it per-device (replicated) so logical_shape()
+            # returns the per-device shape with dim[2]=num_heads.
+            # create_tensor_on_mesh would expand+shard, causing logical_shape() to
+            # return the global shape (dim[2]=num_heads*mesh_factor), mismatching
+            # the master trace.  Replicate to preserve the per-device shape.
+            input_tensor_a = replicate_with_topology(
                 torch_input_tensor_a,
                 device,
                 input_a_dtype,
@@ -139,7 +141,8 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.experimental.nlp_concat_heads_decode(input_tensor_a, num_heads=num_heads, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Unpad the output - TTNN output may be padded to tile size (32)

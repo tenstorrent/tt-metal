@@ -106,17 +106,13 @@ def run(
     # correct matmul behavior with sharded memory configs.
     op_kwargs = build_op_kwargs(kwargs)
 
-    # matmul needs memory_config for output placement. build_op_kwargs filters
-    # memory_config by default, so restore the traced memory_config when present,
-    # falling back to output_memory_config.
-    if "memory_config" not in op_kwargs:
-        traced_memory_config = kwargs.get("memory_config")
-        if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
-            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+    # build_op_kwargs filters memory_config (infrastructure key), but matmul
+    # accepts it as an op kwarg.  Re-inject from the traced kwargs when present.
+    raw_mc = kwargs.get("memory_config")
+    if raw_mc is not None and raw_mc != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
-            op_kwargs["memory_config"] = parse_dict_value("memory_config", traced_memory_config)
-        elif output_memory_config is not None:
-            op_kwargs["memory_config"] = output_memory_config
+        op_kwargs["memory_config"] = parse_dict_value("memory_config", raw_mc) if isinstance(raw_mc, dict) else raw_mc
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

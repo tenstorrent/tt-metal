@@ -133,19 +133,6 @@ def run(
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
 
-    # When program_config is None (grid-based configs dropped), the shard_spec in
-    # memory configs was computed for the original device and is invalid. Clear sharded
-    # configs so ttnn.linear auto-determines compatible settings.
-    if program_config is None:
-        if memory_config is not None and "SHARDED" in str(memory_config):
-            memory_config = None
-        if output_memory_config is not None and "SHARDED" in str(output_memory_config):
-            output_memory_config = None
-        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
-            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
-            del parsed_op_kwargs["memory_config"]
-
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
 
@@ -327,9 +314,12 @@ def run(
             except Exception:
                 output_tensor = ttnn.matmul(ttnn_a, ttnn_b)
     else:
-        linear_kwargs = {
-            "bias": ttnn_bias,
-        }
+        linear_kwargs = {}
+        # Only pass bias if it was actually traced (non-None).
+        # Passing bias=None creates extra_key diff when master didn't have it.
+        if ttnn_bias is not None:
+            linear_kwargs["bias"] = ttnn_bias
+
         if transpose_a:
             linear_kwargs["transpose_a"] = transpose_a
         if transpose_b:
@@ -346,7 +336,12 @@ def run(
         if program_config is not None:
             linear_kwargs["program_config"] = program_config
 
-        if compute_kernel_config is not None:
+        # Pass compute_kernel_config even when None — the master trace records it
+        # when the model explicitly passed it (including None).
+        raw_ckc = kwargs.get("compute_kernel_config", "__ABSENT__")
+        if raw_ckc != "__ABSENT__":
+            linear_kwargs["compute_kernel_config"] = compute_kernel_config
+        elif compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
         if core_grid is not None:

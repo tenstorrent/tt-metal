@@ -81,11 +81,14 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "dtype"}, output_memory_config=output_memory_config)
 
     pos_args = extract_positional_args(kwargs)
-    output_dtype = output_dtype or kwargs.get("dtype", pos_args.get(1, ttnn.float32))
-    if isinstance(output_dtype, dict):
-        output_dtype = parse_dtype(output_dtype.get("repr", ""))
-    elif isinstance(output_dtype, str):
-        output_dtype = parse_dtype(output_dtype)
+    traced_target = pos_args.get(1) or kwargs.get("dtype")
+    if traced_target is not None:
+        if isinstance(traced_target, dict):
+            output_dtype = parse_dtype(traced_target.get("repr", ""))
+        elif isinstance(traced_target, str):
+            output_dtype = parse_dtype(traced_target)
+        else:
+            output_dtype = traced_target
     if output_dtype is None:
         output_dtype = ttnn.float32
     if output_memory_config is None and memory_config is not None:
@@ -134,11 +137,17 @@ def run(
     is_host = storage_type and "HOST" in str(storage_type)
 
     if not is_host:
-        if is_mesh_device:
-            # Typecast is element-wise: replicate to all devices and compare
-            # device-0 output against the original reference tensor.
-            # Using create_tensor_on_mesh with ShardTensor2dMesh repeats/shards
-            # the input, causing a mismatch when extracting device 0 only.
+        if is_mesh_device and input_a_tensor_placement:
+            # Use the traced tensor placement to match the master trace's distribution
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        elif is_mesh_device:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -159,7 +168,11 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
+    use_named_dtype = "dtype" in kwargs and pos_args.get(1) is None
+    if use_named_dtype:
+        output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
+    else:
+        output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
     # Use device-0 extraction (no mesh composer) to get per-device output that
     # matches the per-device reference tensor.  Typecast is element-wise so each
     # device's output independently matches the reference.

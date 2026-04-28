@@ -1,28 +1,24 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
-from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
-    get_mesh_composer,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("repeat")
+model_traced_params = loader.get_suite_parameters("zeros_like")
 
 parameters = {
     "model_traced_sample": {
@@ -31,7 +27,6 @@ parameters = {
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "repeat_shape": [(1, 1, 2, 1)],
         "storage_type": ["StorageType::DEVICE"],
     },
 }
@@ -52,11 +47,11 @@ def run(
     input_a_shape,
     input_a_dtype,
     input_a_layout,
-    input_a_memory_config=None,
+    input_a_memory_config,
     output_memory_config=None,
-    repeat_shape=None,
-    repeat_dims=None,
     memory_config=None,
+    dtype=None,
+    layout=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -66,47 +61,39 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "repeat_dims"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # v2 tracer puts repeat vector in arg1 or repeat_dims
-    pos_args = extract_positional_args(kwargs)
-    repetition_vector = repeat_shape or repeat_dims or pos_args.get(1, None)
-    if repetition_vector is None:
-        repetition_vector = (1, 1, 2, 1)  # fallback for sample
+    # Re-inject memory_config from kwargs (build_op_kwargs strips it by default)
+    mc_raw = kwargs.get("memory_config")
+    if mc_raw is not None and "memory_config" not in op_kwargs:
+        parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+    elif memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = memory_config
 
-    if isinstance(repetition_vector, dict) and "value" in repetition_vector:
-        import re
-
-        m = re.search(r"\[([0-9, ]+)\]", str(repetition_vector["value"]))
-        if m:
-            repetition_vector = tuple(int(x) for x in m.group(1).split(","))
-
-    if isinstance(repetition_vector, list):
-        repetition_vector = tuple(repetition_vector)
-
-    # Use named memory_config if output_memory_config not set
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
+    # Re-inject dtype and layout if provided
+    if dtype is not None and "dtype" not in op_kwargs:
+        parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
+        if parsed_dt is not None:
+            op_kwargs["dtype"] = parsed_dt
+    if layout is not None and "layout" not in op_kwargs:
+        parsed_lt = parse_dict_value("layout", layout) if isinstance(layout, dict) else layout
+        if parsed_lt is not None:
+            op_kwargs["layout"] = parsed_lt
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
-        shape
-    )
-
-    torch_output = torch_input.repeat(repetition_vector)
+    # Create input tensor
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    torch_output = torch.zeros_like(torch_input)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor = create_tensor_on_mesh(
-                torch_input,
-                device,
-                input_a_dtype,
-                input_a_layout,
-                input_a_memory_config or ttnn.DRAM_MEMORY_CONFIG,
-                input_a_tensor_placement,
+                torch_input, device, input_a_dtype, input_a_layout, input_a_memory_config, input_a_tensor_placement
             )
         else:
             input_tensor = ttnn.from_torch(
@@ -114,15 +101,14 @@ def run(
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=input_a_memory_config,
             )
     else:
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.repeat(input_tensor, repetition_vector, **op_kwargs)
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+    output_tensor = ttnn.zeros_like(input_tensor, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)

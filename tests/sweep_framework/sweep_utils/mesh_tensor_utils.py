@@ -48,7 +48,7 @@ def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[tt
             # e.g., "['PlacementShard(2)', 'PlacementShard(3)']" -> shard on dims 2,3
             import re
 
-            shard_dims = re.findall(r"PlacementShard\((-?\d+)\)", placement_str)
+            shard_dims = re.findall(r"PlacementShard\((?:dim=)?(-?\d+)\)", placement_str)
 
             if shard_dims:
                 # For 2D mesh, we typically shard on the last dimension(s)
@@ -125,7 +125,7 @@ def _parse_shard_dim(placement_str: str) -> int:
     """Extract shard dimension from placement string, handling negative dims."""
     import re
 
-    shard_dims = re.findall(r"PlacementShard\((-?\d+)\)", placement_str)
+    shard_dims = re.findall(r"PlacementShard\((?:dim=)?(-?\d+)\)", placement_str)
     return int(shard_dims[-1]) if shard_dims else -1
 
 
@@ -166,6 +166,165 @@ def get_mesh_composer(mesh_device, tensor_placement: Optional[Dict] = None):
         return ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape, dims=shard_dim)
     except (TypeError, RuntimeError):
         return None
+
+
+def _restore_topology(
+    tensor: ttnn.Tensor,
+    placement_entries: list,
+    dist_parsed: list,
+    mesh_shape_tuple: tuple,
+) -> None:
+    """Restore correct TensorTopology on a device tensor to match the master trace.
+
+    The C++ factory methods may create a topology that doesn't match what the
+    master trace recorded (e.g., flattening 2D to 1D, or setting 2D when the
+    master had 1D).  This helper reconstructs the exact topology from the vector
+    config's distribution_shape and placement info.
+    """
+    import re
+
+    ndim = len(dist_parsed)
+
+    if ndim >= 2:
+        # 2D (or higher) distribution — e.g. [4, 8]
+        dist_shape = ttnn.MeshShape(*dist_parsed[:2])
+
+        placements = []
+        for entry in placement_entries or []:
+            shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+            if shard_match:
+                placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
+            else:
+                placements.append(ttnn.PlacementReplicate())
+        while len(placements) < 2:
+            placements.append(ttnn.PlacementReplicate())
+
+        rows, cols = dist_parsed[0], dist_parsed[1]
+        mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+    elif ndim == 1:
+        # 1D distribution — e.g. [32].  Keep as 1D to match the master trace.
+        dist_shape = ttnn.MeshShape(shape=dist_parsed)
+
+        placements = []
+        for entry in placement_entries or []:
+            shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+            if shard_match:
+                placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
+            else:
+                placements.append(ttnn.PlacementReplicate())
+        if not placements:
+            placements.append(ttnn.PlacementReplicate())
+
+        total = dist_parsed[0]
+        mesh_coords = [ttnn.MeshCoordinate(coords=[i]) for i in range(total)]
+    else:
+        return  # Nothing to restore
+
+    topology = ttnn.TensorTopology(dist_shape, placements, mesh_coords)
+    tensor.update_tensor_topology(topology)
+
+
+def apply_tensor_placement_topology(tensor, tensor_placement, mesh_shape_tuple):
+    """Apply topology from a tensor_placement config dict to a device tensor.
+
+    Use this for tensors created outside of ``create_tensor_on_mesh`` (e.g. in
+    decode-mode paths that use ``from_torch`` + ``interleaved_to_sharded``).
+    """
+    import ast as _ast
+    import re
+
+    if not tensor_placement:
+        return
+    dist_raw = tensor_placement.get("distribution_shape", "")
+    if isinstance(dist_raw, str):
+        try:
+            dist_parsed = _ast.literal_eval(dist_raw)
+        except (ValueError, SyntaxError):
+            return
+    else:
+        dist_parsed = list(dist_raw) if dist_raw else []
+    if not dist_parsed:
+        return
+    placement_str = str(tensor_placement.get("placement", ""))
+    entries = re.findall(r"Placement(?:Shard\((?:dim=)?-?\d+\)|Replicate)", placement_str)
+    try:
+        _restore_topology(tensor, entries, dist_parsed, mesh_shape_tuple)
+    except Exception:
+        pass
+
+
+def replicate_with_topology(
+    torch_tensor: torch.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout,
+    memory_config: ttnn.MemoryConfig,
+    tensor_placement: Optional[Dict] = None,
+) -> ttnn.Tensor:
+    """Create a replicated tensor on mesh and restore the master trace's topology.
+
+    Use this when the master model creates a tensor per-device (replicated) but the
+    traced topology has shard-like placement.  This keeps the per-device shape as the
+    logical shape while restoring the correct topology metadata so the operation
+    tracer captures placement info matching the master trace.
+
+    Args:
+        torch_tensor: Input torch tensor (per-device shape)
+        mesh_device: Mesh device to create tensor on
+        dtype: TTNN data type
+        layout: TTNN layout (TILE/ROW_MAJOR)
+        memory_config: Memory configuration
+        tensor_placement: Optional placement info from traced config
+
+    Returns:
+        TTNN tensor on mesh device with replicated data and restored topology
+    """
+    import ast as _ast
+    import re
+
+    # Create tensor directly with the target layout.
+    # Note: For TILE_LAYOUT mesh tensors, logical_shape() may return tile-padded
+    # dimensions (e.g. 8→32). This is handled by normalization in
+    # validate_sweep_trace.py rather than working around it here, because the
+    # ROW_MAJOR→TILE_LAYOUT approach breaks some ops (e.g. SDPA).
+    tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=dtype,
+        layout=layout,
+        device=mesh_device,
+        memory_config=memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    if tensor_placement:
+        placement_raw = tensor_placement.get("placement", "")
+        placement_str = str(placement_raw) if not isinstance(placement_raw, str) else placement_raw
+        entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
+
+        dist_raw = tensor_placement.get("distribution_shape", "")
+        if isinstance(dist_raw, str):
+            try:
+                dist_parsed = _ast.literal_eval(dist_raw)
+            except Exception:
+                dist_parsed = []
+        else:
+            dist_parsed = list(dist_raw) if dist_raw else []
+
+        mesh_shape_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
+        if isinstance(mesh_shape_raw, str):
+            mesh_shape_raw = _ast.literal_eval(mesh_shape_raw)
+        mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
+        if len(mesh_shape_tuple) == 0:
+            mesh_shape_tuple = (1, 1)
+        elif len(mesh_shape_tuple) == 1:
+            mesh_shape_tuple = (mesh_shape_tuple[0], 1)
+        if dist_parsed:
+            try:
+                _restore_topology(tensor, entries, dist_parsed, mesh_shape_tuple)
+            except Exception:
+                pass  # Best-effort; don't block sweep execution
+
+    return tensor
 
 
 def create_tensor_on_mesh(
@@ -211,7 +370,7 @@ def create_tensor_on_mesh(
         # Check if the actual device mesh can support the traced mesh shape.
         # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
         try:
-            actual_mesh = mesh_device.shape()
+            actual_mesh = mesh_device.shape
             actual_rows, actual_cols = actual_mesh[0], actual_mesh[1]
         except Exception:
             actual_rows, actual_cols = 1, 1
@@ -219,7 +378,7 @@ def create_tensor_on_mesh(
         traced_cols = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else 1
         mesh_compatible = actual_rows >= traced_rows and actual_cols >= traced_cols
 
-        entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
+        entries = re.findall(r"Placement(?:Shard\((?:dim=)?-?\d+\)|Replicate)", placement_str)
 
         dist_raw = tensor_placement.get("distribution_shape", "")
         if isinstance(dist_raw, str):
@@ -239,7 +398,7 @@ def create_tensor_on_mesh(
         elif len(entries) >= 2:
             dims = []
             for entry in entries[:2]:
-                shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+                shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entry)
                 if shard_match:
                     dims.append(int(shard_match.group(1)))
                 else:
@@ -257,7 +416,7 @@ def create_tensor_on_mesh(
 
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
         elif len(entries) == 1:
-            shard_match = re.search(r"PlacementShard\((-?\d+)\)", entries[0])
+            shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entries[0])
             if shard_match:
                 dim = int(shard_match.group(1))
                 dims_tuple = (None, dim)
@@ -281,7 +440,7 @@ def create_tensor_on_mesh(
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
     # Create tensor on mesh
-    return ttnn.from_torch(
+    result = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=layout,
@@ -290,10 +449,23 @@ def create_tensor_on_mesh(
         mesh_mapper=mesh_mapper,
     )
 
+    # Restore correct tensor topology from vector placement info.
+    # The C++ factory methods may create a topology that doesn't match the
+    # master trace (e.g., flattening [4,8] to [32] or vice versa).
+    # We reconstruct and re-apply the exact topology so that the operation
+    # tracer captures it accurately (matching the master trace).
+    if tensor_placement and dist_parsed:
+        try:
+            _restore_topology(result, entries, dist_parsed, mesh_shape_tuple)
+        except Exception:
+            pass  # Best-effort; don't block sweep execution
+
+    return result
+
 
 def get_mesh_shape() -> Optional[Tuple[int, int]]:
     """
-    Get mesh shape from environment variable.
+    Get mesh shape from environment variable or auto-detect from hardware.
 
     Returns:
         Tuple of (rows, cols) or None if using single device
@@ -301,22 +473,35 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     Environment variable format:
         MESH_DEVICE_SHAPE="1x2" -> (1, 2)
         MESH_DEVICE_SHAPE="2x4" -> (2, 4)
-        Not set -> None (use single device)
+        Not set -> auto-detect from available hardware
     """
     mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
 
-    if not mesh_env:
+    if mesh_env:
+        # Parse "NxM" format
+        if "x" in mesh_env.lower():
+            try:
+                parts = mesh_env.lower().split("x")
+                rows, cols = int(parts[0]), int(parts[1])
+                return (rows, cols)
+            except (ValueError, IndexError):
+                print(f"⚠️ Invalid MESH_DEVICE_SHAPE format: {mesh_env}, expected NxM (e.g., 1x2)")
+                return None
         return None
 
-    # Parse "NxM" format
-    if "x" in mesh_env.lower():
-        try:
-            parts = mesh_env.lower().split("x")
-            rows, cols = int(parts[0]), int(parts[1])
-            return (rows, cols)
-        except (ValueError, IndexError):
-            print(f"⚠️ Invalid MESH_DEVICE_SHAPE format: {mesh_env}, expected NxM (e.g., 1x2)")
-            return None
+    # Auto-detect mesh shape from available hardware when env var not set.
+    # Model-traced sweeps need the correct mesh topology to reproduce the
+    # tensor placement metadata recorded during model tracing.
+    try:
+        num_devices = ttnn.get_num_devices()
+        if num_devices >= 32:
+            return (4, 8)  # Galaxy (32 Wormhole devices)
+        elif num_devices >= 8:
+            return (1, 8)  # T3000 (8 devices)
+        elif num_devices >= 2:
+            return (1, num_devices)
+    except Exception:
+        pass
 
     return None
 
@@ -329,10 +514,26 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     only reproduced when the sweep re-executes on a mesh device.
 
     Returns ``MESH_DEVICE_SHAPE`` from the environment when set, otherwise
-    falls back to ``(1, 1)`` so that the sweep device topology matches the
-    trace topology.
+    auto-detects from available hardware so that the sweep device topology
+    matches the trace topology.
     """
-    return get_mesh_shape() or (1, 1)
+    shape = get_mesh_shape()
+    if shape:
+        return shape
+    # Auto-detect mesh shape from available hardware when env var not set.
+    # This ensures model-traced sweeps on Galaxy (32 devices) create a [4, 8]
+    # mesh matching the topology used during model tracing.
+    try:
+        num_devices = ttnn.get_num_devices()
+        if num_devices >= 32:
+            return (4, 8)  # Galaxy (32 Wormhole devices)
+        elif num_devices >= 8:
+            return (1, 8)  # T3000 (8 devices)
+        elif num_devices >= 2:
+            return (1, num_devices)
+    except Exception:
+        pass
+    return (1, 1)
 
 
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:

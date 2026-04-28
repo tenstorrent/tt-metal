@@ -11,7 +11,9 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
+    create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 
@@ -31,10 +33,9 @@ TIMEOUT = 300
 # Until such a golden is implemented, we deliberately *do not* enable the
 # model_traced suite for this op to avoid claiming coverage we do not have.
 #
-# The sample suite below still exercises the operation shape/layout path; the
-# traced configurations will be wired in a follow-up once a proper golden exists.
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-_model_traced_params = None  # reserved for future enablement
+model_traced_params = loader.get_suite_parameters("ttnn.transformer.paged_scaled_dot_product_attention_decode")
 
 parameters = {
     "model_traced_sample": {
@@ -59,29 +60,18 @@ parameters = {
     },
 }
 
-# Intentionally do not attach a "model_traced" suite yet.
+# Only add model_traced suite if it has valid configurations
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
+    del device
 
 
 def run(
@@ -227,12 +217,19 @@ def run(
     # paged_scaled_dot_product_attention_decode signature:
     # (input_tensor_q, input_tensor_k, input_tensor_v, page_table_tensor, *, is_causal=True, attn_mask=None, cur_pos_tensor=None, ...)
     # So tensor_a=Q, tensor_b=K, tensor_c=V, tensor_d=page_table, tensor_e=cur_pos
+    #
+    # The master trace records page_table_tensor as a NAMED kwarg (the model
+    # called it by name), so the sweep must also pass it by name to produce a
+    # matching trace.  Only pass is_causal when the master config includes it
+    # (most traces omit it, relying on the default).
+    is_causal = op_kwargs.pop("is_causal", None)
+    if is_causal is not None:
+        op_kwargs["is_causal"] = is_causal
     output_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q
         tensor_b,  # K
         tensor_c,  # V
-        tensor_d,  # page_table (required positional)
-        is_causal=True,
+        page_table_tensor=tensor_d,
         cur_pos_tensor=tensor_e,
         **op_kwargs,
     )

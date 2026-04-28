@@ -29,7 +29,10 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-NUM_DEVICES = ttnn.get_num_devices()
+try:
+    NUM_DEVICES = ttnn.get_num_devices()
+except Exception:
+    NUM_DEVICES = 0  # Headless runner (vector generation only)
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
@@ -100,7 +103,7 @@ def _parse_shard_dims_from_placement(tensor_placement):
     if isinstance(placement, list):
         placement = " ".join(str(p) for p in placement)
     dims = []
-    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+    for m in re.finditer(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", placement):
         if m.group(1) is not None:
             dims.append(int(m.group(1)))
         else:
@@ -285,6 +288,10 @@ def run(
         if NUM_DEVICES < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
+
+        # The loader remaps dim -> arg2 via _NAMED_TO_POSITIONAL_REMAP
+        if dim is None:
+            dim = kwargs.get("arg2")
 
         input_shape = input_a_shape
         input_dtype = input_a_dtype
@@ -492,28 +499,19 @@ def run(
             worker_sub_device_id = ttnn.SubDeviceId(0)
             sub_device_stall_group = [worker_sub_device_id]
 
-            # Set sub-device stall group
             device.set_sub_device_stall_group(sub_device_stall_group)
 
-            # Create semaphores for CCL operations - one set per iteration
             ccl_semaphore_handles = [
                 [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
                 for _ in range(num_iters)
             ]
 
-            # Create barrier semaphore if needed
             barrier_semaphore_handles = []
             if barrier_semaphore is not None:
                 barrier_semaphore_handles = [
                     ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
                 ]
 
-            # Persistent output buffers are not created for model_traced configs.
-            # They are a performance optimization (for tracing) but not required
-            # for correctness.  Creating them here is problematic because the
-            # traced input memory_config (often sharded) may not fit the gathered
-            # output shape, and the C++ op requires the persistent buffer's memory
-            # layout to match the input's.
             persistent_output_buffers = []
 
             for i in range(num_iters):
@@ -521,41 +519,15 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # Build kwargs matching the reference test pattern
-                        # (test_minimal_all_gather_async.py::run_all_gather_impl).
-                        # subdevice_id is always passed; persistent_output_buffer
-                        # is created locally (not from traced JSON).
-                        # Use the persistent_buffer overload which accepts
-                        # cluster_axis as a keyword arg.  The mesh_device
-                        # overload requires positional args in a specific order
-                        # and is not needed here — the op infers the mesh from
-                        # the input tensor.
-                        op_kwargs = {
-                            "num_links": num_links,
-                            "topology": topology,
-                            "subdevice_id": worker_sub_device_id,
-                        }
-                        if cluster_axis is not None:
-                            op_kwargs["cluster_axis"] = cluster_axis
-                        if output_memory_config is not None:
-                            op_kwargs["memory_config"] = output_memory_config
-                        if barrier_semaphore_handles:
-                            op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
-                        if chunks_per_sync is not None:
-                            op_kwargs["chunks_per_sync"] = chunks_per_sync
-                        if num_workers_per_link is not None:
-                            op_kwargs["num_workers_per_link"] = num_workers_per_link
-                        if num_buffers_per_channel is not None:
-                            op_kwargs["num_buffers_per_channel"] = num_buffers_per_channel
-                        if use_broadcast is not None:
-                            op_kwargs["use_broadcast"] = use_broadcast
-                        persistent_buf = persistent_output_buffers[i] if persistent_output_buffers else None
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
-                            persistent_buf,
+                            None,  # persistent_output_buffer
                             dim,
-                            ccl_semaphore_handles[i],
-                            **op_kwargs,
+                            multi_device_global_semaphore=ccl_semaphore_handles[i],
+                            num_links=num_links,
+                            memory_config=output_memory_config,
+                            topology=topology,
+                            cluster_axis=cluster_axis,
                         )
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(

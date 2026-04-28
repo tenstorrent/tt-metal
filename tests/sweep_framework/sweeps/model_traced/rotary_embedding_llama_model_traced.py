@@ -64,7 +64,9 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    apply_tensor_placement_topology,
     create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
 )
 
@@ -351,6 +353,9 @@ def run(
 
     is_mesh_device = hasattr(device, "get_num_devices")
     input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -576,6 +581,18 @@ def run(
         )
         trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
 
+        # Restore 2D mesh topology on decode-path tensors so the tracer
+        # records the canonical distribution_shape matching the master.
+        if is_mesh_device:
+            _mesh_shape = get_model_traced_mesh_shape()
+            for _t, _tp in [
+                (input_tensor_a, input_a_tensor_placement),
+                (cos_cache_tt, input_b_tensor_placement or input_a_tensor_placement),
+                (sin_cache_tt, input_c_tensor_placement or input_a_tensor_placement),
+                (trans_mat_tt, input_d_tensor_placement or input_a_tensor_placement),
+            ]:
+                apply_tensor_placement_topology(_t, _tp, _mesh_shape)
+
     else:
         # --- Prefill Mode: Use interleaved memory ---
         if is_mesh_device and input_a_tensor_placement:
@@ -588,13 +605,28 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+                torch_cos_cache,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_b_tensor_placement or input_a_tensor_placement,
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+                torch_sin_cache,
+                device,
+                input_c_dtype,
+                input_c_layout,
+                input_c_memory_config,
+                input_c_tensor_placement or input_a_tensor_placement,
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+                torch_trans_mat,
+                device,
+                input_d_dtype,
+                input_d_layout,
+                input_d_memory_config,
+                input_d_tensor_placement or input_a_tensor_placement,
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -629,9 +661,11 @@ def run(
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()
 
+    # Do NOT inject memory_config — the master trace only has it when the model
+    # explicitly passed it.  Injecting from the vector's output_memory_config or
+    # memory_config metadata causes extra_key diffs in validation.
+
     rope_call_kwargs = {"is_decode_mode": is_decode_mode}
-    if output_memory_config is not None:
-        rope_call_kwargs["memory_config"] = output_memory_config
     rope_call_kwargs.update(op_kwargs)
     output_tensor = ttnn.experimental.rotary_embedding_llama(
         input_tensor_a,
@@ -643,6 +677,11 @@ def run(
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # In decode mode the input n_heads dim (e.g. 8) is tile-padded to 32 by
+    # TILE_LAYOUT.  Slice back to the logical shape before the PCC check.
+    if is_decode_mode and len(output_tensor.shape) == 4 and output_tensor.shape[2] != torch_output_tensor.shape[2]:
+        output_tensor = output_tensor[:, :, : torch_output_tensor.shape[2], :]
 
     # --- Check Results ---
     # Use high PCC threshold (0.9997) to match reference test expectations

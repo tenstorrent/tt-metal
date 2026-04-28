@@ -90,13 +90,8 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Pass output memory_config to ttnn.transpose — without it, transpose inherits
-    # the input's sharded memory_config which may become non-tile-aligned after
-    # transposing dimensions.
-    if output_memory_config is not None and "memory_config" not in op_kwargs:
-        parsed_mc = parse_dict_value("memory_config", output_memory_config)
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
+    # Do NOT inject memory_config from output_memory_config — the master trace only
+    # records it when the model explicitly passed it.  Injecting causes extra_key diffs.
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

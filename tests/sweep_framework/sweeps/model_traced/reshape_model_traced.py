@@ -175,8 +175,11 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    if tgt_numel != input_numel and arg2 is not None:
-        output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
+    if arg2 is not None:
+        try:
+            output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
+        except (TypeError, RuntimeError):
+            output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     else:
         output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
