@@ -144,3 +144,70 @@ entirely) would start to pay off in `all` as well.
   — `compute_math_utilization` accepts `ring_iter_mode` for FLOPs scaling.
 * `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py`
   — perf-table test passes `ring_iter_mode` from env to the util function.
+
+## DRAM-cost breakdown (perf-only experiments, not committed)
+
+Same `mla_100k`, `q=160`, `k=320`, `mode=all`, CCL on. Each variant either
+disables a DRAM read or rewires the V/K chain. CB tiles are stale when reads
+are skipped, so outputs are wrong — perf-only.
+
+| Variant | Duration (ms) | Math Util | Δ vs baseline |
+|---|---|---|---|
+| Baseline | 5.205 | 58.1 % | — |
+| V row-0 only DRAM, V chain disabled | 5.091 | 59.4 % | −0.114 |
+| V chain unicast on, V DRAM off | 5.086 | 59.5 % | −0.119 |
+| V chain disabled, V DRAM off | 5.053 | 59.9 % | −0.152 |
+| K mcast on, K DRAM off | 5.077 | 59.6 % | −0.128 |
+| K + V chains on, both DRAM off | 4.974 | 60.8 % | −0.231 |
+| Q DRAM off (K + V on) | 4.778 | 63.3 % | −0.427 |
+
+Reading:
+
+* **Q is the largest exposed DRAM cost (~427 µs)** — 87 cores read Q in
+  parallel each q_chunk start, with no chain to share. Q is `bfloat16`
+  (2× larger than `bfloat8_b` K/V tiles).
+* **K (~128 µs) and V (~119 µs) are comparable** despite K having a single
+  mcast injector and V having ~29 unicast injectors. K wins per-reader
+  because its chunk is 4.5× larger (`DHt=18` vs `vDHt=4`) *and* K is on
+  the critical path of every k_chunk iter (compute waits on K before V).
+* The K + V "cost" is roughly additive (231 µs ≈ 119 + 128 − 16) — the
+  two readers don't fight for the same NoC bottleneck.
+
+## Q DRAM mid-barrier (committed change)
+
+`fetch_block` / `read_block` in `kernels/dataflow/dataflow_common.hpp`
+take an optional `barrier_threshold` parameter (default `0` = old
+behavior, single trailing barrier). When non-zero, an intermediate
+`noc_async_read_barrier()` fires every `barrier_threshold` tile reads
+to throttle in-flight reads and avoid saturating the NoC outstanding-read
+budget.
+
+The ring joint reader passes
+`get_barrier_read_threshold<q_tile_bytes, num_readers>()` for Q reads —
+the same formula `((512 / num_readers) * (1024 + 128)) / tile_bytes`
+used by single-chip SDPA. `num_readers` is plumbed through as a new
+compile-time arg (`num_cores`) from the program factory.
+
+For `mla_100k` (`num_readers=110`, `q_tile_bytes=2048`) the formula
+yields **threshold = 2**. Empirical sweep (3 runs averaged):
+
+| Variant | Duration (ms) | Math Util |
+|---|---|---|
+| Baseline (no mid-barrier, mean of 3) | 5.209 | 58.1 % |
+| Threshold = 2, formula `(1024 + 128)` (mean of 3) | **5.174** | **58.5 %** |
+| Threshold = 4, formula `(2048 + 128)` (mean of 3) | 5.200 | 58.2 % |
+
+Net: **−35 µs / +0.4 pp** with the API formula. Tightening to threshold=4
+nearly disappears (within noise of baseline) — the budget formula's
+`1024` constant is the right tuning here. K and V readers are unchanged
+(still no mid-barrier) — only Q saw enough in-flight pressure to benefit.
+
+Files touched:
+
+* `kernels/dataflow/dataflow_common.hpp` — add `barrier_threshold = 0`
+  parameter to `fetch_block` and `read_block`.
+* `kernels/dataflow/ring_joint_reader.cpp` — read `num_readers`
+  compile-time arg, derive `q_barrier_threshold` from
+  `get_barrier_read_threshold`, pass into `read_block` for Q.
+* `ring_joint_sdpa_program_factory.cpp` — append `num_cores` to reader
+  compile-time args.
