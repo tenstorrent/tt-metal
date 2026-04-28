@@ -325,6 +325,12 @@ struct SfpuMin : BinaryOp<SfpuMin<In0, In1, Out>, In0, In1, Out> {
     ALWI void call(uint32_t a, uint32_t b, uint32_t c) const;
 };
 
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct SfpuEq : BinaryOp<SfpuEq<In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const;
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c) const;
+};
+
 }  // namespace compute_kernel_lib::eltwise
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary.inl"

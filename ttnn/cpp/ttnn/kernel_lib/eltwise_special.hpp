@@ -63,6 +63,36 @@ struct Lgamma : UnaryOp<Lgamma<Slot>, Slot> {
     ALWI void call(uint32_t d) const { lgamma_stirling_tile(d); }
 };
 
+/**
+ * LgammaAdjusted — 4-DEST ternary that finishes the lgamma reflection
+ * formula (lessons §9: 4-arg lgamma_adjusted_tile).
+ *
+ * In0: lgamma_stirling(x)         (modified in place if Out == In0)
+ * In1: log|sin(pi * frac(x))| with integer adjustments
+ * In2: original x
+ * Out: lgamma(x) for -inf < x < inf
+ */
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst In2 = Dst::D2, Dst Out = Dst::D0>
+struct LgammaAdjusted : TernaryOp<LgammaAdjusted<In0, In1, In2, Out>, In0, In1, In2, Out> {
+    ALWI void init() const { lgamma_adjusted_tile_init(); }
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const { lgamma_adjusted_tile(a, b, c, d); }
+};
+
+/**
+ * LgammaStirlingFloat — 3-DEST binary SFPU that computes
+ *   lgamma(x) for x >= 0.5 (and lgamma(1-x) for x < 0.5) using the Stirling
+ *   approximation, given log(z) where z = (x < 0.5) ? 1-x : x.
+ *
+ * In0: input x
+ * In1: log(z)
+ * Out: result
+ */
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct LgammaStirlingFloat : BinaryOp<LgammaStirlingFloat<In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const { lgamma_stirling_float_tile_init(); }
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c) const { lgamma_stirling_float_tile(a, b, c); }
+};
+
 template <Dst Slot = Dst::D0>
 struct Digamma : UnaryOp<Digamma<Slot>, Slot> {
     ALWI void init() const { digamma_tile_init(); }

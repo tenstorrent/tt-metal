@@ -3,136 +3,57 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/lgamma.h"
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/compute/eltwise_unary/rounding.h"
-#include "api/compute/eltwise_unary/trigonometry.h"
-#include "api/compute/eltwise_unary/where.h"
-#include "api/compute/eltwise_unary/comp.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
+    constexpr uint32_t cb_input = tt::CBIndex::c_0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_2;
 
     constexpr float M_PI = 3.14159265358979323846f;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
+    using namespace compute_kernel_lib::eltwise;
 
     init_sfpu(cb_input, cb_output);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
+    // FP32 lgamma — uses the lgamma_stirling_float_tile kernel which expects
+    // x and log(z = (x<0.5 ? 1-x : x)) and writes lgamma_stirling(x) into Out,
+    // followed by the same reflection-formula adjustment as lgamma_fast.
+    //
+    // DEST footprint is 4 slots (D0..D3) — exactly the FP32 + half-sync cap.
+    FillScalar<Dst::D2> fill_half{{}, /*value=*/0.5f};
+    FillScalar<Dst::D2> fill_one_d2{{}, /*value=*/1.0f};
+    FillScalar<Dst::D2> fill_pi_d2{{}, /*value=*/M_PI};
+    FillScalar<Dst::D3> fill_zero_d3{{}, /*value=*/0.0f};
 
-        // copy input to dst 0 and 1
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);  // x
-        copy_tile(cb_input, 0, 1);  // x
+    auto chain = eltwise_chain(
+        CopyTile<cb_input, Dst::D0, CopyTilePolicy::WaitNoPop>{},
+        CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitNoPop>{},
+        fill_half,
+        SfpuSub<Dst::D1, Dst::D2, Dst::D1>{},
+        Ltz<Dst::D1>{},
+        fill_one_d2,
+        SfpuSub<Dst::D2, Dst::D0, Dst::D2>{},
+        Where<DataFormat::Float32, Dst::D1, Dst::D2, Dst::D0, Dst::D1>{},
+        Log<Approx::Exact, Dst::D1>{},
+        LgammaStirlingFloat<Dst::D0, Dst::D1, Dst::D0>{},
+        fill_pi_d2,
+        CopyTile<cb_input, Dst::D1, CopyTilePolicy::NoWaitNoPop>{},
+        Frac<Dst::D1>{},
+        SfpuMul<Dst::D1, Dst::D2, Dst::D1>{},
+        Sin<Dst::D1>{},
+        CopyTile<cb_input, Dst::D2, CopyTilePolicy::NoWaitNoPop>{},
+        CopyTile<cb_input, Dst::D3, CopyTilePolicy::NoWaitNoPop>{},
+        Floor<Dst::D3>{},
+        SfpuEq<Dst::D2, Dst::D3, Dst::D2>{},
+        fill_zero_d3,
+        Where<DataFormat::Float32, Dst::D2, Dst::D3, Dst::D1, Dst::D1>{},
+        Abs<Dst::D1>{},
+        Log<Approx::Exact, Dst::D1>{},
+        CopyTile<cb_input, Dst::D2, CopyTilePolicy::NoWaitPop>{},
+        LgammaAdjusted<Dst::D0, Dst::D1, Dst::D2, Dst::D0>{});
 
-        fill_tile_init();
-        fill_tile(2, 0.5f);
-
-        // x - 0.5
-        sub_binary_tile_init();
-        sub_binary_tile(1, 2, 1);
-
-        // (x - 0.5) < 0
-        ltz_tile_init();
-        ltz_tile(1);
-
-        fill_tile_init();
-        fill_tile(2, 1.0f);
-
-        // 1 - x
-        sub_binary_tile_init();
-        sub_binary_tile(2, 0, 2);
-
-        // tile 1 = z = (x < 0.5) ? 1-x : x
-        where_tile_init();
-        where_tile<DataFormat::Float32>(1, 2, 0, 1);
-
-        // log z
-        log_tile_init<false>();
-        log_tile<false>(1);
-
-        // tile 0 = res_stirling
-        lgamma_stirling_float_tile_init();
-        lgamma_stirling_float_tile(0, 1, 0);  // x, log_z
-
-        // fill tile 2 with M_PI
-        fill_tile_init();
-        fill_tile(2, M_PI);
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 1);  // x
-
-        // tile 1 = frac (x)
-        rounding_op_tile_init();
-        frac_tile(1);
-
-        // tile 1 = frac (x) * M_PI
-        mul_binary_tile_init();
-        mul_binary_tile(1, 2, 1);
-
-        // tile 1 =  sin(frac (x) * M_PI)
-        sin_tile_init();
-        sin_tile(1);
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 2);  // x
-        copy_tile(cb_input, 0, 3);  // x
-
-        // tile 3 = floor(x)
-        rounding_op_tile_init();
-        floor_tile(3);
-
-        // tile 2 = ( x == floor(x)) condition
-        eq_binary_tile_init();
-        eq_binary_tile(2, 3, 2);
-
-        // fill tile 3 with 0.0f
-        fill_tile_init();
-        fill_tile(3, 0.0f);
-
-        // tile 1 = 0 if x == floor(x), otherwise sin(frac (x) * M_PI)
-        where_tile_init();
-        where_tile<DataFormat::Float32>(2, 3, 1, 1);
-
-        // abs(integer adjusted sin(frac (x) * M_PI))
-        abs_tile_init();
-        abs_tile(1);
-
-        // log|sin(pi*x)|. Zero sin(pi*x) at integers handled
-        log_tile_init();
-        log_tile(1);
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 2);  // x
-
-        lgamma_adjusted_tile_init();
-        lgamma_adjusted_tile(0, 1, 2, 0);
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-
-        tile_regs_release();
-    }
+    eltwise_pipeline<EltwiseOutputPolicy::PerTile, EltwiseDataFormatReconfig::NONE>(chain, cb_output, num_tiles);
 }
