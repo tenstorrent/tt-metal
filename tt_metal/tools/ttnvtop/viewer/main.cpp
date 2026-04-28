@@ -19,6 +19,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <deque>
 #include <cstdio>
 #include <cstring>
 #include <iomanip>
@@ -429,6 +430,15 @@ int main(int argc, char* argv[]) {
         });
     };
 
+    // Per-chip Gantt timeline: ring buffer of the last N frames' program sets.
+    // Each frame appends the set of distinct programs running anywhere on the
+    // chip (decoded raw runtime_id, ignoring kid==0). The TIMELINE pane below
+    // the live grid renders one row per program × N columns of presence
+    // markers so you can see when each program ran and for how many frames.
+    // 80 frames × 100 ms = 8 s of visible history.
+    constexpr size_t kTimelineWidth = 80;
+    std::vector<std::deque<std::set<uint32_t>>> chip_timeline;
+
     const auto render_period = std::chrono::milliseconds(1000 / kRenderHz);
     while (!g_stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(render_period);
@@ -516,6 +526,13 @@ int main(int argc, char* argv[]) {
         };
         std::unordered_map<uint32_t, KernelBucket> global_kernels;
 
+        // Resize the per-chip timeline ring buffer to match the current
+        // chip count. Adding/removing chips at runtime is rare but
+        // possible (workload close+reopen) and handled cleanly.
+        if (chip_timeline.size() != maps.size()) {
+            chip_timeline.resize(maps.size());
+        }
+
         // Layout: chip grids on the left, programs panel on the right. We
         // build them into separate buffers and zip them line-by-line at the
         // end so they sit side-by-side instead of stacked vertically.
@@ -562,6 +579,19 @@ int main(int argc, char* argv[]) {
                     b.sum_d_p1000 += v.dispatch_busy_p1000;
                     b.chip_bits |= (1u << c);
                 }
+            }
+
+            // Per-frame per-chip program set for the TIMELINE pane below.
+            std::set<uint32_t> frame_set;
+            for (uint32_t i = 0; i < n; ++i) {
+                const auto& v = cores[i];
+                if ((v.dispatch_busy_p1000 / 10u) > 0 && v.last_kernel_id != 0) {
+                    frame_set.insert((v.last_kernel_id >> 10) & 0x1FFFFFu);
+                }
+            }
+            chip_timeline[c].push_back(std::move(frame_set));
+            while (chip_timeline[c].size() > kTimelineWidth) {
+                chip_timeline[c].pop_front();
             }
             const uint32_t f_avg = n == 0 ? 0 : static_cast<uint32_t>(sum_f / (n * 10u));
             const uint32_t s_avg = n == 0 ? 0 : static_cast<uint32_t>(sum_s / (n * 10u));
@@ -948,6 +978,84 @@ int main(int argc, char* argv[]) {
                 }
                 merged << "\n";
             }
+
+            // ── TIMELINE pane: per-chip program Gantt over the last 8 s ──
+            // Each row = one program. Each column = one render frame
+            // (~100 ms). Cell is filled when the program was running on at
+            // least one core of this chip at that frame, blank otherwise.
+            // Rows sorted by total presence (most-active first), capped at
+            // 12 to keep the pane terminal-friendly.
+            for (size_t ci = 0; ci < chip_timeline.size(); ++ci) {
+                const auto& tl_frames = chip_timeline[ci];
+                if (tl_frames.empty()) {
+                    continue;
+                }
+                std::unordered_map<uint32_t, uint32_t> presence;
+                for (const auto& fset : tl_frames) {
+                    for (uint32_t p : fset) {
+                        ++presence[p];
+                    }
+                }
+                if (presence.empty()) {
+                    continue;
+                }
+                std::vector<std::pair<uint32_t, uint32_t>> tl_rows(presence.begin(), presence.end());
+                std::sort(
+                    tl_rows.begin(), tl_rows.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+                constexpr size_t kTLRowCap = 12;
+                if (tl_rows.size() > kTLRowCap) {
+                    tl_rows.resize(kTLRowCap);
+                }
+
+                merged << "\nTIMELINE chip " << ci << "  (last " << (tl_frames.size() * (1000 / kRenderHz)) / 1000
+                       << "s, " << (1000 / kRenderHz) << "ms cells, older ──> now)\n";
+                for (auto& [pid, count] : tl_rows) {
+                    const std::string* nm = nullptr;
+                    auto nit = name_cache.find(pid);
+                    if (nit != name_cache.end()) {
+                        nm = &nit->second;
+                    }
+                    if (!nm) {
+                        for (uint32_t dev = 0; dev < 8; ++dev) {
+                            auto it = name_cache.find((pid << 10) | dev);
+                            if (it != name_cache.end()) {
+                                nm = &it->second;
+                                break;
+                            }
+                        }
+                    }
+                    std::string name_disp = nm ? *nm : std::string("?");
+                    constexpr size_t kTLNameW = 36;
+                    if (name_disp.size() > kTLNameW) {
+                        name_disp.resize(kTLNameW);
+                    }
+                    if (name_disp.size() < kTLNameW) {
+                        name_disp.append(kTLNameW - name_disp.size(), ' ');
+                    }
+
+                    std::ostringstream id_cell;
+                    id_cell << "#" << pid;
+                    std::string idstr = id_cell.str();
+                    if (idstr.size() < 6) {
+                        idstr.append(6 - idstr.size(), ' ');
+                    }
+
+                    merged << "  " << prog_color(pid) << idstr << kAnsiReset << " " << name_disp << "  [";
+                    const size_t pad = kTimelineWidth > tl_frames.size() ? kTimelineWidth - tl_frames.size() : 0;
+                    for (size_t pi = 0; pi < pad; ++pi) {
+                        merged << ' ';
+                    }
+                    for (const auto& fset : tl_frames) {
+                        if (fset.count(pid)) {
+                            merged << prog_color(pid) << "#" << kAnsiReset;
+                        } else {
+                            merged << kAnsiDim << "." << kAnsiReset;
+                        }
+                    }
+                    merged << "]\n";
+                }
+            }
+
             // Stage 1 (history pane): every program seen since the viewer
             // started, sorted most-recent first. The live PROGRAMS table
             // above only reflects programs currently dispatched on cores —
