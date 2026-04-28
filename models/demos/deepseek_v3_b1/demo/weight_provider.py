@@ -21,7 +21,6 @@ from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssign
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
-    _COMBINED_ATTN_SRAM_CAP_BYTES,
     _MTP_LAYER_IDX,
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
