@@ -266,22 +266,18 @@ class CacheWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        use_bspm = self._bspm_dir is not None
-        weights = prepare_moe_layer_weights(
+        return prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
-            move_to_device=use_bspm,
+            move_to_device=True,
             cache_config=self._cache_config(device),
             bspm_dir=self._bspm_dir,
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
-            compressed_tp8=use_bspm,
+            compressed_tp8=True,
         )
-        if use_bspm:
-            return weights
-        return self._upload_prepared_weights(device, weights)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         host_weights = prepare_dense_layer_weights(
@@ -357,7 +353,6 @@ class SyntheticWeightProvider:
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
-        use_bspm = self._bspm_dir is not None
         return prepare_moe_layer_weights(
             device,
             sd,
@@ -367,7 +362,7 @@ class SyntheticWeightProvider:
             bspm_dir=self._bspm_dir,
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
-            compressed_tp8=use_bspm,
+            compressed_tp8=True,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -418,7 +413,7 @@ class StateDictWeightProvider:
             bspm_dir=self._bspm_dir,
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
-            compressed_tp8=self._bspm_dir is not None,
+            compressed_tp8=True,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
