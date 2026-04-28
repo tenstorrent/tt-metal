@@ -113,8 +113,17 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
              &worker_logical_row_to_virtual_row_[device_id]});
     }
 
+    // FIX NV (#42429): Capture MMIO device IDs before spawning async tasks.
+    // get_device_aiclk() on non-MMIO (remote) chips calls RemoteChip::get_clock() →
+    // WormholeTTDevice::get_clock() → WormholeArcMessenger::send_message() →
+    // wait_for_non_mmio_flush(). When the MMIO relay is dead (stale firmware from a
+    // prior session), this blocks for 5 seconds per chip, multiplying across all remote
+    // chips in the cluster. The aiclk value is debug-only ([[maybe_unused]]) — skip it
+    // for non-MMIO chips to avoid relay-dependent hangs during init.
+    const std::set<tt::ChipId> mmio_ids_set = cluster_.mmio_chip_ids();
+
     for (auto refs : table_refs) {
-        futures.emplace_back(detail::async([this, refs]() {
+        futures.emplace_back(detail::async([this, refs, mmio_ids_set]() {
             tt::ChipId device_id = refs.device_id;
             // Clear L1/DRAM if requested - skip for mock devices (no memory), but do for emulated (memory-backed)
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
@@ -125,8 +134,14 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                     clear_dram_state(device_id);
                 }
             }
-            [[maybe_unused]] int ai_clk = cluster_.get_device_aiclk(device_id);
-            log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
+            // FIX NV (#42429): Skip get_device_aiclk for non-MMIO (remote) chips.
+            // The ARC messenger path requires wait_for_non_mmio_flush() which hangs 5s
+            // per chip on a dead relay. The aiclk value is debug-only — not worth the
+            // risk of relay-timeout delays multiplying across all remote chips.
+            if (mmio_ids_set.count(device_id)) {
+                [[maybe_unused]] int ai_clk = cluster_.get_device_aiclk(device_id);
+                log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
+            }
             generate_device_bank_to_noc_tables(
                 device_id,
                 *refs.dram_bank_offset_map,
