@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<!--
+  SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+  SPDX-License-Identifier: Apache-2.0
+
+  ttnvtop replay viewer. Self-contained single-file HTML/JS app — no build,
+  no external dependencies. Open directly with file://, or serve a recording
+  directory with `python -m http.server`.
+
+  Inputs:
+    1. frames.jsonl  — per-frame per-core snapshots from record.py --frames
+    2. tt_program_registry.bin (v3) — program names + cycle totals
+       (optional; without it, programs show numeric ids)
+
+  Renders:
+    - timeline scrubber across the recorded duration
+    - per-chip core grid (heatmap colored by F%, cell label = prog id)
+    - active-now program list (frame-local)
+    - history program list (session-wide, sorted by recency)
+
+  Implementation: vanilla JS, no frameworks. Canvas for the grid,
+  native <input type=range> for the scrubber. Browser-side parsers for
+  both inputs.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ttnvtop replay</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --fg: #c9d1d9;
+    --fg-dim: #8b949e;
+    --accent: #58a6ff;
+    --idle: #21262d;
+    --warn: #d29922;
+    --hot: #f85149;
+    --ok: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 16px; }
+  .file-pickers { display: flex; gap: 12px; align-items: center; }
+  .file-pickers label {
+    cursor: pointer;
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 4px;
+    color: var(--fg-dim);
+  }
+  .file-pickers label:hover { border-color: var(--accent); color: var(--accent); }
+  .file-pickers input { display: none; }
+  .file-pickers .loaded { color: var(--ok); }
+  #controls { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 320px; }
+  #scrubber { flex: 1; }
+  #t-display { width: 90px; font-variant-numeric: tabular-nums; }
+  button {
+    background: var(--panel);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.playing { color: var(--ok); border-color: var(--ok); }
+  main {
+    padding: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 16px;
+    height: calc(100vh - 80px);
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    overflow: auto;
+  }
+  .panel h2 {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  #grids { grid-column: 1 / -1; min-height: 280px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .chip-grid { flex: 1; min-width: 280px; }
+  .chip-grid canvas { width: 100%; height: auto; image-rendering: pixelated; cursor: crosshair; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  th, td {
+    text-align: left;
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { color: var(--fg-dim); font-weight: normal; position: sticky; top: 0; background: var(--panel); }
+  tr:hover td { background: rgba(88, 166, 255, 0.08); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .highlight { color: var(--accent); }
+  .empty { color: var(--fg-dim); font-style: italic; padding: 20px; text-align: center; }
+  #legend {
+    padding: 8px 16px;
+    color: var(--fg-dim);
+    font-size: 11px;
+    border-top: 1px solid var(--border);
+    display: flex; gap: 16px; flex-wrap: wrap;
+  }
+  .swatch { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin-right: 4px; border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ttnvtop replay</h1>
+  <div class="file-pickers">
+    <label for="frames-file"><span id="frames-status">Load frames.jsonl…</span><input id="frames-file" type="file" accept=".jsonl,.txt"></label>
+    <label for="reg-file"><span id="reg-status">Load registry.bin (optional)…</span><input id="reg-file" type="file" accept=".bin"></label>
+  </div>
+  <div id="controls">
+    <button id="play-btn" disabled>▶</button>
+    <input id="scrubber" type="range" min="0" max="0" value="0" disabled>
+    <span id="t-display">--:--.---</span>
+  </div>
+</header>
+
+<main>
+  <section id="grids" class="panel">
+    <div class="empty">Load a frames.jsonl to begin.</div>
+  </section>
+  <section class="panel">
+    <h2>Active now (this frame)</h2>
+    <div id="active-list"><div class="empty">—</div></div>
+  </section>
+  <section class="panel">
+    <h2>Session history (every program seen)</h2>
+    <div id="history-list"><div class="empty">—</div></div>
+  </section>
+</main>
+
+<div id="legend">
+  <span><span class="swatch" style="background:var(--idle)"></span>idle</span>
+  <span><span class="swatch" style="background:var(--ok)"></span>F &lt; 33%</span>
+  <span><span class="swatch" style="background:var(--warn)"></span>F 33-66%</span>
+  <span><span class="swatch" style="background:var(--hot)"></span>F &gt; 66%</span>
+  <span>arrow keys = step ±1 frame · Space = play/pause · drag scrubber to scrub · click cell = select core</span>
+</div>
+
+<script>
+"use strict";
+
+// ─── State ─────────────────────────────────────────────────────────────────
+const state = {
+  frames: [],          // sorted by t_us; each: {t_us, chip, asic, aiclk_mhz, cores}
+  framesByTime: [],    // [{t_us, chips: {chip_idx: frame, ...}}, ...] grouped/merged
+  registry: new Map(), // runtime_id -> {name, cycles_total, dispatch_count, first_seen_us, last_seen_us}
+  history: new Map(),  // runtime_id (decoded) -> {name, dispatch_count, first_us, last_us, cores_set: Set}
+  curIdx: 0,
+  playing: false,
+  playTimer: null,
+  selectedCore: null,  // {chip, x, y} or null
+};
+
+const $ = (id) => document.getElementById(id);
+const playBtn = $("play-btn");
+const scrubber = $("scrubber");
+const tDisplay = $("t-display");
+
+// ─── File loading ──────────────────────────────────────────────────────────
+$("frames-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $("frames-status").textContent = `Loading ${file.name}…`;
+  const text = await file.text();
+  parseFrames(text);
+  $("frames-status").textContent = `${file.name} (${state.framesByTime.length} frames)`;
+  $("frames-status").classList.add("loaded");
+  initScrubber();
+  render();
+});
+
+$("reg-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $("reg-status").textContent = `Loading ${file.name}…`;
+  const buf = await file.arrayBuffer();
+  parseRegistry(buf);
+  $("reg-status").textContent = `${file.name} (${state.registry.size} programs)`;
+  $("reg-status").classList.add("loaded");
+  render();
+});
+
+function parseFrames(text) {
+  state.frames = [];
+  state.history.clear();
+  const lines = text.split("\n");
+  for (const ln of lines) {
+    if (!ln.trim()) continue;
+    try {
+      const f = JSON.parse(ln);
+      state.frames.push(f);
+    } catch (err) { /* skip malformed */ }
+  }
+  state.frames.sort((a, b) => a.t_us - b.t_us || a.chip - b.chip);
+  // Group by t_us (the recorder emits one line per chip per poll, all sharing the same t_us).
+  const byTime = new Map();
+  for (const f of state.frames) {
+    if (!byTime.has(f.t_us)) byTime.set(f.t_us, { t_us: f.t_us, chips: {} });
+    byTime.get(f.t_us).chips[f.chip] = f;
+  }
+  state.framesByTime = [...byTime.values()].sort((a, b) => a.t_us - b.t_us);
+  // Build session-wide history: every (chip, prog) pair seen and when.
+  for (const ft of state.framesByTime) {
+    for (const chipIdx of Object.keys(ft.chips)) {
+      const chip = ft.chips[chipIdx];
+      for (const c of chip.cores) {
+        if (!c.prog) continue;
+        const key = c.prog;
+        let h = state.history.get(key);
+        if (!h) {
+          h = { name: c.name || "", dispatch_count: 0, first_us: ft.t_us, last_us: ft.t_us, cores_set: new Set() };
+          state.history.set(key, h);
+        }
+        if (c.name && !h.name) h.name = c.name;
+        h.last_us = ft.t_us;
+        h.cores_set.add(`${chipIdx}/${c.x},${c.y}`);
+      }
+    }
+  }
+  // dispatch_count is approximated by counting frames each program appears in
+  // (since we sample at hz, this ≈ presence-frame-count, not true dispatch count).
+  for (const ft of state.framesByTime) {
+    const seen = new Set();
+    for (const chipIdx of Object.keys(ft.chips)) {
+      const chip = ft.chips[chipIdx];
+      for (const c of chip.cores) if (c.prog) seen.add(c.prog);
+    }
+    for (const prog of seen) {
+      const h = state.history.get(prog);
+      if (h) h.dispatch_count++;
+    }
+  }
+}
+
+function parseRegistry(buf) {
+  state.registry.clear();
+  const dv = new DataView(buf);
+  if (buf.byteLength < 48) return;
+  const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+  if (magic !== "TPRG") { console.warn("registry magic mismatch"); return; }
+  const version = dv.getUint16(4, true);
+  if (version !== 3) { console.warn(`registry version ${version} != 3, skipping`); return; }
+  const entrySize = dv.getUint16(6, true);
+  if (entrySize !== 128) { console.warn(`registry entry_size ${entrySize} != 128, skipping`); return; }
+  const capacity = dv.getUint32(8, true);
+  const cursor = dv.getUint32(24, true);
+  const n = Math.min(cursor, capacity);
+  const HDR = 48;
+  const dec = new TextDecoder();
+  for (let i = 0; i < n; i++) {
+    const off = HDR + i * 128;
+    const rid = dv.getUint32(off, true);
+    const epUs = Number(dv.getBigUint64(off + 8, true));
+    const nameBytes = new Uint8Array(buf, off + 16, 96);
+    let nlen = 0; while (nlen < 96 && nameBytes[nlen] !== 0) nlen++;
+    const name = dec.decode(nameBytes.subarray(0, nlen));
+    const cyclesWindow = Number(dv.getBigUint64(off + 112, true));
+    const cyclesTotal = Number(dv.getBigUint64(off + 120, true));
+    const prev = state.registry.get(rid);
+    if (!prev) {
+      state.registry.set(rid, { name, cycles_total: cyclesTotal, dispatch_count: 1, first_seen_us: epUs });
+    } else {
+      prev.dispatch_count++;
+      if (cyclesTotal > prev.cycles_total) prev.cycles_total = cyclesTotal;
+    }
+  }
+}
+
+// ─── Scrubber + playback ───────────────────────────────────────────────────
+function initScrubber() {
+  scrubber.min = 0;
+  scrubber.max = state.framesByTime.length - 1;
+  scrubber.value = 0;
+  scrubber.disabled = false;
+  playBtn.disabled = false;
+  state.curIdx = 0;
+  updateTimeDisplay();
+}
+
+scrubber.addEventListener("input", () => {
+  state.curIdx = parseInt(scrubber.value, 10);
+  updateTimeDisplay();
+  render();
+});
+
+playBtn.addEventListener("click", togglePlay);
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  else if (e.key === "ArrowRight") { stepFrame(1); e.preventDefault(); }
+  else if (e.key === "ArrowLeft") { stepFrame(-1); e.preventDefault(); }
+});
+
+function togglePlay() {
+  if (state.framesByTime.length === 0) return;
+  state.playing = !state.playing;
+  playBtn.textContent = state.playing ? "❚❚" : "▶";
+  playBtn.classList.toggle("playing", state.playing);
+  if (state.playing) {
+    state.playTimer = setInterval(() => {
+      if (state.curIdx >= state.framesByTime.length - 1) {
+        togglePlay(); return;
+      }
+      stepFrame(1);
+    }, 100); // 10 Hz playback (matches recorder default)
+  } else {
+    clearInterval(state.playTimer);
+    state.playTimer = null;
+  }
+}
+
+function stepFrame(d) {
+  state.curIdx = Math.max(0, Math.min(state.framesByTime.length - 1, state.curIdx + d));
+  scrubber.value = state.curIdx;
+  updateTimeDisplay();
+  render();
+}
+
+function fmtTimeUs(us) {
+  const ms = us / 1000;
+  const s = Math.floor(ms / 1000);
+  const fr = Math.floor(ms % 1000);
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}.${String(fr).padStart(3, "0")}`;
+}
+
+function updateTimeDisplay() {
+  const f = state.framesByTime[state.curIdx];
+  tDisplay.textContent = f ? fmtTimeUs(f.t_us) : "--:--.---";
+}
+
+// ─── Color helpers ─────────────────────────────────────────────────────────
+function fColor(pct) {
+  if (pct === 0) return "#21262d";
+  if (pct < 33) return "#3fb950";
+  if (pct < 66) return "#d29922";
+  return "#f85149";
+}
+// Stable per-program color (derived from prog id).
+function progColor(p) {
+  if (!p) return "#666";
+  // simple hash to HSL — bright pastel range
+  const h = ((p * 2654435761) >>> 0) % 360;
+  return `hsl(${h}, 70%, 60%)`;
+}
+
+// ─── Rendering ─────────────────────────────────────────────────────────────
+const grids = $("grids");
+const activeList = $("active-list");
+const historyList = $("history-list");
+
+function render() {
+  if (state.framesByTime.length === 0) return;
+  const ft = state.framesByTime[state.curIdx];
+  renderGrids(ft);
+  renderActive(ft);
+  renderHistory();
+}
+
+function renderGrids(ft) {
+  grids.innerHTML = "";
+  const chipIdxs = Object.keys(ft.chips).map(Number).sort((a, b) => a - b);
+  for (const chipIdx of chipIdxs) {
+    const chip = ft.chips[chipIdx];
+    const div = document.createElement("div");
+    div.className = "chip-grid";
+    div.innerHTML = `<h2>Chip ${chipIdx} · asic 0x${chip.asic.toString(16)} · ${chip.aiclk_mhz} MHz · ${chip.cores.length} cores</h2>`;
+    const canvas = document.createElement("canvas");
+    // Find grid extent.
+    let maxX = 0, maxY = 0;
+    for (const c of chip.cores) { if (c.x > maxX) maxX = c.x; if (c.y > maxY) maxY = c.y; }
+    const W = maxX + 1, H = maxY + 1;
+    const CELL = 32;
+    canvas.width = W * CELL;
+    canvas.height = H * CELL;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0d1117";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Build core grid lookup.
+    const grid = {};
+    for (const c of chip.cores) grid[`${c.x},${c.y}`] = c;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const c = grid[`${x},${y}`];
+      const px = x * CELL, py = y * CELL;
+      if (!c) {
+        ctx.fillStyle = "#0d1117";
+        ctx.fillRect(px, py, CELL, CELL);
+        continue;
+      }
+      // Heat by F%
+      ctx.fillStyle = fColor(c.f);
+      ctx.fillRect(px, py, CELL - 1, CELL - 1);
+      // Program-id stripe at top
+      if (c.prog) {
+        ctx.fillStyle = progColor(c.prog);
+        ctx.fillRect(px, py, CELL - 1, 4);
+      }
+      // Selection highlight
+      if (state.selectedCore && state.selectedCore.chip === chipIdx
+          && state.selectedCore.x === x && state.selectedCore.y === y) {
+        ctx.strokeStyle = "#58a6ff";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(px + 1, py + 1, CELL - 3, CELL - 3);
+      }
+      // Tiny prog label
+      if (c.prog && CELL >= 28) {
+        ctx.fillStyle = "#0d1117";
+        ctx.font = "9px monospace";
+        ctx.textBaseline = "top";
+        ctx.fillText(`#${c.prog}`, px + 2, py + 6);
+      }
+    }
+    canvas.addEventListener("click", (e) => {
+      const r = canvas.getBoundingClientRect();
+      const sx = canvas.width / r.width;
+      const sy = canvas.height / r.height;
+      const cx = Math.floor((e.clientX - r.left) * sx / CELL);
+      const cy = Math.floor((e.clientY - r.top) * sy / CELL);
+      state.selectedCore = { chip: chipIdx, x: cx, y: cy };
+      render();
+    });
+    div.appendChild(canvas);
+    grids.appendChild(div);
+  }
+  // Optional: details for the selected core
+  if (state.selectedCore) {
+    const sc = state.selectedCore;
+    const chip = ft.chips[sc.chip];
+    const c = chip ? chip.cores.find(c => c.x === sc.x && c.y === sc.y) : null;
+    const det = document.createElement("div");
+    det.style.flexBasis = "100%";
+    det.style.padding = "8px";
+    det.style.color = "var(--fg-dim)";
+    det.style.fontSize = "12px";
+    if (c) {
+      det.innerHTML = `<b style="color:var(--accent)">core(${sc.x},${sc.y}) on chip ${sc.chip}</b>
+        · prog #${c.prog || "—"} ${c.name ? `· <span class="highlight">${escapeHtml(c.name)}</span>` : ""}
+        · F=${c.f.toFixed(1)}% S=${c.s.toFixed(1)}% D=${c.d.toFixed(1)}%`;
+    } else {
+      det.textContent = `core(${sc.x},${sc.y}) on chip ${sc.chip}: not present in this frame`;
+    }
+    grids.appendChild(det);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
+}
+
+function renderActive(ft) {
+  // Aggregate by prog across all chips at this frame.
+  const buckets = new Map();
+  for (const chipIdx of Object.keys(ft.chips)) {
+    for (const c of ft.chips[chipIdx].cores) {
+      if (!c.prog) continue;
+      let b = buckets.get(c.prog);
+      if (!b) {
+        b = { prog: c.prog, name: c.name || "", cores: 0, sumF: 0, sumS: 0, sumD: 0, chips: new Set() };
+        buckets.set(c.prog, b);
+      }
+      b.cores++;
+      b.sumF += c.f; b.sumS += c.s; b.sumD += c.d;
+      b.chips.add(chipIdx);
+      if (c.name && !b.name) b.name = c.name;
+    }
+  }
+  const rows = [...buckets.values()].sort((a, b) => b.cores - a.cores);
+  if (rows.length === 0) {
+    activeList.innerHTML = `<div class="empty">no programs running at t=${fmtTimeUs(ft.t_us)}</div>`;
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th>id</th><th>name</th><th class="num">chips</th><th class="num">cores</th>
+    <th class="num">F%</th><th class="num">S%</th><th class="num">D%</th>
+  </tr></thead><tbody>`;
+  for (const r of rows.slice(0, 50)) {
+    html += `<tr>
+      <td><span style="color:${progColor(r.prog)}">#${r.prog}</span></td>
+      <td>${escapeHtml(r.name) || "<span class=empty>—</span>"}</td>
+      <td class="num">${[...r.chips].sort().join(",")}</td>
+      <td class="num">${r.cores}</td>
+      <td class="num">${(r.sumF / r.cores).toFixed(1)}</td>
+      <td class="num">${(r.sumS / r.cores).toFixed(1)}</td>
+      <td class="num">${(r.sumD / r.cores).toFixed(1)}</td>
+    </tr>`;
+  }
+  if (rows.length > 50) html += `<tr><td colspan="7" class="empty">(${rows.length - 50} more)</td></tr>`;
+  html += `</tbody></table>`;
+  activeList.innerHTML = html;
+}
+
+function renderHistory() {
+  const rows = [...state.history.entries()].map(([prog, h]) => ({ prog, ...h }))
+    .sort((a, b) => b.last_us - a.last_us);
+  if (rows.length === 0) {
+    historyList.innerHTML = `<div class="empty">no programs seen yet</div>`;
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th>id</th><th>name</th><th class="num">first</th><th class="num">last</th>
+    <th class="num">frames</th><th class="num">cores seen</th>
+  </tr></thead><tbody>`;
+  for (const r of rows.slice(0, 200)) {
+    html += `<tr>
+      <td><span style="color:${progColor(r.prog)}">#${r.prog}</span></td>
+      <td>${escapeHtml(r.name) || "<span class=empty>—</span>"}</td>
+      <td class="num">${fmtTimeUs(r.first_us)}</td>
+      <td class="num">${fmtTimeUs(r.last_us)}</td>
+      <td class="num">${r.dispatch_count}</td>
+      <td class="num">${r.cores_set.size}</td>
+    </tr>`;
+  }
+  if (rows.length > 200) html += `<tr><td colspan="6" class="empty">(${rows.length - 200} more)</td></tr>`;
+  html += `</tbody></table>`;
+  historyList.innerHTML = html;
+}
+</script>
+</body>
+</html>
