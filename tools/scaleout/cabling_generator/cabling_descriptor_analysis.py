@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
 """
 Script to identify and report on clusters in a cabling_descriptor.textproto file.
 A cluster is defined here as a group of nodes that are connected through one or more connections.

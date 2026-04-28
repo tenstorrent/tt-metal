@@ -127,16 +127,26 @@ def count_nodes(deployment_path):
 def validate_cluster_node_types(cabling_path, deployment_path):
     """
     Validate that:
-    1. All hosts within each cluster have the same node_type (deployment descriptor)
+    1. Cabling and deployment descriptors have exactly the same set of hosts
     2. Each host's node_descriptor (cabling) matches its node_type (deployment)
-    Uses cabling_descriptor_analysis.py to identify clusters.
+    3. All hosts within each cluster have the same node_type (deployment descriptor)
+
+    Uses cabling_descriptor_analysis.py to identify clusters via connectivity analysis.
+
+    Exits with non-zero status if:
+    - Analysis script is missing
+    - Analysis script fails to run
+    - Hosts exist in one descriptor but not the other
+    - Host types mismatch between descriptors
+    - Cluster has mixed node types
     """
     script_dir = Path(__file__).resolve().parent
     analysis_script = script_dir / "cabling_descriptor_analysis.py"
 
     if not analysis_script.exists():
-        print(f"Warning: Cluster analysis script not found at {analysis_script}, skipping validation", file=sys.stderr)
-        return
+        print(f"Error: Cluster analysis script not found at {analysis_script}", file=sys.stderr)
+        print("This script is required for validation. Cannot proceed.", file=sys.stderr)
+        sys.exit(1)
 
     # Run cluster analysis to get cluster information
     try:
@@ -145,11 +155,17 @@ def validate_cluster_node_types(cabling_path, deployment_path):
         )
         cluster_data = json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
-        print(f"Warning: Failed to run cluster analysis: {e}", file=sys.stderr)
-        return
+        print(f"Error: Failed to run cluster analysis script", file=sys.stderr)
+        print(f"Command failed with exit code {e.returncode}", file=sys.stderr)
+        if e.stderr:
+            print(f"stderr: {e.stderr}", file=sys.stderr)
+        if e.stdout:
+            print(f"stdout: {e.stdout}", file=sys.stderr)
+        sys.exit(1)
     except json.JSONDecodeError as e:
-        print(f"Warning: Failed to parse cluster analysis JSON: {e}", file=sys.stderr)
-        return
+        print(f"Error: Failed to parse cluster analysis JSON output: {e}", file=sys.stderr)
+        print(f"Output was: {result.stdout[:500]}", file=sys.stderr)
+        sys.exit(1)
 
     # Parse deployment descriptor to build hostname -> node_type mapping
     hostname_to_node_type = {}
@@ -191,20 +207,44 @@ def validate_cluster_node_types(cabling_path, deployment_path):
 
     # Check 1: Cabling descriptor matches deployment descriptor for each host
     print("  Checking cabling descriptor vs deployment descriptor...")
-    cabling_deployment_mismatches = []
-    for hostname, node_descriptor in hostname_to_node_descriptor.items():
-        if hostname in hostname_to_node_type:
-            node_type = hostname_to_node_type[hostname]
-            if node_descriptor != node_type:
-                cabling_deployment_mismatches.append(
-                    f"    {hostname}: cabling has '{node_descriptor}' but deployment has '{node_type}'"
-                )
+    cabling_deployment_errors = []
 
-    if cabling_deployment_mismatches:
-        errors.append("\n  Cabling/Deployment mismatch errors:")
-        errors.extend(cabling_deployment_mismatches)
+    # Check: Hosts in cabling but missing from deployment
+    cabling_only_hosts = set(hostname_to_node_descriptor.keys()) - set(hostname_to_node_type.keys())
+    if cabling_only_hosts:
+        cabling_deployment_errors.append(f"\n    Hosts in cabling descriptor but missing from deployment descriptor:")
+        for hostname in sorted(cabling_only_hosts):
+            cabling_deployment_errors.append(
+                f"      {hostname} (node_descriptor: '{hostname_to_node_descriptor[hostname]}')"
+            )
+
+    # Check: Hosts in deployment but missing from cabling
+    deployment_only_hosts = set(hostname_to_node_type.keys()) - set(hostname_to_node_descriptor.keys())
+    if deployment_only_hosts:
+        cabling_deployment_errors.append(f"\n    Hosts in deployment descriptor but missing from cabling descriptor:")
+        for hostname in sorted(deployment_only_hosts):
+            cabling_deployment_errors.append(f"      {hostname} (node_type: '{hostname_to_node_type[hostname]}')")
+
+    # Check: Hosts in both descriptors but with mismatched types
+    type_mismatches = []
+    common_hosts = set(hostname_to_node_descriptor.keys()) & set(hostname_to_node_type.keys())
+    for hostname in sorted(common_hosts):
+        node_descriptor = hostname_to_node_descriptor[hostname]
+        node_type = hostname_to_node_type[hostname]
+        if node_descriptor != node_type:
+            type_mismatches.append(
+                f"      {hostname}: cabling has '{node_descriptor}' but deployment has '{node_type}'"
+            )
+
+    if type_mismatches:
+        cabling_deployment_errors.append(f"\n    Node type mismatches between cabling and deployment:")
+        cabling_deployment_errors.extend(type_mismatches)
+
+    if cabling_deployment_errors:
+        errors.append("\n  Cabling/Deployment consistency errors:")
+        errors.extend(cabling_deployment_errors)
     else:
-        print("    All hosts match between cabling and deployment ✓")
+        print(f"    All {len(common_hosts)} hosts match between cabling and deployment ✓")
 
     # Check 2: All hosts within each cluster have the same node type
     print(f"  Checking consistency across {cluster_data['total_clusters']} clusters...")

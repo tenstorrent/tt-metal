@@ -301,8 +301,9 @@ bool try_merge_torus_compatible_template(
 
     merge_inter_board_connections(this_node_desc_name_to_node[*compatible_desc_name], missing_template);
 
-    // Add the missing template as an alias
+    // Add the missing template as an alias (copy compatible template but preserve alias name)
     this_node_desc_name_to_node[missing_node_desc_name] = this_node_desc_name_to_node[*compatible_desc_name];
+    this_node_desc_name_to_node[missing_node_desc_name].node_descriptor_name = missing_node_desc_name;
 
     return true;
 }
@@ -403,6 +404,7 @@ Node build_node(
     if (it != node_templates.end()) {
         Node node = it->second;  // Copy template
         node.host_id = host_id;
+        node.node_descriptor_name = node_descriptor_name;  // Preserve original descriptor name
         return node;
     }
 
@@ -560,7 +562,7 @@ HostId resolve_path_from_proto(
 std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor* deployment_descriptor,
+    [[maybe_unused]] const tt::scaleout_tools::deployment::proto::DeploymentDescriptor* deployment_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
