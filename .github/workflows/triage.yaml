@@ -59,7 +59,7 @@ jobs:
       ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
           path: docker-job

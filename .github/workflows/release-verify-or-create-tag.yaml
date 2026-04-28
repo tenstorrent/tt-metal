@@ -40,7 +40,7 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true

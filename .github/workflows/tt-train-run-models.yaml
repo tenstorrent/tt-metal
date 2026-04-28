@@ -79,7 +79,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive

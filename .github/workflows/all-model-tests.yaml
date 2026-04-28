@@ -108,7 +108,7 @@ jobs:
       has-any-tests: ${{ steps.check.outputs.has-any-tests }}
     steps:
       - name: Checkout test definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           sparse-checkout: tests/pipeline_reorg
           sparse-checkout-cone-mode: true
