@@ -81,12 +81,7 @@ class MoeSem:
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
-    # MatmulExpertCompressedDRAM pipeline sems (Phase 1B — cores_per_bank=1 makes these
-    # degenerate self-signals; values still need to be valid semaphore IDs).
-    GATE_PROJ_PIPELINE = 19
-    UP_PROJ_PIPELINE = 20
-    DOWN_PROJ_PIPELINE = 21
-    NUM_SEMAPHORES = 22
+    NUM_SEMAPHORES = 19
 
 
 @dataclass
