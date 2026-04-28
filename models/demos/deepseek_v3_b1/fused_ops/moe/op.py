@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import ttnn
-import ttnn.core
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
     build_cb_reconfig_tensor,
