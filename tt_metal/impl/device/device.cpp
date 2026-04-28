@@ -3037,6 +3037,33 @@ void Device::wait_for_fabric_workers_ready() {
                     master_chan,
                     sync_buf[0]);
             }
+
+            // FIX AM (#42429): STARTED early-exit shortcut.
+            //
+            // When FIX AL fires (master chan stuck at STARTED after kStartedTimeoutMs — out-of-mesh
+            // peer not responding), the READY_FOR_TRAFFIC write above was skipped (guard condition
+            // false: sync_buf[0]==STARTED, not LOCAL_HANDSHAKE_COMPLETE or READY_FOR_TRAFFIC).
+            //
+            // Consequently, ALL subordinate ERISCs are stuck at REMOTE_HANDSHAKE_COMPLETE waiting
+            // for master to call notify_subordinate_routers() — which requires master to first
+            // complete the ETH handshake (impossible for an out-of-mesh channel).  Running Phase 5b
+            // in this state only burns 2001ms per device confirming what we already know.  FIX AK
+            // (in phase5b_erisc_health_check) would then fire anyway and set the same flag.
+            //
+            // Skip Phase 5b immediately: set fabric_channels_not_ready_for_traffic_=true and return.
+            // This saves ~2s per device (e.g., 4 devices × 2001ms ≈ 8s quiesce overhead eliminated).
+            if (sync_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STARTED)) {
+                fabric_channels_not_ready_for_traffic_ = true;
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5: master chan {} still at STARTED "
+                    "after early-exit — subordinate channels cannot advance past REMOTE_HANDSHAKE_COMPLETE "
+                    "without master completing ETH handshake. Setting "
+                    "fabric_channels_not_ready_for_traffic_=true and skipping Phase 5b. (FIX AM: #42429)",
+                    this->id(),
+                    master_chan);
+                return;
+            }
         } else {
             log_warning(
                 tt::LogMetal,
