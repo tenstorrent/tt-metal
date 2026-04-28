@@ -109,20 +109,32 @@ class TestFactory:
 
 
 def parametrize_mesh_with_fabric():
-    """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
-    # Always use 4x8 base mesh like original working tests
+    """Universal mesh parametrization with automatic fabric setup.
+
+    Single-device runs (e.g. 1x1 Blackhole) disable fabric since there is no
+    inter-chip topology to ring around — mirrors the tt_transformers
+    conftest.py pattern where is_single_device sets fabric_config=None.
+    """
     num_devices = ttnn.get_num_devices()
-    if num_devices == 8:
+    if num_devices == 1:
+        mesh_params = [pytest.param((1, 1))]
+        fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 100000000}, id="no_fabric")]
+    elif num_devices == 8:
         mesh_params = [pytest.param((1, 8))]
+        fabric_params = [
+            pytest.param(
+                {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
+            ),
+        ]
     elif num_devices == 32:
         mesh_params = [pytest.param((4, 8))]
+        fabric_params = [
+            pytest.param(
+                {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
+            ),
+        ]
     else:
         raise ValueError(f"Invalid number of devices: {num_devices}")
-    fabric_params = [
-        pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
-        ),
-    ]
 
     # Return a single decorator that combines both parametrizations
     def decorator(func):

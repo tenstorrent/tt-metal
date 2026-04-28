@@ -27,7 +27,6 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
@@ -177,14 +176,15 @@ def prepare_gpt_oss_generator_args(
 @pytest.mark.parametrize(
     "mesh_shape",
     [
+        # Single Blackhole card (P100/P150) - no fabric, no CCL
+        (1, 1),
         # LoudBox (1×8) - Single device, low latency
         (1, 8),
         # Galaxy (4×8) - Multi-device mesh, higher throughput
         (4, 8),
     ],
-    ids=["mesh_1x8", "mesh_4x8"],
+    ids=["mesh_1x1", "mesh_1x8", "mesh_4x8"],
 )
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [
