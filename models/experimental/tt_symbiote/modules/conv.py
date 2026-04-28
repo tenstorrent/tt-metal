@@ -325,7 +325,7 @@ def _conv1d_to_height1_conv2d(conv1d: nn.Conv1d) -> nn.Conv2d:
 class TTNNConv1d(TTNNModule):
     """1D convolution via TTNN ``conv2d`` with height 1 (activations ``[B, C, T]`` → NHWC ``[B, 1, T, C]``).
 
-    Pairs with :class:`TTNNQwen3OmniMoeCausalConvNet` in ``activation`` for HF ``Qwen3OmniMoeCausalConvNet``.
+    Pairs with :class:`TTNNQwen3OmniMoeCausalConvNet` in ``qwen_omni_activation`` for HF ``Qwen3OmniMoeCausalConvNet``.
     """
 
     def __init__(self):
@@ -357,7 +357,7 @@ class TTNNConv1d(TTNNModule):
         """``input_tensor``: ``ttnn.Tensor`` or ``torch.Tensor`` ``[B, C, T]``. Returns ``[B, C_out, T_out]``.
 
         TTNN children of TTNN parents use ``_bypass_tensor_wrapping`` (see ``device_management``), so
-        :class:`TTNNQwen3OmniMoeCausalConvNet` passes host torch after ``F.pad``; convert here.
+        :class:`TTNNQwen3OmniMoeCausalConvNet` (``qwen_omni_activation``) passes host torch after ``F.pad``; convert here.
         """
         if isinstance(input_tensor, TorchTTNNTensor):
             input_tensor = input_tensor.ttnn_tensor if input_tensor.ttnn_tensor is not None else input_tensor.elem
