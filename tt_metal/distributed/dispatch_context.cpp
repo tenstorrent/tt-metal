@@ -148,8 +148,8 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
     // init_command_queue_host call can safely replace sysmem_manager_ without dangling references
     for (const auto& device : device_manager->get_all_active_devices_impl()) {
-        device->command_queues_.clear();
         device->command_queue_programs_.clear();
+        device->command_queues_.clear();
     }
 
     fast_dispatch_enabled_ = false;
