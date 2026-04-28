@@ -819,10 +819,17 @@ void bind_binary_composite_with_rtol_atol(
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16
+               * - BFLOAT16, INT32
                  - TILE, ROW_MAJOR
 
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            When one or both input tensors are INT32, each INT32 input is individually promoted
+            to FLOAT32 for the comparison, and the NaN sentinel replacement is skipped for that
+            input (integer dtypes have no NaN representation).
+
+            Note: INT32 values with magnitude greater than 2^24 (16,777,216) may lose precision
+            during the internal FLOAT32 promotion.
         )doc",
 
         std::string(Name),

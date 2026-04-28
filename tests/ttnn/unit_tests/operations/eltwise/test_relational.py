@@ -280,6 +280,38 @@ def test_isclose(device, h, w, atol, rtol):
 
 
 @pytest.mark.parametrize(
+    "rtol, atol",
+    [
+        (1e-05, 1e-08),
+        (0.01, 5),
+        (0.05, 10),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+    ],
+)
+def test_isclose_int32(device, input_shapes, rtol, atol):
+    torch.manual_seed(0)
+
+    x_torch = torch.randint(-2_000_000, 2_000_000, input_shapes, dtype=torch.int32)
+    delta = torch.randint(-15, 15, input_shapes, dtype=torch.int32)
+    y_torch = x_torch + delta
+
+    z_torch = torch.isclose(x_torch.float(), y_torch.float(), rtol=rtol, atol=atol)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(x_tt, y_tt, rtol=rtol, atol=atol)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out.bool())
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),

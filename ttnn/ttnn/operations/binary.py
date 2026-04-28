@@ -311,6 +311,10 @@ ttnn.attach_golden_function(ttnn.nextafter, golden_function=_golden_function_nex
 def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, atol=1e-08, equal_nan=False, **kwargs):
     import torch
 
+    if not input_tensor_a.is_floating_point():
+        input_tensor_a = input_tensor_a.float()
+    if not input_tensor_b.is_floating_point():
+        input_tensor_b = input_tensor_b.float()
     return torch.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
 
