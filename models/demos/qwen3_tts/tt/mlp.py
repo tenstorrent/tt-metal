@@ -85,31 +85,10 @@ class MLP(LightweightModule):
 
         def _build_proj_weight(weight_key: str, cache_name: str):
             weight_torch = state_dict[weight_key]
-            in_features = int(weight_torch.shape[1])
-            out_features = int(weight_torch.shape[0])
-
-            # DRAM (not L1): transpose/reshape compile matmul-scale programs with large circular
-            # buffers; L1 staging here overlaps allocator space with those CBs (Metal validate
-            # "clash with L1 buffers" during model init). Same pattern as Attention weight prep.
-            weight_tt = ttnn.from_torch(
-                weight_torch,
-                device=device,
-                dtype=weight_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=_dram,
-                mesh_mapper=_mesh_mapper,
-            )
-            weight_tx = ttnn.transpose(weight_tt, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(weight_tt)
-            weight_4d = ttnn.reshape(weight_tx, [1, 1, in_features, out_features], memory_config=ttnn.L1_MEMORY_CONFIG)
-
-            # Read reshape output before freeing transpose input; reshape may alias weight_tx storage.
-            weight_host = ttnn.to_torch(weight_4d).contiguous()
-
-            ttnn.deallocate(weight_4d)
-            ttnn.deallocate(weight_tx)
-
-            #
+            # Keep layout conversion on host once at load time:
+            # [out, in] -> [1, 1, in, out] for ttnn.linear.
+            # This avoids device-side transpose/reshape churn during model init.
+            weight_host = weight_torch.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
 
             cache_file = get_cache_name(cache_name)
             if cache_file is not None:
