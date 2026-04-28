@@ -88,7 +88,7 @@
   team: scaleout
   sp_config: sp4
 
-- name: "Pipeline Test (DeepSeek V3 B1 Superpod)"
+- name: "Pipeline Test (DeepSeek V3 B1 Superpod 4)"
   cmd: |
     set -x
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
@@ -102,6 +102,40 @@
       --worker-tt-metal-home /home/user/tt-metal \
       --output-dir $PIPELINE_DIR \
       /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
+
+    MAX_RETRIES=10
+    validation_succeeded=false
+
+    for attempt in $(seq 1 "$MAX_RETRIES"); do
+      echo "=== Recovery attempt $attempt of $MAX_RETRIES ==="
+
+      echo "--- Resetting cards with tt-smi ---"
+      mpirun --pernode --tag-output tt-smi -glx_reset
+
+      echo "--- Running cluster validation ---"
+      if mpirun --pernode --tag-output \
+        /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+        --send-traffic \
+        --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+        --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+        --num-iterations 100 \
+        --hard-fail; then
+        echo "SUCCESS: Recovery completed on attempt $attempt"
+        validation_succeeded=true
+        break
+      fi
+
+      echo "WARNING: Validation failed on attempt $attempt"
+      if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+        echo "Sleeping 30s before retry..."
+        sleep 30
+      fi
+    done
+
+    if [ "$validation_succeeded" != true ]; then
+      echo "ERROR: Recovery failed after $MAX_RETRIES attempts -- SKIPPING PIPELINE TEST (DeepSeek V3 B1 Superpod 4)"
+      exit 1
+    fi
 
     echo "=== SP4 superpod: running tt-run ==="
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
