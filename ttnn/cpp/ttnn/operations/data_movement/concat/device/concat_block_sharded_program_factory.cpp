@@ -255,6 +255,18 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
     }
     TT_FATAL(max_num_transfers > 0, "No transfers computed for block-sharded concat");
 
+    constexpr uint32_t runtime_args_limit = 256;
+    constexpr uint32_t args_per_transfer = 9;
+    constexpr uint32_t args_overhead = 1;  // num_transfers field
+    constexpr uint32_t max_transfers_per_risc = (runtime_args_limit - args_overhead) / args_per_transfer;
+    const uint32_t reader_count_max = (max_num_transfers + 1) / 2;
+    TT_FATAL(
+        reader_count_max <= max_transfers_per_risc,
+        "Block-sharded concat: too many transfers per core ({}, max {} per RISC). "
+        "Reduce the number of input tensors or the grid size.",
+        max_num_transfers,
+        max_transfers_per_risc);
+
     // Pass 2: create kernels and split transfers between reader and writer RISCs.
     // Both RISCs run the same kernel but with different subsets of transfers,
     // doubling effective NOC bandwidth (reader uses NOC0, writer uses NOC1).
