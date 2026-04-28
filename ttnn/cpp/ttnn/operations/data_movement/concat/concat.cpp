@@ -6,6 +6,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/math.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -273,7 +274,20 @@ ttnn::Tensor concat(
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
                                                            // but causes CI errors for now
 
+    log_info(
+        tt::LogAlways,
+        "[TRACE] ttnn::concat: num_tensors={}, dim={}, groups={}, input_sharded={}, output_mem_layout={}, "
+        "output_is_sharded={}, memory_config_provided={}",
+        input_tensors.size(),
+        dim,
+        groups,
+        input_tensors.front().is_sharded(),
+        static_cast<int>(mem_config.memory_layout()),
+        mem_config.is_sharded(),
+        memory_config.has_value());
+
     if (input_tensors.size() == 1) {
+        log_info(tt::LogAlways, "[TRACE] ttnn::concat: single tensor path -> to_memory_config");
         return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
     }
 
@@ -333,8 +347,11 @@ ttnn::Tensor concat(
     // which don't currently support sub_core_grids
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
+        log_info(tt::LogAlways, "[TRACE] ttnn::concat: sub_core_grids direct path -> concat_impl");
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
+
+    log_info(tt::LogAlways, "[TRACE] ttnn::concat: entering massaged operations pipeline");
 
     auto untilize_rm_retilize_concat =
         ttnn::operations::data_movement::build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
@@ -347,6 +364,7 @@ ttnn::Tensor concat(
 
     const std::vector<ttnn::Tensor>& itensors(input_tensors);
     auto res = massaged_concat(itensors, dim, groups);
+    log_info(tt::LogAlways, "[TRACE] ttnn::concat: massaged concat done, result_sharded={}", res.is_sharded());
     return res;
 }
 
