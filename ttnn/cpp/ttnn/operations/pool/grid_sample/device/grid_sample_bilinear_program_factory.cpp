@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <utility>
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
@@ -239,11 +240,9 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         reader0_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader0_desc.core_ranges = all_cores;
         reader0_desc.compile_time_args = std::move(reader_compile_time_args);
-        // ReaderDataMovementConfig defaults: processor RISCV_1, noc RISCV_1_default
-        reader0_desc.config = DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-        };
+        // Use ReaderConfigDescriptor so the framework preserves
+        // ReaderDataMovementConfig defaults (preferred_noc_for_dram_read(arch)).
+        reader0_desc.config = ReaderConfigDescriptor{};
     }
 
     const bool is_output_tiled = false;
@@ -303,7 +302,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         KernelDescriptor compute_desc;
         compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc.core_ranges = cores;
+        compute_desc.core_ranges = std::move(cores);
         compute_desc.compile_time_args = std::move(compute_compile_time_args);
         compute_desc.defines = {pool_defines_map.begin(), pool_defines_map.end()};
         compute_desc.config = ComputeConfigDescriptor{
@@ -341,11 +340,9 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_desc.core_ranges = all_cores;
         writer_desc.compile_time_args = std::move(writer_compile_time_args);
-        // WriterDataMovementConfig defaults: processor RISCV_0, noc RISCV_0_default
-        writer_desc.config = DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-        };
+        // Use WriterConfigDescriptor so the framework preserves
+        // WriterDataMovementConfig defaults (preferred_noc_for_dram_write(arch)).
+        writer_desc.config = WriterConfigDescriptor{};
     }
 
     // Set runtime arguments

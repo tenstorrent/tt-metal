@@ -4,7 +4,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <map>
 #include <string>
 
 #include <tt-metalium/host_api.hpp>
