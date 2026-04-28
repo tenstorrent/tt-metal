@@ -137,8 +137,18 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Call positionally to match the master trace (arg1=starts, arg2=ends, arg3=steps)
-    output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+    has_named = "starts" in kwargs or "ends" in kwargs or "steps" in kwargs
+    is_default_steps = all(s == 1 for s in slice_step)
+    if has_named:
+        slice_call_kwargs = {"starts": slice_start, "ends": slice_end}
+        if not is_default_steps:
+            slice_call_kwargs["steps"] = slice_step
+        slice_call_kwargs.update(op_kwargs)
+        output_tensor = ttnn.slice(input_tensor_a, **slice_call_kwargs)
+    elif is_default_steps and arg3 is None:
+        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)
+    else:
+        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
