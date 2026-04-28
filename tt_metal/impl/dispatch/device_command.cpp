@@ -129,6 +129,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
         alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_wait{};
         alignas(MEMCPY_ALIGNMENT) CQDispatchCmd wait_cmd{};
         initialize_wait_cmds(&relay_wait, &wait_cmd);
+        log_info(tt::LogMetal, "TRACE: add_dispatch_wait: relay_wait_dst={}", (void*)relay_wait_dst);
+        log_info(tt::LogMetal, "TRACE: add_dispatch_wait: wait_cmd_dst={}", (void*)wait_cmd_dst);
         this->memcpy(relay_wait_dst, &relay_wait, sizeof(CQPrefetchCmd));
         this->memcpy(wait_cmd_dst, &wait_cmd, sizeof(CQDispatchCmd));
     } else {
@@ -1144,13 +1146,18 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_inline(
         relay_write->base.cmd_id = flush ? CQ_PREFETCH_CMD_RELAY_INLINE : CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
         relay_write->relay_inline.dispatcher_type = (uint8_t)(dispatcher_type);
         relay_write->relay_inline.length = lengthB;
+        log_info(tt::LogMetal, "TRACE: add_prefetch_relay_inline: lengthB={}", lengthB);
+        log_info(tt::LogMetal, "TRACE: add_prefetch_relay_inline: sizeof(CQPrefetchCmd)={}", sizeof(CQPrefetchCmd));
+        log_info(tt::LogMetal, "TRACE: add_prefetch_relay_inline: this->pcie_alignment={}", this->pcie_alignment);
         relay_write->relay_inline.stride = tt::align(sizeof(CQPrefetchCmd) + lengthB, this->pcie_alignment);
+        log_info(tt::LogMetal, "TRACE: add_prefetch_relay_inline: stride={}", relay_write->relay_inline.stride);
     };
     CQPrefetchCmd* relay_write_dst = this->reserve_space<CQPrefetchCmd*>(sizeof(CQPrefetchCmd));
 
     if constexpr (hugepage_write) {
         alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_write{};
         initialize_relay_write(&relay_write);
+        log_info(tt::LogMetal, "TRACE: add_prefetch_relay_inline: relay_write_dst={}", (void*)relay_write_dst);
         this->memcpy(relay_write_dst, &relay_write, sizeof(CQPrefetchCmd));
     } else {
         initialize_relay_write(relay_write_dst);

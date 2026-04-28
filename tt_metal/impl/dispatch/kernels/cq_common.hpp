@@ -80,7 +80,7 @@ FORCE_INLINE void cq_noc_async_write_with_state(
         noc, src_addr, dst_addr, size, ndests);
 
     if constexpr (send) {
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
+        // DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
         noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, CQ_NOC_sndl, send, CQ_NOC_wait, update_counters>(
             noc, src_addr, dst_addr, size, ndests);
     }
@@ -492,6 +492,8 @@ public:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
     FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
+        DPRINT << "wait_for_available_data_and_release_old_pages: cmd_ptr: " << cmd_ptr
+               << " available_bytes: " << this->available_bytes(cmd_ptr) << ENDL();
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {

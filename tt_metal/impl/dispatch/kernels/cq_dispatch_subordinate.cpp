@@ -181,7 +181,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     DPRINT << "dispatch_s: Acquiring pages: " << n << ENDL();
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
-    DPRINT << "dispatch_s: sem_addr: " << (uintptr_t)sem_addr << "sem id: " << sem_id << ENDL();
+    DPRINT << "dispatch_s: sem_addr: " << HEX() << (uintptr_t)sem_addr << "sem id: " << sem_id << ENDL();
 
     WAYPOINT("DAPW");
     uint32_t heartbeat = 0;
@@ -410,6 +410,7 @@ void kernel_main() {
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+        DPRINT << "dispatch_s: cmd_ptr: " << HEX() << cmd_ptr << ENDL();
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         DPRINT << "dispatch_s: Processing command: " << (uint32_t)cmd->base.cmd_id << ENDL();
         switch (cmd->base.cmd_id) {
