@@ -517,6 +517,14 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 reducer_semaphore_id,      // [9]  Tier 2A: per-program semaphore (worker→reducer signal)
             });
 
+        // Tier 2A: physical NoC coords of this group's reducer (always
+        // core_idx_in_group == 0 within the group). Workers send their partials
+        // to this address; reducer self-writes (no-op via NoC).
+        const uint32_t reducer_logical_core_id = group_id * cores_per_head;
+        const CoreCoord reducer_logical = {
+            reducer_logical_core_id % grid_size.x, reducer_logical_core_id / grid_size.x};
+        const auto reducer_physical = device->worker_core_from_logical_core(reducer_logical);
+
         SetRuntimeArgs(
             program,
             writer_kernel,
@@ -528,8 +536,11 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 batch_end,
                 head_start,
                 head_end,
-                (uint32_t)0,
-                (uint32_t)1,
+                kernel_core_idx_in_group,                   // [6] Tier 2A: chunk-slice routing
+                kernel_cores_per_head,                      // [7] Tier 2A: chunk-slice routing
+                static_cast<uint32_t>(reducer_physical.x),  // [8] Tier 2A: this group's reducer NoC x
+                static_cast<uint32_t>(reducer_physical.y),  // [9] Tier 2A: this group's reducer NoC y
+                reducer_semaphore_id,                       // [10] Tier 2A: per-program semaphore id
             });
     }
 
