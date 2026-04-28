@@ -13,7 +13,8 @@ USE_PERF_TEST_MODE = True
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-def test_dram_group_norm_welford_reciprocal_vae(device):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_dram_group_norm_welford_reciprocal_vae(device, specify_grid):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import test_group_norm_DRAM
 
     test_group_norm_DRAM(
@@ -27,7 +28,7 @@ def test_dram_group_norm_welford_reciprocal_vae(device):
         8,
         8,
         "welford_reciprocal",
-        specify_grid=True,
+        specify_grid=specify_grid,
         perf_test_mode=USE_PERF_TEST_MODE,
     )
 

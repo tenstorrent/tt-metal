@@ -42,7 +42,8 @@
 //     canonical zero source on Tensix.
 inline void zero_whole_cb(uint32_t cb_id, const experimental::Noc& noc, uint32_t local_noc_x, uint32_t local_noc_y) {
     auto& iface = get_local_cb_interface(cb_id);
-    uint32_t l1_write_addr = iface.fifo_limit - iface.fifo_size;
+    // start writing at base CB address, which is the limit - size.
+    uint32_t sram_write_addr = iface.fifo_limit - iface.fifo_size;
     uint32_t bytes_remaining = iface.fifo_size;
 
     experimental::UnicastEndpoint zeros_ep;
@@ -50,11 +51,11 @@ inline void zero_whole_cb(uint32_t cb_id, const experimental::Noc& noc, uint32_t
         const uint32_t chunk = bytes_remaining > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_remaining;
         noc.async_read(
             zeros_ep,
-            experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+            experimental::CoreLocalMem<uint32_t>(sram_write_addr),
             chunk,
             {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = MEM_ZEROS_BASE},
             {});
-        l1_write_addr += chunk;
+        sram_write_addr += chunk;
         bytes_remaining -= chunk;
     }
     noc.async_read_barrier();

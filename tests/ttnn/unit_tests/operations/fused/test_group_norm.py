@@ -1322,6 +1322,7 @@ def test_group_norm_optional_weight_bias(
         if specify_grid:
             frobenius_threshold = 0.06
         else:
+            # Automatically chosen grid results in a slightly higher overall error.
             frobenius_threshold = 0.065
     else:
         pcc_threshold = 0.9999

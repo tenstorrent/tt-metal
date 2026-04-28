@@ -227,6 +227,15 @@ Tensor group_norm(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
+    // Reciprocals: we currently only support sharded reciprocals via the legacy
+    // ShardSpec representation.
+    if (reciprocals.has_value() && reciprocals->is_sharded()) {
+        TT_FATAL(
+            reciprocals->shard_spec().has_value(),
+            "group_norm: reciprocals tensor must have a shard spec when sharded "
+            "(NdShardSpec sharding is not currently supported).");
+    }
+
     const bool core_grid_auto_selected = !core_grid.has_value();
 
     if (!core_grid.has_value()) {
@@ -240,11 +249,13 @@ Tensor group_norm(
             // grid_size matches the cores where kernels are actually placed.
             const auto bbox = shard_spec_opt->grid.bounding_box();
             core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
-        } else if (reciprocals.has_value() && reciprocals->shard_spec().has_value()) {
+        } else if (reciprocals.has_value() && reciprocals->is_sharded()) {
             // The reciprocals LUT is height-sharded on a specific grid; its
             // length encodes num_virtual_rows which must match the compute
-            // grid.  Infer the grid from the reciprocals tensor so the kernel
-            // sees a consistent LUT.
+            // grid. Infer the grid from the reciprocals tensor so the kernel
+            // sees a consistent LUT. (The reciprocals shard-spec precondition
+            // above guarantees shard_spec() is populated whenever
+            // reciprocals->is_sharded() is true.)
             const auto bbox = reciprocals->shard_spec()->grid.bounding_box();
             core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
         } else {
@@ -275,7 +286,9 @@ Tensor group_norm(
     // the wrong length and/or lives on the wrong banks. This covers all
     // three paths to picking core_grid (sharded input, reciprocals
     // inference, and an explicit user-provided core_grid).
-    if (reciprocals.has_value() && reciprocals->shard_spec().has_value()) {
+    if (reciprocals.has_value() && reciprocals->is_sharded()) {
+        // Precondition above guarantees shard_spec() is populated whenever
+        // reciprocals->is_sharded() is true.
         const auto recip_bbox = reciprocals->shard_spec()->grid.bounding_box();
         const uint32_t recip_x = recip_bbox.end_coord.x + 1;
         const uint32_t recip_y = recip_bbox.end_coord.y + 1;

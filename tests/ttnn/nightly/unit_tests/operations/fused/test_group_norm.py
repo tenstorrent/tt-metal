@@ -66,8 +66,8 @@ def test_group_norm_large_ex_external_cb(device, specify_grid):
 
 
 @pytest.mark.parametrize("specify_grid", [True, False])
-def test_group_norm_sharded_ex_external_cb_gap_zeroing(device, specify_grid):
-    """Sharded analog of test_group_norm_large_ex_external_cb (regression for #41690).
+def test_group_norm_sharded_ex_external_cb_gap(device, specify_grid):
+    """Sharded analog of test_group_norm_large_ex_external_cb.
 
     Stresses cb_ex_external gap-byte zeroing on the sharded reader path
     (reader_mcast_sender_unary_sharded_gn_v2.cpp). cb_ex_external is sized as
@@ -75,24 +75,31 @@ def test_group_norm_sharded_ex_external_cb_gap_zeroing(device, specify_grid):
     at a 16-byte pitch; the rest of the tile is read by the downstream
     reduce_tile sum and must be zero.
 
-    This shape exercises both gap-byte categories on the sharded path:
-      (A) Intra-slot gap: bfloat16 input (datum_size_bytes == 2 < 16) leaves
-          14 untouched bytes inside every per-core slot.
-      (B) Trailing tile gap: with num_mcast_cores == grid.y == 4 the used
-          slots span 4 * 16 == 64 bytes, leaving 2048 - 64 == 1984 bytes of
-          unused tile tail.
+    Both gap-byte regions structurally exist in the reserved tile; this
+    shape exercises both:
+      (A) Intra-slot gap: bfloat16 input (datum_size_bytes == 2 < 16) means
+          each per-slot remote-core read writes only 2 bytes into its
+          16-byte slot, leaving 14 bytes per remote-core slot
+          (slots 1..num_mcast_cores-1) not covered by the per-slot writes.
+          Slot 0 is the local core's slot and is fully covered by the
+          full-tile SELF read described below, so it does not contribute
+          an intra-slot gap.
+      (B) Trailing tile gap: with num_mcast_cores == grid.y == 4 the
+          per-core slots occupy 4 * 16 == 64 of 2048 bytes per tile; the
+          remaining 1984 bytes are also not covered by the per-slot writes.
 
     The sharded reader currently relies on the documented packer-zeroing
     contract of `reduce<…, REDUCE_SCALAR>` (see reduce.h's reduce_init doc)
-    to keep those gap bytes zero -- the SELF read from cb_ex_partial is a
+    to keep those gap bytes zero. The self read from cb_ex_partial is a
     full single_tile_size_bytes copy that uses cb_ex_partial's
     packer-zeroed non-result datums as a free zero-init for cb_ex_external.
-    Multiple groups-per-core × the n=0,1 sub-passes cycle the producer
-    through the cb_ex_external L1 region many times, so any breakage of
-    that zeroing (e.g. switching the cb_ex_partial producer to a
-    non-REDUCE_SCALAR pack without updating the reader) would corrupt the
-    per-group mean/var reduction enough to fail the tight numeric
-    tolerances below.
+    Each group runs two cb_ex_external aggregation passes, one for the
+    partial mean (E[x]) and one for the partial variance, and this shape
+    has multiple groups per core, so the producer cycles through the
+    cb_ex_external SRAM region many times. Any breakage of that zeroing
+    (e.g. switching the cb_ex_partial producer to a non-REDUCE_SCALAR pack
+    without updating the reader) would corrupt the per-group mean/var
+    reduction enough to fail the tight numeric tolerances below.
     """
     torch.manual_seed(0)
 
@@ -171,7 +178,7 @@ def test_group_norm_sharded_ex_external_cb_gap_zeroing(device, specify_grid):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.9999,
-        rtol=0.065,
-        atol=0.065,
-        frobenius_threshold=0.015,
+        rtol=0.04,
+        atol=0.04,
+        frobenius_threshold=0.01,
     )

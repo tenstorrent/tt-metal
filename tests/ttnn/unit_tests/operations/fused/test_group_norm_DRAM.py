@@ -37,16 +37,14 @@ def run_group_norm_DRAM(
         pytest.skip()
 
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
-    # Pick the grid that the op will actually run on:
-    #   - specify_grid=True  exercises the explicit-grid contract on the user-chosen
-    #     (cores_y, cores_x) from the parametrize fixture.
-    #   - specify_grid=False exercises the C++ auto-selection (find_expected_dram_grid).
-    #     We must prepare gamma/beta/mask/reciprocals for that *same* auto-selected
-    #     grid; otherwise their shapes (driven by num_virtual_cols/num_virtual_rows)
-    #     would not match the grid the op actually picks at runtime.
     if specify_grid:
+        #   Use the explicit user-chosen grid.
         grid_for_params = grid_size
     else:
+        # Exercises the C++ automatic grid selection.
+        # We must prepare gamma/beta/mask/reciprocals for that *same* auto-selected
+        # grid; otherwise their shapes (driven by num_virtual_cols/num_virtual_rows)
+        # would not match the grid the op actually picks at runtime.
         grid_for_params = ttnn.determine_expected_group_norm_dram_grid_size(
             device=device,
             num_channels=C,
@@ -377,7 +375,7 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, 
             num_groups=num_groups_per_split,
             input_mask=input_mask_tensor,
             memory_config=sharded_mem_config_per_split,
-            core_grid=grid_size,
+            core_grid=grid_size if specify_grid else None,
             inplace=False,
             negative_mask=input_negative_mask_tensor,
         )
@@ -420,6 +418,20 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(0)
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
+    if specify_grid:
+        # Use the explicit user-chosen grid.
+        grid_for_params = grid_size
+    else:
+        # Exercises the C++ automatic grid selection. Input padding, mask, and
+        # gamma/beta must be prepared for that *same* auto-selected grid;
+        # otherwise their shapes would not match the grid the op picks at runtime.
+        grid_for_params = ttnn.determine_expected_group_norm_dram_grid_size(
+            device=device,
+            num_channels=C,
+            num_groups=num_groups,
+            input_nhw=N * H * W,
+            num_batches=N,
+        )
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
@@ -443,19 +455,19 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     out_shape = [
         unpadded_shape[0],
         unpadded_shape[1],
-        _nearest_32_per_core(unpadded_shape[2], cores_x),
-        _nearest_32_per_core(unpadded_shape[3], cores_y),
+        _nearest_32_per_core(unpadded_shape[2], grid_for_params.x),
+        _nearest_32_per_core(unpadded_shape[3], grid_for_params.y),
     ]
 
     input_tensor_tilized = ttnn.tilize_with_val_padding(
         input_tensor_row_major, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
     )
 
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT16)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_for_params.y, ttnn.DataType.BFLOAT16)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
     # gamma/beta
-    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
-    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_for_params.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_for_params.y)
     gamma_t = ttnn.from_torch(
         gamma,
         dtype=ttnn.DataType.BFLOAT16,
@@ -478,9 +490,11 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         bias=beta_t,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_layout=ttnn.TILE_LAYOUT,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         inplace=False,
-        num_out_blocks=num_out_blocks,
+        # num_out_blocks must be omitted when core_grid is auto-selected; the op
+        # picks a heuristic value internally in that case.
+        num_out_blocks=num_out_blocks if specify_grid else None,
         epsilon=eps,
     )
 
