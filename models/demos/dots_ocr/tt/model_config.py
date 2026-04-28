@@ -7,7 +7,7 @@ import os
 
 from loguru import logger
 
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs, PrecisionSetting, TensorGroup
 
 
 class DotsModelArgs(ModelArgs):
@@ -59,6 +59,69 @@ class DotsModelArgs(ModelArgs):
         self.trust_remote_code_hf = True
         self.use_hf_rope = True
 
+        # Dots OCR text quality is very sensitive to MLP weight precision.
+        # Force BF16 for FFN weights (w1/w2/w3) to improve decode PCC and avoid degenerate text.
+        try:
+            dec_opt = getattr(self, "decoders_optimizations", None)
+            if dec_opt is not None and hasattr(dec_opt, "decoder_optimizations"):
+                for _dec_id, conf in dec_opt.decoder_optimizations.items():
+                    # Keep activations handled by callers; just force the weight tensors.
+                    conf.tensor_dtype_settings[TensorGroup.FF1_FF3] = PrecisionSetting.BF16
+                    conf.tensor_dtype_settings[TensorGroup.FF2] = PrecisionSetting.BF16
+                logger.info("DotsModelArgs: forced BF16 for FFN weights (FF1_FF3/FF2) for OCR correctness")
+        except Exception:
+            pass
+
+        # Wormhole correctness guard:
+        # TTNN warns that HiFi4 + fp32_dest_acc_en can reduce accuracy on Wormhole. Dots OCR is very
+        # sensitive and can collapse into repetitive garbage when this triggers. Force HiFi3 for the
+        # affected compute configs on Wormhole SKUs (N150/N300/T3K).
+        try:
+            import ttnn
+
+            dev = str(getattr(self, "device_name", "") or "").lower()
+            is_wormhole = (
+                dev in ("n150", "n300", "t3k") or dev.startswith("n150") or dev.startswith("n300") or "wormhole" in dev
+            )
+            if is_wormhole and hasattr(ttnn, "WormholeComputeKernelConfig") and hasattr(ttnn, "MathFidelity"):
+                hifi3 = getattr(ttnn.MathFidelity, "HiFi3", None)
+                if hifi3 is not None:
+                    for attr in (
+                        "compute_kernel_config_hifi4",
+                        "compute_kernel_config_hifi4_fp32",
+                        "compute_kernel_config_sdpa",
+                    ):
+                        cfg = getattr(self, attr, None)
+                        if cfg is None:
+                            continue
+                        if not bool(getattr(cfg, "fp32_dest_acc_en", True)):
+                            continue
+                        setattr(
+                            self,
+                            attr,
+                            ttnn.WormholeComputeKernelConfig(
+                                math_fidelity=hifi3,
+                                math_approx_mode=bool(getattr(cfg, "math_approx_mode", False)),
+                                fp32_dest_acc_en=True,
+                                packer_l1_acc=bool(getattr(cfg, "packer_l1_acc", True)),
+                                dst_full_sync_en=bool(getattr(cfg, "dst_full_sync_en", False)),
+                            ),
+                        )
+                    logger.info("DotsModelArgs: forced HiFi3 for fp32 accumulation on Wormhole (correctness)")
+        except Exception:
+            pass
+
+        # Dots OCR decode correctness is very sensitive to LM head output quantization.
+        # `tt_transformers/tt/lm_head.py` defaults logits dtype to BF8 unless `args.lm_head_dtype`
+        # is provided, which can collapse text quality (low decode PCC / repetitive garbage).
+        # Force BF16 logits for Dots OCR.
+        try:
+            import ttnn
+
+            self.lm_head_dtype = ttnn.bfloat16
+        except Exception:
+            pass
+
         # Seed an instance-level ``LOCAL_HF_PARAMS`` entry so the parent
         # ``ModelArgs.load_state_dict()``'s ``self.LOCAL_HF_PARAMS[self.model_name]`` access
         # finds a config source for the Dots checkpoint (which is not listed in the class-level
@@ -104,6 +167,33 @@ class DotsModelArgs(ModelArgs):
             f"kv_heads={self.n_kv_heads} cluster_shape={self.cluster_shape} "
             f"max_seq_len={self.max_seq_len} device_name={self.device_name}"
         )
+
+    def weight_cache_path(self, dtype):
+        """
+        Override base cache path to avoid correctness bugs from reusing tensorbins
+        across incompatible Dots OCR configurations.
+
+        TT weight tensorbins depend on how we convert HF weights (notably Q/K permute).
+        If we reuse the same `tensor_cache_*` directory, toggling `text_qkv_permute`
+        will silently keep using the old cached tensors and PCC won't change.
+        """
+        base = super().weight_cache_path(dtype)
+
+        parts: list[str] = []
+        qkvp = getattr(self, "dots_text_qkv_permute", None)
+        if qkvp is not None:
+            parts.append(f"qkvperm{int(bool(qkvp))}")
+        host_rope = getattr(self, "dots_use_host_rope", None)
+        if host_rope is not None:
+            parts.append("hostrope" if bool(host_rope) else "devrope")
+
+        env_tag = os.getenv("DOTS_CACHE_TAG", "").strip()
+        if env_tag:
+            parts.append(env_tag)
+
+        if not parts:
+            return base
+        return base.parent / f"{base.name}__{'__'.join(parts)}"
 
     def _set_hf_params(self, checkpoint_dir):
         """

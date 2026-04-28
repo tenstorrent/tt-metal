@@ -38,7 +38,6 @@ import torch
 from loguru import logger
 
 from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
-from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
 # ---------------------------------------------------------------------------
 # Sampling
@@ -243,15 +242,15 @@ def text_embeds_from_ttnn_embedding_ttnn(tt_model, input_ids: torch.Tensor) -> o
     )
     embd = tt_model.embd(tt_tok, memory_config=mem)
     embd4 = ttnn.unsqueeze_to_4D(embd)
+    # Embedding output is often TILE; force ROW_MAJOR before any reshape/scatter path.
     try:
-        return ttnn.reshape(embd4, (b, s_len, h))
+        embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
     except Exception:
-        if hasattr(ttnn, "to_layout") and mem is not None:
-            try:
-                embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
-            except Exception:
-                pass
-        return ttnn.reshape(embd4, (b, s_len, h))
+        try:
+            embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT)
+        except Exception:
+            pass
+    return ttnn.reshape(embd4, (b, s_len, h))
 
 
 def pad_embedding_ttnn_tensor(tt_model, pad_token_id: int) -> object:
@@ -273,6 +272,14 @@ def pad_embedding_ttnn_tensor(tt_model, pad_token_id: int) -> object:
     embd = tt_model.embd(tt_tok, memory_config=mem)
     embd4 = ttnn.unsqueeze_to_4D(embd)
     try:
+        # Embedding output is often TILE; force ROW_MAJOR for consistent reshape/scatter behavior.
+        try:
+            embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
+        except Exception:
+            try:
+                embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT)
+            except Exception:
+                pass
         return ttnn.reshape(embd4, (1, h))
     except Exception:
         if hasattr(ttnn, "to_layout") and mem is not None:
@@ -308,6 +315,14 @@ def merge_vision_tokens_ttnn(
         return input_embeds
 
     mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    # Ensure consistent layouts for reshape/scatter across TTNN versions.
+    try:
+        input_embeds = ttnn.to_layout(input_embeds, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
+    except Exception:
+        try:
+            input_embeds = ttnn.to_layout(input_embeds, ttnn.ROW_MAJOR_LAYOUT)
+        except Exception:
+            pass
     if not isinstance(image_embeds, ttnn.Tensor):
         fkw: dict = {"device": mesh_device, "dtype": ttnn.bfloat16, "layout": ttnn.ROW_MAJOR_LAYOUT}
         if mem is not None:
@@ -315,6 +330,13 @@ def merge_vision_tokens_ttnn(
         image_tt = ttnn.from_torch(image_embeds.to(torch.bfloat16), **fkw)
     else:
         image_tt = image_embeds
+        try:
+            image_tt = ttnn.to_layout(image_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
+        except Exception:
+            try:
+                image_tt = ttnn.to_layout(image_tt, ttnn.ROW_MAJOR_LAYOUT)
+            except Exception:
+                pass
 
     B, S, H = int(input_embeds.shape[0]), int(input_embeds.shape[1]), int(input_embeds.shape[2])
     mask_idx = torch.where(input_ids.view(-1) == image_token_id)[0]
@@ -324,7 +346,17 @@ def merge_vision_tokens_ttnn(
     )
     flat = ttnn.reshape(input_embeds, (-1, H))
     flat = ttnn.scatter(flat, 0, mask_idx_tt, image_tt)
-    return ttnn.reshape(flat, (B, S, H))
+    out = ttnn.reshape(flat, (B, S, H))
+    try:
+        ttnn.deallocate(mask_idx_tt)
+    except Exception:
+        pass
+    try:
+        if image_tt is not image_embeds:
+            ttnn.deallocate(image_tt)
+    except Exception:
+        pass
+    return out
 
 
 def _ttnn_expand_pad_block(ttnn, pad_1d: object, n_rows: int, d: int) -> object:
@@ -499,8 +531,8 @@ def text_rope_from_hf(
     to the model's top-level ``rotary_emb`` attribute.
 
     Returns:
-        ``(cos, sin)`` — ``[1, 1, max_seq_len, head_dim]`` in meta-style interleaved format,
-        compatible with ``DotsTransformer.prepare_inputs_prefill``.
+        ``(cos, sin)`` — ``[1, 1, max_seq_len, head_dim]`` in HF-style duplicated-half format,
+        compatible with the Dots TT generator's prefill path.
     """
     max_seq_len = min(
         model_args.max_seq_len,
@@ -522,8 +554,52 @@ def text_rope_from_hf(
     if cos.dim() == 3:  # [B, S, D] -> [B, 1, S, D]
         cos = cos.unsqueeze(1)
         sin = sin.unsqueeze(1)
-    cos, sin = convert_rope_style_hf_to_meta(cos, sin)
     return cos, sin
+
+
+def text_rope_from_config(
+    inputs,
+    hf_config,
+    model_args,
+    pad_token_id: int,
+):
+    """
+    Precompute host RoPE cos/sin matrices from config only (no HF model forward).
+
+    Returns:
+        (cos, sin) shaped [1, 1, max_seq_len, head_dim] in HF-style duplicated-half format,
+        compatible with the Dots TT generator's prefill path.
+    """
+    max_seq_len = min(
+        int(getattr(model_args, "max_seq_len")),
+        max(2 ** math.ceil(math.log(inputs.input_ids.shape[-1], 2)), 128),
+    )
+    _ = pad_token_id  # kept for API parity; padding is handled by caller prefill.
+
+    head_dim = int(
+        getattr(hf_config, "head_dim", getattr(hf_config, "hidden_size") // getattr(hf_config, "num_attention_heads"))
+    )
+    rope_params = getattr(hf_config, "rope_parameters", None) or {}
+    theta = float(rope_params.get("rope_theta", getattr(hf_config, "rope_theta", 10000.0)))
+    rope_type = str(rope_params.get("rope_type", "default"))
+    rope_scaling = getattr(hf_config, "rope_scaling", None) or {}
+    scale_factor = rope_scaling.get("factor", None)
+    orig_context_len = rope_scaling.get("original_max_position_embeddings", None)
+
+    from models.demos.dots_ocr.tt.rope_freqs import precompute_freqs
+
+    cos_freqs, sin_freqs = precompute_freqs(
+        head_dim,
+        max_seq_len * 2,
+        theta=theta,
+        scale_factor=scale_factor,
+        orig_context_len=orig_context_len,
+        rope_type=rope_type,
+    )
+    # HF-style format: [1, 1, S, head_dim] where half is duplicated.
+    cos_hf = torch.cat([cos_freqs[:max_seq_len], cos_freqs[:max_seq_len]], dim=-1).unsqueeze(0).unsqueeze(0)
+    sin_hf = torch.cat([sin_freqs[:max_seq_len], sin_freqs[:max_seq_len]], dim=-1).unsqueeze(0).unsqueeze(0)
+    return cos_hf, sin_hf
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +718,7 @@ def argmax_token_id_ttnn(
     mesh_device: object,
     batch_size: int = 1,
     layout: str = "decode",
+    vocab_size: int | None = None,
 ) -> object:
     """
     Greedy token selection on device (same row selection as :meth:`Transformer.process_output_decode` + host ``argmax``).
@@ -674,6 +751,11 @@ def argmax_token_id_ttnn(
         raise ValueError(f"batch_size must be >= 1, got {b_req}")
 
     vocab = int(tt_logits.shape[-1])
+    if vocab_size is not None:
+        v_req = int(vocab_size)
+        if v_req <= 0:
+            raise ValueError(f"vocab_size must be > 0, got {v_req}")
+        vocab = min(vocab, v_req)
     x = tt_logits
     try:
         if len(x.shape) == 4:
@@ -685,6 +767,8 @@ def argmax_token_id_ttnn(
                 else:
                     # Prefill: one 32-token *sequence* chunk — last real token in block
                     x = ttnn.slice(x, (0, 0, s_blk - 1, 0), (d0, d1, s_blk, vocab))
+            elif vocab < int(x.shape[3]):
+                x = ttnn.slice(x, (0, 0, 0, 0), (d0, d1, s_blk, vocab))
         elif len(x.shape) == 3:
             d0, s_blk, _v = (int(x.shape[0]), int(x.shape[1]), int(x.shape[2]))
             if s_blk > 1:
@@ -693,6 +777,8 @@ def argmax_token_id_ttnn(
                     x = ttnn.slice(x, (0, 0, 0), (d0, take, vocab))
                 else:
                     x = ttnn.slice(x, (0, s_blk - 1, 0), (d0, s_blk, vocab))
+            elif vocab < int(x.shape[2]):
+                x = ttnn.slice(x, (0, 0, 0), (d0, s_blk, vocab))
     except Exception:
         # If slice isn't supported for this layout, fall back to flattening (may be wrong; prefer fixing slice).
         x = tt_logits

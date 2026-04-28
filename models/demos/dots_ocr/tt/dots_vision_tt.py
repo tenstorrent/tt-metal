@@ -201,6 +201,7 @@ class DotsPatchEmbedTt(LightweightModule):
         self.mesh = mesh_device
         self.cfg = cfg
         self.compute_cfg = _get_compute_cfg()
+        self.weight_dtype = getattr(cfg, "_weight_dtype", None) or ttnn.bfloat16
         in_dim = cfg.num_channels * cfg.patch_size * cfg.patch_size
 
         # HF key layouts for patch embed have varied over time (patchifier vs direct patch_embed).
@@ -243,7 +244,7 @@ class DotsPatchEmbedTt(LightweightModule):
         )
         self.w_proj = ttnn.as_tensor(
             w_lin,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.weight_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -346,6 +347,7 @@ class DotsMlpTt(LightweightModule):
         self.mesh = mesh_device
         self.cfg = cfg
         self.compute_cfg = _get_compute_cfg()
+        self.weight_dtype = getattr(cfg, "_weight_dtype", None) or ttnn.bfloat16
 
         def t_linear_weight(name: str) -> torch.Tensor:
             w = state_dict[f"{state_dict_prefix}{name}.weight"]
@@ -372,7 +374,7 @@ class DotsMlpTt(LightweightModule):
 
         self.w1 = ttnn.as_tensor(
             t_linear_weight("fc1"),
-            dtype=ttnn.bfloat8_b,
+            dtype=self.weight_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -381,7 +383,7 @@ class DotsMlpTt(LightweightModule):
         )
         self.w2 = ttnn.as_tensor(
             t_linear_weight("fc2"),
-            dtype=ttnn.bfloat8_b,
+            dtype=self.weight_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -390,7 +392,7 @@ class DotsMlpTt(LightweightModule):
         )
         self.w3 = ttnn.as_tensor(
             t_linear_weight("fc3"),
-            dtype=ttnn.bfloat8_b,
+            dtype=self.weight_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -532,7 +534,7 @@ class DotsMlpTt(LightweightModule):
             w1o,
             w3o,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
+            dtype=(ttnn.bfloat16 if self.weight_dtype == ttnn.bfloat16 else ttnn.bfloat8_b),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(w1o)
@@ -570,6 +572,7 @@ class DotsAttnQkvprojTt(LightweightModule):
         self.cfg = cfg
         self.compute_cfg = _get_compute_cfg()
         self.mesh = mesh_device
+        self.weight_dtype = getattr(cfg, "_weight_dtype", None) or ttnn.bfloat16
         # HF key layouts for attention weights have varied (`attn` vs `attention`, `qkv` vs `qkv_proj`).
         prefixes = [state_dict_prefix]
         if ".attn." in state_dict_prefix:
@@ -624,7 +627,7 @@ class DotsAttnQkvprojTt(LightweightModule):
         )
         self.wqkv = ttnn.as_tensor(
             wqkv,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.weight_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -635,7 +638,7 @@ class DotsAttnQkvprojTt(LightweightModule):
         _, wo_key = _pick_key(("proj.weight", "out_proj.weight", "o_proj.weight"))
         self.wo = ttnn.as_tensor(
             _wo_from_state(state_dict, wo_key),
-            dtype=ttnn.bfloat8_b,
+            dtype=self.weight_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -747,14 +750,16 @@ class DotsAttnQkvprojTt(LightweightModule):
         # deallocating them frees the shared backing store and breaks later vision blocks.
 
         cu_1d = ttnn.to_torch(cu_seqlens).reshape(-1).to(torch.int32)
-        mask = torch.zeros(1, s, s, dtype=torch.bool, device=q.device)
+        # Use additive float mask to avoid boolean-mask semantic differences across torch versions.
+        # 0.0 = allow, -inf = disallow.
+        attn_mask = torch.full((1, s, s), float("-inf"), dtype=torch.float32, device=q.device)
         for b in range(1, cu_1d.numel()):
             a, z = int(cu_1d[b - 1].item()), int(cu_1d[b].item())
-            mask[..., a:z, a:z] = True
+            attn_mask[..., a:z, a:z] = 0.0
         q1 = q.transpose(0, 1).unsqueeze(0)
         k1 = k.transpose(0, 1).unsqueeze(0)
         v1 = v.transpose(0, 1).unsqueeze(0)
-        m3 = mask.unsqueeze(0)  # [1, S, S], True = allow (match reference VisionSdpaAttention)
+        m3 = attn_mask.unsqueeze(0)  # [1, 1, S, S] additive mask
         o = F.scaled_dot_product_attention(q1, k1, v1, attn_mask=m3, dropout_p=0.0, is_causal=False, scale=self.scale)
         o = o.squeeze(0).transpose(0, 1).reshape(s, d)
         out_pad = _w128(s)
@@ -810,12 +815,14 @@ class DotsPatchMergerTt(LightweightModule):
             eps=1e-6,
         )
         self.compute_cfg = _get_compute_cfg()
+        # Default to BF16 weights for correctness (BF8 can degrade OCR quality).
+        self.weight_dtype = getattr(cfg, "_weight_dtype", None) or ttnn.bfloat16
 
         def tw_linear(name: str) -> ttnn.Tensor:
             w = torch.transpose(state_dict[f"{state_dict_prefix}mlp.{name}.weight"], -2, -1)
             return ttnn.as_tensor(
                 w,
-                dtype=ttnn.bfloat8_b,
+                dtype=self.weight_dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
