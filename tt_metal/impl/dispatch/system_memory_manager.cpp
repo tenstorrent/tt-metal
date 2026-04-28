@@ -587,12 +587,26 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
             this->device_id,
             dram_channel,
             dram_target_addr);
+
+        // readback the value of dram_target_addr
+        // std::vector<uint32_t> readback_ptr((push_size_16B << 4) / sizeof(uint32_t));
+        // ctx.get_cluster().read_dram_vec(
+        //     (void*)readback_ptr.data(), push_size_16B << 4, this->device_id, dram_channel, dram_target_addr);
+        // for (uint32_t i = 0; i < readback_ptr.size(); i++) {
+        //     log_info(
+        //         tt::LogMetal,
+        //         "TRACE: issue_queue_push_back: dram_target_addr=0x{:x} readback={}",
+        //         dram_target_addr + i * sizeof(uint32_t),
+        //         readback_ptr[i]);
+        // }
+
         ctx.get_cluster().write_dram_vec(
             &cq_interface.issue_fifo_wr_ptr,
             sizeof(uint32_t),
             this->device_id,
             dram_channel,
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + issue_q_wr_ptr);
+        // std::this_thread::sleep_for(std::chrono::milliseconds(10000));
         return;
     }
 
