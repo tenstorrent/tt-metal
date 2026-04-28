@@ -282,9 +282,15 @@ static std::vector<Tensor> pool2d_L1(
     //      channels=290, num_cores_c=1:  ceil(290/1)=290, 290%32=2 → tile pad needed.
     uint32_t channels_per_shard = tt::div_up(output_c, num_cores_c);
     uint32_t cps_mod_tile = channels_per_shard % tt::constants::TILE_WIDTH;
-    // For TILE output the shard width must be TILE_WIDTH-aligned regardless; for ROW_MAJOR
-    // we only round up to TILE_WIDTH when channels_per_shard is strictly partial (< FACE_WIDTH).
-    bool needs_tile_pad = !is_out_tiled && cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH;
+    // For TILE output the shard width must be TILE_WIDTH-aligned regardless; for ROW_MAJOR we
+    // only round up to TILE_WIDTH when the partial last tile is strictly less than one full face
+    // wide (cps_mod_tile < FACE_WIDTH) AND there is at least one preceding full tile per core
+    // (channels_per_shard > FACE_WIDTH). When the only tile per core is partial and fits in one
+    // face, the kernel packs just 1 face — so FACE_WIDTH alignment matches the kernel output and
+    // avoids creating per-shard internal padding that breaks downstream consumers (e.g.
+    // sharded_to_interleaved, slice_write).
+    bool needs_tile_pad = !is_out_tiled && cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH &&
+                          channels_per_shard > tt::constants::FACE_WIDTH;
     uint32_t base_alignment =
         (is_out_tiled || needs_tile_pad) ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
     uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * base_alignment);

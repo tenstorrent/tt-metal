@@ -116,7 +116,12 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     // we check the maximum per-shard channel count and avoid false partial-tile detection.
     uint32_t channels_per_shard = tt::div_up(out_c, num_cores_c);
     uint32_t cps_mod_tile = channels_per_shard % tt::constants::TILE_WIDTH;
-    bool needs_tile_pad = cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH;
+    // Skip tile-padding when the only tile per core is partial and fits in one face (single
+    // partial tile, first==last). In that case the kernel packs just 1 face, so FACE_WIDTH
+    // alignment matches the kernel output. See compute_pool_2d.cpp for the matching kernel
+    // condition (single_partial_fits_in_face).
+    bool needs_tile_pad =
+        cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH && channels_per_shard > tt::constants::FACE_WIDTH;
     uint32_t base_alignment = needs_tile_pad ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
     uint32_t out_c_padded = tt::round_up(out_c, base_alignment);
     if (mem_config.is_sharded()) {
