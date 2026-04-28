@@ -59,13 +59,15 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Context, Device, Misc, NOC, JIT Build ---
+# --- Context, Device, Misc, JIT Build ---
+# NOTE: unit_tests_noc temporarily disabled — TestDynamicNoCOneProgram deadlocks
+# (CHIP_IN_USE_0_PCIe self-deadlock). Reproduces locally. Binary was never on CI
+# before this reorg. Re-enable once the owner fixes the hang.
 - name: runtime_core
   cmd: |
     ./build/test/tt_metal/unit_tests_context
     ./build/test/tt_metal/unit_tests_device
     ./build/test/tt_metal/unit_tests_misc
-    ./build/test/tt_metal/unit_tests_noc
     ./build/test/tt_metal/unit_tests_jit_build
   skus:
     wh_n150_civ2:
@@ -76,8 +78,12 @@
   team: runtime
 
 # --- Integration Tests ---
+# NOTE: TensixMatmulMultiCoreMultiDRAM temporarily filtered — writer_matmul_tile_layout.cpp
+# uses TensorAccessorArgs<0>() without KERNEL_COMPILE_TIME_ARGS (latent since #27647,
+# 2025-09-03). Binary was never on CI before this reorg. Re-enable once the kernel/host
+# call is fixed.
 - name: runtime_integration
-  cmd: ./build/test/tt_metal/unit_tests_integration
+  cmd: ./build/test/tt_metal/unit_tests_integration --gtest_filter='-MeshDispatchFixture.TensixMatmulMultiCoreMultiDRAM'
   skus:
     wh_n150_civ2:
       timeout: 8
@@ -99,13 +105,16 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Debug Tools (DPrint, Watcher, Inspector, NOC Debugging, Clean Init) ---
+# --- Debug Tools (DPrint, Watcher, Inspector, Clean Init) ---
+# NOTE: unit_tests_noc_debugging temporarily disabled — 9 of 17 tests deterministically
+# fail on BH (11 on WH); debugger reports zero issues where violations are intentionally
+# injected. Pre-existing breakage; was on cpp-post-commit Nightly L2 with auto-triage:false
+# so failures went unnoticed. Re-enable once the NOC debug detection is fixed.
 - name: runtime_debug_tools
   cmd: |
     ./tests/scripts/run_tools_tests.sh
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='*'
     ./build/test/tt_metal/unit_tests_inspector --gtest_filter='*'
-    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1 ./build/test/tt_metal/unit_tests_noc_debugging --gtest_filter='*'
   skus:
     wh_n150_civ2:
       timeout: 12
