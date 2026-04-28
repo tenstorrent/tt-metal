@@ -197,7 +197,7 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
-            True,  # enable_decode_trace
+            False,  # enable_decode_trace  # DIAGNOSTIC: trace disabled for 1x1 BH bisect
             True,  # enable_prefill_trace
             False,  # warmup_prefill
             False,  # users_row_sharded
@@ -539,6 +539,19 @@ def test_gpt_oss_demo(
         num_logprobs=[num_logprobs] * SAMPLING_BATCH_SIZE,
     )
 
+    # On-device sampling is disabled when per-device padded vocab exceeds the 64K
+    # cap (e.g. tp=1 on a single Blackhole card → 262K-padded vocab). In that case
+    # fall back to host-side sampling. Only greedy is supported for the fallback.
+    on_device_sampling_supported = all(getattr(m, "sampling", None) is not None for m in model)
+    if not on_device_sampling_supported:
+        assert greedy, (
+            "On-device sampling is unavailable on this mesh (per-device vocab > 64K) "
+            "and the host-side fallback only supports greedy decoding. "
+            f"Got temperature={sampling_params['temperature']}."
+        )
+        assert not enable_log_probs, "Host-side sampling fallback does not support logprobs."
+        logger.info("On-device sampling unavailable; using host-side greedy argmax for decode.")
+
     # Prepare input prompts
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
@@ -787,15 +800,28 @@ def test_gpt_oss_demo(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Decode forward with on-device sampling
-            out_tok, _ = generator.decode_forward(
-                out_tok,
-                current_pos,
-                enable_trace=enable_decode_trace,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                sampling_params=device_sampling_params,
-            )
+            # Decode forward — on-device sampling when available, host-side
+            # greedy argmax otherwise (1×1 Blackhole, etc.)
+            if on_device_sampling_supported:
+                out_tok, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_decode_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    sampling_params=device_sampling_params,
+                )
+            else:
+                # decode_forward returns (logits, log_probs) when sampling_params=None.
+                logits, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_decode_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    sampling_params=None,
+                )
+                out_tok = torch.argmax(logits, dim=-1).view(-1)
 
             if iteration == 0:
                 profiler.end(f"compile_decode", iteration=batch_idx)

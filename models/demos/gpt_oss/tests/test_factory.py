@@ -118,7 +118,13 @@ def parametrize_mesh_with_fabric():
     num_devices = ttnn.get_num_devices()
     if num_devices == 1:
         mesh_params = [pytest.param((1, 1))]
-        fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 100000000}, id="no_fabric")]
+        fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
+    elif num_devices == 2:
+        # 2-card Blackhole (e.g. P300). Open a 1x2 base mesh; the test selects a
+        # submesh via the mesh_shape parametrize (use -k mesh_1x1 to run on a
+        # single card). Fabric stays disabled since 1x1 needs no CCL.
+        mesh_params = [pytest.param((1, 2))]
+        fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
     elif num_devices == 8:
         mesh_params = [pytest.param((1, 8))]
         fabric_params = [

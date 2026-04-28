@@ -51,10 +51,14 @@ def decode_forward(
     if seq_len != 1:
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
-    # QKV projection
-    xqkv_fused = ttnn.matmul(
-        hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-    )
+    # QKV projection. With TP>1 the per-device QKV is small enough to fit in
+    # an L1 width-sharded layout that nlp_create_qkv_heads_decode consumes
+    # directly. With TP=1 (e.g. single Blackhole card) the per-device QKV is
+    # TP× larger and overflows the per-core CB; spill to DRAM and let the
+    # kernel's interleaved program factory handle it (overlap_qk_coregrid=True
+    # is the default, which is what the interleaved path requires).
+    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.DRAM_MEMORY_CONFIG
+    xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
     ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
     # Split into Q, K, V heads
@@ -149,7 +153,6 @@ def decode_forward(
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
-
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 
