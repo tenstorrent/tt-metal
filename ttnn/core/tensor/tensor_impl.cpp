@@ -255,29 +255,31 @@ std::string to_string_impl(const Tensor& tensor) {
             tensor.layout());
     }
 
-    auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
-        if (tensor.layout() == Layout::ROW_MAJOR) {
-            return tensor;
-        }
-        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
-        }
-        return to_layout(tensor, Layout::ROW_MAJOR);
-    };
-
     auto get_host_buffers = [&](const HostStorage& storage) {
         std::vector<HostBuffer> buffers;
         storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
         return buffers;
     };
 
+    // Compute simple row-major strides for logical shape (no padding alignment)
+    auto compute_logical_strides = [](const tt::tt_metal::Shape& logical_shape) -> Strides {
+        const int rank = static_cast<int>(logical_shape.rank());
+        Strides strides(rank, 1);
+        for (int i = rank - 2; i >= 0; i--) {
+            strides[i] = strides[i + 1] * logical_shape[i + 1];
+        }
+        return strides;
+    };
+
     if (is_cpu_tensor(tensor)) {
-        const Tensor row_major_tensor = get_row_major_tensor(tensor);
-        const auto strides = row_major_tensor.tensor_spec().compute_strides();
-        const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+        const auto& tensor_spec = tensor.tensor_spec();
+        const std::vector<HostBuffer> buffers = get_host_buffers(tensor.host_storage());
+        const auto strides = compute_logical_strides(shape);
         std::stringstream ss;
         for (size_t i = 0; i < buffers.size(); i++) {
-            detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+            // Use decode_tensor_data to properly convert physical data to logical (removes padding)
+            auto logical_data = decode_tensor_data<T>(buffers[i].view_as<T>(), tensor_spec);
+            detail::to_string(ss, ttsl::make_const_span(logical_data), shape, strides, tensor.dtype(), tensor.layout());
             if (i + 1 != buffers.size()) {
                 ss << std::endl;
             }
@@ -298,17 +300,19 @@ std::string to_string_impl(const Tensor& tensor) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
     // }
 
-    const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
-    const auto strides = row_major_tensor.tensor_spec().compute_strides();
-    const auto coords = storage.get_coords();
+    const auto& tensor_spec = cpu_tensor.tensor_spec();
+    const auto strides = compute_logical_strides(shape);
+    const auto& coords = storage.coords;
     auto coords_it = coords.begin();
-    const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+    const std::vector<HostBuffer> buffers = get_host_buffers(cpu_tensor.host_storage());
     std::stringstream ss;
     for (size_t i = 0; i < buffers.size(); i++) {
         const distributed::MeshCoordinate coord = *coords_it++;
-        if (mesh_device.is_local(coord)) {
-            ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
-            detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+        if (mesh_device->is_local(coord)) {
+            ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+            // Use decode_tensor_data to properly convert physical data to logical (removes padding)
+            auto logical_data = decode_tensor_data<T>(buffers[i].view_as<T>(), tensor_spec);
+            detail::to_string(ss, ttsl::make_const_span(logical_data), shape, strides, tensor.dtype(), tensor.layout());
         }
         if (i + 1 != buffers.size()) {
             ss << std::endl;
