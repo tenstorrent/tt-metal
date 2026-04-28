@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/allocator.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -77,6 +78,41 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // If C_out_block is set, use it. Otherwise, use the full number of output channels.
     uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : padded_C_out;
     uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
+
+    // When C_in_block is auto-selected (config.C_in_block == 0), reduce it if the two dominant
+    // CBs (vol2col_tiled + weight_tiled) would exceed 75% of available L1.  Halve C_in_block
+    // until it is a divisor of C_in and the CBs fit.
+    if (config.C_in_block == 0 && C_in_block >= tt::constants::TILE_WIDTH) {
+        auto* device = input_tensor.device();
+        uint32_t l1_available =
+            device->l1_size_per_core() -
+            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint32_t kD = operation_attributes.kernel_size[0];
+        uint32_t kH = operation_attributes.kernel_size[1];
+        uint32_t kW = operation_attributes.kernel_size[2];
+        uint32_t cur_num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
+        uint32_t cur_M_t = tt::div_up(cur_num_patches, tt::constants::TILE_HEIGHT);
+        uint32_t cur_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
+        uint32_t cb_budget = l1_available * 3 / 4;
+        uint32_t try_block = C_in_block;
+        while (try_block >= tt::constants::TILE_WIDTH) {
+            uint32_t K_t = tt::div_up(kD * kH * kW * try_block, tt::constants::TILE_WIDTH);
+            uint32_t dominant_cb_bytes = tile_size * K_t * (cur_M_t + cur_N_t);
+            if (dominant_cb_bytes <= cb_budget && C_in % try_block == 0) {
+                break;
+            }
+            try_block /= 2;
+        }
+        if (try_block >= tt::constants::TILE_WIDTH && C_in % try_block == 0 && try_block < C_in_block) {
+            log_warning(
+                tt::LogOp,
+                "Conv3d: auto-reduced C_in_block from {} to {} to fit dominant CBs within L1 ({} B available)",
+                C_in_block,
+                try_block,
+                l1_available);
+            C_in_block = try_block;
+        }
+    }
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
                           operation_attributes.kernel_size[2] * C_in_block;
