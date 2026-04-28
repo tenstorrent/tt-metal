@@ -1173,21 +1173,16 @@ void write_block_row_grouped(
     const uint32_t tile_bytes,
     const uint32_t sbh,
     const uint32_t barrier_threshold) {
+    constexpr uint32_t default_trid = 0;
     uint32_t tile_id = out_tile_id;
     uint32_t barrier_count = 0;
     drain_cb_row_grouped(
-        cb_out,
-        total_rows,
-        cols,
-        tile_bytes,
-        sbh,
-        /*flush_trid=*/0,
-        [&](uint32_t row, uint32_t /*col*/, uint32_t l1_addr) {
+        cb_out, total_rows, cols, tile_bytes, sbh, default_trid, [&](uint32_t row, uint32_t /*col*/, uint32_t l1_addr) {
             if (row < write_rows) {
                 noc_async_write_tile(tile_id, out_writer, l1_addr);
                 ++tile_id;
                 if (++barrier_count == barrier_threshold) {
-                    noc_async_write_flushed_with_trid(0);
+                    noc_async_write_flushed_with_trid(default_trid);
                     barrier_count = 0;
                 }
             }
