@@ -551,6 +551,7 @@ class TtMoe(LightweightModule):
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
 
         logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
+        _dump_meta("post_to_tile")
 
         # NOTE: expert_outputs aliases dispatched_buffer_tiled — TtRoutedExpert.forward sets
         # expert_outputs = dispatched_buffer and then writes per-expert FFN results back
@@ -566,6 +567,7 @@ class TtMoe(LightweightModule):
                 dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets
             )
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
+        _dump_meta("post_routed_expert")
 
         # Add back the batch dimensions for combine
         # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
@@ -586,6 +588,10 @@ class TtMoe(LightweightModule):
             tt_expert_region_offsets,
         )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
+
+        # Debug: drain combine before reduce to isolate combine completion from downstream ops
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("[TtMoe.forward] post-combine synchronize_device complete")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)

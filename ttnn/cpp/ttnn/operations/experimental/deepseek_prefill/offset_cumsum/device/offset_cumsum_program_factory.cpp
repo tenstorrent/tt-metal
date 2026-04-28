@@ -121,6 +121,39 @@ CreatedProgram create_program(
 
 }  // namespace
 
+// Compute the row index this chip's exclusive-prefix-sum result should be written at.
+//
+// The gathered input has H rows where:
+//   - 1D mesh: H = subgroup_span_along_cluster_axis (n_rows=1)
+//   - 2D mesh: H = subgroup_span_along_cluster_axis * mesh_other_axis_size (n_rows=mesh_cols)
+//
+// To honor subgroup boundaries, row_idx must be the chip's position WITHIN its subgroup
+// (not within the full mesh axis). For 2D meshes we also need to fold in the other-axis
+// position so each (subgroup_row, other_axis_col) gets a unique slot.
+//
+//   subgroup_span = mesh.shape[cluster_axis] / num_dispatch_subgroups
+//   local_cluster = coord[cluster_axis] % subgroup_span     // resets at subgroup boundary
+//   For 1D mesh: row_idx = local_cluster
+//   For 2D mesh: row_idx = local_cluster * mesh_other_axis_size + coord[other_axis]
+static uint32_t compute_row_idx(
+    const ttnn::MeshCoordinate& coord,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    uint32_t cluster_axis,
+    uint32_t num_dispatch_subgroups) {
+    const uint32_t cluster_axis_size = mesh_shape[cluster_axis];
+    const uint32_t subgroup_span = cluster_axis_size / num_dispatch_subgroups;
+    const uint32_t local_cluster = coord[cluster_axis] % subgroup_span;
+
+    if (mesh_shape.dims() == 1 || coord.dims() == 1) {
+        return local_cluster;
+    }
+
+    const uint32_t other_axis = (cluster_axis == 0) ? 1 : 0;
+    const uint32_t mesh_other_size = mesh_shape[other_axis];
+    const uint32_t local_other = coord[other_axis];
+    return local_cluster * mesh_other_size + local_other;
+}
+
 OffsetCumsumProgramFactory::cached_mesh_workload_t OffsetCumsumProgramFactory::create_mesh_workload(
     const OffsetCumsumParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -129,15 +162,22 @@ OffsetCumsumProgramFactory::cached_mesh_workload_t OffsetCumsumProgramFactory::c
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    // The composite `offset_cumsum` above chose either a full-mesh all-gather (H ==
-    // num_devices) or a subgroup-scoped gather (H == dispatch_group_size). Either way,
-    // the prim kernel sums every row of its input, and the row at which this chip's
-    // offset gets written is `coord[cluster_axis] % H`.
-    const auto& input_shape = input.padded_shape();
-    const uint32_t input_H = input_shape[-2];
+    auto* mesh_device = input.device();
+    const auto& mesh_shape = mesh_device->shape();
 
     for (const auto& coord : tensor_coords.coords()) {
-        uint32_t row_idx = coord[operation_attributes.cluster_axis] % input_H;
+        uint32_t row_idx = compute_row_idx(
+            coord, mesh_shape, operation_attributes.cluster_axis, operation_attributes.num_dispatch_subgroups);
+
+        log_info(
+            tt::LogOp,
+            "offset_cumsum prim row_idx: coord={} mesh_shape={} cluster_axis={} num_dispatch_subgroups={} -> "
+            "row_idx={}",
+            coord,
+            mesh_shape,
+            operation_attributes.cluster_axis,
+            operation_attributes.num_dispatch_subgroups,
+            row_idx);
 
         auto result =
             create_program(input, tensor_return_value, row_idx, operation_attributes.experts_per_chip);
@@ -154,12 +194,13 @@ void OffsetCumsumProgramFactory::override_runtime_arguments(
     const OffsetCumsumParams& operation_attributes,
     const Tensor& input,
     tensor_return_value_t& tensor_return_value) {
-    const auto& input_shape = input.padded_shape();
-    const uint32_t input_H = input_shape[-2];
+    auto* mesh_device = input.device();
+    const auto& mesh_shape = mesh_device->shape();
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto coord = *(coord_range.begin());
-        uint32_t row_idx = coord[operation_attributes.cluster_axis] % input_H;
+        uint32_t row_idx = compute_row_idx(
+            coord, mesh_shape, operation_attributes.cluster_axis, operation_attributes.num_dispatch_subgroups);
 
         auto& shared_vars = cached_workload.shared_variables.at(coord_range);
         auto& runtime_args = GetRuntimeArgs(program, shared_vars.kernel_id, shared_vars.core);

@@ -159,10 +159,25 @@ void kernel_main() {
 
     open_direction_connections_barrier(directions, fabric_connections);
 
+    // Debug: dump unicast configuration once (per writer)
+    DPRINT << "Combine writer[" << linearized_mesh_coord << "]: cfg src_chip=" << src_chip_id
+           << " src_mesh=" << src_mesh_id << " mesh_rows=" << mesh_rows << " mesh_cols=" << mesh_cols
+           << " total_mesh_devices=" << total_mesh_devices << " init_sem_l1=0x" << HEX() << init_semaphore_address
+           << " pkt_hdr_l1=0x" << packet_header_buffer_address << DEC() << ENDL();
+    DPRINT << "Combine writer[" << linearized_mesh_coord << "]: directions={E=" << (uint32_t)directions[0]
+           << ",W=" << (uint32_t)directions[1] << ",N=" << (uint32_t)directions[2] << ",S=" << (uint32_t)directions[3]
+           << "}" << ENDL();
+    for (uint32_t _i = 0; _i < total_mesh_devices; _i++) {
+        DPRINT << "Combine writer[" << linearized_mesh_coord << "]: dest[" << _i
+               << "] chip=" << (uint32_t)dest_chip_ids[_i] << " mesh=" << (uint32_t)dest_mesh_ids[_i] << ENDL();
+    }
+
+    volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+
     // Init semaphore exchange
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
     DPRINT << "Combine writer[" << linearized_mesh_coord << "]: init send begin (combine_devices=" << combine_devices
-           << " expected=" << (combine_devices - 1) << ")" << ENDL();
+           << " expected=" << (combine_devices - 1) << ") sem_pre=" << *init_sem_ptr << ENDL();
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -172,13 +187,15 @@ void kernel_main() {
         axis,
         total_mesh_devices>(
         fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
-    DPRINT << "Combine writer[" << linearized_mesh_coord << "]: init send done; waiting" << ENDL();
+    DPRINT << "Combine writer[" << linearized_mesh_coord << "]: init send done; waiting (sem_now=" << *init_sem_ptr
+           << ")" << ENDL();
 
-    volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
     DPRINT << "Combine writer[" << linearized_mesh_coord << "]: init wait satisfied (val=" << *init_sem_ptr << ")"
            << ENDL();
     noc_semaphore_set(init_sem_ptr, 0);
+    DPRINT << "Combine writer[" << linearized_mesh_coord << "]: init sem reset (sem_now=" << *init_sem_ptr << ")"
+           << ENDL();
 
     DPRINT_COMBINE << "Fabric setup complete" << ENDL();
 #endif
@@ -192,6 +209,9 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
+
+    DPRINT << "Combine writer[" << linearized_mesh_coord << "]: data loop enter" << ENDL();
+    uint32_t fs_iter = 0;
 
     // Sentinel-terminated fabric send loop
     while (true) {
@@ -215,6 +235,11 @@ void kernel_main() {
                        << ENDL();
 
 #ifdef DEST_CHIP_ID
+        // Sample-print: first 3 iterations and every 500 iterations after, before send
+        if (fs_iter < 3 || (fs_iter % 500) == 0) {
+            DPRINT << "Combine writer[" << linearized_mesh_coord << "]: fs_pre#" << fs_iter << " route=" << route
+                   << " dist=" << distance << " page_idx=" << output_page_idx << ENDL();
+        }
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
@@ -225,10 +250,15 @@ void kernel_main() {
             (int)aligned_output_page_size,
             l1_alignment);
         noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+        if (fs_iter < 3 || (fs_iter % 500) == 0) {
+            DPRINT << "Combine writer[" << linearized_mesh_coord << "]: fs_post#" << fs_iter << ENDL();
+        }
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);
+        fs_iter++;
     }
+    DPRINT << "Combine writer[" << linearized_mesh_coord << "]: data loop done (total_fs=" << fs_iter << ")" << ENDL();
 
 #ifdef DEST_CHIP_ID
     // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
@@ -262,7 +292,8 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
-        DPRINT << "Combine writer[" << linearized_mesh_coord << "]: exit wait satisfied" << ENDL();
+        DPRINT << "Combine writer[" << linearized_mesh_coord << "]: exit wait satisfied (val=" << *exit_sem_ptr << ")"
+               << ENDL();
         noc_semaphore_set(exit_sem_ptr, 0);
     }
 

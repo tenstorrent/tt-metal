@@ -172,6 +172,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+    // Cluster/UMD device id — what DPRINT uses as line prefix.
+    uint32_t cluster_device_id = (uint32_t)mesh_device->get_device(mesh_coordinate)->id();
 
     // Subgroup-local view: kernel sees only chips inside `subgroup_range`.
     const auto subgroup_shape = subgroup_range.shape();
@@ -191,7 +193,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     log_info(
         tt::LogOp,
         "combine create_at: coord={} subgroup=[{}, {}] subgroup_num_rows={} subgroup_num_cols={} "
-        "subgroup_num_devices={} linearized_subgroup_coord={} src_mesh_id={} src_chip_id={}",
+        "subgroup_num_devices={} linearized_subgroup_coord={} src_mesh_id={} src_chip_id={} "
+        "cluster_device_id={}",
         mesh_coordinate,
         subgroup_range.start_coord(),
         subgroup_range.end_coord(),
@@ -200,7 +203,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         mesh_rows * mesh_cols,
         linearized_mesh_coord,
         src_mesh_id,
-        src_chip_id);
+        src_chip_id,
+        cluster_device_id);
 
     log_debug(
         tt::LogOp,

@@ -41,7 +41,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_comb
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (128, 7 * 1024, 16, 4, 2),
+        pytest.param(128, 7 * 1024, 16, 4, 2, id="small-128-7168-16-4-2"),
+        # Mirrors the combine shape from the hanging test_ttnn_moe_subgroups 4x2 case:
+        # combine input Tensor[0] = [1, 1, 16, 800, 7168] BFLOAT16 (experts_per_chip=16,
+        # max_dispatched_tokens_per_expert=800). Inputs use randn / randint with the same
+        # validation as the small case, so values are meaningful and a real torch reference
+        # is computed for PCC checks.
+        pytest.param(1600, 7 * 1024, 64, 8, 2, id="moe-shape-1600-7168-64-8-2"),
     ],
 )
 @pytest.mark.parametrize(
@@ -203,6 +209,24 @@ def test_ttnn_dispatch_combine_subgroups(
     tt_dispatched_buffer, tt_dispatched_metadata = tt_dispatch_module(
         tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
+
+    # Debug: same per-shard metadata address+content dump as moe path uses.
+    try:
+        _shards = ttnn.get_device_tensors(tt_dispatched_metadata)
+        for _si, _sh in enumerate(_shards):
+            try:
+                _addr = _sh.buffer_address()
+            except Exception:
+                _addr = None
+            _t = ttnn.to_torch(_sh).reshape(-1)
+            _first = _t[:12].tolist()
+            _csum = int(_t.to(_t.dtype).sum().item()) & 0xFFFFFFFF
+            _addr_s = f"0x{_addr:x}" if _addr is not None else "n/a"
+            logger.info(
+                f"[meta-track unit_post_dispatch] shard={_si} addr={_addr_s} csum=0x{_csum:08x} first12={_first}"
+            )
+    except Exception as _e:
+        logger.warning(f"[meta-track unit_post_dispatch] dump failed: {_e}")
 
     # Run TTNN combine on the TTNN dispatch outputs (the path that hangs in TtMoe.forward).
     tt_combine_module = TtCombineModule(

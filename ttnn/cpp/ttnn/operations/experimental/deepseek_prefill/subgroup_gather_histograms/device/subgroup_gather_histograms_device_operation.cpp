@@ -51,6 +51,17 @@ SubgroupGatherHistogramsDeviceOperation::compute_output_specs(
     const uint32_t subgroup_rows = axis_size / args.num_dispatch_subgroups;
 
     auto output_shape = ttnn::Shape({subgroup_rows * n_rows, n_routed_experts});
+    log_info(
+        tt::LogOp,
+        "subgroup_gather_histograms compute_output_specs: input_shape={} cluster_axis={} "
+        "num_dispatch_subgroups={} axis_size={} n_rows={} subgroup_rows={} -> output_shape={}",
+        input_shape,
+        args.cluster_axis,
+        args.num_dispatch_subgroups,
+        axis_size,
+        n_rows,
+        subgroup_rows,
+        output_shape);
     auto layout = tt::tt_metal::TensorLayout(
         DataType::UINT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config);
     return TensorSpec(output_shape, layout);
