@@ -235,6 +235,12 @@ run_t3000_ttnn_tests() {
   #   saves ~2s per device vs FIX AL alone; caught TestMeshWidthShardedCopy3D timeout in CI run 25048641877
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
 
+  # GAP-35: FIX AT — Phase 5 handshake poll skipped when MMIO master chan was FIX AS Pass-0
+  #   timeout'd (WH BRISC boot >500ms → status=0x0, no firmware loaded). Without FIX AT:
+  #   Phase 5 polls for 10s per MMIO device = 20s overhead per cycle (2 MMIO devices on T3K).
+  #   Caught AsyncExecutionWorksCQ0 timeout in CI run 25054499947.
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap35_fixat_fixas_mmio_phase5_skip.py ; record_test
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

@@ -2869,8 +2869,31 @@ void Device::wait_for_fabric_workers_ready() {
         }
         bool phase5_relay_read_threw = false;
 
-        // Skip the handshake poll if the master channel is pre-known dead.
-        const bool master_is_dead = fabric_pre_dead_channels_.count(master_chan) > 0;
+        // Skip the handshake poll if the master channel is pre-known dead (FIX AN) or
+        // was newly-dead via FIX AS Pass-0 timeout (FIX AT).
+        //
+        // FIX AT (#42429): FIX AS marks master-chan newly-dead in pending_quiesce_newly_dead_eth_chans_
+        // when the UMD canary poll (500ms) fires before the BRISC writes 0x49706550.  Without FIX AT,
+        // Phase 5 polls master chan for kSyncTimeoutMs (10s) and reads 0x0 throughout — no firmware
+        // was launched, so the status never advances.  FIX-1 then sets fabric_relay_path_broken_=true
+        // and Phase 5b is skipped.  FIX AT short-circuits that 10s wait:
+        //   1. Detects master chan in pending_quiesce_newly_dead_eth_chans_ (FIX AS outcome).
+        //   2. Sets fabric_relay_path_broken_=true immediately (so Phase 5b is skipped via FIX U/V).
+        //   3. Skips the 10s Phase 5 poll.
+        // Per-device savings: kSyncTimeoutMs (10s).  T3K 2×4 with 2 MMIO devices affected: 20s/cycle.
+        const bool master_newly_dead_fixas = pending_quiesce_newly_dead_eth_chans_.count(master_chan) > 0;
+        if (master_newly_dead_fixas) {
+            fabric_relay_path_broken_ = true;
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5: master chan {} was FIX AS "
+                "Pass-0 timeout'd (status=0x0, no firmware loaded) — skipping {}ms handshake "
+                "poll + setting fabric_relay_path_broken_=true to skip Phase 5b. (FIX AT: #42429)",
+                this->id(),
+                master_chan,
+                kSyncTimeoutMs);
+        }
+        const bool master_is_dead = fabric_pre_dead_channels_.count(master_chan) > 0 || master_newly_dead_fixas;
         if (!master_is_dead) {
             log_info(
                 tt::LogMetal,
