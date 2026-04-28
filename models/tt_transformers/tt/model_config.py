@@ -483,6 +483,8 @@ class ModelArgs:
         "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
         "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
         "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+        "Qwen3-Embedding-0.6B": "models/tt_transformers/model_params/Qwen3-Embedding-0.6B",
+        "Qwen3-Embedding-4B": "models/tt_transformers/model_params/Qwen3-Embedding-4B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -545,9 +547,11 @@ class ModelArgs:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
 
+            self._hf_files_base_path = None
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
+                self._hf_files_base_path = os.path.normpath(self.CACHE_PATH)
                 self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
             if self.use_hf_rope:
                 self.CACHE_PATH = os.path.join(self.CACHE_PATH, "hf_rope")
@@ -575,6 +579,10 @@ class ModelArgs:
         # If the weights file contain the keyword `instruct` also set self.instruct to true
         if any(keyword in self.CKPT_DIR.lower() for keyword in ("instruct", "it")):
             self.instruct = True
+
+        self.hf_pretrained_path = self._resolve_hf_pretrained_path()
+        if self.hf_pretrained_path != self.CKPT_DIR:
+            logger.info(f"transformers from_pretrained path (TT_CACHE/offline): {self.hf_pretrained_path}")
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
         # 25: common embedding throughput batch (e.g. Qwen3-Embedding perf tests)
@@ -2876,6 +2884,34 @@ class ModelArgs:
         self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
         self.vision_n_global_layers = vision_config.get("n_global_layers", vision_config.get("num_global_layers", 8))
 
+    def _resolve_hf_pretrained_path(self) -> str:
+        """Path for transformers ``*.from_pretrained`` (config, tokenizer, PyTorch weights).
+
+        With ``CI=true``, ``local_files_only=True`` only reads disk. Hub ids are looked up under the
+        HF hub cache; many CI layouts instead store a full snapshot under ``TT_CACHE_PATH`` (same
+        layout as ``HF_MODEL`` but on disk: ``config.json`` next to ``N150/`` etc.). In that case use
+        ``TT_CACHE_PATH`` before the device suffix. Optional ``HF_MODEL_LOCAL`` overrides when it
+        contains ``config.json``.
+        """
+        override = os.environ.get("HF_MODEL_LOCAL")
+        if override:
+            o = os.path.normpath(override)
+            if os.path.isfile(os.path.join(o, "config.json")):
+                logger.info(f"HF_MODEL_LOCAL: using {o} for transformers from_pretrained")
+                return o
+            logger.warning(f"HF_MODEL_LOCAL is set but {o}/config.json not found; falling back to HF_MODEL")
+
+        ckpt = self.CKPT_DIR
+        if os.path.isdir(ckpt) and os.path.isfile(os.path.join(ckpt, "config.json")):
+            return ckpt
+
+        base = getattr(self, "_hf_files_base_path", None)
+        if base and os.path.isfile(os.path.join(base, "config.json")):
+            logger.info(f"Using HF snapshot under TT_CACHE_PATH for transformers: {base}")
+            return base
+
+        return ckpt
+
     def _set_hf_params(self, checkpoint_dir):
         def merge_text_config(base_config):
             text_config = base_config.get("text_config", {})
@@ -2898,7 +2934,7 @@ class ModelArgs:
             )
         else:
             self.hf_config = AutoConfig.from_pretrained(
-                self.CKPT_DIR,
+                self.hf_pretrained_path,
                 trust_remote_code=self.trust_remote_code_hf,
                 local_files_only=os.getenv("CI") == "true",
             )
@@ -3090,7 +3126,7 @@ class ModelArgs:
             # Always HuggingFace since we only support HF_MODEL now
             model_cls = self.get_hf_model_cls()
             model = model_cls.from_pretrained(
-                self.CKPT_DIR,
+                self.hf_pretrained_path,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
                 local_files_only=os.getenv("CI") == "true"
@@ -3534,13 +3570,13 @@ class ModelArgs:
             # Try to load tokenizer from the original model path
             # If there is no Processor, it will return Tokenizer (useful for multimodal models)
             tokenizer = AutoTokenizer.from_pretrained(
-                self.TOKENIZER_PATH,
+                self.hf_pretrained_path,
                 local_files_only=os.getenv("CI") == "true",
                 trust_remote_code=self.trust_remote_code_hf,
             )
-            logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+            logger.info(f"Successfully loaded tokenizer from {self.hf_pretrained_path}")
         except Exception as e:
-            logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+            logger.warning(f"Failed to load tokenizer from {self.hf_pretrained_path}: {e}")
 
         # Only try fallback if initial load failed
         if tokenizer is None:
@@ -3608,10 +3644,12 @@ class ModelArgs:
 
         processor = None
         try:
-            processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
-            logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
+            processor = AutoProcessor.from_pretrained(
+                self.hf_pretrained_path, local_files_only=os.getenv("CI") == "true"
+            )
+            logger.info(f"Successfully loaded processor from {self.hf_pretrained_path}")
         except Exception as e:
-            logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
+            logger.warning(f"Failed to load processor from {self.hf_pretrained_path}: {e}")
 
         return processor
 
@@ -3657,7 +3695,7 @@ class ModelArgs:
             try:
                 # .from_pretrained + _init_weights works faster than .from_config
                 model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
+                    self.hf_pretrained_path,
                     config=config,
                     torch_dtype="auto",
                     trust_remote_code=self.trust_remote_code_hf,
@@ -3689,7 +3727,7 @@ class ModelArgs:
                 try:
                     # .from_pretrained + _init_weights works faster than .from_config
                     model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
+                        self.hf_pretrained_path,
                         config=config,
                         torch_dtype="auto",
                         trust_remote_code=self.trust_remote_code_hf,
@@ -3703,7 +3741,7 @@ class ModelArgs:
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
+                        self.hf_pretrained_path,
                         torch_dtype="auto",
                         local_files_only=os.getenv("CI") == "true",
                         trust_remote_code=self.trust_remote_code_hf,
@@ -3714,7 +3752,7 @@ class ModelArgs:
                 else:
                     # No caching - load fresh each time
                     model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
+                        self.hf_pretrained_path,
                         torch_dtype="auto",
                         trust_remote_code=self.trust_remote_code_hf,
                         local_files_only=os.getenv("CI") == "true",
@@ -3775,7 +3813,7 @@ class ModelArgs:
             try:
                 # .from_pretrained + _init_weights works faster than .from_config
                 model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
+                    self.hf_pretrained_path,
                     config=config,
                     torch_dtype="auto",
                     trust_remote_code=self.trust_remote_code_hf,
@@ -3789,7 +3827,7 @@ class ModelArgs:
         else:
             if self.cached_hf_model is None:
                 model = model_cls.from_pretrained(
-                    self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+                    self.hf_pretrained_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
                 )
                 self.cached_hf_model = model
             else:
