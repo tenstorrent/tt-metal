@@ -56,9 +56,17 @@ def _model_matches(model_key: str, model_name: str, model_block: dict[str, Any])
 def _entry_matches(entry: dict[str, Any], batch_size: int | None, seq_len: int | None) -> bool:
     entry_batch = entry.get("batch_size")
     entry_seq = entry.get("seq_len")
-    if batch_size is not None and entry_batch is not None and entry_batch != batch_size:
+
+    if batch_size is None:
+        if entry_batch is not None:
+            return False
+    elif entry_batch is not None and entry_batch != batch_size:
         return False
-    if seq_len is not None and entry_seq is not None and entry_seq != seq_len:
+
+    if seq_len is None:
+        if entry_seq is not None:
+            return False
+    elif entry_seq is not None and entry_seq != seq_len:
         return False
     return True
 
