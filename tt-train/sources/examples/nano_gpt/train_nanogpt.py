@@ -55,7 +55,13 @@ from ttml.models.qwen3 import (
     Qwen3RopeScalingConfig,
 )
 from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
+from ttml.common.utils import (
+    round_up_to_tile,
+    get_tt_metal_runtime_root,
+    create_optimizer,
+    summary,
+    get_allocatable_device_memory_in_bytes,
+)
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
@@ -1616,6 +1622,8 @@ def main():
                         MemoryUsageTracker.clear()
                         if memory_guard:
                             memory_guard.release()
+                        allocatable_dram = get_allocatable_device_memory_in_bytes()
+                        print(f"Allocatable Device Memory: {allocatable_dram:.2f} bytes")
 
                     profiler_marker(None, f"iteration_{global_step}", dump_results=True)
                     if global_step == start_step + 1:

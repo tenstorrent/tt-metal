@@ -51,19 +51,7 @@ def get_arch_name() -> str:
         return arch_name.read().rstrip()
 
 
-def get_allocatable_device_memory() -> float:
-    try:
-        import ttnn
-
-        with ttnn.manage_device(device_id=0) as device:
-            dram_view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
-            total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * ttnn.get_num_devices()
-            return total_dram
-    except:
-        return 12 * 1024 * 1024 * 1024
-
-
-def run_and_save_log(cmd: list[str], log_path: Path):
+def run_and_save_log(cmd: list[str], log_path: Path) -> int:
     """Run a command, writing stdout to log_path and to this process's stdout. Return exit code."""
     print(f"Running: {' '.join(cmd)}")
     with open(log_path, "w") as log_file:
@@ -253,9 +241,7 @@ def main() -> int:
             continue
 
         # Extract the following metrics from the log
-        memory_data = analyze_memory.main(
-            ["--logs", str(log_path), "--device_memory", str(get_allocatable_device_memory())]
-        )
+        memory_data = analyze_memory.main(["--logs", str(log_path)])
         if memory_data is None:
             raise Exception(f"analyze_memory returned None. Please check the log {log_path}.")
         print(memory_data)

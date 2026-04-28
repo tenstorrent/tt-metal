@@ -45,6 +45,20 @@ def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
     return None
 
 
+def extract_allocatable_device_memory(content: str, start_pos: int) -> Optional[int]:
+    """Extract number of parameters from logs before the memory summary"""
+    # Search forward from a reasonable position before start
+    search_start = max(0, start_pos - 1000)
+    text_before = content[search_start:start_pos]
+    text_before = text_before.replace(",", "")
+    print(text_before)
+    match = re.search(r"Allocatable Device Memory:\s+([\d.]+)\s*bytes", content)
+    if match:
+        print("MEMORY:", float(match.group(1)))
+        return float(match.group(1))
+    return None
+
+
 def parse_memory_section(section: str) -> Dict[str, Dict[str, float]]:
     """Parse a memory usage summary section and extract metrics"""
     metrics = {}
@@ -462,6 +476,8 @@ def main(raw_args=None):
     # Find all memory summaries
     summaries = find_memory_summaries(content)
 
+    device_memory = extract_allocatable_device_memory(content, 0)
+
     if not summaries:
         raise ValueError("No memory usage summaries found in the log file")
 
@@ -501,7 +517,7 @@ def main(raw_args=None):
             model_size_bytes,
             optimizer_size_bytes,
             gradients_size_bytes,
-            args.device_memory,
+            device_memory if device_memory is not None else args.device_memory,
             args.use_actual_sizes,
         )
         if breakdown:
