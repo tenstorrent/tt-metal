@@ -1400,14 +1400,14 @@ struct NocCounterSnapshot {
     uint32_t posted_writes_num_issued;
 };
 
-FORCE_INLINE
-NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
+template <uint32_t noc_index>
+FORCE_INLINE NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
     return {
-        .reads_num_issued = noc_reads_num_issued[upstream_noc_index],
-        .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[upstream_noc_index],
-        .nonposted_writes_acked = noc_nonposted_writes_acked[upstream_noc_index],
-        .nonposted_atomics_acked = noc_nonposted_atomics_acked[upstream_noc_index],
-        .posted_writes_num_issued = noc_posted_writes_num_issued[upstream_noc_index]
+        .reads_num_issued = noc_reads_num_issued[noc_index],
+        .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[noc_index],
+        .nonposted_writes_acked = noc_nonposted_writes_acked[noc_index],
+        .nonposted_atomics_acked = noc_nonposted_atomics_acked[noc_index],
+        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]
     };
 }
 
@@ -1470,7 +1470,7 @@ void kernel_main() {
 
     [[maybe_unused]] NocCounterSnapshot dispatch_d_noc_counter_start = {};
     if constexpr (publish_noc_count) {
-        dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters();
+        dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters<upstream_noc_index>();
     }
 
     for (size_t i = 0; i < max_num_worker_sems; i++) {
