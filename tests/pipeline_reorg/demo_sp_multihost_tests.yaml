@@ -115,7 +115,7 @@
           if [ -n "$tt_smi" ] && [ -x "$tt_smi" ]; then
             echo "Using tt-smi at $tt_smi on $(hostname)"
             # exec replaces this remote shell, so mpirun sees tt-smi's exit code.
-            exec "$tt_smi" -glx_reset
+            exec "$tt_smi" -glx_reset_auto
           fi
         done
 
@@ -124,7 +124,7 @@
           if [ -n "$tt_smi" ]; then
             echo "Using tt-smi at $tt_smi on $(hostname)"
             # exec replaces this remote shell, so mpirun sees tt-smi's exit code.
-            exec "$tt_smi" -glx_reset
+            exec "$tt_smi" -glx_reset_auto
           fi
         done
 
