@@ -36,7 +36,7 @@ def make_kernel():
         ht = input_t.shape[0] // TILE_WIDTH
         wt = input_t.shape[1] // TILE_WIDTH
         block_size = get_block_size(wt)
-        bs = block_size
+        bs = 2
         # DFB tile shape for one reader/writer "push": one tile-row × block_size column tiles
         tr, tc = 1, bs
         # Inner width in elements for one full tile-row strip
@@ -107,6 +107,7 @@ def make_kernel():
                         # where gained_dL_dout = (gamma / rms_a) * dL_dout.
                         with scale_red_dfb.reserve() as sr:
                             sr.store(ttl.math.reduce_sum(contrib_wide_dfb.wait(), scv, dims=[1]))
+                        srt = scale_red_dfb.wait()
                         with scale_red_dfb.wait() as srt, scale_bc_blk_dfb.reserve() as sbb:
                             sbb.store(ttl.math.broadcast(srt, sbb, dims=[1]))
                         sbv = scale_bc_blk_dfb.wait()
