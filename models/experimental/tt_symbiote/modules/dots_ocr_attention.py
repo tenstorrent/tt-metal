@@ -47,6 +47,8 @@ class TTNNDotsOCRAttention(TTNNModule):
         self._q_bias = None
         self._k_bias = None
         self._v_bias = None
+        self._qkv_bias_torch = None
+        self._qkv_bias = None
         self._q_size = None
         self._kv_size = None
 
@@ -89,6 +91,21 @@ class TTNNDotsOCRAttention(TTNNModule):
             new_attn._k_bias_torch = hf_attn.k_proj.bias.data.clone()
         if hf_attn.v_proj.bias is not None:
             new_attn._v_bias_torch = hf_attn.v_proj.bias.data.clone()
+
+        # Fused QKV bias for nlp_create_qkv_heads path
+        if (
+            new_attn._q_bias_torch is not None
+            and new_attn._k_bias_torch is not None
+            and new_attn._v_bias_torch is not None
+        ):
+            new_attn._qkv_bias_torch = torch.cat(
+                [
+                    new_attn._q_bias_torch,
+                    new_attn._k_bias_torch,
+                    new_attn._v_bias_torch,
+                ],
+                dim=0,
+            )
 
         # O projection
         new_attn.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(hf_attn.o_proj)
@@ -161,6 +178,16 @@ class TTNNDotsOCRAttention(TTNNModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+        if self._qkv_bias_torch is not None:
+            self._qkv_bias = ttnn.from_torch(
+                self._qkv_bias_torch.unsqueeze(0).unsqueeze(0),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         config = self._fallback_torch_layer.config
         setup_key = (id(self.device), self.head_dim, config.rope_theta, 1.0)
         if setup_key not in TTNNDotsOCRAttention._shared_rotary_setups:
@@ -195,40 +222,33 @@ class TTNNDotsOCRAttention(TTNNModule):
             return self._decode_cur_pos
         return cp
 
-    def _project_qkv(self, hidden_states, batch_size, seq_length):
+    def _project_qkv_fused(self, hidden_states, batch_size, seq_length):
+        """Project hidden states to fused QKV tensor, ready for nlp_create_qkv_heads."""
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         qkv_states = self.qkv_proj(hidden_states)
 
-        q_size = self._q_size
-        kv_size = self._kv_size
-        query_states = ttnn.slice(qkv_states, [0, 0, 0], [batch_size, seq_length, q_size])
-        key_states = ttnn.slice(qkv_states, [0, 0, q_size], [batch_size, seq_length, q_size + kv_size])
-        value_states = ttnn.slice(qkv_states, [0, 0, q_size + kv_size], [batch_size, seq_length, q_size + 2 * kv_size])
-        ttnn.deallocate(qkv_states)
+        if self._qkv_bias is not None:
+            qkv_states = ttnn.add(qkv_states, self._qkv_bias)
 
-        if self._q_bias is not None:
-            query_states = ttnn.add(query_states, self._q_bias)
-        if self._k_bias is not None:
-            key_states = ttnn.add(key_states, self._k_bias)
-        if self._v_bias is not None:
-            value_states = ttnn.add(value_states, self._v_bias)
+        # Reshape to 4D for nlp_create_qkv_heads: [B, 1, S, D]
+        qkv_states = ttnn.reshape(qkv_states, (batch_size, 1, seq_length, -1))
 
-        return query_states, key_states, value_states
+        return qkv_states
 
     def _forward_prefill(self, hidden_states, attention_mask, past_key_values, cache_position):
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
-        query_states, key_states, value_states = self._project_qkv(hidden_states, batch_size, seq_length)
-
-        query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_attention_heads, self.head_dim))
-        key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-        value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-
-        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
+        qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length)
+        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_states,
+            num_heads=self.num_attention_heads,
+            num_kv_heads=self.num_key_value_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv_states)
 
         seq_len = query_states.shape[2]
         cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
@@ -280,15 +300,15 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         cur_pos_tt = self._get_cur_pos_device_tensor(cache_position, batch_size)
 
-        query_states, key_states, value_states = self._project_qkv(hidden_states, batch_size, seq_length)
-
-        query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_attention_heads, self.head_dim))
-        key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-        value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-
-        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
+        qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length)
+        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_states,
+            num_heads=self.num_attention_heads,
+            num_kv_heads=self.num_key_value_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv_states)
 
         if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
             query_states = ttnn.typecast(query_states, ttnn.bfloat16)
