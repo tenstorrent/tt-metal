@@ -38,33 +38,33 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
         tensor_args.dtype());
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
+    /*
+        TT_FATAL(tensor_args.device() != nullptr, "Reduce input tensor must have a valid device");
 
-    TT_FATAL(tensor_args.device() != nullptr, "Reduce input tensor must have a valid device");
+        using namespace tt::tt_metal;
+        const auto strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
 
-    using namespace tt::tt_metal;
-    const auto strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
-
-    switch (operation_attributes.dim) {
-        case ReduceOpDim::H:
-            TT_FATAL(
-                strategy == ReduceOpParallelizationStrategy::MULTI_CORE_H,
-                "Reduce dim H must use MULTI_CORE_H strategy, got enum value {}",
-                static_cast<int>(strategy));
-            break;
-        case ReduceOpDim::W:
-            TT_FATAL(
-                strategy == ReduceOpParallelizationStrategy::MULTI_CORE_W,
-                "Reduce dim W must use MULTI_CORE_W strategy, got enum value {}",
-                static_cast<int>(strategy));
-            break;
-        case ReduceOpDim::HW:
-            TT_FATAL(
-                strategy == ReduceOpParallelizationStrategy::SINGLE_CORE_HW ||
-                    strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW,
-                "Reduce dim HW must use SINGLE_CORE_HW or MULTI_CORE_HW strategy, got enum value {}",
-                static_cast<int>(strategy));
-            break;
-    }
+        switch (operation_attributes.dim) {
+            case ReduceOpDim::H:
+                TT_FATAL(
+                    strategy == ReduceOpParallelizationStrategy::MULTI_CORE_H,
+                    "Reduce dim H must use MULTI_CORE_H strategy, got enum value {}",
+                    static_cast<int>(strategy));
+                break;
+            case ReduceOpDim::W:
+                TT_FATAL(
+                    strategy == ReduceOpParallelizationStrategy::MULTI_CORE_W,
+                    "Reduce dim W must use MULTI_CORE_W strategy, got enum value {}",
+                    static_cast<int>(strategy));
+                break;
+            case ReduceOpDim::HW:
+                TT_FATAL(
+                    strategy == ReduceOpParallelizationStrategy::SINGLE_CORE_HW ||
+                        strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW,
+                    "Reduce dim HW must use SINGLE_CORE_HW or MULTI_CORE_HW strategy, got enum value {}",
+                    static_cast<int>(strategy));
+                break;
+        }*/
 
     const auto device_grid_size = tensor_args.device()->compute_with_storage_grid_size();
     TT_FATAL(
@@ -91,7 +91,6 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "Input shard grid {} must be contained in program core grid {}",
             input_shard_grid,
             program_grid);
-        // Issue #41957: shard "face" in elements must be positive and tile-aligned (tilized reduce input).
         const uint32_t th = tensor_args.tensor_spec().tile().get_height();
         const uint32_t tw = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(

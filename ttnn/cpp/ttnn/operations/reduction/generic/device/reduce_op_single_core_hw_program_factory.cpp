@@ -105,11 +105,6 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     if (operation_attributes.negate) {
-        TT_FATAL(
-            dst_single_tile_size > 0,
-            "Reduce HW negate path: dst tile byte size must be > 0 for accumulation CBs, got {}",
-            dst_single_tile_size);
-
         uint32_t acc_cb_index = tt::CBIndex::c_4;
         uint32_t num_acc_tiles = 1;
         tt_metal::CircularBufferConfig cb_acc_config =

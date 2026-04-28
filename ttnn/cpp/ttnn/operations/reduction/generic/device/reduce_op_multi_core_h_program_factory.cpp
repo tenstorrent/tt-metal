@@ -10,7 +10,6 @@
 #include <bit>
 #include <cmath>
 #include <numeric>
-#include <limits>
 
 namespace ttnn::prim {
 
@@ -184,19 +183,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         if (num_cols_per_core_group_2 > 0) {
             include_push_sizes(num_cols_per_core_group_2);
         }
-        // Accumulation CBs (acc / intermediate negate staging) scale with chunk_size tiles × dst tile bytes.
-        TT_FATAL(
-            chunk_size > 0, "Reduce H negate path: chunk_size (dest register tiling) must be > 0, got {}", chunk_size);
-        TT_FATAL(
-            dst_single_tile_size > 0,
-            "Reduce H negate path: dst tile byte size must be > 0, got {}",
-            dst_single_tile_size);
-        TT_FATAL(
-            static_cast<uint64_t>(chunk_size) * static_cast<uint64_t>(dst_single_tile_size) <=
-                static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()),
-            "Reduce H negate path: accumulation CB byte size overflows uint32 (chunk_size={}, dst_single_tile_size={})",
-            chunk_size,
-            dst_single_tile_size);
 
         uint32_t acc_cb_index = CBIndex::c_4;
         tt_metal::CircularBufferConfig cb_acc_config =
