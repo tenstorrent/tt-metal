@@ -117,18 +117,21 @@ public:
         get_max_num_eth_cores_(get_max_num_eth_cores),
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {
         bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
+        bool are_fd_kernels_on_same_core = descriptor.cluster().arch() == tt::ARCH::QUASAR && descriptor.num_cqs() == 1;
         dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
             CoreType::WORKER,
             descriptor.num_cqs(),
             descriptor.hal(),
             is_galaxy_cluster,
-            descriptor.rtoptions().get_dram_backed_cq());
+            descriptor.rtoptions().get_dram_backed_cq(),
+            are_fd_kernels_on_same_core);
         dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
             CoreType::ETH,
             descriptor.num_cqs(),
             descriptor.hal(),
             is_galaxy_cluster,
-            descriptor.rtoptions().get_dram_backed_cq());
+            descriptor.rtoptions().get_dram_backed_cq(),
+            /*are_fd_kernels_on_same_core=*/false);
     }
     virtual ~FDKernel() = default;
 

@@ -36,7 +36,8 @@ public:
         uint32_t num_hw_cqs,
         const Hal& hal,
         bool is_galaxy_cluster,
-        bool are_cqs_dram_backed);
+        bool are_cqs_dram_backed,
+        bool are_fd_kernels_on_same_core);
 
     uint32_t prefetch_q_entries() const;
 

@@ -229,10 +229,21 @@ void MetalContext::initialize(
         dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
+    bool are_fd_kernels_on_same_core = get_cluster().arch() == tt::ARCH::QUASAR && num_hw_cqs == 1;
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
+        CoreType::WORKER,
+        num_hw_cqs,
+        hal(),
+        is_galaxy_cluster,
+        rtoptions().get_dram_backed_cq(),
+        are_fd_kernels_on_same_core);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
+        CoreType::ETH,
+        num_hw_cqs,
+        hal(),
+        is_galaxy_cluster,
+        rtoptions().get_dram_backed_cq(),
+        /*are_fd_kernels_on_same_core=*/false);
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());

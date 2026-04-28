@@ -67,18 +67,21 @@ void DispatchKernelInitializer::init(
     devices_ = devices;
 
     bool is_galaxy_cluster = descriptor_->cluster().is_galaxy_cluster();
+    bool are_fd_kernels_on_same_core = descriptor_->cluster().arch() == tt::ARCH::QUASAR && descriptor_->num_cqs() == 1;
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
         CoreType::WORKER,
         descriptor_->num_cqs(),
         descriptor_->hal(),
         is_galaxy_cluster,
-        descriptor_->rtoptions().get_dram_backed_cq());
+        descriptor_->rtoptions().get_dram_backed_cq(),
+        are_fd_kernels_on_same_core);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
         CoreType::ETH,
         descriptor_->num_cqs(),
         descriptor_->hal(),
         is_galaxy_cluster,
-        descriptor_->rtoptions().get_dram_backed_cq());
+        descriptor_->rtoptions().get_dram_backed_cq(),
+        /*are_fd_kernels_on_same_core=*/false);
 
     // Skip firmware initialization for mock devices
     if (descriptor_->is_mock_device()) {
