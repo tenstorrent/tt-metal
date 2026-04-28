@@ -58,6 +58,14 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+
+// ttnvtop program registrar: publishes {runtime_id -> name} mappings
+// into /dev/shm/tt_program_registry so the ttnvtop viewer can label
+// live programs. Hot path is a single atomic-bool load when the env
+// var TTNVTOP_REGISTER_PROGRAMS is unset, so unconditional calls here
+// are safe.
+#include "tools/ttnvtop/registrar/ttnvtop_register.hpp"
+#include "tools/ttnvtop/registrar/tt_metal_name.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
@@ -1720,6 +1728,9 @@ public:
 
                 std::ranges::fill(kernel_config.kernel_config_base(), 0);
                 kernel_config.host_assigned_id() = program.get_runtime_id();
+                // ttnvtop: publish {runtime_id -> program_name} (no-op when disabled).
+                ttnvtop::register_program(
+                    static_cast<uint32_t>(program.get_runtime_id()), ttnvtop::ttnvtop_program_name(program).c_str());
 
                 // Setup values for dataflow kernel APIs for getting logical and relative coordinates
                 const auto& origin = get_sub_device_worker_origin(
@@ -2408,6 +2419,9 @@ void update_program_dispatch_commands(
         }
         launch_msg.kernel_config().host_assigned_id() = program.get_runtime_id();
     }
+    // ttnvtop: publish {runtime_id -> program_name} (no-op when disabled).
+    ttnvtop::register_program(
+        static_cast<uint32_t>(program.get_runtime_id()), ttnvtop::ttnvtop_program_name(program).c_str());
     // Update launch message addresses to reflect new launch_msg slot in ring buffer
     uint32_t multicast_cores_launch_msg_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
@@ -2593,6 +2607,12 @@ void update_traced_program_dispatch_commands(
             launch_msg.kernel_config().kernel_config_base()[i] = dispatch_md.nonbinary_kernel_config_addrs[i].addr;
         }
         launch_msg.kernel_config().host_assigned_id() = trace_node.program_runtime_id;
+        // ttnvtop: trace replay does NOT re-register. The program was already
+        // dispatched once via the normal path during trace capture (sites at
+        // ~L1732 / L2424), which wrote a real name to the registry. Re-
+        // registering here on every replay with a synthetic "prog_<id>"
+        // would overwrite the good name and the viewer would lose the
+        // human-readable label every time a trace replays.
         if (is_multicast) {
             uint32_t i = 0;
             for (auto original_kernel_text_offset : original_launch_msg.view().kernel_config().kernel_text_offset()) {
@@ -2760,6 +2780,14 @@ void write_program_command_sequence(
 }
 
 TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_workers, bool use_prefetcher_cache) {
+    // ttnvtop: trace capture is the only place the trace flow has a real
+    // ProgramImpl reference. Register the program's human-readable name here
+    // so the registry still has a good label even if the program runs
+    // exclusively via trace replay (no normal dispatch path ever fires).
+    // Hot-path no-op when TTNVTOP_REGISTER_PROGRAMS is unset.
+    ttnvtop::register_program(
+        static_cast<uint32_t>(program.get_runtime_id()), ttnvtop::ttnvtop_program_name(program).c_str());
+
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
     program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
     uint64_t command_hash = *device->get_active_sub_device_manager_id();

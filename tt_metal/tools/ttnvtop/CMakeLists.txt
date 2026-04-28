@@ -70,3 +70,28 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/tools
 )
+
+# ----- ttnvtop_register (writer-side registrar static lib) -----
+#
+# Tiny tt-metal-free static library that workloads link to publish
+# {runtime_id -> program_name} mappings into /dev/shm/tt_program_registry.
+# The hot path is a single atomic-bool load when TTNVTOP_REGISTER_PROGRAMS
+# is unset, so unconditional linking into tt-metal is safe.
+#
+# Intentionally not linked to anything by default — consumers pull it in
+# explicitly. Only the bridge file `tt_metal_name.cpp` (compiled into
+# libtt_metal) sees tt-metal types; this library itself depends only on
+# libc + libstdc++.
+add_library(ttnvtop_register STATIC registrar/ttnvtop_register.cpp)
+target_include_directories(
+    ttnvtop_register
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/registrar
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_target_properties(
+    ttnvtop_register
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            ON
+)

@@ -19,6 +19,8 @@
 //   are plain PCIe TLB reads via TTDevice::read_from_device — non-destructive.
 
 #include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -30,6 +32,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -38,6 +41,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "umd/device/soc_descriptor.hpp"
@@ -57,6 +62,40 @@
 using namespace ttnvtop_wh_tensix;  // NOLINT(google-build-using-namespace)
 
 #include "shm_publisher.hpp"
+#include "common/program_registry.hpp"
+
+// util_sampler.h is normally a firmware-only header (it dereferences a fixed
+// L1 address). We only need its layout types and constants, not its
+// host-unsafe inline functions. Pull just the layout in by skipping the
+// inline ring()/init()/maybe_tick() helpers — easiest path is a parallel
+// declaration block, since the header guards are unconditional.
+namespace ttnvtop_ring {
+constexpr uint32_t kMagic = 0x53555454u;  // 'TTUS' little-endian — must match util_sampler.h UTIL_SAMPLER_MAGIC.
+constexpr uint32_t kVersion = 2u;
+// Phase 2.1.c: header grew 16 -> 32 B (added current_kernel_id + reserved
+// pad), ring shrank 63 -> 62 entries. Mirrors util_sampler.h.
+constexpr uint32_t kRingSize = 62u;
+struct Entry {
+    uint32_t wall_clock_l;
+    uint32_t kernel_id;
+    uint32_t fpu_count;
+    uint8_t math_fidelity;
+    uint8_t counter_sel;
+    uint8_t producer_riscv;
+    uint8_t flags;
+};
+static_assert(sizeof(Entry) == 16, "Entry must mirror util_sampler.h util_sampler_entry_t");
+struct Header {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t head;
+    uint32_t period_cycles;
+    uint32_t current_kernel_id;  // stashed by trisc1 firmware on kernel start (Phase 2.1.c)
+    uint32_t next_due_wall_l;    // persistent sample deadline, written by trisc1 (Phase 2.1.c.i)
+    uint32_t reserved[2];        // pad to 32 B; future per-thread metadata
+};
+static_assert(sizeof(Header) == 32);
+}  // namespace ttnvtop_ring
 
 using tt::CoordSystem;
 using tt::CoreType;
@@ -83,23 +122,37 @@ constexpr int kDefaultPublishHz = 10;
 // in a host-only build without the HAL_BUILD dance).
 constexpr uint64_t kRiscvDebugBase = 0xFFB12000ull;
 
-// Perf-counter control registers (per tt_metal/tools/profiler/perf_counters.hpp):
+// Perf-counter control registers (per tt_metal/tools/profiler/perf_counters.hpp
+// and tt_llk/docs/performance_counters/performance_counters.md):
 //   FPU0 @ 0x018: reference period (unused in continuous mode)
-//   FPU1 @ 0x01C: [7:0] mode (0 = continuous), [12:8] bank select (0 = FPU_COUNTER),
-//                 [16] output H selector (0 = req_cnt, 1 = grant_cnt)
+//   FPU1 @ 0x01C: [7:0] mode (0 = continuous), [16:8] counter_sel (MUX for OUT_H)
 //   FPU2 @ 0x020: [0] start, [1] stop. Rising edge on [0] clears + starts the counter.
+// counter_sel muxes which underlying counter is read out at OUT_H: 0 =
+// FPU_INSTRUCTION, 1 = SFPU_INSTRUCTION, 257 = combined. Both underlying
+// counters accumulate in parallel in hardware; counter_sel only changes
+// which one is visible at OUT_H. The collector alternates counter_sel per
+// tick to sample FPU and SFPU busy% from the single output port.
 constexpr uint64_t kRegFpu0 = kRiscvDebugBase + 0x018;
 constexpr uint64_t kRegFpu1 = kRiscvDebugBase + 0x01C;
 constexpr uint64_t kRegFpu2 = kRiscvDebugBase + 0x020;
+
+// counter_sel field in PERF_CNT_FPU1 (bits 16:8). Used to mux which FPU-bank
+// counter reads out at OUT_H.
+constexpr uint32_t kFpuCounterSelShift = 8;
+constexpr uint32_t kFpuCounterSelFpu = 0;   // FPU_INSTRUCTION
+constexpr uint32_t kFpuCounterSelSfpu = 1;  // SFPU_INSTRUCTION
+// Mode 0 = continuous (0..7 bits), 0 in bits 31:17.
+constexpr uint32_t kFpuModeContinuous = 0;
 
 // Data window we read every tick: FPU_OUT_L/H (0x120, 0x124) and
 // WALL_CLOCK_L/H (0x1F0, 0x1F8). One NOC read covers 220 bytes including gaps.
 //
 // FPU_OUT_L and FPU_OUT_H are TWO INDEPENDENT 32-bit counters in the FPU
 // counter group — not the low/high halves of one 64-bit value:
-//   OUT_L = ref_cnt (cycles counter was armed)
-//   OUT_H = req_cnt (FPU request cycles) when FPU1[16]=0
-// We read OUT_H as "FPU busy" and use WALL_CLOCK as the denominator.
+//   OUT_L = ref_cnt (independent of counter_sel — reference cycles)
+//   OUT_H = counter muxed by PERF_CNT_FPU1[16:8] (FPU or SFPU)
+// We alternate counter_sel per tick and route the OUT_H read into the
+// matching (FPU or SFPU) delta/EWMA branch. WALL_CLOCK is the denominator.
 //
 // WALL_CLOCK_L / WALL_CLOCK_H ARE paired halves of one 64-bit free-running
 // cycle counter.
@@ -238,10 +291,57 @@ struct CoreState {
     // reset), use OUT_H as a conservative post-reset delta estimate rather
     // than dropping the tick; over many ticks this converges to truth.
     bool counter_armed = false;
-    bool perf_primed = false;
-    uint64_t last_wall_clock = 0;
+    // Which counter_sel the *next* tick will read (hardware's currently-programmed selector).
+    uint32_t next_counter_sel = kFpuCounterSelFpu;
+    // Primed separately per counter because each is sampled every other tick.
+    bool perf_primed_fpu = false;
+    bool perf_primed_sfpu = false;
+    uint64_t last_wall_fpu = 0;
+    uint64_t last_wall_sfpu = 0;
     uint32_t last_fpu_out_h = 0;
-    double compute_busy_ewma = 0.0;  // [0..1]
+    uint32_t last_sfpu_out_h = 0;
+    double fpu_busy_ewma = 0.0;   // [0..1]
+    double sfpu_busy_ewma = 0.0;  // [0..1]
+
+    // Phase 2.1.e kernel attribution: raw host_assigned_id from the running
+    // launch slot. Full u32; viewer decodes bits 30:10 as the program id.
+    uint32_t last_kernel_id = 0;
+
+    // Phase 2.1.c ring drain state. The 50 Hz drain thread reads the
+    // per-core L1 sampler ring (1 KiB at MEM_UTIL_SAMPLER_BASE), parses
+    // entries newer than `last_ring_head`, and applies wrap-aware
+    // wall_clock_l deltas against `last_ring_wall_l`.
+    uint32_t last_ring_head = 0;       // last `head` value we saw — entries [last_ring_head, head) are new.
+    uint32_t last_ring_wall_l = 0;     // last entry's wall_clock_l, for delta math against the next batch.
+    uint32_t last_ring_kernel_id = 0;  // kernel_id of the most recent ring entry we drained.
+    bool ring_primed = false;          // first drain just records state, second drain begins delta accumulation.
+};
+
+// Phase 2.1.c: per-kernel rolling-window cycle accumulator. We track total
+// wall-clock cycles attributed to each `kernel_id` over the last 1 second
+// across all worker cores on the chip. Old samples decay out the back of
+// the deque; the current sum is published into the program registry's
+// `cycles_in_window` field for the viewer's TIME% column.
+struct KernelTimeAccumulator {
+    // Each sample is (recv_steady_us, cycles_added_at_this_tick).
+    std::deque<std::pair<uint64_t, uint64_t>> samples;
+    uint64_t total = 0;  // sum of cycles in samples — kept incrementally to avoid full re-summation.
+
+    void add(uint64_t now_us, uint64_t cycles) {
+        if (cycles == 0) {
+            return;
+        }
+        samples.emplace_back(now_us, cycles);
+        total += cycles;
+    }
+
+    // Drop entries older than `now_us - window_us` from the front.
+    void decay(uint64_t now_us, uint64_t window_us) {
+        while (!samples.empty() && samples.front().first + window_us <= now_us) {
+            total -= samples.front().second;
+            samples.pop_front();
+        }
+    }
 };
 
 struct ChipState {
@@ -251,6 +351,120 @@ struct ChipState {
     bool is_remote = false;
     std::vector<CoreState> cores;
     ttnvtop::ShmPublisher publisher;
+
+    // Phase 2.1.c: per-kernel cycle attribution. Updated by the drain
+    // thread; protected by `ring_mx`. Wrapped in unique_ptr to keep
+    // ChipState movable (std::mutex is neither copyable nor movable, and
+    // ChipState is moved into the `chips` vector at startup).
+    std::unique_ptr<std::mutex> ring_mx = std::make_unique<std::mutex>();
+    std::unordered_map<uint32_t, KernelTimeAccumulator> kernel_cycles;
+    // Phase 2.1.c.i: per-kernel monotonic cycle total since collector start.
+    // Updated alongside kernel_cycles[kid].add() — but never decays. Lives
+    // here (not in KernelTimeAccumulator) so that kernels which decay-out of
+    // kernel_cycles still retain their cumulative total for compare.py.
+    std::unordered_map<uint32_t, uint64_t> kernel_cycles_total;
+    uint64_t drain_ticks = 0;         // total ring-drain ticks completed (debug)
+    uint64_t drain_lost_samples = 0;  // count of entries dropped because head moved more than ring capacity (debug)
+    uint64_t drain_entries_seen = 0;  // total ring entries ingested across all cores (debug)
+};
+
+// Phase 2.1.c registry-SHM writer. Opens `/dev/shm/tt_program_registry`
+// read-write for `cycles_in_window` updates only. The workload-side
+// registrar library still owns runtime_id+pid+epoch_us+name (slot claim);
+// we just patch the disjoint cycle field. Magic mismatch -> disabled, no
+// writes happen until the workload (re)initializes the file.
+struct RegistryWriter {
+    int fd = -1;
+    void* map = nullptr;
+    size_t map_size = 0;
+    ttnvtop::RegistryHeader* header = nullptr;
+    ttnvtop::RegistryEntry* entries = nullptr;
+    bool enabled = false;
+
+    bool open_or_attach() {
+        const size_t want = ttnvtop::registry_file_size();
+        // O_RDWR — workload may not have started yet; if the file does not
+        // exist we skip and re-probe periodically. We do NOT create the
+        // file: that's the workload's job (it sets the header magic).
+        fd = ::open(ttnvtop::kRegistryShmPath, O_RDWR);
+        if (fd < 0) {
+            return false;
+        }
+        struct stat st{};
+        if (::fstat(fd, &st) != 0 || static_cast<size_t>(st.st_size) < want) {
+            ::close(fd);
+            fd = -1;
+            return false;
+        }
+        map = ::mmap(nullptr, want, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (map == MAP_FAILED) {
+            ::close(fd);
+            fd = -1;
+            map = nullptr;
+            return false;
+        }
+        map_size = want;
+        header = static_cast<ttnvtop::RegistryHeader*>(map);
+        entries = reinterpret_cast<ttnvtop::RegistryEntry*>(static_cast<char*>(map) + sizeof(ttnvtop::RegistryHeader));
+        if (std::memcmp(header->magic, ttnvtop::kRegistryMagic, sizeof(ttnvtop::kRegistryMagic)) != 0 ||
+            header->version != ttnvtop::kRegistryVersion ||
+            header->entry_size != static_cast<uint16_t>(sizeof(ttnvtop::RegistryEntry))) {
+            ::munmap(map, map_size);
+            ::close(fd);
+            map = nullptr;
+            fd = -1;
+            return false;
+        }
+        enabled = true;
+        return true;
+    }
+
+    // Find the slot whose runtime_id matches the program identified by `kid`
+    // and update both `cycles_in_window` (rolling, viewer TIME%) and
+    // `cycles_total` (monotonic, compare.py).
+    //
+    // ID encoding: every dispatch path observed in tt-metal writes
+    // `host_assigned_id = EncodePerDeviceProgramID(runtime_id, dev_id)
+    //                  = (runtime_id << 10) | dev_id` into launch_msg.
+    // The LLK Hook B propagates this encoded value into the L1 ring
+    // entries verbatim. The registrar (`register_program`) on the host
+    // side writes the RAW `program.get_runtime_id()` — also at every call
+    // site we've audited. So `kid` is always encoded and `entries[i].runtime_id`
+    // is always raw. We decode `kid` to its raw form before lookup.
+    //
+    // Empirical confirmation (run 20260427-160642, Llama-3.2-1B 1-layer):
+    //   profiler host_assigned_id range: 1024..974079 (all >= 1024 ⇒ all encoded)
+    //   registry rid range:              0..2079 (raw runtime_ids)
+    // Direct-match-only would catch only the two registry slots whose raw
+    // rid coincidentally equals an encoded kid (rid=1024 ⇒ kid=encoded(1,0),
+    // rid=2048 ⇒ kid=encoded(2,0)) — i.e., 2 out of ~460 attributable
+    // programs. Decoded match catches all of them.
+    //
+    // An earlier version tried "direct OR decoded" (dual lookup). That was
+    // wrong: raw rids routinely exceed 1024, so for any kid with the same
+    // numeric value as an unrelated raw rid, BOTH entries would be
+    // updated, causing 1024× cross-contamination. Decoded-only avoids it.
+    //
+    // Linear scan over the live region — capacity is 16384 so worst case
+    // is a few thousand reads, well below the drain budget. Writers can
+    // race with us on a slot's name field, but we touch only the disjoint
+    // cycle fields so no torn-read window.
+    // The caller passes a RAW runtime_id (already decoded from any
+    // host_assigned_id encoding by the ring drain). We match directly
+    // against `entries[i].runtime_id`, which is also raw.
+    void update_kernel_cycles(uint32_t runtime_id, uint64_t cycles_in_window, uint64_t cycles_total) {
+        if (!enabled) {
+            return;
+        }
+        const uint32_t total = header->write_cursor.load(std::memory_order_relaxed);
+        const uint32_t scan = std::min<uint32_t>(total, ttnvtop::kRegistryCapacity);
+        for (uint32_t i = 0; i < scan; ++i) {
+            if (entries[i].runtime_id == runtime_id) {
+                entries[i].cycles_in_window = cycles_in_window;
+                entries[i].cycles_total = cycles_total;
+            }
+        }
+    }
 };
 
 std::atomic<bool> g_stop{false};
@@ -266,8 +480,12 @@ const char* arch_name(tt::ARCH a) {
     }
 }
 
-// Arm the FPU counter on a single Tensix for free-running continuous mode
-// with bank=FPU_COUNTER. Rising edge on FPU2[0] both clears and starts.
+// Arm the FPU counter bank on a single Tensix for free-running continuous
+// mode. Rising edge on FPU2[0] both clears and starts; this single rising
+// edge starts BOTH underlying counters (FPU_INSTRUCTION and SFPU_INSTRUCTION)
+// — they tick in parallel in hardware. The collector later reads them in
+// turn by muxing counter_sel (PERF_CNT_FPU1[16:8]) per tick. We must NOT
+// pulse start again after this, or the accumulators would reset.
 // Returns true on success; false if any of the four writes threw. A user
 // kernel that calls StartPerfCounters later will fight with this (transient
 // reset + new start), which our sampler's negative-delta guard tolerates.
@@ -277,7 +495,10 @@ bool arm_fpu_counter(TTDevice* device, const tt_xy_pair& core) {
     };
     try {
         write32(kRegFpu0, 0u);  // reference period (unused in continuous)
-        write32(kRegFpu1, 0u);  // mode=0 continuous, bank=FPU_COUNTER, H=req_cnt
+        // mode=0 continuous, counter_sel=0 (FPU). SFPU will be sampled by
+        // muxing counter_sel=1 on later ticks; the underlying SFPU counter
+        // is already accumulating regardless of the mux setting.
+        write32(kRegFpu1, (kFpuCounterSelFpu << kFpuCounterSelShift) | kFpuModeContinuous);
         write32(kRegFpu2, 0u);  // ensure start bit is low
         write32(kRegFpu2, 1u);  // rising edge on start clears + starts
     } catch (const std::exception&) {
@@ -325,6 +546,24 @@ int main(int argc, char* argv[]) {
     constexpr size_t kIdxOffInBuf = kGoIndexOff - kGoMessagesOff;
     static_assert(sizeof(go_msg_t) == sizeof(uint32_t), "go_msg_t must be 4 bytes");
     const uint64_t read_addr = kMailboxBase + static_cast<uint64_t>(kGoMessagesOff);
+
+    // Level 1 kernel attribution (Phase 2.1.e).
+    //   host_assigned_id layout per dev_msgs.h line 161-165:
+    //     [9:0]   physical device id
+    //     [30:10] program id
+    //     [31]    0 (program-running-on-device marker)
+    //   launch[] is an 8-entry ring; launch_msg_rd_ptr indexes the currently-
+    //   executing slot. At slot boundaries the value is transiently stale —
+    //   acceptable for a 4 Hz display. Tie to the D bar for "is this value
+    //   meaningful right now": if D ≈ 0, kernel_id is just whatever ran last.
+    constexpr size_t kLaunchRdPtrOff = offsetof(mailboxes_t, launch_msg_rd_ptr);
+    constexpr size_t kLaunchArrOff = offsetof(mailboxes_t, launch);
+    constexpr size_t kLaunchEntrySize = sizeof(launch_msg_t);
+    // launch_msg_t is effectively kernel_config_msg_t (no other fields). Be
+    // explicit about the offset chain so this stays correct if that changes.
+    constexpr size_t kHostIdOffInLaunch =
+        offsetof(launch_msg_t, kernel_config) + offsetof(kernel_config_msg_t, host_assigned_id);
+    constexpr uint32_t kLaunchBufEntries = launch_msg_buffer_num_entries;
 
     TopologyDiscoveryOptions opts;
     opts.discover_remote_devices = true;
@@ -410,6 +649,32 @@ int main(int argc, char* argv[]) {
         std::cerr << "ttnvtop-collector: chip " << chip.chip_id << " armed FPU counter on " << armed << "/"
                   << chip.cores.size() << " cores.\n";
 
+        // Phase 2.1.c.i: override `period_cycles` on every core's L1 sampler
+        // ring header. The firmware default is set at brisc init() time from
+        // util_sampler.h's UTIL_SAMPLER_DEFAULT_PERIOD_CYCLES, but that value
+        // is baked into the precompiled-firmware ELF — TT_METAL_DISABLE_PRECOMPILED_FW=1
+        // alone isn't sufficient if the kernel JIT cache holds a stale firmware
+        // hash. Writing the override here from the host bypasses all caching
+        // and gives the operator a runtime knob without rebuilds. 1 ms at
+        // 1 GHz keeps total sample rate ~128k/sec/chip — well below the
+        // 200 Hz × 62 × 64 = ~793k/sec drain budget.
+        constexpr uint32_t kPeriodOverrideCycles = 1'000'000u;  // 1 ms @ 1 GHz
+        constexpr uint64_t kPeriodAddr =
+            static_cast<uint64_t>(MEM_UTIL_SAMPLER_BASE) + 12;  // offset of period_cycles field
+        int period_set = 0;
+        for (auto& c : chip.cores) {
+            try {
+                c.device->write_to_device(&kPeriodOverrideCycles, c.translated, kPeriodAddr, sizeof(uint32_t));
+                ++period_set;
+            } catch (...) {
+                // remote-chip ETH-tunnel writes can fail silently — leave
+                // those cores at the firmware default; the L1 read on TRISC1
+                // still works, just with whatever brisc init() seeded.
+            }
+        }
+        std::cerr << "ttnvtop-collector: chip " << chip.chip_id << " set period_cycles=" << kPeriodOverrideCycles
+                  << " on " << period_set << "/" << chip.cores.size() << " cores.\n";
+
         // Verify the arm actually took effect: read FPU_OUT_L twice on the
         // first worker core. If it advances, the counter is genuinely running;
         // if it stays at zero, the arm write hit a dead end (likely: remote
@@ -475,6 +740,26 @@ int main(int argc, char* argv[]) {
                         now_bit = (signal == static_cast<uint8_t>(RUN_MSG_GO)) ? 1 : 0;
                     }
 
+                    // Phase 2.1.e kernel attribution: read launch_msg_rd_ptr to
+                    // find the active slot, then pull host_assigned_id from it.
+                    // +2 small PCIe reads per core per tick (vs the existing 4
+                    // for perf + 1 block for dispatch). Failure keeps the prior
+                    // kernel_id, which is harmless — viewer disambiguates via
+                    // the D bar.
+                    uint32_t kernel_id_now = 0;
+                    bool have_kernel_id = false;
+                    try {
+                        uint32_t rd_ptr = 0;
+                        c.device->read_from_device(
+                            &rd_ptr, c.translated, kMailboxBase + kLaunchRdPtrOff, sizeof(rd_ptr));
+                        const uint32_t slot = rd_ptr % kLaunchBufEntries;
+                        const uint64_t host_id_addr =
+                            kMailboxBase + kLaunchArrOff + slot * kLaunchEntrySize + kHostIdOffInLaunch;
+                        c.device->read_from_device(&kernel_id_now, c.translated, host_id_addr, sizeof(kernel_id_now));
+                        have_kernel_id = true;
+                    } catch (const std::exception&) {
+                    }
+
                     // Perf counters (Phase 2.0). busy% = delta(OUT_H) / delta(WALL_CLOCK).
                     //
                     // We use four separate 4-byte reads per core per tick
@@ -504,7 +789,9 @@ int main(int argc, char* argv[]) {
                         // core (1,1) on each chip once per second so we can
                         // tell "counter stopped" from "counter ticking but
                         // OUT_H reads 0" from "everything working, workload
-                        // really has no FPU activity here".
+                        // really has no FPU activity here". Also prints the
+                        // current counter_sel and the matching last-seen
+                        // OUT_H so the log captures the alternation.
                         if (c.noc_x == 1 && c.noc_y == 1) {
                             static std::atomic<uint64_t> last_probe_us{0};
                             const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -513,14 +800,20 @@ int main(int argc, char* argv[]) {
                             const uint64_t lp = last_probe_us.load(std::memory_order_relaxed);
                             if (static_cast<uint64_t>(now_us) - lp > 1'000'000) {
                                 last_probe_us.store(now_us, std::memory_order_relaxed);
+                                const uint32_t sel = c.next_counter_sel;
+                                const uint32_t last_matching =
+                                    (sel == kFpuCounterSelSfpu) ? c.last_sfpu_out_h : c.last_fpu_out_h;
                                 std::fprintf(
                                     stderr,
-                                    "[live-probe] core(1,1) is_remote=%d "
-                                    "wall=0x%016lx out_l=0x%08x out_h=0x%08x\n",
+                                    "[live-probe] core(1,1) is_remote=%d sel=%u "
+                                    "wall=0x%016lx out_l=0x%08x out_h=0x%08x last_%s=0x%08x\n",
                                     c.is_remote ? 1 : 0,
+                                    sel,
                                     wall_now,
                                     fpu_out_l_now,
-                                    fpu_out_h_now);
+                                    fpu_out_h_now,
+                                    (sel == kFpuCounterSelSfpu) ? "sfpu_out_h" : "fpu_out_h",
+                                    last_matching);
                                 std::fflush(stderr);
                             }
                         }
@@ -536,27 +829,71 @@ int main(int argc, char* argv[]) {
                             c.samples_seen += 1;
                             c.last_dispatched = now_bit;
                         }
+                        if (have_kernel_id) {
+                            c.last_kernel_id = kernel_id_now;
+                        }
                         if (have_perf) {
-                            if (c.perf_primed) {
-                                const uint64_t wall_d = wall_now - c.last_wall_clock;
-                                // Estimate FPU-active cycles during this
-                                // interval. If OUT_H went backwards, a kernel
-                                // called StartPerfCounters somewhere in the
-                                // interval; conservatively take OUT_H as the
-                                // post-reset portion and discard the pre-reset
-                                // portion (unknown).
-                                const uint64_t fpu_d = (fpu_out_h_now >= c.last_fpu_out_h)
-                                                           ? static_cast<uint64_t>(fpu_out_h_now - c.last_fpu_out_h)
-                                                           : static_cast<uint64_t>(fpu_out_h_now);
-                                if (wall_d > 0 && wall_d < (1ull << 40) && fpu_d <= wall_d) {
-                                    const double inst = static_cast<double>(fpu_d) / static_cast<double>(wall_d);
-                                    c.compute_busy_ewma =
-                                        kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.compute_busy_ewma;
+                            // Route fpu_out_h_now to the FPU or SFPU branch
+                            // based on the currently-programmed counter_sel
+                            // (captured in c.next_counter_sel for "what the
+                            // next read will yield" — which is *this* read).
+                            if (c.next_counter_sel == kFpuCounterSelSfpu) {
+                                if (c.perf_primed_sfpu) {
+                                    const uint64_t wall_d = wall_now - c.last_wall_sfpu;
+                                    // Negative-delta guard: a backwards count
+                                    // means kernel-side StartPerfCounters
+                                    // reset the bank mid-interval; treat the
+                                    // current value as a conservative
+                                    // post-reset delta.
+                                    const uint64_t sfpu_d =
+                                        (fpu_out_h_now >= c.last_sfpu_out_h)
+                                            ? static_cast<uint64_t>(fpu_out_h_now - c.last_sfpu_out_h)
+                                            : static_cast<uint64_t>(fpu_out_h_now);
+                                    if (wall_d > 0 && wall_d < (1ull << 40) && sfpu_d <= wall_d) {
+                                        const double inst = static_cast<double>(sfpu_d) / static_cast<double>(wall_d);
+                                        c.sfpu_busy_ewma =
+                                            kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.sfpu_busy_ewma;
+                                    }
                                 }
+                                c.last_wall_sfpu = wall_now;
+                                c.last_sfpu_out_h = fpu_out_h_now;
+                                c.perf_primed_sfpu = true;
+                            } else {
+                                if (c.perf_primed_fpu) {
+                                    const uint64_t wall_d = wall_now - c.last_wall_fpu;
+                                    const uint64_t fpu_d = (fpu_out_h_now >= c.last_fpu_out_h)
+                                                               ? static_cast<uint64_t>(fpu_out_h_now - c.last_fpu_out_h)
+                                                               : static_cast<uint64_t>(fpu_out_h_now);
+                                    if (wall_d > 0 && wall_d < (1ull << 40) && fpu_d <= wall_d) {
+                                        const double inst = static_cast<double>(fpu_d) / static_cast<double>(wall_d);
+                                        c.fpu_busy_ewma =
+                                            kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.fpu_busy_ewma;
+                                    }
+                                }
+                                c.last_wall_fpu = wall_now;
+                                c.last_fpu_out_h = fpu_out_h_now;
+                                c.perf_primed_fpu = true;
                             }
-                            c.last_wall_clock = wall_now;
-                            c.last_fpu_out_h = fpu_out_h_now;
-                            c.perf_primed = true;
+                        }
+                    }
+
+                    // Flip counter_sel for the NEXT tick. Keep mode=0
+                    // continuous in bits [7:0]. If the write fails, leave
+                    // next_counter_sel unchanged so the next tick re-reads
+                    // the same counter rather than misrouting data.
+                    if (have_perf) {
+                        const uint32_t new_sel =
+                            (c.next_counter_sel == kFpuCounterSelFpu) ? kFpuCounterSelSfpu : kFpuCounterSelFpu;
+                        const uint32_t new_fpu1 = (new_sel << kFpuCounterSelShift) | kFpuModeContinuous;
+                        bool wrote = false;
+                        try {
+                            c.device->write_to_device(&new_fpu1, c.translated, kRegFpu1, sizeof(new_fpu1));
+                            wrote = true;
+                        } catch (const std::exception&) {
+                        }
+                        if (wrote) {
+                            std::lock_guard<std::mutex> lk(state_mx);
+                            c.next_counter_sel = new_sel;
                         }
                     }
                 }
@@ -571,6 +908,355 @@ int main(int argc, char* argv[]) {
         }
     };
     std::thread sampler_thread(sampler);
+
+    // Phase 2.1.c ring-drain thread. 50 Hz per-chip, per-core bulk read of
+    // the L1 sampler ring (1 KiB at MEM_UTIL_SAMPLER_BASE), parses entries
+    // newer than the per-core `last_ring_head`, applies wrap-aware
+    // `wall_clock_l` deltas, and accumulates cycles per `kernel_id` with a
+    // 1-second rolling window. Result is published into the program
+    // registry's `cycles_in_window` field for the viewer's TIME% column.
+    //
+    // Until the LLK PR (Phase 2.1.c firmware) lands, the only ring producer
+    // is the brisc idle-loop sampler which always writes kernel_id=0 — so
+    // expect all attribution to land under runtime_id 0 (i.e. nothing
+    // visible in the registry until LLK ships). That's the documented
+    // intermediate state.
+    // Phase 2.1.c.i: 200 Hz drain (5 ms interval). At 50 Hz with 1 ms TRISC1
+    // sampling on 64 cores × 2 producer threads (BRISC + TRISC1) = ~128k
+    // samples/sec/chip vs 198k drainable, observed 46% loss empirically (the
+    // average rate fits but the per-tick burstiness over 64 cores doesn't —
+    // each core's 62-slot ring fills in 31 ms at 2 samples/ms, so 50 Hz =
+    // 20 ms interval grants no headroom). 200 Hz quadruples drain capacity to
+    // ~793k/sec/chip, leaves ~6× headroom for bursts and the eventual
+    // sub-ms period override.
+    constexpr uint64_t kRingDrainHz = 200;
+    constexpr uint64_t kRingWindowUs = 1'000'000;  // 1 s rolling window for cycle attribution.
+    constexpr uint64_t kSamplerBase = static_cast<uint64_t>(MEM_UTIL_SAMPLER_BASE);
+    constexpr size_t kSamplerSize = static_cast<size_t>(MEM_UTIL_SAMPLER_SIZE);
+    static_assert(kSamplerSize == 1024, "ring drain assumes 1 KiB per-core ring");
+    static_assert(
+        sizeof(ttnvtop_ring::Header) + ttnvtop_ring::kRingSize * sizeof(ttnvtop_ring::Entry) == kSamplerSize,
+        "ring layout mismatch with util_sampler.h");
+
+    RegistryWriter registry_writer;
+    registry_writer.open_or_attach();  // best-effort; re-tried inside the loop if the file isn't there yet.
+
+    auto ring_drain = [&]() {
+        const auto period = std::chrono::microseconds(1'000'000ull / kRingDrainHz);
+        auto next = std::chrono::steady_clock::now();
+        std::vector<uint8_t> buf(kSamplerSize);
+        uint64_t reattach_throttle_us = 0;
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            const auto loop_t0 = std::chrono::steady_clock::now();
+            const uint64_t now_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(loop_t0.time_since_epoch()).count();
+
+            // Lazy re-attach to the registry if the workload hadn't started
+            // yet at collector launch. Probe at most once per 2 s to avoid
+            // syscall churn.
+            if (!registry_writer.enabled && now_us > reattach_throttle_us) {
+                registry_writer.open_or_attach();
+                reattach_throttle_us = now_us + 2'000'000;
+            }
+
+            // Phase 2.1.c.i: re-assert period_cycles override every drain
+            // tick (200 Hz, 5 ms). brisc init() re-runs at every device
+            // open and races our override; at 1 Hz reassert, brisc can
+            // sample at the firmware's baked-in default for up to ~1 s
+            // between corrections — enough to overflow the ring on any
+            // sub-ms baked period. Per-tick reassert closes that window
+            // to the drain interval. 64 cores × 1 u32 × 200 Hz =
+            // ~50 KB/sec/chip — negligible host PCIe usage.
+            // 5 ms at 1 GHz. Drain runs at ~10 Hz observed (UMD read latency
+            // for 128 cores × 1 KiB/tick saturates), so drainable per chip is
+            // ~40k/sec. At 5 ms period: 200 samples/sec/core × 2 producers ×
+            // 64 cores = 25.6k/sec/chip. Leaves ~36% headroom for transient
+            // bursts. Sub-10 ms is still finer than host poll's effective
+            // ~10 ms cadence, so per-program TIME% is meaningfully better
+            // than the pre-Phase-2.1.c baseline.
+            constexpr uint32_t kPeriodOverrideCycles = 5'000'000u;
+            constexpr uint64_t kPeriodAddr = static_cast<uint64_t>(MEM_UTIL_SAMPLER_BASE) + 12;
+            // Reassert at 1 Hz only. Per-tick reassert at 200 Hz costs 128
+            // UMD writes/tick — pushing drain rate below 50 Hz observed.
+            // brisc init() runs only on device open, so 1 Hz is enough to
+            // re-cover that race window.
+            static uint64_t last_period_assert_us = 0;
+            const bool reassert_period = (now_us - last_period_assert_us) > 1'000'000;
+            if (reassert_period) {
+                last_period_assert_us = now_us;
+            }
+            // Phase 2.1.c.i diagnostic: every 5 s, read back period_cycles
+            // from one core after writing it, to verify the override is
+            // sticking. If the read-back value != override, something else
+            // (firmware re-init, kernel-side write) is racing us.
+            static uint64_t last_period_probe_us = 0;
+            const bool probe_period = (now_us - last_period_probe_us) > 5'000'000;
+            if (probe_period) {
+                last_period_probe_us = now_us;
+            }
+
+            for (auto& chip : chips) {
+                std::lock_guard<std::mutex> lk(*chip.ring_mx);
+                ++chip.drain_ticks;
+
+                int probe_good = 0, probe_bad = 0;
+                for (auto& c : chip.cores) {
+                    if (reassert_period) {
+                        try {
+                            c.device->write_to_device(
+                                &kPeriodOverrideCycles, c.translated, kPeriodAddr, sizeof(uint32_t));
+                        } catch (...) { /* same silent-fail as initial write */
+                        }
+                    }
+                    if (probe_period) {
+                        try {
+                            uint32_t period_rb = 0;
+                            c.device->read_from_device(&period_rb, c.translated, kPeriodAddr, 4);
+                            if (period_rb == kPeriodOverrideCycles) {
+                                ++probe_good;
+                            } else {
+                                ++probe_bad;
+                                if (probe_bad <= 3) {
+                                    std::fprintf(
+                                        stderr,
+                                        "[probe-bad] chip=%u core=(%d,%d) period=%u\n",
+                                        static_cast<unsigned>(chip.chip_id),
+                                        c.noc_x,
+                                        c.noc_y,
+                                        period_rb);
+                                }
+                            }
+                        } catch (...) {
+                        }
+                    }
+                    bool have_buf = false;
+                    try {
+                        c.device->read_from_device(buf.data(), c.translated, kSamplerBase, kSamplerSize);
+                        have_buf = true;
+                    } catch (const std::exception&) {
+                        // Skip this core for this tick; remote chips may
+                        // intermittently fail under ETH tunnel pressure.
+                    }
+                    if (!have_buf) {
+                        continue;
+                    }
+
+                    ttnvtop_ring::Header hdr;
+                    std::memcpy(&hdr, buf.data(), sizeof(hdr));
+                    if (hdr.magic != ttnvtop_ring::kMagic) {
+                        // Firmware hasn't initialized the sampler on this
+                        // core yet. Common at collector startup. Silent
+                        // skip — re-probed every tick.
+                        continue;
+                    }
+                    if (hdr.version != ttnvtop_ring::kVersion) {
+                        // Schema mismatch: log once per tick at most for
+                        // the *first* core in the chip, never spam.
+                        static thread_local uint64_t last_warn_us = 0;
+                        if (now_us - last_warn_us > 5'000'000) {
+                            std::fprintf(
+                                stderr,
+                                "[ring-drain] chip %u: util_sampler version mismatch (got %u, want %u) — "
+                                "skipping drain\n",
+                                static_cast<unsigned>(chip.chip_id),
+                                hdr.version,
+                                ttnvtop_ring::kVersion);
+                            std::fflush(stderr);
+                            last_warn_us = now_us;
+                        }
+                        continue;
+                    }
+
+                    const uint32_t cur_head = hdr.head;
+                    if (!c.ring_primed) {
+                        // First sight of this ring: just record state.
+                        // Subsequent ticks compute deltas.
+                        c.last_ring_head = cur_head;
+                        // Seed wall-clock from the most recent slot if any.
+                        if (cur_head > 0) {
+                            const uint32_t last_slot = (cur_head - 1) % ttnvtop_ring::kRingSize;
+                            ttnvtop_ring::Entry e;
+                            std::memcpy(
+                                &e,
+                                buf.data() + sizeof(ttnvtop_ring::Header) + last_slot * sizeof(ttnvtop_ring::Entry),
+                                sizeof(e));
+                            c.last_ring_wall_l = e.wall_clock_l;
+                            c.last_ring_kernel_id = e.kernel_id;
+                        }
+                        c.ring_primed = true;
+                        continue;
+                    }
+
+                    if (cur_head == c.last_ring_head) {
+                        continue;  // no new entries this tick
+                    }
+
+                    // Detect ring re-initialization: brisc's `init()` resets
+                    // `head` to 0 every time the firmware boots (e.g., across
+                    // pytest test boundaries that close+reopen the device).
+                    // Without this check, the unsigned subtraction below
+                    // underflows and ~2^32 gets added per core to
+                    // drain_lost_samples (visible as ~275B jumps per chip in
+                    // the drain log, since 64 cores × 2^32 ≈ 275 GB).
+                    if (cur_head < c.last_ring_head) {
+                        c.last_ring_head = cur_head;
+                        continue;  // treat as fresh start; pick up fresh entries next tick
+                    }
+
+                    // How many entries to ingest. If host stalled and the
+                    // producer wrote more than the ring capacity, we lost
+                    // the oldest ones — clamp and report. The most recent
+                    // `kRingSize` slots are always intact.
+                    uint32_t new_count = cur_head - c.last_ring_head;
+                    if (new_count > ttnvtop_ring::kRingSize) {
+                        chip.drain_lost_samples += (new_count - ttnvtop_ring::kRingSize);
+                        new_count = ttnvtop_ring::kRingSize;
+                    }
+                    const uint32_t start_head = cur_head - new_count;
+
+                    for (uint32_t i = 0; i < new_count; ++i) {
+                        const uint32_t slot = (start_head + i) % ttnvtop_ring::kRingSize;
+                        ttnvtop_ring::Entry e;
+                        std::memcpy(
+                            &e,
+                            buf.data() + sizeof(ttnvtop_ring::Header) + slot * sizeof(ttnvtop_ring::Entry),
+                            sizeof(e));
+                        ++chip.drain_entries_seen;
+
+                        // Phase 2.1.c.i attribution model: each Hook B fire
+                        // contributes `period` cycles to its own kid. This is
+                        // the unbiased "fires × period" estimator: the
+                        // expected fires for kernel K is total_TRISC1_time_K
+                        // / period, so fires × period is a one-shot estimate
+                        // of K's TRISC1 cycle time.
+                        //
+                        // Trade-offs accepted:
+                        //   • COVERAGE is high — every program that ever ran
+                        //     TRISC1 work and was sampled at least once gets
+                        //     cycles_total > 0. compare.py uses cycles_total
+                        //     > 0 as the "Hook B saw it" predicate.
+                        //   • PER-OP CYCLE PRECISION is workload-dependent —
+                        //     a kernel running for time T < period gets
+                        //     attributed period (over-count by period/T per
+                        //     fire, symmetric across kernels). For Llama
+                        //     decode where many kernels are ~100µs at
+                        //     period=5ms, R² between profiler and registry
+                        //     is structurally low. R² is reported as
+                        //     informational only — not gated.
+                        //
+                        // Same-kid wall_d attribution was tested earlier and
+                        // gave clean R² (0.5+) but only attributed kernels
+                        // long enough to span two same-kid samples — 1.5%
+                        // coverage on Llama. For "is ttnvtop seeing the op"
+                        // questions, fires-based is the right semantic.
+                        const uint32_t cur_raw = (e.kernel_id >> 10) & 0x1FFFFFu;
+                        const uint64_t period =
+                            hdr.period_cycles ? static_cast<uint64_t>(hdr.period_cycles) : 5'000'000ull;
+                        if (cur_raw != 0) {
+                            chip.kernel_cycles[cur_raw].add(now_us, period);
+                            chip.kernel_cycles_total[cur_raw] += period;
+                        }
+
+                        c.last_ring_wall_l = e.wall_clock_l;
+                        c.last_ring_kernel_id = e.kernel_id;
+                    }
+                    c.last_ring_head = cur_head;
+                }
+
+                // Decay the rolling window. Walk the map, drop stale
+                // entries, erase empty kernels (keeps the map bounded
+                // even if many transient kernel_ids show up).
+                uint64_t total_chip_cycles = 0;
+                for (auto it = chip.kernel_cycles.begin(); it != chip.kernel_cycles.end();) {
+                    it->second.decay(now_us, kRingWindowUs);
+                    if (it->second.samples.empty()) {
+                        it = chip.kernel_cycles.erase(it);
+                    } else {
+                        total_chip_cycles += it->second.total;
+                        ++it;
+                    }
+                }
+
+                // Publish per-kernel totals into the registry SHM. The
+                // registrar publishes runtime_id under host_assigned_id
+                // bits [9:0]/[30:10] — but the registrar uses the lower
+                // tt-metal `runtime_id` (program.get_runtime_id()) which
+                // matches the launch_msg field directly, so we look up
+                // by kernel_id as-is. Kernel_id 0 = "no kernel" -> skip.
+                //
+                // We iterate over the SUPERSET of (kernel_cycles ∪
+                // kernel_cycles_total) so that kernels which decayed out of
+                // the rolling-window map still get their monotonic total
+                // refreshed in the registry. Without this union, a kernel
+                // that finished >1 s before the audit point would have its
+                // last cycles_total snapshot frozen at decay time — fine for
+                // most cases, but we want every drain tick to reflect the
+                // current monotonic total in case downstream tooling polls
+                // the registry between bursts.
+                // Iterate over the UNION of (kernel_cycles, kernel_cycles_total)
+                // so that:
+                //   - Programs with live samples but no same-kid pair yet
+                //     (cycles_total still 0) still get cycles_in_window
+                //     refreshed in the registry → viewer TIME% works.
+                //   - Programs that ended before the current window (decayed
+                //     out of kernel_cycles) still get cycles_total kept current
+                //     in the registry → compare.py audit works.
+                std::unordered_set<uint32_t> all_rids;
+                for (auto& [k, _] : chip.kernel_cycles) {
+                    all_rids.insert(k);
+                }
+                for (auto& [k, _] : chip.kernel_cycles_total) {
+                    all_rids.insert(k);
+                }
+                for (uint32_t rid : all_rids) {
+                    if (rid == 0) {
+                        continue;
+                    }
+                    auto wit = chip.kernel_cycles.find(rid);
+                    auto tit = chip.kernel_cycles_total.find(rid);
+                    const uint64_t cyc_window = (wit != chip.kernel_cycles.end()) ? wit->second.total : 0ull;
+                    const uint64_t cyc_total = (tit != chip.kernel_cycles_total.end()) ? tit->second : 0ull;
+                    registry_writer.update_kernel_cycles(rid, cyc_window, cyc_total);
+                }
+
+                // Periodic debug log: once per 5 s, dump tick + lost +
+                // entries + map size per chip. Cheap, useful when triaging
+                // "TIME% is stuck at 0".
+                static thread_local uint64_t last_debug_us = 0;
+                static thread_local uint64_t last_debug_ticks = 0;
+                if (now_us - last_debug_us > 5'000'000) {
+                    const uint64_t dt_us = (last_debug_us == 0) ? 1 : (now_us - last_debug_us);
+                    const double drain_hz =
+                        static_cast<double>(chip.drain_ticks - last_debug_ticks) * 1'000'000.0 / dt_us;
+                    last_debug_us = now_us;
+                    last_debug_ticks = chip.drain_ticks;
+                    std::fprintf(
+                        stderr,
+                        "[ring-drain] chip=%u ticks=%lu drain_hz=%.1f entries=%lu lost=%lu kernels=%zu chip_cycles=%lu "
+                        "period_ok=%d/%d\n",
+                        static_cast<unsigned>(chip.chip_id),
+                        static_cast<unsigned long>(chip.drain_ticks),
+                        drain_hz,
+                        static_cast<unsigned long>(chip.drain_entries_seen),
+                        static_cast<unsigned long>(chip.drain_lost_samples),
+                        chip.kernel_cycles.size(),
+                        static_cast<unsigned long>(total_chip_cycles),
+                        probe_good,
+                        probe_good + probe_bad);
+                    std::fflush(stderr);
+                }
+            }
+
+            next += period;
+            const auto now_t = std::chrono::steady_clock::now();
+            if (next < now_t) {
+                next = now_t;
+            } else {
+                std::this_thread::sleep_until(next);
+            }
+        }
+    };
+    std::thread ring_drain_thread(ring_drain);
 
     // Publisher: copy rolling stats into SHM at the configured rate.
     const auto publish_period = std::chrono::milliseconds(1000 / cli.publish_hz);
@@ -601,14 +1287,25 @@ int main(int argc, char* argv[]) {
                 // busy_count is the count over kWindowSamples samples. Convert to per-mille.
                 v.dispatch_busy_p1000 = static_cast<uint16_t>((c.busy_count * 1000u) / kWindowSamples);
                 v.samples_seen = static_cast<uint32_t>(c.samples_seen);
-                // Compute busy: EWMA is in [0,1]; clamp and convert to per-mille.
-                double cb = c.compute_busy_ewma;
-                if (cb < 0.0) {
-                    cb = 0.0;
-                } else if (cb > 1.0) {
-                    cb = 1.0;
+                // Compute busy: two EWMAs in [0,1] — FPU (MATH/matmul pipe)
+                // and SFPU (vector pipe). Clamp each and convert to per-mille.
+                // compute_busy_p1000 continues to mean FPU-only; SFPU goes in
+                // its own field.
+                double fb = c.fpu_busy_ewma;
+                if (fb < 0.0) {
+                    fb = 0.0;
+                } else if (fb > 1.0) {
+                    fb = 1.0;
                 }
-                v.compute_busy_p1000 = static_cast<uint16_t>(cb * 1000.0);
+                double sb = c.sfpu_busy_ewma;
+                if (sb < 0.0) {
+                    sb = 0.0;
+                } else if (sb > 1.0) {
+                    sb = 1.0;
+                }
+                v.compute_busy_p1000 = static_cast<uint16_t>(fb * 1000.0);
+                v.sfpu_busy_p1000 = static_cast<uint16_t>(sb * 1000.0);
+                v.last_kernel_id = c.last_kernel_id;
                 // Phase 2+ fields stay at their zero-initialized values.
             }
             chip.publisher.mark_updated();
@@ -616,6 +1313,7 @@ int main(int argc, char* argv[]) {
     }
 
     sampler_thread.join();
+    ring_drain_thread.join();
     std::cout << "\nttnvtop-collector: exiting.\n";
     return 0;
 }

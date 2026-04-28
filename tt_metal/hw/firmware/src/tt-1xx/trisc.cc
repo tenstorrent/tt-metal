@@ -23,6 +23,12 @@
 #include "internal/hw_thread.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
+#if defined(UCK_CHLKC_MATH)
+// ttnvtop sampler ring header lives in L1 at MEM_UTIL_SAMPLER_BASE; trisc1
+// stamps the running kernel's host_assigned_id between launches so the
+// LLK-side maybe_tick_with_kernel_id() can attribute samples (Phase 2.1.c).
+#include "util_sampler.h"
+#endif
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -213,11 +219,24 @@ int main(int argc, char* argv[]) {
         int index =
             static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
         uint32_t kernel_lma = (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
+#if defined(UCK_CHLKC_MATH)
+        // ttnvtop Phase 2.1.c: stash the launching kernel's host_assigned_id
+        // in the L1 sampler-ring header so the LLK math-thread sampler can
+        // stamp it onto each in-kernel tick. Single writer (this thread,
+        // between kernel launches), single reader (LLK on this thread).
+        ttnvtop_sampler::set_current_kernel_id(launch_msg->kernel_config.host_assigned_id);
+#endif
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
         DEVICE_PRINT_KERNEL_FINISHED();
 
+#if defined(UCK_CHLKC_MATH)
+        // Clear the kernel-id between programs so any post-kernel ticks
+        // (there shouldn't be any from the math thread, but if a future hook
+        // adds one) don't get mis-attributed to the just-finished program.
+        ttnvtop_sampler::set_current_kernel_id(0u);
+#endif
         // Signal completion
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;

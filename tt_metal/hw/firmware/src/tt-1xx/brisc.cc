@@ -398,6 +398,12 @@ int main() {
             ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
+            // ttnvtop Phase 2.1.c: brisc still calls maybe_tick() (idle loop)
+            // in addition to the trisc1/LLK hook. Removing this call broke
+            // compute in bisect — root cause TBD, so kept until single-writer
+            // migration is debugged. The two writers don't share the same
+            // ring slot in practice (BRISC ticks during go-signal idle, TRISC1
+            // ticks while inside _llk_math_wait_for_dest_available_).
             ttnvtop_sampler::maybe_tick();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.

@@ -28,6 +28,13 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+
+// ttnvtop name-registry hook for fabric_program_ dispatch (router /
+// multicast / CB-mgmt kernels). Without this, fabric programs show up
+// in ttnvtop as "unnamed" since they are dispatched directly here,
+// bypassing the program-dispatch sites in impl/program/dispatch.cpp.
+#include "tools/ttnvtop/registrar/ttnvtop_register.hpp"
+#include "tools/ttnvtop/registrar/tt_metal_name.hpp"
 #include <vector>
 
 #include "allocator.hpp"
@@ -400,6 +407,9 @@ void Device::configure_fabric() {
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
             dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
             msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+            ttnvtop::register_program(
+                static_cast<uint32_t>(fabric_program_->get_runtime_id()),
+                ttnvtop::ttnvtop_program_name(fabric_program_->impl()).c_str());
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(

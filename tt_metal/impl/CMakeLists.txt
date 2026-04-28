@@ -106,6 +106,11 @@ target_link_libraries(
         protobuf::libprotobuf
         libdwarf::dwarf-static
         Taskflow::Taskflow
+        # ttnvtop program registrar: dispatch.cpp calls register_program().
+        # When TTNVTOP_REGISTER_PROGRAMS is unset, each call is one atomic-bool
+        # load + branch → no measurable runtime cost. Linking unconditionally
+        # keeps all builds ready to surface program names in ttnvtop.
+        ttnvtop_register
 )
 
 target_include_directories(

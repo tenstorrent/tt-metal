@@ -56,6 +56,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
+    # ttnvtop registrar bridge: derives a short human-readable program
+    # name for the on-chip register_program() hook in program/dispatch.cpp.
+    # This is the ONLY file in libtt_metal that touches ttnvtop types.
+    ${PROJECT_SOURCE_DIR}/tt_metal/tools/ttnvtop/registrar/tt_metal_name.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_rpc_client.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_service.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_server_controller.cpp

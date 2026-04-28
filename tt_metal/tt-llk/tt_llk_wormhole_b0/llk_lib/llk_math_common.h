@@ -11,6 +11,14 @@
 #include "ckernel_ops.h"
 #include "cmath_common.h"
 
+// ttnvtop on-chip sampler hook (Phase 2.1.c). The header lives in
+// tt-metal's hw/inc tree and is already on every Tensix RISC-V firmware
+// include path. It only references reg_read + MEM_UTIL_SAMPLER_BASE —
+// no host-only or arch-specific dependencies. The actual call site is
+// _llk_math_wait_for_dest_available_ below; including the header here
+// keeps it visible to any other math-thread hot path that may want it.
+#include "util_sampler.h"
+
 using namespace ckernel::math;
 
 inline void _llk_math_dbg_feature_disable_()
@@ -63,6 +71,12 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 template <DstSync Dst>
 inline void _llk_math_wait_for_dest_available_()
 {
+    // ttnvtop Phase 2.1.c: between-tile sampling hook. This function is the
+    // tile-rate barrier on the math thread, so it's the natural cadence for
+    // a low-overhead utilization sampler. maybe_tick_with_kernel_id() is
+    // ~5 instructions on the fast path (early-out via cached deadline) and
+    // only writes the L1 ring on a sample tick (~100 us at 1 GHz).
+    ttnvtop_sampler::maybe_tick_with_kernel_id();
     // These lightweight functions for sync with packer imply
     // no mode change - entire epoch is either double buffer or single buffer
     math_dest_wait();

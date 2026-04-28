@@ -23,43 +23,77 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "../collector/shm_publisher.hpp"
+#include "../common/program_registry.hpp"
 #include "../common/shm_schema.hpp"
 
 namespace {
 
 constexpr int kRenderHz = 4;
-// Cell format: "(xx,yy) C[........] xxx% D[........] xxx% "
-// visible widths:   8   +    17     +      17       = 42.
-constexpr int kCorePanelWidth = 42;
-constexpr int kBarWidth = 8;
 constexpr int kStaleThresholdMs = 2000;
+constexpr int kBarWidth = 4;    // bar is N pipes wide inside the box
+constexpr int kBoxInnerW = 10;  // 1 letter + bar + 1 sp + 4 pct = 10 visible chars
+constexpr int kBoxOuterW = 12;  // +2 for | | borders
 
-// ANSI color escapes. Kept inline — no curses dep.
+// ANSI color escapes. We use color ONLY to convey meaning:
+//   - saturation (green/yellow/red) for F/S/D percentage
+//   - per-program color on the #ID label so you can visually track a program
 constexpr const char* kAnsiReset = "\x1b[0m";
 constexpr const char* kAnsiDim = "\x1b[2m";
-constexpr const char* kAnsiGreen = "\x1b[38;5;34m";    // 1..33%
-constexpr const char* kAnsiYellow = "\x1b[38;5;220m";  // 34..66%
-constexpr const char* kAnsiRed = "\x1b[38;5;196m";     // 67..100%
-constexpr const char* kAnsiGray = "\x1b[38;5;240m";    //  0%
 constexpr const char* kAnsiBold = "\x1b[1m";
+constexpr const char* kPctGray = "\x1b[38;5;240m";    // idle (0%)
+constexpr const char* kPctGreen = "\x1b[38;5;46m";    // 1..33%
+constexpr const char* kPctYellow = "\x1b[38;5;220m";  // 34..66%
+constexpr const char* kPctRed = "\x1b[38;5;196m";     // 67..100%
 
-const char* color_for_pct(uint32_t pct) {
+const char* pct_color(uint32_t pct) {
     if (pct == 0) {
-        return kAnsiGray;
+        return kPctGray;
     }
     if (pct < 34) {
-        return kAnsiGreen;
+        return kPctGreen;
     }
     if (pct < 67) {
-        return kAnsiYellow;
+        return kPctYellow;
     }
-    return kAnsiRed;
+    return kPctRed;
+}
+
+// Stable per-program color. Intentionally disjoint from the saturation ramp
+// (no pure green/yellow/red here) so you can tell "bar heat" from "program
+// identity" at a glance.
+const char* prog_color(uint32_t prog_id) {
+    static constexpr const char* kPalette[] = {
+        "\x1b[38;5;51m",   // bright cyan
+        "\x1b[38;5;201m",  // magenta
+        "\x1b[38;5;33m",   // blue
+        "\x1b[38;5;208m",  // orange
+        "\x1b[38;5;129m",  // purple
+        "\x1b[38;5;37m",   // teal
+        "\x1b[38;5;213m",  // pink
+        "\x1b[38;5;99m",   // violet
+    };
+    return kPalette[prog_id % (sizeof(kPalette) / sizeof(kPalette[0]))];
+}
+
+// Render a bar of `filled` pipes + `width-filled` spaces. No brackets
+// (brackets live on the box border). Caller wraps with color codes.
+void append_bar(std::string& s, uint32_t pct, int width) {
+    if (pct > 100) {
+        pct = 100;
+    }
+    int filled = static_cast<int>((pct * static_cast<uint32_t>(width)) / 100u);
+    for (int i = 0; i < width; ++i) {
+        s.push_back(i < filled ? '|' : ' ');
+    }
 }
 
 struct MappedShm {
@@ -70,6 +104,66 @@ struct MappedShm {
     const ttnvtop::PerCoreView* cores = nullptr;
     std::string path;
 };
+
+// Program name registry mapping. Read-only view of the writer-side circular
+// buffer at /dev/shm/tt_program_registry. If the file is absent or malformed,
+// we silently fall back to "unnamed" display.
+struct RegistryMap {
+    int fd = -1;
+    void* map = nullptr;
+    size_t map_size = 0;
+    const ttnvtop::RegistryHeader* header = nullptr;
+    const ttnvtop::RegistryEntry* entries = nullptr;
+    uint32_t last_cursor = 0;  // total writes observed so far (capped-summed)
+    uint32_t last_writer_pid = 0;
+};
+
+bool map_registry(RegistryMap& out) {
+    out.fd = ::open(ttnvtop::kRegistryShmPath, O_RDONLY);
+    if (out.fd < 0) {
+        return false;
+    }
+    struct stat st{};
+    if (::fstat(out.fd, &st) != 0 || st.st_size < static_cast<off_t>(ttnvtop::registry_file_size())) {
+        ::close(out.fd);
+        out.fd = -1;
+        return false;
+    }
+    out.map_size = ttnvtop::registry_file_size();
+    out.map = ::mmap(nullptr, out.map_size, PROT_READ, MAP_SHARED, out.fd, 0);
+    if (out.map == MAP_FAILED) {
+        out.map = nullptr;
+        ::close(out.fd);
+        out.fd = -1;
+        return false;
+    }
+    out.header = static_cast<const ttnvtop::RegistryHeader*>(out.map);
+    if (std::memcmp(out.header->magic, ttnvtop::kRegistryMagic, 4) != 0 ||
+        out.header->version != ttnvtop::kRegistryVersion || out.header->entry_size != sizeof(ttnvtop::RegistryEntry) ||
+        out.header->capacity != ttnvtop::kRegistryCapacity) {
+        ::munmap(out.map, out.map_size);
+        out.map = nullptr;
+        ::close(out.fd);
+        out.fd = -1;
+        out.header = nullptr;
+        return false;
+    }
+    out.entries = reinterpret_cast<const ttnvtop::RegistryEntry*>(
+        static_cast<const char*>(out.map) + sizeof(ttnvtop::RegistryHeader));
+    out.last_cursor = 0;
+    out.last_writer_pid = out.header->writer_pid;
+    return true;
+}
+
+void unmap_registry(RegistryMap& r) {
+    if (r.map != nullptr) {
+        ::munmap(r.map, r.map_size);
+    }
+    if (r.fd >= 0) {
+        ::close(r.fd);
+    }
+    r = RegistryMap{};
+}
 
 std::atomic<bool> g_stop{false};
 
@@ -83,21 +177,6 @@ const char* arch_label(uint32_t arch_id) {
         case 4: return "Quasar";
         default: return "?";
     }
-}
-
-std::string make_bar(uint32_t pct, int width) {
-    uint32_t filled = (pct * static_cast<uint32_t>(width)) / 100;
-    if (filled > static_cast<uint32_t>(width)) {
-        filled = static_cast<uint32_t>(width);
-    }
-    std::string s;
-    s.reserve(static_cast<size_t>(width) + 2);
-    s.push_back('[');
-    for (int i = 0; i < width; ++i) {
-        s.push_back(i < static_cast<int>(filled) ? '#' : ' ');
-    }
-    s.push_back(']');
-    return s;
 }
 
 bool map_shm(const std::string& path, MappedShm& out) {
@@ -152,18 +231,117 @@ uint64_t monotonic_us() {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
+    std::set<uint64_t> chip_filter;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view a = argv[i];
+        if (a == "-h" || a == "--help") {
+            std::cout << "ttnvtop — TUI viewer of ttnvtop-collector SHM.\n\n"
+                         "Usage: ttnvtop [--chip N]...\n\n"
+                         "  --chip N         Only show chip with asic_id N. Repeatable; default shows all.\n\n"
+                         "Each Tensix core is drawn as a bordered box containing F/S/D bars\n"
+                         "(matrix/vector/dispatch), a percentage per bar, the (x,y) noc coord,\n"
+                         "and the last 3 digits of the host_assigned_id of the program running.\n";
+            return 0;
+        }
+        if (a == "--chip") {
+            if (i + 1 >= argc) {
+                std::cerr << "ttnvtop: --chip requires an integer argument\n";
+                return 2;
+            }
+            char* endp = nullptr;
+            const char* nstr = argv[++i];
+            unsigned long long v = std::strtoull(nstr, &endp, 10);
+            if (endp == nstr || *endp != '\0') {
+                std::cerr << "ttnvtop: --chip got non-numeric value '" << nstr << "'\n";
+                return 2;
+            }
+            chip_filter.insert(static_cast<uint64_t>(v));
+            continue;
+        }
+    }
     std::signal(SIGINT, handle_sigint);
     std::signal(SIGTERM, handle_sigint);
 
     std::vector<MappedShm> maps;
+
+    // Program-name registry. Lazily (re)opened each frame if not yet mapped
+    // or if the writer process restarted. Missing file is fine — names just
+    // display as "unnamed".
+    RegistryMap registry;
+    std::unordered_map<uint32_t, std::string> name_cache;
+    // Phase 2.1.c: per-program cycles attributed in the last 1s drain window.
+    // Keyed identically to name_cache (raw runtime_id, possibly encoded form).
+    // Updated each frame by replaying every registry slot — the writer rewrites
+    // the same slot with refreshed cycles_in_window each drain.
+    std::unordered_map<uint32_t, uint64_t> cycles_cache;
+
+    auto ingest_registry_entry = [&](const ttnvtop::RegistryEntry& e) {
+        // The writer side (dispatch hooks) registers with the value it just
+        // wrote into host_assigned_id. tt-metal has two encodings:
+        //   - dispatch.cpp (single-device path):  raw runtime_id (e.g. 29539)
+        //   - mesh / tt_metal.cpp:                EncodePerDeviceProgramID
+        //                                         = (runtime_id << 10 | dev_id)
+        // We store under e.runtime_id verbatim. Lookup tries multiple forms.
+        const size_t max_len = ttnvtop::kRegistryNameMax;
+        size_t n = 0;
+        while (n < max_len && e.name[n] != '\0') {
+            ++n;
+        }
+        name_cache[e.runtime_id] = std::string(e.name, n);
+        cycles_cache[e.runtime_id] = e.cycles_in_window;
+    };
+
+    auto refresh_registry = [&]() {
+        if (registry.fd < 0) {
+            if (!map_registry(registry)) {
+                return;  // silently skip — collector/writer may not be running
+            }
+        }
+        // Detect writer restart: if pid changed, start over.
+        const uint32_t cur_pid = registry.header->writer_pid;
+        if (cur_pid != registry.last_writer_pid) {
+            name_cache.clear();
+            registry.last_cursor = 0;
+            registry.last_writer_pid = cur_pid;
+        }
+        const uint32_t cursor = registry.header->write_cursor.load(std::memory_order_acquire);
+        if (cursor == registry.last_cursor) {
+            return;
+        }
+        const uint32_t capacity = registry.header->capacity;
+        uint32_t new_writes = cursor - registry.last_cursor;
+        // If writer has produced more than `capacity` entries since last frame,
+        // we've lapped the buffer and the slots before the current window are
+        // overwritten — just rescan everything.
+        if (new_writes >= capacity) {
+            const uint32_t scan = cursor < capacity ? cursor : capacity;
+            for (uint32_t i = 0; i < scan; ++i) {
+                ingest_registry_entry(registry.entries[i]);
+            }
+        } else {
+            for (uint32_t k = 0; k < new_writes; ++k) {
+                const uint32_t total_written = registry.last_cursor + k;
+                const uint32_t slot = total_written % capacity;
+                ingest_registry_entry(registry.entries[slot]);
+            }
+        }
+        registry.last_cursor = cursor;
+    };
 
     // Refresh the set of SHM files: add any new ones, drop any that vanished or
     // whose collector PID is no longer alive.
     auto refresh_maps = [&]() {
         auto entries = ttnvtop::list_shm_files();
         std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.asic_id < b.asic_id; });
+
+        // Apply --chip filter (matches the asic_id encoded in the filename,
+        // which also equals UtilShmHeader::asic_id).
+        if (!chip_filter.empty()) {
+            entries.erase(
+                std::remove_if(
+                    entries.begin(), entries.end(), [&](const auto& e) { return chip_filter.count(e.asic_id) == 0; }),
+                entries.end());
+        }
 
         // Drop maps whose path no longer exists.
         maps.erase(
@@ -211,14 +389,62 @@ int main(int argc, char* argv[]) {
     while (!g_stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(render_period);
         refresh_maps();
+        refresh_registry();
+
+        // Helper to resolve a program name from the cache. Returns nullptr
+        // if no mapping is known.
+        //
+        // The argument is the decoded program id (bits 30:10 of host_assigned_id),
+        // which is what callers display as "#NNN". The registry, however, may
+        // be keyed by either:
+        //   (a) the raw runtime_id (= same number as the decoded prog_id), or
+        //   (b) the encoded value (runtime_id << 10 | device_id).
+        // depending on which dispatch path registered it. Try (a) first, then
+        // fall back by walking a small set of likely encoded forms.
+        auto lookup_name = [&](uint32_t prog_id) -> const std::string* {
+            auto it = name_cache.find(prog_id);
+            if (it != name_cache.end()) {
+                return &it->second;
+            }
+            // Try encoded forms — runtime_id << 10 | device_id for any
+            // device_id this build of tt-metal might use. Mesh boards typically
+            // have a small number of devices; bound the probe at 8 to keep this
+            // O(1)-ish per render.
+            for (uint32_t dev = 0; dev < 8; ++dev) {
+                const uint32_t encoded = (prog_id << 10) | dev;
+                it = name_cache.find(encoded);
+                if (it != name_cache.end()) {
+                    return &it->second;
+                }
+            }
+            return nullptr;
+        };
+
+        // Phase 2.1.c: parallel lookup for cycles_in_window. Same key search
+        // as lookup_name. Returns 0 when the registry has no value yet — that
+        // signals "no Phase 2.1.c data" to the renderer (column shows --).
+        auto lookup_cycles = [&](uint32_t prog_id) -> uint64_t {
+            auto it = cycles_cache.find(prog_id);
+            if (it != cycles_cache.end()) {
+                return it->second;
+            }
+            for (uint32_t dev = 0; dev < 8; ++dev) {
+                const uint32_t encoded = (prog_id << 10) | dev;
+                it = cycles_cache.find(encoded);
+                if (it != cycles_cache.end()) {
+                    return it->second;
+                }
+            }
+            return 0;
+        };
 
         if (maps.empty()) {
-            std::cout << "\x1b[H\x1b[2J" << kAnsiBold << "ttnvtop" << kAnsiReset
-                      << "  |  waiting for ttnvtop-collector ...\n\n"
-                      << kAnsiDim << "  No /dev/shm/tt_device_*_util files published yet.\n"
+            std::cout << "\x1b[H\x1b[2J"
+                      << "ttnvtop   waiting for ttnvtop-collector ...\n\n"
+                      << "  No /dev/shm/tt_device_*_util files published yet.\n"
                       << "  Start the collector in another terminal:\n"
                       << "    ttnvtop-collector\n"
-                      << kAnsiReset << "\n[Ctrl-C to exit]\n";
+                      << "\n[Ctrl-C to exit]\n";
             std::cout.flush();
             continue;
         }
@@ -229,197 +455,465 @@ int main(int argc, char* argv[]) {
         for (const auto& m : maps) {
             total_cores += m.header->num_cores;
         }
-        out << "ttnvtop  |  chips=" << maps.size() << "  cores=" << total_cores << "  refresh=" << kRenderHz
-            << "Hz  (SHM viewer)\n";
-        out << "\n";
-        out << "Signals shown per Tensix (EWMA ~1s):\n";
-        out << "  " << kAnsiBold << "C" << kAnsiReset << " = FPU peak-request density%    "
-            << "delta(FPU_OUT_H) / delta(WALL_CLOCK).\n";
-        out << "     Fraction of AICLK cycles the FPU issued a request. Tensix is\n";
-        out << "     single-issue, so C=100% means the FPU issued every cycle (true\n";
-        out << "     peak). C does NOT count SIMD-lane occupancy — a partial-width op\n";
-        out << "     shows the same C as a full-width one. Not peak-FLOPS%.\n";
-        out << "  " << kAnsiBold << "D" << kAnsiReset << " = dispatch occupancy%          "
-            << "fraction of last ~1s a kernel was\n";
-        out << "     dispatched to this core (go_msg.signal == RUN_MSG_GO). A kernel\n";
-        out << "     stalled on NOC/CB still reads 100%.\n";
-        out << "  Interpretation: high D + low C = data movement / stalls; both high =\n";
-        out << "  real compute; both low = core genuinely idle.\n";
-        out << "  Color: " << kAnsiGray << "idle" << kAnsiReset << " / " << kAnsiGreen << "low" << kAnsiReset << " / "
-            << kAnsiYellow << "mid" << kAnsiReset << " / " << kAnsiRed << "high" << kAnsiReset << ".\n";
-        out << "\n";
+        out << kAnsiBold << "ttnvtop" << kAnsiReset << "   " << maps.size() << " chip" << (maps.size() == 1 ? "" : "s")
+            << "   " << total_cores << " cores   " << kRenderHz << " Hz\n"
+            << kAnsiDim << "  per-core box: F (FPU matrix) / S (SFPU vector) / D (dispatch)     "
+            << "saturation: " << kAnsiReset << kPctGray << "idle" << kAnsiReset << " " << kPctGreen << "low"
+            << kAnsiReset << " " << kPctYellow << "mid" << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset << "\n";
 
-        // Header row: chip title per column.
+        // Global accumulator for the bottom program table and per-chip aggregates.
+        constexpr uint32_t kLoFiMuladdsPerFpuReq = 4096;
+        struct KernelBucket {
+            uint32_t cores = 0;
+            uint64_t sum_f_p1000 = 0;
+            uint64_t sum_s_p1000 = 0;
+            uint64_t sum_d_p1000 = 0;
+            uint32_t chip_bits = 0;  // bit i set => also present on chip i
+        };
+        std::unordered_map<uint32_t, KernelBucket> global_kernels;
+
+        // Layout: chip grids on the left, programs panel on the right. We
+        // build them into separate buffers and zip them line-by-line at the
+        // end so they sit side-by-side instead of stacked vertically.
+        const std::streampos chips_begin = out.tellp();
+
         for (size_t c = 0; c < maps.size(); ++c) {
             const auto* h = maps[c].header;
             const bool stale = (monotonic_us() - h->last_update_us) > static_cast<uint64_t>(kStaleThresholdMs) * 1000;
-            std::ostringstream t;
-            t << "chip asic 0x" << std::hex << h->asic_id << std::dec << " " << arch_label(h->arch_id);
-            if (h->num_cores > 0) {
-                t << " [" << (maps[c].cores[0].is_remote ? "remote" : " mmio ") << "]";
+            const auto* cores = maps[c].cores;
+            const uint32_t n = h->num_cores;
+
+            // Per-chip aggregates.
+            uint64_t sum_f = 0, sum_s = 0, sum_d = 0;
+            uint8_t min_x = 255, max_x = 0, min_y = 255, max_y = 0;
+            for (uint32_t i = 0; i < n; ++i) {
+                const auto& v = cores[i];
+                sum_f += v.compute_busy_p1000;
+                sum_s += v.sfpu_busy_p1000;
+                sum_d += v.dispatch_busy_p1000;
+                if (v.noc_x < min_x) {
+                    min_x = v.noc_x;
+                }
+                if (v.noc_x > max_x) {
+                    max_x = v.noc_x;
+                }
+                if (v.noc_y < min_y) {
+                    min_y = v.noc_y;
+                }
+                if (v.noc_y > max_y) {
+                    max_y = v.noc_y;
+                }
+                if ((v.dispatch_busy_p1000 / 10u) > 0 && v.last_kernel_id != 0) {
+                    // Aggregate by DECODED program id (bits 30:10). The lower
+                    // 10 bits of host_assigned_id encode device/sub-device/
+                    // dispatch-slot information that varies within a single
+                    // chip — keying on the raw u32 fragments same-program
+                    // cores into multiple rows. Use the prog_id portion only
+                    // so all cores running runtime_id=N collapse to one entry.
+                    const uint32_t prog_id_key = (v.last_kernel_id >> 10) & 0x1FFFFFu;
+                    auto& b = global_kernels[prog_id_key];
+                    b.cores += 1;
+                    b.sum_f_p1000 += v.compute_busy_p1000;
+                    b.sum_s_p1000 += v.sfpu_busy_p1000;
+                    b.sum_d_p1000 += v.dispatch_busy_p1000;
+                    b.chip_bits |= (1u << c);
+                }
+            }
+            const uint32_t f_avg = n == 0 ? 0 : static_cast<uint32_t>(sum_f / (n * 10u));
+            const uint32_t s_avg = n == 0 ? 0 : static_cast<uint32_t>(sum_s / (n * 10u));
+            const uint32_t d_avg = n == 0 ? 0 : static_cast<uint32_t>(sum_d / (n * 10u));
+
+            // Chip title line.
+            out << "\nchip " << c << "   " << arch_label(h->arch_id);
+            if (n > 0) {
+                out << " (" << (cores[0].is_remote ? "remote" : "mmio") << ")";
             }
             if (h->aiclk_mhz > 0) {
-                t << " @ " << h->aiclk_mhz << " MHz";
+                out << " @ " << h->aiclk_mhz << " MHz";
             }
             if (stale) {
-                t << " (STALE)";
+                out << "  (STALE)";
             }
-            std::string s = t.str();
-            if (static_cast<int>(s.size()) < kCorePanelWidth) {
-                s.append(kCorePanelWidth - s.size(), ' ');
-            } else if (static_cast<int>(s.size()) > kCorePanelWidth) {
-                s.resize(kCorePanelWidth);  // truncate rather than break alignment
+            out << "   F=" << std::setw(2) << f_avg << "%  S=" << std::setw(2) << s_avg << "%  D=" << std::setw(2)
+                << d_avg << "%";
+            if (h->aiclk_mhz > 0 && n > 0) {
+                const double peak_greq = static_cast<double>(n) * static_cast<double>(h->aiclk_mhz) / 1000.0;
+                const double f_frac = static_cast<double>(sum_f) / (static_cast<double>(n) * 1000.0);
+                const double achieved_greq = peak_greq * f_frac;
+                const double peak_tflops = peak_greq * kLoFiMuladdsPerFpuReq / 1000.0;
+                const double achieved_tflops = peak_tflops * f_frac;
+                out << "   FPU " << std::fixed << std::setprecision(1) << achieved_greq << "/" << peak_greq
+                    << " Greq/s   ~" << std::setprecision(0) << achieved_tflops << "/" << peak_tflops << " TF";
             }
-            out << s;
-            if (c + 1 < maps.size()) {
-                out << " | ";
-            }
-        }
-        out << "\n";
-        for (size_t c = 0; c < maps.size(); ++c) {
-            out << std::string(kCorePanelWidth, '-');
-            if (c + 1 < maps.size()) {
-                out << "-+-";
-            }
-        }
-        out << "\n";
+            // Dominant-program label removed: variable-length text on the
+            // chip title row caused the right-side PROGRAMS panel to shift
+            // horizontally as programs changed. The PROGRAMS table on the
+            // right covers the same information without the layout jitter.
+            out << "\n";
 
-        size_t max_rows = 0;
-        for (const auto& m : maps) {
-            max_rows = std::max(max_rows, static_cast<size_t>(m.header->num_cores));
-        }
-        // Per-chip running totals of both signals for the footer averages.
-        std::vector<uint64_t> compute_sum(maps.size(), 0);
-        std::vector<uint64_t> dispatch_sum(maps.size(), 0);
-        // Per-core row cell visible layout:
-        //   "(xx,yy) C[########] xx% D[########] xx% "
-        //    8       + 13        + 13        + 1 trailing = 35 chars; pad to kCorePanelWidth.
-        for (size_t row = 0; row < max_rows; ++row) {
-            for (size_t c = 0; c < maps.size(); ++c) {
-                const uint32_t src = maps[c].header->signal_sources;
-                const bool show_compute = (src & ttnvtop::SIGNAL_SRC_COMPUTE) != 0;
-                const bool show_dispatch = (src & ttnvtop::SIGNAL_SRC_DISPATCH) != 0;
-                if (row < maps[c].header->num_cores) {
-                    const auto& v = maps[c].cores[row];
-                    const uint32_t cpct = v.compute_busy_p1000 / 10u;
-                    const uint32_t dpct = v.dispatch_busy_p1000 / 10u;
-                    compute_sum[c] += v.compute_busy_p1000;
-                    dispatch_sum[c] += v.dispatch_busy_p1000;
-                    out << "(" << std::setw(2) << static_cast<int>(v.noc_x) << "," << std::setw(2)
-                        << static_cast<int>(v.noc_y) << ") ";
-                    if (show_compute) {
-                        out << "C" << color_for_pct(cpct) << make_bar(cpct, kBarWidth) << kAnsiReset << " "
-                            << std::setw(3) << cpct << "% ";
-                    } else {
-                        out << std::string(1 + 2 + kBarWidth + 1 + 3 + 2, ' ');
-                    }
-                    if (show_dispatch) {
-                        out << "D" << color_for_pct(dpct) << make_bar(dpct, kBarWidth) << kAnsiReset << " "
-                            << std::setw(3) << dpct << "% ";
-                    } else {
-                        out << std::string(1 + 2 + kBarWidth + 1 + 3 + 2, ' ');
-                    }
-                } else {
-                    out << std::string(kCorePanelWidth, ' ');
+            if (n == 0 || min_x > max_x || min_y > max_y) {
+                out << "  (no cores)\n";
+                continue;
+            }
+
+            // Build a (y, x) → PerCoreView lookup so we can render spatially.
+            // WH noc coords top out around 10 on each axis; this map is tiny.
+            std::unordered_map<uint32_t, const ttnvtop::PerCoreView*> at;
+            at.reserve(n);
+            for (uint32_t i = 0; i < n; ++i) {
+                const auto& v = cores[i];
+                const uint32_t key = (static_cast<uint32_t>(v.noc_y) << 8) | v.noc_x;
+                at[key] = &v;
+            }
+
+            // Render each core as a 12-wide × 6-tall bordered box. Adjacent
+            // boxes in the same y-row share one vertical border (so the run
+            // of boxes reads as a table). Consecutive y-rows share the
+            // horizontal border between them.
+            //
+            // Box content (10 visible chars inside borders):
+            //    row 0: '<x>,<y> #NNN'   (noc coord + last 3 digits of prog id)
+            //    row 1: 'F|||| 78%'      (bar + pct)
+            //    row 2: 'S       0%'     (bar + pct)
+            //    row 3: 'D||||| 99%'     (bar + pct)
+
+            // Column header row: noc_x centered over each box.
+            out << "        ";  // y-label column pad
+            for (uint8_t x = min_x; x <= max_x; ++x) {
+                std::ostringstream xs;
+                xs << "x=" << static_cast<int>(x);
+                std::string s = xs.str();
+                // Center within kBoxOuterW chars.
+                int pad_l = (kBoxOuterW - static_cast<int>(s.size())) / 2;
+                int pad_r = kBoxOuterW - pad_l - static_cast<int>(s.size());
+                if (pad_l < 0) {
+                    pad_l = 0;
                 }
-                if (c + 1 < maps.size()) {
-                    out << " | ";
+                if (pad_r < 0) {
+                    pad_r = 0;
                 }
+                out << std::string(pad_l, ' ') << s << std::string(pad_r, ' ');
             }
             out << "\n";
+
+            // Horizontal border (shared between y-rows; reused for top and bottom).
+            auto hline = [&]() {
+                out << "        ";
+                for (uint8_t x = min_x; x <= max_x; ++x) {
+                    (void)x;
+                    out << "+" << std::string(kBoxInnerW, '-');
+                }
+                out << "+\n";
+            };
+
+            // Renders one content line across all x-columns for a given y.
+            // `line_idx` ∈ [0..3]: which of the four content lines.
+            auto content_line = [&](uint8_t y, int line_idx) {
+                // y-label on the left, only on the first content line of each y-row.
+                // Leading pad must match the hline/header (8 chars) exactly or the
+                // top line of each y-row drifts right by one cell.
+                if (line_idx == 0) {
+                    out << "  y=" << std::setw(2) << static_cast<int>(y) << "  ";  // 4+2+2 = 8
+                } else {
+                    out << "        ";  // 8
+                }
+                for (uint8_t x = min_x; x <= max_x; ++x) {
+                    const uint32_t key = (static_cast<uint32_t>(y) << 8) | x;
+                    auto it = at.find(key);
+                    out << "|";
+                    if (it == at.end()) {
+                        out << std::string(kBoxInnerW, ' ');
+                        continue;
+                    }
+                    const auto* v = it->second;
+                    if (line_idx == 0) {
+                        // Coord + #prog (last 3 digits).
+                        std::ostringstream hdr;
+                        hdr << static_cast<int>(v->noc_x) << "," << static_cast<int>(v->noc_y);
+                        std::string coord = hdr.str();
+                        std::string prog_str;
+                        if (v->last_kernel_id != 0 && v->dispatch_busy_p1000 > 0) {
+                            const uint32_t prog_id = (v->last_kernel_id >> 10) & 0x1FFFFFu;
+                            std::ostringstream ps;
+                            ps << "#" << (prog_id % 1000);
+                            prog_str = ps.str();
+                        }
+                        // Lay out inside kBoxInnerW: "<coord><spaces><prog>" padded.
+                        int used = static_cast<int>(coord.size()) + 1 + static_cast<int>(prog_str.size());
+                        int pad = kBoxInnerW - used;
+                        if (pad < 0) {
+                            pad = 0;
+                        }
+                        out << coord << " ";
+                        if (!prog_str.empty()) {
+                            const uint32_t prog_id = (v->last_kernel_id >> 10) & 0x1FFFFFu;
+                            out << prog_color(prog_id) << prog_str << kAnsiReset;
+                        }
+                        out << std::string(pad, ' ');
+                    } else {
+                        uint32_t pct = 0;
+                        char label = '?';
+                        switch (line_idx) {
+                            case 1:
+                                pct = v->compute_busy_p1000 / 10u;
+                                label = 'F';
+                                break;
+                            case 2:
+                                pct = v->sfpu_busy_p1000 / 10u;
+                                label = 'S';
+                                break;
+                            case 3:
+                                pct = v->dispatch_busy_p1000 / 10u;
+                                label = 'D';
+                                break;
+                        }
+                        if (pct > 100) {
+                            pct = 100;
+                        }
+                        // Layout: label + bar (kBarWidth) + space + pct (4 wide, right-aligned).
+                        std::ostringstream pcts;
+                        pcts << std::setw(3) << pct << "%";
+                        std::string bar;
+                        append_bar(bar, pct, kBarWidth);
+                        out << label << pct_color(pct) << bar << kAnsiReset << " " << pcts.str();
+                        // 1 (label) + kBarWidth + 1 (sp) + 4 (pct) = 6 + kBarWidth
+                        int used = 1 + kBarWidth + 1 + 4;
+                        int pad = kBoxInnerW - used;
+                        if (pad < 0) {
+                            pad = 0;
+                        }
+                        out << std::string(pad, ' ');
+                    }
+                }
+                out << "|\n";
+            };
+
+            hline();
+            for (uint8_t y = min_y; y <= max_y; ++y) {
+                for (int li = 0; li < 4; ++li) {
+                    content_line(y, li);
+                }
+                hline();
+            }
         }
 
-        for (size_t c = 0; c < maps.size(); ++c) {
-            out << std::string(kCorePanelWidth, '-');
-            if (c + 1 < maps.size()) {
-                out << "-+-";
+        // End-of-chips / start-of-programs marker for the side-by-side layout.
+        const std::streampos progs_begin = out.tellp();
+
+        // ── Program table ────────────────────────────────────────────────────
+        out << "\nPROGRAMS  (bits 30:10 of host_assigned_id; counted over cores with D>0)\n";
+        if (global_kernels.empty()) {
+            out << "  no programs running\n";
+        } else {
+            std::vector<std::pair<uint32_t, KernelBucket>> rows(global_kernels.begin(), global_kernels.end());
+            std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+                // Primary: cores desc. Tiebreak: avg F desc.
+                if (a.second.cores != b.second.cores) {
+                    return a.second.cores > b.second.cores;
+                }
+                return a.second.sum_f_p1000 > b.second.sum_f_p1000;
+            });
+            // Show the full pipe-joined kernel chain. Registry caps names at
+            // kRegistryNameMax-1 = 95 chars, so this is the longest possible.
+            constexpr size_t kNameMaxDisp = ttnvtop::kRegistryNameMax - 1;
+            constexpr size_t kNameColW = kNameMaxDisp + 2;  // +2 trailing space
+            // Phase 2.1.c: precompute total cycles_in_window across all rows
+            // so per-row TIME% can be expressed as a fraction. If every row
+            // reports 0, we render "--" for the whole column — the LLK hook
+            // that populates cycles_in_window hasn't landed yet.
+            uint64_t total_cycles_in_window = 0;
+            for (const auto& row : rows) {
+                total_cycles_in_window += lookup_cycles(row.first);
+            }
+            const bool time_pct_available = (total_cycles_in_window > 0);
+            // Header columns must match the per-row layout below exactly:
+            //   "  " <id8> "  " <name kNameColW> setw5(chip) "  " setw5(cores)
+            //   "  " <time5> "   " setw3(F)"%" "  " setw3(S)"%" "  " setw3(D)"%"
+            // TIME% data cell is 5 chars total: either setw(4)+"%" (e.g. " 100%",
+            // "  87%") or the literal "   --" when cycles_in_window is 0 across
+            // all rows. Header label "TIME%" is exactly 5 chars.
+            {
+                std::string h;
+                h += "  ";  // leading
+                h += "ID";
+                h += std::string(8 - 2, ' ');  // pad ID to 8
+                h += "  ";                     // gap before NAME
+                h += "NAME";
+                h += std::string(kNameColW - 4, ' ');  // pad NAME to kNameColW
+                h += " CHIP";                          // right-aligned in setw(5)
+                h += "  ";
+                h += "CORES";  // exact fit setw(5)
+                h += "  ";     // 2-space gap before TIME%
+                h += "TIME%";  // exact fit 5 chars (matches data setw(4)+"%" or "   --")
+                h += "   ";    // 3-space gap before F%
+                h += "  F%";   // right-aligned in setw(3)+"%"
+                h += "  ";
+                h += "  S%";
+                h += "  ";
+                h += "  D%";
+                out << h << "\n";
+            }
+            // With the side-by-side layout the chip grid dictates total
+            // height (often 50+ lines per chip), so we have plenty of room
+            // for the program list. Cap is a sanity bound, not a layout
+            // limit; bump it well past typical workload program counts.
+            const size_t limit = std::min<size_t>(rows.size(), 100);
+            for (size_t i = 0; i < limit; ++i) {
+                // global_kernels is now keyed by the decoded prog_id directly
+                // (see comment in the aggregation loop above), so no shift here.
+                const uint32_t prog_id = rows[i].first;
+                const auto& b = rows[i].second;
+                const uint32_t fpct = static_cast<uint32_t>(b.sum_f_p1000 / (b.cores * 10u));
+                const uint32_t spct = static_cast<uint32_t>(b.sum_s_p1000 / (b.cores * 10u));
+                const uint32_t dpct = static_cast<uint32_t>(b.sum_d_p1000 / (b.cores * 10u));
+                std::string chip_label;
+                for (size_t c = 0; c < maps.size(); ++c) {
+                    if (b.chip_bits & (1u << c)) {
+                        if (!chip_label.empty()) {
+                            chip_label.push_back(',');
+                        }
+                        chip_label.push_back(static_cast<char>('0' + c));
+                    }
+                }
+                // Format the id cell so color escapes don't break column alignment.
+                std::ostringstream id_cell;
+                id_cell << "#" << prog_id;
+                std::string idstr = id_cell.str();
+                std::string id_pad = idstr.size() < 8 ? std::string(8 - idstr.size(), ' ') : std::string();
+                // Name cell: truncate at kNameMaxDisp, pad to kNameColW. Color
+                // escapes don't consume visible width, so we compute padding
+                // from the truncated plain name.
+                const std::string* name_ptr = lookup_name(prog_id);
+                std::string name_plain;
+                bool name_known = false;
+                if (name_ptr && !name_ptr->empty()) {
+                    name_plain = name_ptr->substr(0, kNameMaxDisp);
+                    name_known = true;
+                } else {
+                    name_plain = "unnamed";
+                }
+                std::string name_pad(kNameColW - name_plain.size(), ' ');
+                out << "  " << prog_color(prog_id) << idstr << kAnsiReset << id_pad << "  ";
+                if (name_known) {
+                    out << prog_color(prog_id) << name_plain << kAnsiReset;
+                } else {
+                    out << kAnsiDim << name_plain << kAnsiReset;
+                }
+                out << name_pad << std::setw(5) << chip_label << "  " << std::setw(5) << b.cores;
+                // Phase 2.1.c TIME% column: cycles_in_window / total. When the
+                // total across all rows is 0 (LLK hook not yet live), show "--"
+                // dim for every row so users still see the column scaffold.
+                out << "  ";  // gap before TIME%
+                if (time_pct_available) {
+                    const uint64_t cyc = lookup_cycles(rows[i].first);
+                    // Round to nearest integer percent. Cap at 100.
+                    uint32_t tpct =
+                        static_cast<uint32_t>((cyc * 100u + total_cycles_in_window / 2) / total_cycles_in_window);
+                    if (tpct > 100) {
+                        tpct = 100;
+                    }
+                    out << pct_color(tpct) << std::setw(4) << tpct << "%" << kAnsiReset;
+                } else {
+                    out << kAnsiDim << "   --" << kAnsiReset;
+                }
+                out << "   " << pct_color(fpct) << std::setw(3) << fpct << "%" << kAnsiReset << "  " << pct_color(spct)
+                    << std::setw(3) << spct << "%" << kAnsiReset << "  " << pct_color(dpct) << std::setw(3) << dpct
+                    << "%" << kAnsiReset << "\n";
+            }
+            if (rows.size() > limit) {
+                out << "  (" << (rows.size() - limit) << " more)\n";
             }
         }
-        out << "\n";
-        for (size_t c = 0; c < maps.size(); ++c) {
-            const uint32_t n = maps[c].header->num_cores;
-            const uint32_t c_avg = (n == 0) ? 0u : static_cast<uint32_t>(compute_sum[c] / (n * 10u));
-            const uint32_t d_avg = (n == 0) ? 0u : static_cast<uint32_t>(dispatch_sum[c] / (n * 10u));
-            std::ostringstream t;
-            t << "avg C=" << std::setw(3) << c_avg << "%  D=" << std::setw(3) << d_avg << "%  (" << n << " cores)";
-            std::string s = t.str();
-            if (static_cast<int>(s.size()) < kCorePanelWidth) {
-                s.append(kCorePanelWidth - s.size(), ' ');
+
+        // ── Side-by-side merge ──────────────────────────────────────────────
+        // Take everything we've accumulated so far and split it into:
+        //   header_text  = banner + signal-legend (above chips_begin)
+        //   chips_text   = per-chip grids and aggregates
+        //   progs_text   = the PROGRAMS table
+        // Then re-emit as: header + [chip line | program line] zipped.
+        {
+            const std::string full = out.str();
+            const std::string header_text = full.substr(0, static_cast<size_t>(chips_begin));
+            const std::string chips_text = full.substr(
+                static_cast<size_t>(chips_begin), static_cast<size_t>(progs_begin) - static_cast<size_t>(chips_begin));
+            const std::string progs_text = full.substr(static_cast<size_t>(progs_begin));
+
+            auto split_lines = [](const std::string& s) {
+                std::vector<std::string> v;
+                size_t start = 0;
+                while (start <= s.size()) {
+                    size_t nl = s.find('\n', start);
+                    if (nl == std::string::npos) {
+                        if (start < s.size()) {
+                            v.push_back(s.substr(start));
+                        }
+                        break;
+                    }
+                    v.push_back(s.substr(start, nl - start));
+                    start = nl + 1;
+                }
+                return v;
+            };
+
+            const auto chip_lines = split_lines(chips_text);
+            const auto prog_lines = split_lines(progs_text);
+
+            // Chip grid uses ANSI color codes for the per-program #NNN label,
+            // so byte length != visible width. Strip CSI sequences (ESC '['
+            // … 'm') when measuring so padding aligns visually.
+            auto visible_width = [](const std::string& s) -> size_t {
+                size_t n = 0;
+                for (size_t i = 0; i < s.size();) {
+                    if (s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '[') {
+                        size_t j = i + 2;
+                        while (j < s.size() && s[j] != 'm') {
+                            ++j;
+                        }
+                        i = (j < s.size()) ? j + 1 : s.size();
+                    } else {
+                        ++n;
+                        ++i;
+                    }
+                }
+                return n;
+            };
+
+            size_t chip_panel_w = 0;
+            std::vector<size_t> chip_visible(chip_lines.size(), 0);
+            for (size_t i = 0; i < chip_lines.size(); ++i) {
+                chip_visible[i] = visible_width(chip_lines[i]);
+                if (chip_visible[i] > chip_panel_w) {
+                    chip_panel_w = chip_visible[i];
+                }
             }
-            out << s;
-            if (c + 1 < maps.size()) {
-                out << " | ";
+
+            std::ostringstream merged;
+            merged << header_text;
+            const size_t rows_total = std::max(chip_lines.size(), prog_lines.size());
+            for (size_t i = 0; i < rows_total; ++i) {
+                if (i < chip_lines.size()) {
+                    merged << chip_lines[i];
+                    if (chip_visible[i] < chip_panel_w) {
+                        merged << std::string(chip_panel_w - chip_visible[i], ' ');
+                    }
+                } else {
+                    merged << std::string(chip_panel_w, ' ');
+                }
+                if (i < prog_lines.size() && !prog_lines[i].empty()) {
+                    merged << "  " << prog_lines[i];
+                }
+                merged << "\n";
             }
+            merged << "\n[Ctrl-C to exit]\n";
+            std::cout << merged.str();
         }
-        out << "\n";
-        // Per Tensix matrix-engine tech report: one FPU request at LoFi
-        // fidelity issues a 4096-muladd matmul tile, so 4 TFLOPs/Tensix at
-        // 1 GHz peak. Each muladd is counted as one op, per tt-metal docs.
-        constexpr uint32_t kLoFiMuladdsPerFpuReq = 4096;
-        // Second footer row: absolute FPU-request throughput when AICLK known.
-        //   peak_greq = num_cores × AICLK (1 req/cycle × cores at clock rate)
-        //   achieved_greq = peak_greq × c_avg
-        for (size_t c = 0; c < maps.size(); ++c) {
-            const uint32_t n = maps[c].header->num_cores;
-            const uint32_t aiclk = maps[c].header->aiclk_mhz;
-            std::ostringstream t;
-            if (aiclk > 0 && n > 0) {
-                const double peak_greq = static_cast<double>(n) * static_cast<double>(aiclk) / 1000.0;  // Greq/s
-                const double c_avg = static_cast<double>(compute_sum[c]) / (static_cast<double>(n) * 1000.0);
-                const double achieved_greq = peak_greq * c_avg;
-                t << "FPU req " << std::fixed << std::setprecision(1) << achieved_greq << " / " << peak_greq
-                  << " Greq/s";
-            } else {
-                t << "FPU throughput: unknown (no AICLK)";
-            }
-            std::string s = t.str();
-            if (static_cast<int>(s.size()) < kCorePanelWidth) {
-                s.append(kCorePanelWidth - s.size(), ' ');
-            } else if (static_cast<int>(s.size()) > kCorePanelWidth) {
-                s.resize(kCorePanelWidth);
-            }
-            out << s;
-            if (c + 1 < maps.size()) {
-                out << " | ";
-            }
-        }
-        out << "\n";
-        // Third footer row: TFLOPs estimate assuming each FPU request is a
-        // full-width LoFi matmul tile. Conservative upper bound for non-
-        // matmul workloads; close to truth for prefill-style matmul.
-        for (size_t c = 0; c < maps.size(); ++c) {
-            const uint32_t n = maps[c].header->num_cores;
-            const uint32_t aiclk = maps[c].header->aiclk_mhz;
-            std::ostringstream t;
-            if (aiclk > 0 && n > 0) {
-                const double peak_greq = static_cast<double>(n) * static_cast<double>(aiclk) / 1000.0;
-                const double c_avg = static_cast<double>(compute_sum[c]) / (static_cast<double>(n) * 1000.0);
-                const double peak_tflops = peak_greq * kLoFiMuladdsPerFpuReq / 1000.0;
-                const double achieved_tflops = peak_tflops * c_avg;
-                t << "~" << std::fixed << std::setprecision(0) << achieved_tflops << " / " << std::setprecision(0)
-                  << peak_tflops << " TF (LoFi-eq; HiFi2 real ÷2, HiFi4 ÷4)";
-            } else {
-                t << "";
-            }
-            std::string s = t.str();
-            if (static_cast<int>(s.size()) < kCorePanelWidth) {
-                s.append(kCorePanelWidth - s.size(), ' ');
-            } else if (static_cast<int>(s.size()) > kCorePanelWidth) {
-                s.resize(kCorePanelWidth);
-            }
-            out << s;
-            if (c + 1 < maps.size()) {
-                out << " | ";
-            }
-        }
-        out << "\n\n[Ctrl-C to exit]\n";
-        std::cout << out.str();
         std::cout.flush();
     }
 
     for (auto& m : maps) {
         unmap_shm(m);
     }
+    unmap_registry(registry);
     std::cout << "\nttnvtop: exiting.\n";
     return 0;
 }

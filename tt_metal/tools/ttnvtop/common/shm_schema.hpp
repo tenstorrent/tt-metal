@@ -21,7 +21,8 @@
 namespace ttnvtop {
 
 // Bump on any binary-incompatible change to the structs below.
-constexpr uint16_t kShmVersion = 1;
+//   v2 (2026-04-24): repurposed PerCoreView::reserved_0 as sfpu_busy_p1000.
+constexpr uint16_t kShmVersion = 2;
 
 constexpr char kShmMagic[4] = {'T', 'T', 'U', 'T'};
 
@@ -63,9 +64,9 @@ struct PerCoreView {
     uint8_t logical_y;
     uint8_t is_remote;
     uint8_t dispatched;  // latest 1-bit from go_msg.signal (RUN_MSG_GO?)
-    uint16_t reserved_0;
+    uint16_t sfpu_busy_p1000;      // Phase 2.1.d: SFPU (vector pipe) busy%
     uint16_t dispatch_busy_p1000;  // Phase 1 rolling dispatch-occupancy
-    uint16_t compute_busy_p1000;   // Phase 2+: FPU/MATH busy
+    uint16_t compute_busy_p1000;   // Phase 2+: FPU (MATH/matmul pipe) busy%
     uint16_t unpack_busy_p1000;    // Phase 2+
     uint16_t pack_busy_p1000;      // Phase 2+
     uint16_t stall_p1000;          // Phase 2+
