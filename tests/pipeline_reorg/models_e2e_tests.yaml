@@ -308,8 +308,9 @@
 - name: Gemma-4-E2B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
+    python -c "import transformers; print('[gemma4-ci] transformers:', transformers.__version__)"
     export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
-    pytest --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x1"
+    pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x1"
   model: gemma-4-e2b
   skus:
     wh_n150:
@@ -321,8 +322,9 @@
 - name: Gemma-4-E4B e2e tests (N150)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
+    python -c "import transformers; print('[gemma4-ci] transformers:', transformers.__version__)"
     export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
-    pytest --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x1"
+    pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x1"
   model: gemma-4-e4b-n150
   skus:
     wh_n150:
@@ -334,8 +336,9 @@
 - name: Gemma-4-E4B e2e tests (N300)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
+    python -c "import transformers; print('[gemma4-ci] transformers:', transformers.__version__)"
     export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
-    pytest --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x2"
+    pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x2"
   model: gemma-4-e4b-n300
   skus:
     wh_n300:
@@ -347,8 +350,9 @@
 - name: Gemma-4-26B-A4B e2e tests (T3K)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
+    python -c "import transformers; print('[gemma4-ci] transformers:', transformers.__version__)"
     export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
-    pytest --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x8"
+    pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x8"
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
@@ -360,8 +364,9 @@
 - name: Gemma-4-31B e2e tests (T3K)
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
+    python -c "import transformers; print('[gemma4-ci] transformers:', transformers.__version__)"
     export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
-    pytest --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x8"
+    pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo -k "1x8"
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
