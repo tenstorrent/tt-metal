@@ -245,6 +245,14 @@ run_t3000_ttnn_tests() {
   #   timeout = 40s teardown → CI SIGALRM. With FIX AV: 1 throw × 2 devices × 5s = 10s.
   #   Root CI failure: run 25060970918 (job 73417098227).
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap36_fixav_relay_dead_per_device_skip.py::test_gap36_fixav_relay_dead_per_device_skip ; record_test
+  # GAP-37: FIX BA — STARTED-state non-MMIO devices must be cleaned up at teardown.
+  #   Without FIX BA: FIX AM sets channels_not_ready=true but relay_broken=false, so
+  #   teardown Step 1 skips these devices. Non-MMIO ERISCs remain in FABRIC STARTED state.
+  #   Next session's topology discovery (create_remote_device → read_non_mmio) stalls 5s
+  #   per device → ALL subsequent tests fail (observed: run 25066686656, all 359 failed).
+  #   With FIX BA: STARTED-state devices added to relay_broken_non_mmio → FIX AC + FIX AY
+  #   clean up ERISCs. Second open in this test must complete < 15s.
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
 
   # Record the end time
   end_time=$(date +%s)

@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|teardown:.*relay|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|teardown:.*relay|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -110,7 +110,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re
@@ -740,6 +740,14 @@ FIX_AY_FIRES=$(grep -cE 'FIX AY' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AY_SUCCEEDED=$(grep -cE 'FIX AY.*all.*reset to base firmware|FIX AY.*succeeded' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AY_FAILED=$(grep -cE 'FIX AY.*failed|FIX AY.*non-std exception|FIX AY/AV.*failed' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AV_FIRES=$(grep -cE 'FIX AV #42429|FIX AY/AV.*Skipping all remaining' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AL: STARTED early-exit — Phase 5 master chan stuck at EDMStatus::STARTED after kStartedTimeoutMs
+FIX_AL_FIRES=$(grep -cE 'FIX AL|STARTED early-exit after.*ms.*master chan' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AM: Phase 5b skip when master chan still at STARTED after FIX AL break
+FIX_AM_FIRES=$(grep -cE 'FIX AM|skipping Phase 5b.*FIX AM|channels_not_ready_for_traffic.*FIX AM|still at STARTED.*skipping Phase 5b' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AW: ~Cluster destructor runs driver_->close_device() in detached thread to avoid wait_for_non_mmio_flush hang
+FIX_AW_FIRES=$(grep -cE 'FIX AW|relay-broken non-MMIO.*running driver.*close_device.*background thread|close_device.*did not complete.*5s.*FIX AW' "$CLEAN" 2>/dev/null || echo 0)
+# FIX BA: STARTED-state non-MMIO devices added to relay_broken_non_mmio (FIX AM fired, relay_broken=false)
+FIX_BA_FIRES=$(grep -cE 'FIX BA|channels_not_ready_for_traffic.*relay not marked broken.*Adding to relay_broken_non_mmio|teardown: FIX BA' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -846,6 +854,18 @@ if [ "${FIX_AV_SKIP:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_AT_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AT] Phase 5 handshake poll skipped (${FIX_AT_FIRES} event(s)) — master chan was FIX AS Pass-0 timeout'd (WH BRISC boot >500ms, status=0x0 after deassert). No firmware was loaded so Phase 5 poll would waste 10s; FIX AT early-exits + sets fabric_relay_path_broken_=true to skip Phase 5b. Saves 10s per affected MMIO device."
+fi
+if [ "${FIX_AL_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AL] STARTED early-exit fired (${FIX_AL_FIRES} event(s)) — master chan stuck at EDMStatus::STARTED for >3s (out-of-mesh peer unreachable, ETH handshake never completes). Phase 5 poll exits early; FIX AM should fire next to skip Phase 5b."
+fi
+if [ "${FIX_AM_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AM] Phase 5b skipped after FIX AL STARTED early-exit (${FIX_AM_FIRES} event(s)) — master chan still at STARTED after poll exits; subordinates stuck at REMOTE_HANDSHAKE_COMPLETE; Phase 5b is pointless. Sets fabric_channels_not_ready_for_traffic_=true. FIX BA should fire at teardown to clean up."
+fi
+if [ "${FIX_AW_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AW] ~Cluster destructor: driver_->close_device() running in background thread with 5s timeout (${FIX_AW_FIRES} event(s)) — relay-broken non-MMIO chips registered by FIX BA/teardown; wait_for_non_mmio_flush would hang indefinitely on stale UMD relay CMD queue entries."
+fi
+if [ "${FIX_BA_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX BA] teardown: STARTED-state non-MMIO device(s) added to relay_broken_non_mmio (${FIX_BA_FIRES} event(s)) — FIX AM set channels_not_ready_for_traffic=true but NOT fabric_relay_path_broken_. Without FIX BA: FIX AC + FIX AY skip these devices; STARTED ERISCs remain; next session stalls 5s/device in topology discovery. FIX BA forces FIX AC + FIX AY to clean them up."
 fi
 echo ""
 echo "========================================================================"
