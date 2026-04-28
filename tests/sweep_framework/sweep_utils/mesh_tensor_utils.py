@@ -231,6 +231,7 @@ def apply_tensor_placement_topology(tensor, tensor_placement, mesh_shape_tuple):
     decode-mode paths that use ``from_torch`` + ``interleaved_to_sharded``).
     """
     import ast as _ast
+    import re
 
     if not tensor_placement:
         return
