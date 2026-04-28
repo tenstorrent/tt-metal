@@ -81,6 +81,18 @@ class Qwen35Model:
         self._trace_id = None
         self._prev_page_table = None
         self._deltanet_external_states = None  # list of (recurrent, conv) tuples, set by allocate_kv_caches
+        # Trace-prefill: persistent device buffers for inputs that would otherwise
+        # be allocated per-call inside prefill_layer_chunked. Populated by
+        # capture_prefill_trace_paged. When None, prefill uses the legacy
+        # allocate-per-call path.
+        self._prefill_trace_inputs = None
+        # Trace handle + persistent output buffer for traced prefill replay.
+        self._prefill_trace_id = None
+        self._prefill_trace_logits = None
+        self._prefill_bucket_size = None
+        # Shared zero buffers for in-place DN state reset between traced replays.
+        self._dn_zero_recurrent = None
+        self._dn_zero_conv = None
 
     @classmethod
     def from_pretrained(cls, device, checkpoint_dir, max_batch_size=1, max_seq_len=2048, n_layers=None):
@@ -117,7 +129,7 @@ class Qwen35Model:
         B, T = token_ids.shape
 
         if T > 1024:
-            return self.prefill_layer_chunked(token_ids, chunk_size=1024)
+            return self.prefill_layer_chunked(token_ids, chunk_size=2048)
 
         # Original path for short sequences
         self.reset_state(batch_size=B)
@@ -159,22 +171,34 @@ class Qwen35Model:
         B, T = token_ids.shape
         self.reset_state(batch_size=B)
 
-        token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
+        # Trace-mode: caller pre-loaded persistent device buffers for token_ids,
+        # page_table, and the per-chunk page_table sub-buffer (single chunk for
+        # full-attn at T==bucket). All host→device transfers must happen *before*
+        # this function in trace replay; here we only consume the buffers.
+        trace_inputs = self._prefill_trace_inputs
+
+        if trace_inputs is not None:
+            token_ids_ttnn = trace_inputs["token_ids"]
+            page_table_tt = trace_inputs["page_table"]
+        else:
+            token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
+
         x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(token_ids_ttnn)
+        if trace_inputs is None:
+            ttnn.deallocate(token_ids_ttnn)
 
         # Attention layers can use larger chunks than DeltaNet — no Neumann series
         # limitation, and fewer chunks means fewer unique KV cache sizes for SDPA
         # compilation. 4096 = 4x fewer SDPA compilations vs chunk_size=1024.
         attn_chunk_size = max(chunk_size, 4096)
 
-        # Hoist page_table device tensor outside both loops (1 H2D transfer, not 256 for 128K).
-        page_table_tt = None
-        if page_table is not None:
-            page_table_tt = ttnn.from_torch(
-                page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-            )
+        if trace_inputs is None:
+            page_table_tt = None
+            if page_table is not None:
+                page_table_tt = ttnn.from_torch(
+                    page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
 
         for layer_idx, layer in enumerate(self.layers):
             layer_chunk_size = attn_chunk_size if layer.is_full_attention else chunk_size
@@ -193,10 +217,16 @@ class Qwen35Model:
 
                     block_size = 64
                     chunk_blocks_end = math.ceil(chunk_end / block_size)
-                    chunk_page_table = page_table[:, chunk_start // block_size : chunk_blocks_end]
-                    chunk_page_table_tt = ttnn.from_torch(
-                        chunk_page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                    )
+                    if trace_inputs is not None:
+                        # Single shared buffer for the (only) full-attn chunk at chunk_start=0.
+                        # Trace mode requires bucket==T and attn_chunk_size>=T → 1 chunk per layer.
+                        assert chunk_start == 0, "trace mode only supports single full-attn chunk"
+                        chunk_page_table_tt = trace_inputs["chunk_page_table_full"]
+                    else:
+                        chunk_page_table = page_table[:, chunk_start // block_size : chunk_blocks_end]
+                        chunk_page_table_tt = ttnn.from_torch(
+                            chunk_page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                        )
 
                     x_chunk = layer.forward(
                         x_chunk,
@@ -228,8 +258,10 @@ class Qwen35Model:
             # For long sequences (T > 4096), slicing x[:, -1:, :] on the full
             # [1, T, 4096] concatenated tensor triggers an L1 clash in the slice program.
             # Extracting from the last chunk (at most [1, 4096, 4096]) avoids this.
+            # In trace mode we DON'T extract — we return the full hidden state so the
+            # caller can slice at `actual_len-1` (a runtime value the trace can't bake in).
             is_last_layer = layer_idx == len(self.layers) - 1
-            if is_last_layer:
+            if is_last_layer and trace_inputs is None:
                 x_last = chunks_out[-1][:, -1:, :]
                 x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -243,6 +275,12 @@ class Qwen35Model:
 
             ttnn.deallocate(x)
             x = x_new
+
+        if trace_inputs is not None:
+            # Trace mode: return the full last-layer hidden state. The caller
+            # (prefill_traced_paged) will slice at the real prompt length and
+            # run rms_norm + lm_head outside the trace.
+            return x
 
         x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
         logits = ttnn.linear(x_last, self.lm_head_weight)
@@ -376,13 +414,228 @@ class Qwen35Model:
 
         return self._trace_output
 
+    def capture_prefill_trace_paged(self, device, page_table, bucket_size=4096, chunk_size=2048):
+        """Capture a trace for paged prefill at a fixed bucket size.
+
+        Pre-allocates persistent input buffers (token_ids, page_table,
+        chunk_page_table_full) and a shared GDN output buffer, then runs one
+        warmup prefill (program-cache prime) followed by a traced prefill.
+
+        Args:
+            device: tt-metal device
+            page_table: torch.Tensor [B, max_blocks] int32 used during capture.
+                Must remain valid (or be replaced via copy_host_to_device) for replay.
+            bucket_size: T to capture for. Replay must pad inputs to this length.
+            chunk_size: GDN chunk size (must divide bucket_size). Default 2048.
+        """
+        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
+        assert bucket_size % chunk_size == 0, f"bucket_size {bucket_size} must be multiple of chunk_size {chunk_size}"
+
+        B = 1
+        block_size = 64
+        attn_chunk_size = max(chunk_size, 4096)
+        # Number of full-attn chunks at bucket_size (typically 1 for bucket==4096).
+        assert bucket_size <= attn_chunk_size, "trace mode currently supports a single full-attn chunk"
+        chunk_blocks = math.ceil(bucket_size / block_size)
+
+        # Release prior trace if any.
+        if self._prefill_trace_id is not None:
+            ttnn.release_trace(device, self._prefill_trace_id)
+            self._prefill_trace_id = None
+            for key in ("token_ids", "page_table", "chunk_page_table_full"):
+                if self._prefill_trace_inputs and self._prefill_trace_inputs.get(key) is not None:
+                    ttnn.deallocate(self._prefill_trace_inputs[key])
+            self._prefill_trace_inputs = None
+
+        # Persistent input buffers. Sized for the bucket; replay copies inputs into these.
+        token_ids_dummy = torch.zeros(B, bucket_size, dtype=torch.int32)
+        token_ids_buf = ttnn.from_torch(token_ids_dummy, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        page_table_buf = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        chunk_page_table_full_buf = ttnn.from_torch(
+            page_table[:, :chunk_blocks], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+
+        self._prefill_bucket_size = bucket_size
+
+        # ---- 1. Warmup OUTSIDE trace mode ----
+        # Run a normal prefill to compile every program at the bucket size. We do
+        # this BEFORE setting _prefill_trace_inputs so prefill_paged takes its
+        # legacy allocate-fresh path. This compiles all kernels and primes the
+        # program cache. State and the persistent external DN buffers will be
+        # zeroed afterward.
+        dummy_ids = torch.zeros(B, bucket_size, dtype=torch.long)
+        _ = self.prefill_paged(dummy_ids, page_table)
+        ttnn.synchronize_device(device)
+
+        # ---- 2. Allocate the GDN output buffer (shared across all GDN layers) ----
+        first_dn = next(layer.attention for layer in self.layers if not layer.is_full_attention)
+        Nv = first_dn.num_v_heads
+        Dv = first_dn.head_v_dim
+        num_pairs = B * Nv
+        gdn_output_buf = ttnn.zeros(
+            [num_pairs * chunk_size, 1, Dv],
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for layer in self.layers:
+            if layer.is_full_attention:
+                continue
+            dn = layer.attention
+            dn._trace_prefill_output = gdn_output_buf
+            dn.use_inplace_state = True
+
+        # ---- 3. Allocate zero buffers and reset DN state in place ----
+        # Note: warmup left dn.fused_conv_state pointing at a NON-persistent buffer
+        # (slice of x_padded). Restore it to the external persistent buffer first
+        # so subsequent in-place writes always target the same address.
+        for layer, (ext_rec, ext_conv) in zip(
+            (l for l in self.layers if not l.is_full_attention),
+            self._deltanet_external_states,
+        ):
+            dn = layer.attention
+            dn.recurrent_state = ext_rec
+            dn.fused_conv_state = ext_conv
+            dn.conv_state_q = None
+            dn.conv_state_k = None
+            dn.conv_state_v = None
+            if dn.split_conv_state is not None:
+                for buf in dn.split_conv_state:
+                    ttnn.deallocate(buf)
+                dn.split_conv_state = None
+        self._init_dn_zero_buffers()
+
+        # Now activate trace mode (persistent inputs + reset_state no-op)
+        self._prefill_trace_inputs = {
+            "token_ids": token_ids_buf,
+            "page_table": page_table_buf,
+            "chunk_page_table_full": chunk_page_table_full_buf,
+            "gdn_output": gdn_output_buf,
+        }
+        self._reset_dn_state_inplace()
+
+        # ---- 4. Capture the trace ----
+        self._prefill_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        self._prefill_trace_logits = self.prefill_paged(dummy_ids, page_table)
+        ttnn.end_trace_capture(device, self._prefill_trace_id, cq_id=0)
+        logger.info("Prefill trace captured successfully!")
+
+    def prefill_traced_paged(self, token_ids, page_table, actual_len):
+        """Replay captured prefill trace.
+
+        `token_ids` must be padded to `bucket_size`. `actual_len` is the number
+        of REAL tokens in the prompt (excludes padding) — used to extract the
+        next-token logit at the right position.
+
+        Returns: ttnn.Tensor (host) with shape [1, 1, vocab_size] — the logit
+        for the token AFTER position `actual_len-1`.
+
+        Note: releases the trace after one replay (sets `_prefill_trace_id` to
+        None). For repeated traced prefill, re-capture before each call.
+        """
+        assert self._prefill_trace_id is not None, "Call capture_prefill_trace_paged first"
+        bucket = self._prefill_bucket_size
+        T = token_ids.shape[1]
+        assert T == bucket, f"token_ids T={T} != bucket {bucket}; pad before calling"
+        assert 1 <= actual_len <= bucket, f"actual_len {actual_len} not in [1, {bucket}]"
+
+        self._reset_dn_state_inplace()
+
+        token_host = ttnn.from_torch(token_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(token_host, self._prefill_trace_inputs["token_ids"])
+        page_table_host = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(page_table_host, self._prefill_trace_inputs["page_table"])
+        block_size = 64
+        chunk_blocks = math.ceil(bucket / block_size)
+        chunk_pt_host = ttnn.from_torch(
+            page_table[:, :chunk_blocks].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        ttnn.copy_host_to_device_tensor(chunk_pt_host, self._prefill_trace_inputs["chunk_page_table_full"])
+
+        ttnn.execute_trace(self.device, self._prefill_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
+
+        # Trace output is the FULL last-layer hidden state [1, bucket, hidden_size].
+        # Slice at actual_len-1 (the real last prompt token) and run rms_norm + lm_head
+        # outside the trace. This produces "Allocating device buffers is unsafe" warnings
+        # because the trace is still live, but they're benign (warnings, not FATALs).
+        hidden = self._prefill_trace_logits  # [1, bucket, hidden_size], TILE
+        x_last = hidden[:, actual_len - 1 : actual_len, :]
+        x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
+        x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
+        x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
+        logits = ttnn.linear(x_last, self.lm_head_weight)
+
+        # Release the trace so downstream code (decode trace capture) can allocate
+        # without "unsafe alloc" warnings.
+        ttnn.release_trace(self.device, self._prefill_trace_id)
+        self._prefill_trace_id = None
+        return logits.cpu()
+
     def reset_state(self, batch_size=None):
-        """Reset all layer states for a new sequence."""
+        """Reset all layer states for a new sequence.
+
+        In trace mode (`self._prefill_trace_inputs` set), skip in-place — caller
+        must explicitly invoke `_reset_dn_state_inplace` BEFORE trace replay so
+        the zeroing happens once outside the captured graph.
+        """
+        if self._prefill_trace_inputs is not None:
+            return
         for layer in self.layers:
             if layer.is_full_attention:
                 layer.attention.reset_cache()
             else:
                 layer.attention.reset_state(batch_size)
+
+    def _reset_dn_state_inplace(self):
+        """Zero DN recurrent + conv state buffers in place (preserves addresses).
+
+        Required between traced-prefill replays: every replay must start from
+        zeroed state, but the buffers' addresses are baked into the captured
+        trace and cannot change. Uses pre-allocated zero buffers as the source
+        for `ttnn.copy`.
+        """
+        assert self._dn_zero_recurrent is not None, "Call _init_dn_zero_buffers first"
+        for layer in self.layers:
+            if layer.is_full_attention:
+                continue
+            dn = layer.attention
+            ttnn.copy(self._dn_zero_recurrent, dn.recurrent_state)
+            ttnn.copy(self._dn_zero_conv, dn.fused_conv_state)
+            # split_conv_state is rebuilt lazily on first decode; clear so it
+            # gets rebuilt from the freshly-prefilled fused_conv_state.
+            if dn.split_conv_state is not None:
+                for buf in dn.split_conv_state:
+                    ttnn.deallocate(buf)
+                dn.split_conv_state = None
+
+    def _init_dn_zero_buffers(self):
+        """Allocate one shared zero buffer per DN state shape (recurrent and conv).
+
+        Both shapes are uniform across all DN layers, so a single pair suffices.
+        Called by capture_prefill_trace_paged.
+        """
+        if self._dn_zero_recurrent is not None:
+            return
+        # Find the first DN layer to get shapes
+        first_dn = next(layer.attention for layer in self.layers if not layer.is_full_attention)
+        rec_shape = list(first_dn.recurrent_state.shape)
+        conv_shape = list(first_dn.fused_conv_state.shape)
+        self._dn_zero_recurrent = ttnn.zeros(
+            rec_shape,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._dn_zero_conv = ttnn.zeros(
+            conv_shape,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def set_paged_kv_caches(self, kv_caches):
         """Attach paged KV caches to the 8 attention layers."""
@@ -465,7 +718,7 @@ class Qwen35Model:
 
         # Use existing prefill (concat-based K/V for SDPA)
         if T > 1024:
-            logits = self.prefill_layer_chunked(token_ids, chunk_size=1024, page_table=page_table_torch)
+            logits = self.prefill_layer_chunked(token_ids, chunk_size=2048, page_table=page_table_torch)
         else:
             token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
             x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
@@ -482,32 +735,37 @@ class Qwen35Model:
             logits = ttnn.linear(x_last, self.lm_head_weight)
             ttnn.deallocate(x)
 
-        # Defensive fallback: if paged prefill was used, past_key is None and this is a no-op.
-        # If concat path was used (T <= 1024), this copies concat KV into paged cache.
-        page_table_device = ttnn.from_torch(
-            page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-        )
-        self._fill_paged_cache_from_prefill(page_table_device)
+        # Trace mode: skip the post-prefill housekeeping that would re-allocate device
+        # tensors during trace capture. The paged-fill is a no-op when prefill_layer_chunked
+        # already used paged_sdpa (T > 1024 path), and DN states already live in the external
+        # buffers because use_inplace_state=True.
+        if self._prefill_trace_inputs is None:
+            # Defensive fallback: if paged prefill was used, past_key is None and this is a no-op.
+            # If concat path was used (T <= 1024), this copies concat KV into paged cache.
+            page_table_device = ttnn.from_torch(
+                page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            )
+            self._fill_paged_cache_from_prefill(page_table_device)
 
-        # Prepare DeltaNet for decode (fuse conv states)
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                if dn.fused_conv_state is None and dn.conv_state_q is not None:
-                    dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
-                    dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
-
-        # Copy DeltaNet states back into external (pre-allocated) buffers so trace can see them
-        if self._deltanet_external_states is not None:
-            dn_idx = 0
+            # Prepare DeltaNet for decode (fuse conv states)
             for layer in self.layers:
                 if not layer.is_full_attention:
                     dn = layer.attention
-                    ext_rec, ext_conv = self._deltanet_external_states[dn_idx]
-                    ttnn.copy(dn.recurrent_state, ext_rec)
-                    if dn.fused_conv_state is not None:
-                        ttnn.copy(dn.fused_conv_state, ext_conv)
-                    dn_idx += 1
+                    if dn.fused_conv_state is None and dn.conv_state_q is not None:
+                        dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
+                        dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
+
+            # Copy DeltaNet states back into external (pre-allocated) buffers so trace can see them
+            if self._deltanet_external_states is not None:
+                dn_idx = 0
+                for layer in self.layers:
+                    if not layer.is_full_attention:
+                        dn = layer.attention
+                        ext_rec, ext_conv = self._deltanet_external_states[dn_idx]
+                        ttnn.copy(dn.recurrent_state, ext_rec)
+                        if dn.fused_conv_state is not None:
+                            ttnn.copy(dn.fused_conv_state, ext_conv)
+                        dn_idx += 1
 
         return logits
 

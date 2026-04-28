@@ -200,6 +200,9 @@ class Qwen35GatedDeltaNet:
         self.split_conv_state = None
         # Trace capture support
         self.use_inplace_state = False
+        # Optional persistent buffer for GDN kernel output. When set, forward_prefill_kernel
+        # writes here instead of allocating fresh — required for trace replay.
+        self._trace_prefill_output = None
 
     def _precompute_weight_taps(self, conv_weight):
         """Pre-slice conv weight [D, 1, K] into K device tensors [1, 1, D] for FIR decode."""
@@ -302,7 +305,7 @@ class Qwen35GatedDeltaNet:
         # Use kernel-based prefill when available (replaces chunked delta rule)
         T = x.shape[1]
         if mode == "chunk" and T > 1 and self._use_prefill_kernel:
-            return self.forward_prefill_kernel(x)
+            return self.forward_prefill_kernel(x, prefill_output=self._trace_prefill_output)
 
         # After prefill, fuse separate conv states into one for efficient decode
         if T == 1 and self.fused_conv_state is None and self.conv_state_q is not None:
@@ -451,7 +454,7 @@ class Qwen35GatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward_prefill_kernel(self, x):
+    def forward_prefill_kernel(self, x, prefill_output=None):
         """Prefill using on-device GDN recurrence kernel.
 
         Replaces the chunked delta rule with a single kernel dispatch that
@@ -459,6 +462,9 @@ class Qwen35GatedDeltaNet:
         tokens — no CPU round-trips, no chunking approximation.
 
         Input:  x [B, T, hidden_size]
+                prefill_output: optional pre-allocated [num_pairs * T, 1, Dv] buffer
+                  in DRAM, TILE_LAYOUT, bfloat16. When None, allocated per call.
+                  Pass a persistent buffer for trace-capture compatibility.
         Output: [B, T, hidden_size]
         """
         B = x.shape[0]
@@ -538,14 +544,16 @@ class Qwen35GatedDeltaNet:
         # State is already TILE_LAYOUT + DRAM from _init_recurrent_state or prior kernel write.
         state_3d = ttnn.reshape(self.recurrent_state, [num_pairs, Dk, Dv])
 
-        # Allocate flat output buffer on device (no host transfer)
-        prefill_output = ttnn.zeros(
-            [num_pairs * T, 1, Dv],
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Output buffer: caller-supplied (trace-safe) or fresh per call.
+        owns_prefill_output = prefill_output is None
+        if owns_prefill_output:
+            prefill_output = ttnn.zeros(
+                [num_pairs * T, 1, Dv],
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Ensure kernel inputs are in DRAM for NOC reads (may be in L1 when mc=None)
         if mc != ttnn.DRAM_MEMORY_CONFIG:
@@ -583,7 +591,8 @@ class Qwen35GatedDeltaNet:
         # ---- 6. Reshape kernel output ----
         # Flat [num_pairs * T, 1, Dv] → [B, Nv, T, Dv] → transpose → [B, T, Nv, Dv]
         out_4d = ttnn.reshape(prefill_output, [B, Nv, T, Dv])
-        ttnn.deallocate(prefill_output)
+        if owns_prefill_output:
+            ttnn.deallocate(prefill_output)
         out_4d = ttnn.transpose(out_4d, 1, 2)  # [B, T, Nv, Dv]
 
         # ---- 7. Gated RMS norm with z ----
@@ -603,7 +612,12 @@ class Qwen35GatedDeltaNet:
         # new_fused_conv is already TILE_LAYOUT from line 497.
         # Don't split here — splitting is deferred to first decode call
         # (either via prefill_paged post-processing or lazy on first T=1 forward).
-        self.fused_conv_state = new_fused_conv
+        if self.use_inplace_state and self.fused_conv_state is not None:
+            # Trace-safe path: write into the persistent buffer so its address is stable.
+            ttnn.copy(new_fused_conv, self.fused_conv_state)
+            ttnn.deallocate(new_fused_conv)
+        else:
+            self.fused_conv_state = new_fused_conv
         self.conv_state_q = None
         self.conv_state_k = None
         self.conv_state_v = None

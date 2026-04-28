@@ -212,6 +212,7 @@ def test_demo_text(
         CHECKPOINT_DIR,
         max_batch_size=1,
         max_seq_len=max_seq_len,
+        # n_layers=4,  # uncomment for fast iteration; default uses 32-layer config
     )
     logger.info(f"Model load: {time.time() - t0:.1f}s")
 
@@ -267,15 +268,39 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     # Identity page table (host torch.Tensor — model converts internally)
     page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
 
-    # Prefill (fills paged KV cache + accumulates DeltaNet state)
+    # Prefill via trace capture+replay.
+    chunk_size = 2048
+    bucket_size = ((T + chunk_size - 1) // chunk_size) * chunk_size
+    logger.info(f"Capturing prefill trace at bucket_size={bucket_size} (prompt {T} tokens)...")
+    t_cap = time.time()
+    model.capture_prefill_trace_paged(device, page_table, bucket_size=bucket_size, chunk_size=chunk_size)
+    logger.info(f"Prefill trace captured in {time.time() - t_cap:.1f}s")
+    pad_len = bucket_size - T
+    # Pad with the prompt's last real token rather than 0. The DeltaNet recurrence
+    # is sequential and updates state for every input token in the captured bucket;
+    # padding with token 0 corrupts state with the embedding of `<pad>`/`<unk>`, while
+    # repeating the last real token produces a smoother (still imperfect) post-prefill
+    # state. The logit is still extracted at position actual_len-1 so the next-token
+    # prediction itself is unaffected — only decode quality is.
+    last_token = token_ids[:, -1:].expand(1, pad_len) if pad_len > 0 else token_ids[:, :0]
+    padded_token_ids = torch.cat([token_ids, last_token], dim=1)
+
     t0 = time.time()
-    logits = model.prefill_paged(token_ids, page_table)
-    ttnn.synchronize_device(device)
+    logits = model.prefill_traced_paged(padded_token_ids, page_table, actual_len=T)
     ttft = time.time() - t0
 
     logits_torch = ttnn.to_torch(logits).squeeze()
     assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
     next_token = logits_torch.argmax().item()
+    model._prefill_trace_inputs = None
+    for layer in model.layers:
+        if not layer.is_full_attention:
+            layer.attention._trace_prefill_output = None
+            # IMPORTANT: leave use_inplace_state=True (set by set_external_state in
+            # allocate_kv_caches). The decode trace REQUIRES it — without it,
+            # gated_deltanet_forward_ttnn allocates fresh state tensors via
+            # ttnn.zeros/from_torch inside the captured trace, which does a
+            # host→device write and FATALs.
 
     # Capture decode trace
     model.capture_decode_trace_paged(device, page_table)
