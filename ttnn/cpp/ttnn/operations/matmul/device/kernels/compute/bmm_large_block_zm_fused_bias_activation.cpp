@@ -174,7 +174,9 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
-    // matmul_block + reblock_and_untilize own their own init/uninit (default modes).
+    // matmul_block self-inits via init_mode=Full; reblock_and_untilize self-inits per
+    // call via the InitUninitMode template parameter (we use Neither inside the
+    // in0_subblock loop so the standalone init/uninit wrappers below handle it once).
 
     // ── Main loop: batch × output blocks ────────────────────────────────
     for (uint32_t b = 0; b < batch; b++) {

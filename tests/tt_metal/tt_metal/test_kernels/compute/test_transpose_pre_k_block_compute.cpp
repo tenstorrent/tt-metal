@@ -69,7 +69,7 @@ void kernel_main() {
         in0_block_w>;
     XposeFn xpose{in0_transpose_buf, in0_buf, in1_buf, interm_buf};
 
-    // matmul_block owns mm_block_init via the default init_mode=Full.
+    // matmul_block self-inits (init_mode=Full).
     compute_kernel_lib::matmul_block<
         /*transpose=*/false,
         /*packer_l1_acc=*/false,

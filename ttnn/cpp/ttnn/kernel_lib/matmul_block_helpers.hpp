@@ -209,9 +209,11 @@ struct NoPreKBlock {
  *
  * @example
  *   // SDPA-style: row-major pack, retain_in0 to reuse Q across K chunks, masked post-compute.
- *   // init_mode=Short cheap-restores matmul state between successive matmul_block calls.
+ *   // The SDPA-side wrapper does its own [mm_block_init_short, reconfig_data_format]
+ *   // pair externally (for ordering parity with matmul_reduce_inplace.inl and
+ *   // OptionalMaskPostCompute), so the helper is invoked with init_mode=None.
  *   matmul_block<transpose, false, false, false, OutputLayout::RowMajor,
- *                matmul_config::InitMode::Short, OptionalMaskPostCompute>(
+ *                matmul_config::InitMode::None, OptionalMaskPostCompute>(
  *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             subblock_h, subblock_w, in0_block_w, num_blocks),
