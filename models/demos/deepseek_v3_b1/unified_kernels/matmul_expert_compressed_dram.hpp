@@ -27,6 +27,7 @@
 
 #include "kernel_utils.hpp"
 #include "expert_index_encoding.hpp"
+#include "api/debug/dprint.h"  // TEMP debugging — gate K-split hang investigation
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -110,11 +111,11 @@ struct MatmulExpertCompressedDRAM {
         // Dedicated global sem for K-reduction (passed as address). PACK on the reducer
         // polls it; NCRISC on senders increments. Separate from pipeline_sem (ring protocol).
         uint32_t partial_sem_addr_,
-        // gather_to_next (accum_experts only): after all experts, sender NOC-writes its
-        // own per_core_n slot of cb_out to the receiver (next core in bank), so receiver
-        // ends up with [sender_n_slice | receiver_n_slice] = the bank's full N output.
-        // No reduction.
-        uint32_t gather_to_next_,
+        // primary_at_last_offset: in-bank swap flag — when 1, op.py places the primary at
+        // the LAST in-bank offset so the kernel's last-offset core (= the K-reducer when
+        // k_parallel>1, OR the accum_experts gather receiver when accum_experts=1) IS the
+        // primary that downstream ops talk to. Used by both K-split and accum_experts gather.
+        uint32_t primary_at_last_offset_,
         // Global L1 sem for sender TRISC → NCRISC sync (gather mode only). TRISC
         // sem_atomic_inc(1) once after the per-expert accum loop completes; NCRISC
         // spins on sem_atomic_load >= 1 then sem_atomic_dec(1) — back to 0 for the
@@ -174,12 +175,12 @@ struct MatmulExpertCompressedDRAM {
         // Only meaningful inside `if constexpr (inner_dim_reduction)` scope.
         static constexpr bool is_sender = !is_reducer;
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
-        // Gather (accum_experts only): receiver = last core in bank, sender = others.
-        // Mirrors inner_dim_reduce's is_reducer/is_sender derivation.
-        // Only meaningful inside `if constexpr (gather_to_next)` scope.
-        static constexpr bool gather_to_next = gather_to_next_ != 0;
-        static constexpr bool is_gather_receiver = (core_in_bank_idx + 1 == cores_per_bank);
-        static constexpr bool is_gather_sender = !is_gather_receiver;
+        // primary = last in-bank core post-swap (accum_experts gather receiver, OR
+        // K-reducer when k_parallel>1). secondary = all others. Equivalent to
+        // is_reducer when only K-parallel; same physical core when only N-parallel.
+        static constexpr bool primary_at_last_offset = primary_at_last_offset_ != 0;
+        static constexpr bool is_in_bank_primary = (core_in_bank_idx + 1 == cores_per_bank);
+        static constexpr bool is_in_bank_secondary = !is_in_bank_primary;
         static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
         static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
     };
@@ -217,12 +218,12 @@ struct MatmulExpertCompressedDRAM {
         // silu_tile_h is pre-padded by op.py to a valid face_r_dim ∈ {2,4,8,16}.
         uint32_t cb_out_silu_,
         uint32_t silu_tile_h_,
-        // gather_to_next mirror — see ReaderCTArgs for semantics.
+        // primary_at_last_offset mirror — see ReaderCTArgs for semantics.
         uint32_t cores_per_bank_,
         uint32_t core_in_bank_idx_,
         uint32_t next_core_noc_x_,
         uint32_t next_core_noc_y_,
-        uint32_t gather_to_next_,
+        uint32_t primary_at_last_offset_,
         uint32_t gather_sync_sem_addr_,
         uint32_t cb_internal_acc_>
     struct ComputeCTArgs {
@@ -262,14 +263,14 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
         static constexpr uint32_t cb_out_silu = cb_out_silu_;
         static constexpr uint32_t silu_tile_h = silu_tile_h_;
-        // Gather (accum_experts only) — mirror of ReaderCTArgs derivation.
+        // primary_at_last_offset mirror — see ReaderCTArgs for semantics.
         static constexpr uint32_t cores_per_bank = cores_per_bank_;
         static constexpr uint32_t core_in_bank_idx = core_in_bank_idx_;
         static constexpr uint32_t next_core_noc_x = next_core_noc_x_;
         static constexpr uint32_t next_core_noc_y = next_core_noc_y_;
-        static constexpr bool gather_to_next = gather_to_next_ != 0;
-        static constexpr bool is_gather_receiver = (core_in_bank_idx + 1 == cores_per_bank);
-        static constexpr bool is_gather_sender = !is_gather_receiver;
+        static constexpr bool primary_at_last_offset = primary_at_last_offset_ != 0;
+        static constexpr bool is_in_bank_primary = (core_in_bank_idx + 1 == cores_per_bank);
+        static constexpr bool is_in_bank_secondary = !is_in_bank_primary;
         static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
         static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
     };
@@ -550,8 +551,8 @@ struct MatmulExpertCompressedDRAM {
             // free for sender's NOC). Sync via gather_sync_sem (TRISC inc once
             // after all experts) so NCRISC doesn't unblock mid per-expert cycle.
             // No reduction. Receiver's L1 ends up [sender_n_slice | receiver_n_slice].
-            if constexpr (CTArgs::accum_experts && CTArgs::gather_to_next) {
-                if constexpr (CTArgs::is_gather_sender) {
+            if constexpr (CTArgs::accum_experts && CTArgs::primary_at_last_offset) {
+                if constexpr (CTArgs::is_in_bank_secondary) {
                     if (num_dram_active > 0) {
                         uint32_t output_tiles = CTArgs::per_core_n;
                         uint32_t output_bytes = output_tiles * get_tile_size(CTArgs::cb_out);
@@ -617,7 +618,7 @@ struct MatmulExpertCompressedDRAM {
                 // target (slot 1 for receiver) across all per-expert cycles, and
                 // makes NCRISC's get_read_ptr return base = slot 0 = sender's pack.
                 constexpr uint32_t cb_out_num_pages =
-                    CTArgs::gather_to_next ? CTArgs::cores_per_bank * CTArgs::per_core_n : CTArgs::per_core_n;
+                    CTArgs::primary_at_last_offset ? CTArgs::cores_per_bank * CTArgs::per_core_n : CTArgs::per_core_n;
 
                 uint32_t num_dram_experts = 0;
                 for (uint32_t i = 0; i < num_active_experts; i++) {
@@ -644,7 +645,7 @@ struct MatmulExpertCompressedDRAM {
                 // back to base + per_core_n_bytes (= slot 1). Sender's NOC lands at
                 // receiver's slot 0, giving [sender_n | receiver_n] order on cb_out's
                 // shared L1.
-                if constexpr (CTArgs::gather_to_next && CTArgs::is_gather_receiver) {
+                if constexpr (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary) {
                     PACK(({
                         uint32_t base = unified_kernels::get_cb_buf_addr(CTArgs::cb_internal_acc);
                         uint32_t page_size = unified_kernels::get_cb_page_size(CTArgs::cb_internal_acc);
@@ -743,13 +744,13 @@ struct MatmulExpertCompressedDRAM {
 
                 PACK((llk_pack_reconfig_l1_acc(0)));
 
-                if constexpr (CTArgs::gather_to_next) {
+                if constexpr (CTArgs::primary_at_last_offset) {
                     // After all per-expert work is done, sender TRISC sem_atomic_inc's
                     // gather_sync_sem so NCRISC can unblock and issue the NOC write.
                     // We can't reuse cb_out's wait_front from NCRISC because cb_out's
                     // per-expert push/pop cycles its metadata mid-loop. The sem is set
                     // exactly once per iter, after all packs have landed.
-                    if constexpr (CTArgs::is_gather_sender) {
+                    if constexpr (CTArgs::is_in_bank_secondary) {
                         if (num_dram_experts > 0) {
                             PACK((unified_kernels::sem_atomic_inc(CTArgs::gather_sync_sem_addr, 1)));
                         }
@@ -943,7 +944,7 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t num_dram_pushed = 0;
 
                 if constexpr (CTArgs::fuse_silu) {
-                    PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
+                    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
                 }
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
@@ -1011,7 +1012,7 @@ struct MatmulExpertCompressedDRAM {
                             PACK(TT_SETC16(
                                 DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
                             for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(sn, (int)VectorMode::R)));
+                                PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2>(sn, (int)VectorMode::R)));
                             }
                             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                         } else {

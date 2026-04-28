@@ -1209,6 +1209,8 @@ def prepare_moe_routed_experts_compressed_tp8(
     mesh_shape: tuple[int, int],
     *,
     move_to_device: bool,
+    gate_proj_subblock_k: int | None = None,
+    up_proj_subblock_k: int | None = None,
     down_proj_subblock_k: int | None = None,
     down_proj_subblock_n: int = 1,
 ) -> MoERoutedExpertWeights:
@@ -1222,16 +1224,20 @@ def prepare_moe_routed_experts_compressed_tp8(
 
     For gather-mode down_proj (cores_per_dram_bank>1, ``subblock_n>1``), pass
     ``down_proj_subblock_n`` matching the kernel's subblock geometry so the DRAM tile layout
-    matches the kernel's per-iteration block read. Gate/up always use plain column-major
-    (``subblock_n=1``).
+    matches the kernel's per-iteration block read.
+
+    For K-split gate/up (k_parallel_per_bank>1), pass ``gate_proj_subblock_k`` /
+    ``up_proj_subblock_k`` = ``Kt // k_parallel`` so each K-slice's tiles are contiguous in
+    DRAM (the kernel reads K-slice-major within each bank). Default ``None`` =
+    ``shuffle_dram_tiles``'s default (subblock_k=Kt = no K-slice grouping).
     """
     tile_w = 32
     assigner = CompressedTensorAssigner(metric="pcc", threshold=1.1, formats=["bfp4"], bfp0_mae_threshold=0.01)
 
     # (proj_name, K, N, shard_dim, subblock_k, subblock_n)
     proj_specs = [
-        ("gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, None, 1),
-        ("up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, None, 1),
+        ("gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, gate_proj_subblock_k, 1),
+        ("up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, up_proj_subblock_k, 1),
         ("down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, 0, down_proj_subblock_k, down_proj_subblock_n),
     ]
 
@@ -1304,6 +1310,8 @@ def prepare_routed_expert_weights(
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
     compressed_tp8: bool = False,
+    gate_proj_subblock_k: int | None = None,
+    up_proj_subblock_k: int | None = None,
     down_proj_subblock_k: int | None = None,
     down_proj_subblock_n: int = 1,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
@@ -1362,6 +1370,8 @@ def prepare_routed_expert_weights(
                 num_banks=num_banks,
                 mesh_shape=mesh_shape,
                 move_to_device=move_to_device,
+                gate_proj_subblock_k=gate_proj_subblock_k,
+                up_proj_subblock_k=up_proj_subblock_k,
                 down_proj_subblock_k=down_proj_subblock_k,
                 down_proj_subblock_n=down_proj_subblock_n,
             )
