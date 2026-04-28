@@ -96,6 +96,62 @@ with `cur_pos` (~0.48 ms / 128 tokens per layer). T3K does not help — each
 device runs the full chunk loop on its local head shard. BFP8 stays
 sub-millisecond up to 128K. At long context this gap dominates e2e.
 
+## Centroid-gather cascade optimization (2026-04-28 PM)
+
+The TQ chunk-loop bottleneck was the per-tile centroid-gather telescoping
+cascade — 6 SFPU ops per level × 7 levels × 32 K/V tiles per chunk. Two
+redundancies eliminated:
+
+1. **DST→DST copy instead of CB→DST**. The cascade reloaded `idx` from
+   `cb_dq_temp` every level even though it's constant; now loaded once
+   into DST 0 and refreshed via `copy_dest_values<BF16>(0, 2)`.
+2. **Precomputed centroid deltas + `mul_unary_tile`**. Replaced runtime
+   `fill_tile + sub_binary_tile + mul_binary_tile` with a single
+   `mul_unary_tile(2, delta_bits[lev])` against deltas computed once at
+   kernel_main start.
+
+Per-level: 6 ops → 4 ops (-33%). Per-chunk: ~40% fewer SFPU ops.
+
+### Updated seqlen sweep — post-cascade-optimization
+
+**N150 (1 chip):**
+
+| seq | TQ FD ms | Δ vs prev | BFP8 ms | KV ratio |
+|--:|--:|--:|--:|--:|
+| 128 | 0.30 | -38% | 0.04 | 0.75× |
+| 256 | 0.57 | -39% | 0.04 | 0.75× |
+| 512 | 1.12 | -39% | 0.05 | 0.75× |
+| 1 024 | 2.23 | -39% | 0.06 | 0.75× |
+| 2 048 | 4.42 | -40% | 0.07 | 0.75× |
+| 4 096 | 8.82 | -40% | 0.10 | 0.75× |
+| 8 192 | 17.62 | -40% | 0.16 | 0.75× |
+| 16 384 | 35.20 | -40% | 0.25 | 0.75× |
+| 32 768 | 70.30 | -40% | 0.43 | 0.75× |
+| 65 536 | 140.59 | -40% | 0.78 | 0.75× |
+| 131 072 | 281.02 | -40% | 1.47 | 0.75× |
+
+**T3K (8 chips):**
+
+| seq | TQ FD ms | Δ vs prev | BFP8 ms |
+|--:|--:|--:|--:|
+| 128 | 0.30 | -38% | 0.10 |
+| 256 | 0.57 | -39% | 0.16 |
+| 512 | 1.11 | -40% | 0.11 |
+| 1 024 | 2.22 | -39% | 0.12 |
+| 2 048 | 4.41 | -40% | 0.11 |
+| 4 096 | 8.80 | -40% | 0.14 |
+| 8 192 | 17.62 | -40% | 0.17 |
+| 16 384 | 35.13 | -40% | 0.14 |
+| 32 768 | 70.20 | -40% | 0.16 |
+| 65 536 | 140.36 | -40% | 0.29 |
+| 131 072 | 280.56 | -40% | 0.34 |
+
+**E2E:** T3K traced `--tq-full-dequant` 32 layers: 32.7 → 26.9 ms/tok
+(**18% faster end-to-end**), output "The capital of France is Paris."
+unchanged.
+
+**Validation:** cos > 0.995 on N150 partial cache + all 8 T3K devices.
+
 ## BFP8 norms repack (2026-04-28 PM)
 
 Cut on-device norms storage in half by storing as BFP8_B in DRAM and
