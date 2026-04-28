@@ -297,8 +297,9 @@ def run_demo_whisper_for_audio_classification_inference(
         # Convert logits to torch
         logits_torch = ttnn.to_torch(logits, mesh_composer=output_mesh_composer)
 
-        # Argmax over class dimension
-        predicted_class_ids = torch.argmax(logits_torch.squeeze(1), dim=1)
+        # Argmax over class (last) dimension; flatten to yield one prediction per sample
+        # regardless of any extra leading unit dims produced by ttnn tile-layout conversion.
+        predicted_class_ids = torch.argmax(logits_torch, dim=-1).flatten()[:current_batch_size]
         predicted_labels = [model.config.id2label[class_id.item()] for class_id in predicted_class_ids]
 
         for idx, label_str in enumerate(predicted_labels):
