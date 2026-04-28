@@ -148,77 +148,6 @@ def parse_dtype(dtype_val):
     return dtype_val
 
 
-def _parse_int_list_str(s):
-    """Parse a string like '[4, 8]' into [4, 8]. Returns [] on failure."""
-    if isinstance(s, list):
-        return [int(x) for x in s]
-    if not isinstance(s, str):
-        return []
-    try:
-        import ast
-
-        v = ast.literal_eval(s)
-        if isinstance(v, (list, tuple)):
-            return [int(x) for x in v]
-    except (ValueError, SyntaxError):
-        pass
-    return []
-
-
-def _parse_placements_str(s):
-    """Parse a string like \"['PlacementReplicate', 'PlacementShard(-1)']\" into
-    [(\"Replicate\", None), (\"Shard\", -1)]. Returns [] on failure."""
-    import ast
-    import re
-
-    items = s
-    if isinstance(s, str):
-        try:
-            items = ast.literal_eval(s)
-        except (ValueError, SyntaxError):
-            return []
-    if not isinstance(items, (list, tuple)):
-        return []
-    parsed = []
-    for it in items:
-        it = str(it)
-        if "Replicate" in it:
-            parsed.append(("Replicate", None))
-        else:
-            m = re.search(r"Shard\(\s*(-?\d+)\s*\)", it)
-            if m:
-                parsed.append(("Shard", int(m.group(1))))
-            else:
-                parsed.append((it, None))
-    return parsed
-
-
-def reconstruct_global_shape(per_chip_shape, tensor_placement):
-    """Recover a tensor's logical/global shape from its per-chip shape + placement.
-
-    The model_tracer captures `tensor.shape`, which for sharded mesh tensors is
-    the per-chip view (e.g. last dim 360 instead of 2880 for Shard(-1) on an
-    8-wide mesh axis).  At sweep load time we need the true global shape so the
-    sweep test creates a torch source tensor of the same size the real model
-    used; the mesh mapper then re-shards it to match per-chip dims.
-    """
-    if not per_chip_shape or not tensor_placement:
-        return list(per_chip_shape) if per_chip_shape else per_chip_shape
-    mesh_shape = _parse_int_list_str(tensor_placement.get("mesh_device_shape"))
-    placements = _parse_placements_str(tensor_placement.get("placement", []))
-    if not mesh_shape or not placements or len(mesh_shape) != len(placements):
-        return list(per_chip_shape)
-    global_shape = list(per_chip_shape)
-    rank = len(global_shape)
-    for axis_size, (kind, dim) in zip(mesh_shape, placements):
-        if kind != "Shard" or dim is None:
-            continue
-        d = dim if dim >= 0 else dim + rank
-        if 0 <= d < rank:
-            global_shape[d] *= axis_size
-    return global_shape
-
-
 def parse_layout(layout_val):
     """Convert a layout string from traced JSON to a ttnn layout object.
 
@@ -817,19 +746,13 @@ class MasterConfigLoader:
         if arg_data.get("type") != "ttnn.Tensor":
             return None
         try:
-            per_chip_shape = arg_data.get("original_shape", arg_data.get("shape", []))
-            placement = arg_data.get("tensor_placement")
-            # The tracer records `tensor.shape` (per-chip view) for distributed
-            # tensors.  Reconstruct the global shape so sweep tests build a
-            # source torch tensor matching what the real model fed in.
-            shape = reconstruct_global_shape(per_chip_shape, placement)
             return TensorConfig(
-                shape=shape,
+                shape=arg_data.get("original_shape", arg_data.get("shape", [])),
                 dtype=arg_data.get("original_dtype", arg_data.get("dtype", "")),
                 layout=arg_data.get("layout", ""),
                 memory_config=arg_data.get("memory_config", {}),
                 storage_type=arg_data.get("storage_type", "StorageType.DEVICE"),
-                tensor_placement=placement,
+                tensor_placement=arg_data.get("tensor_placement"),  # Extract placement info
             )
         except Exception:
             return None
@@ -1296,9 +1219,7 @@ class MasterConfigLoader:
                     if "x" not in end or "y" not in end:
                         raise ValueError(f"Invalid grid end (missing x/y): {end}")
 
-                    core_range = ttnn.CoreRange(
-                        ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])
-                    )
+                    core_range = ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
                     core_ranges.add(core_range)
 
                 shard_grid = ttnn.CoreRangeSet(core_ranges)
