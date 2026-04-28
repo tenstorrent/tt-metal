@@ -167,7 +167,7 @@ fi
 
 echo "[${step_idx}/${total_steps}] Processing CSV with excel_process_combined.py"
 echo "CSV: ${CSV_PATH}"
-python3 excel_process_combined.py "${CSV_PATH}" .
+python3 models/demos/qwen3_tts/excel_process_combined.py "${CSV_PATH}" .
 step_idx=$((step_idx + 1))
 
 if [[ "${RUN_DEMO}" -eq 1 ]]; then
