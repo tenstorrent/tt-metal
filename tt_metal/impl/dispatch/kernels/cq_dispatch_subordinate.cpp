@@ -60,7 +60,7 @@ constexpr uint32_t cb_end = cb_base + cb_size;
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
 // REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
 // description; this kernel is the consumer side of the embedded program_id_fifo.
-volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
+volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static bool rt_profiler_enabled = false;
@@ -140,16 +140,16 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
 }
 
 FORCE_INLINE
-void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
-    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(mailbox->realtime_profiler_state);
+void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
     bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
 
     RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
-    mailbox->realtime_profiler_state = new_state;
+    msg->realtime_profiler_state = new_state;
 
-    if (mailbox->realtime_profiler_core_noc_xy != 0) {
+    if (msg->realtime_profiler_core_noc_xy != 0) {
         uint64_t realtime_profiler_addr =
-            get_noc_addr_helper(mailbox->realtime_profiler_core_noc_xy, mailbox->realtime_profiler_mailbox_addr);
+            get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_state_addr);
         dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
     }
 }
@@ -173,7 +173,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
         if (rt_profiler_enabled) {
-            record_realtime_timestamp(realtime_profiler_mailbox, false);
+            record_realtime_timestamp(rt_profiler_msg, false);
         }
     }
 
@@ -426,28 +426,28 @@ void kernel_main() {
 
     // Clear stale RT profiler state on startup; host may enable RT profiler
     // later by writing valid mailbox coordinates.
-    realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
-    realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
-    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
+    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
     // FIFO + buffer IDs must be reset while core_noc_xy is still zero, before dispatch_d can
     // append; deferring this would race with dispatch_d and drop the first/last program IDs.
-    realtime_profiler_mailbox->program_id_fifo_start = 0;
-    realtime_profiler_mailbox->program_id_fifo_end = 0;
-    realtime_profiler_mailbox->kernel_start_a.id = 0;
-    realtime_profiler_mailbox->kernel_end_a.id = 0;
-    realtime_profiler_mailbox->kernel_start_b.id = 0;
-    realtime_profiler_mailbox->kernel_end_b.id = 0;
+    rt_profiler_msg->program_id_fifo_start = 0;
+    rt_profiler_msg->program_id_fifo_end = 0;
+    rt_profiler_msg->kernel_start_a.id = 0;
+    rt_profiler_msg->kernel_end_a.id = 0;
+    rt_profiler_msg->kernel_start_b.id = 0;
+    rt_profiler_msg->kernel_end_b.id = 0;
 
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        rt_profiler_enabled = (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0);
+        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
         uint32_t popped_pid = 0;
         if (rt_profiler_enabled) {
-            record_realtime_timestamp(realtime_profiler_mailbox, true);
-            popped_pid = pop_program_id(realtime_profiler_mailbox);
+            record_realtime_timestamp(rt_profiler_msg, true);
+            popped_pid = pop_program_id(rt_profiler_msg);
         }
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
@@ -455,7 +455,7 @@ void kernel_main() {
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         if (rt_profiler_enabled) {
             uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) ? popped_pid : 0;
-            write_buffer_id(realtime_profiler_mailbox, buffer_id);
+            write_buffer_id(rt_profiler_msg, buffer_id);
         }
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
@@ -464,17 +464,17 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 if (rt_profiler_enabled) {
-                    signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
+                    signal_realtime_profiler_and_switch(rt_profiler_msg);
                     noc_async_writes_flushed();
                     for (volatile uint32_t delay = 0; delay < 5000; delay++) {
                     }
                 }
 
-                realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
+                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
                 if (rt_profiler_enabled) {
                     uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
-                        realtime_profiler_mailbox->realtime_profiler_core_noc_xy,
-                        realtime_profiler_mailbox->realtime_profiler_mailbox_addr);
+                        rt_profiler_msg->realtime_profiler_core_noc_xy,
+                        rt_profiler_msg->realtime_profiler_remote_state_addr);
                     dispatch_s_noc_inline_dw_write(
                         realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
                 }
@@ -497,7 +497,7 @@ void kernel_main() {
         total_pages_acquired++;
 
         if (!done && rt_profiler_enabled) {
-            signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
+            signal_realtime_profiler_and_switch(rt_profiler_msg);
         }
     }
     // Confirm expected number of pages, spinning here is a leak

@@ -237,7 +237,7 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
 RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device) {
     // HAL offsets are the same for all devices (same arch).
     const auto& hal = MetalContext::instance().hal();
-    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
+    const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
     // realtime_profiler_msg_t lives in a dispatch-core-local L1 region assigned by
     // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG (only reachable on dispatch cores
     // and the reserved RT-profiler tensix).
@@ -260,13 +260,13 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp and rebuild.",
         RT_PROFILER_SOCKET_CONFIG_SIZE,
         D2HSocket::required_config_buffer_size());
-    uint32_t config_buffer_addr_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
-        dev_msgs::realtime_profiler_msg_t::Field::config_buffer_addr);
-    uint32_t sync_request_offset =
-        factory.offset_of<dev_msgs::realtime_profiler_msg_t>(dev_msgs::realtime_profiler_msg_t::Field::sync_request);
-    uint32_t sync_host_timestamp_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
-        dev_msgs::realtime_profiler_msg_t::Field::sync_host_timestamp);
-    uint32_t realtime_profiler_mailbox_addr = realtime_profiler_base_addr + config_buffer_addr_offset;
+    uint32_t config_buffer_addr_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::config_buffer_addr);
+    uint32_t sync_request_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::sync_request);
+    uint32_t sync_host_timestamp_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::sync_host_timestamp);
+    uint32_t profiler_msg_config_field_addr = realtime_profiler_base_addr + config_buffer_addr_offset;
 
     auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
     const std::string realtime_profiler_kernel_path = "tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp";
@@ -341,7 +341,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         dev_state.sync_request_addr = realtime_profiler_base_addr + sync_request_offset;
         dev_state.sync_host_ts_addr = realtime_profiler_base_addr + sync_host_timestamp_offset;
 
-        // Write real-time profiler core info to dispatch_s core's mailbox for termination signaling.
+        // Write real-time profiler core info into the dispatch carve-out for termination signaling.
         if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
             const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
             CoreCoord dispatch_s_core(dispatch_s_cxy.x, dispatch_s_cxy.y);
@@ -351,35 +351,38 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             uint32_t realtime_profiler_noc_xy =
                 hal.noc_xy_encoding(realtime_profiler_virtual.x, realtime_profiler_virtual.y);
 
-            uint32_t realtime_profiler_core_noc_xy_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
-                dev_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy);
-            uint32_t realtime_profiler_mailbox_addr_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
-                dev_msgs::realtime_profiler_msg_t::Field::realtime_profiler_mailbox_addr);
-            uint32_t realtime_profiler_state_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
-                dev_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state);
+            uint32_t realtime_profiler_core_noc_xy_offset =
+                factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy);
+            uint32_t remote_state_addr_field_offset =
+                factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr);
+            uint32_t realtime_profiler_state_offset =
+                factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state);
             uint32_t realtime_profiler_core_state_addr = realtime_profiler_base_addr + realtime_profiler_state_offset;
-            uint32_t dispatch_s_mailbox_base = realtime_profiler_base_addr;
+            uint32_t profiler_msg_carve_base = realtime_profiler_base_addr;
 
             std::vector<uint32_t> noc_xy_data = {realtime_profiler_noc_xy};
             tt::tt_metal::detail::WriteToDeviceL1(
                 device,
                 dispatch_s_core,
-                dispatch_s_mailbox_base + realtime_profiler_core_noc_xy_offset,
+                profiler_msg_carve_base + realtime_profiler_core_noc_xy_offset,
                 noc_xy_data,
                 CoreType::WORKER);
 
-            std::vector<uint32_t> mailbox_addr_data = {realtime_profiler_core_state_addr};
+            std::vector<uint32_t> remote_state_addr_data = {realtime_profiler_core_state_addr};
             tt::tt_metal::detail::WriteToDeviceL1(
                 device,
                 dispatch_s_core,
-                dispatch_s_mailbox_base + realtime_profiler_mailbox_addr_offset,
-                mailbox_addr_data,
+                profiler_msg_carve_base + remote_state_addr_field_offset,
+                remote_state_addr_data,
                 CoreType::WORKER);
 
             log_info(
                 tt::LogMetal,
-                "Device {}: wrote real-time profiler core info (noc_xy=0x{:x}, mailbox_addr=0x{:x}) to dispatch_s ({}, "
-                "{})",
+                "Device {}: wrote real-time profiler core info (noc_xy=0x{:x}, remote_state_addr=0x{:x}) to dispatch_s "
+                "({}, {})",
                 device_id,
                 realtime_profiler_noc_xy,
                 realtime_profiler_core_state_addr,
@@ -426,7 +429,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         //   * sync_host_timestamp != 0 -> phantom sync marker pushed on first boot.
         //   * realtime_profiler_state / program_id_fifo_{start,end} corrupt state machine.
         {
-            const uint32_t profiler_msg_size = factory.size_of<dev_msgs::realtime_profiler_msg_t>();
+            const uint32_t profiler_msg_size = factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
             const uint32_t profiler_msg_words = profiler_msg_size / sizeof(uint32_t);
             std::vector<uint32_t> zero_msg(profiler_msg_words, 0);
             tt::tt_metal::detail::WriteToDeviceL1(
@@ -451,10 +454,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 dispatch_core_noc_x = dispatch_s_virtual.x;
                 dispatch_core_noc_y = dispatch_s_virtual.y;
 
-                uint32_t kernel_start_a_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
-                    dev_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
-                uint32_t kernel_start_b_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
-                    dev_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
+                uint32_t kernel_start_a_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
+                uint32_t kernel_start_b_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
                 dispatch_data_addr_a = realtime_profiler_base_addr + kernel_start_a_offset;
                 dispatch_data_addr_b = realtime_profiler_base_addr + kernel_start_b_offset;
             }
@@ -494,7 +497,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             uint32_t config_buffer_addr = dev_state.socket->get_config_buffer_address();
             std::vector<uint32_t> addr_data = {config_buffer_addr};
             tt::tt_metal::detail::WriteToDeviceL1(
-                device, realtime_profiler_core, realtime_profiler_mailbox_addr, addr_data, CoreType::WORKER);
+                device, realtime_profiler_core, profiler_msg_config_field_addr, addr_data, CoreType::WORKER);
 
             log_info(
                 tt::LogMetal,

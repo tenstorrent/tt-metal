@@ -137,7 +137,7 @@ constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb
 // co-located cq_dispatch_subordinate kernel and the reserved RT-profiler tensix core, so
 // all three view the same physical L1. The embedded program_id_fifo is the BRISC
 // (producer) / dispatch_s NCRISC (consumer) handoff.
-volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
+volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
@@ -1294,8 +1294,8 @@ re_run_command:
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
-            if (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0) {
-                while (!program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id)) {
+            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0) {
+                while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
                     invalidate_l1_cache();
                 }
             }
@@ -1503,9 +1503,9 @@ void kernel_main() {
     // Reset RT profiler mailbox fields on every dispatch core startup.
     // L1 is not guaranteed to be zero-initialized, and stale values here can
     // incorrectly enable RT profiler paths when host-side RT setup is skipped.
-    realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
-    realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
-    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
+    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     dispatch_cb_reader.init();
     cmd_ptr = dispatch_cb_base;

@@ -11,7 +11,7 @@
 #include <cstdint>
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
-#include "hostdev/dev_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "api/debug/dprint.h"
@@ -29,7 +29,7 @@ constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profil
 // L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) on this
 // reserved RT-profiler tensix core. The matching dispatch cores use the same define to address
 // this structure; host propagates the value via the REALTIME_PROFILER_MSG_ADDR compile-time define.
-volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
+volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
@@ -64,10 +64,10 @@ __attribute__((noinline)) void realtime_profiler_sync() {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
     uint32_t sync_count = 0;
-    while (realtime_profiler_mailbox->sync_request) {
+    while (rt_profiler_msg->sync_request) {
         invalidate_l1_cache();
 
-        uint32_t host_time = realtime_profiler_mailbox->sync_host_timestamp;
+        uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
         if (host_time > 0) {
             DPRINT << "REALTIME: sync got host_time=" << host_time << ENDL();
 
@@ -93,7 +93,7 @@ __attribute__((noinline)) void realtime_profiler_sync() {
 
             ring_buffer->write_index++;
 
-            realtime_profiler_mailbox->sync_host_timestamp = 0;
+            rt_profiler_msg->sync_host_timestamp = 0;
             sync_count++;
             DPRINT << "REALTIME: sync pushed count=" << sync_count << ENDL();
         }
@@ -109,17 +109,16 @@ void kernel_main() {
     ring_buffer->read_index = 0;
     ring_buffer->terminate = 0;
 
-    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     while (true) {
         invalidate_l1_cache();
 
-        RealtimeProfilerState state =
-            static_cast<RealtimeProfilerState>(realtime_profiler_mailbox->realtime_profiler_state);
+        RealtimeProfilerState state = static_cast<RealtimeProfilerState>(rt_profiler_msg->realtime_profiler_state);
 
         switch (state) {
             case REALTIME_PROFILER_STATE_IDLE:
-                if (realtime_profiler_mailbox->sync_request) {
+                if (rt_profiler_msg->sync_request) {
                     DPRINT << "REALTIME: sync_request detected!" << ENDL();
                     realtime_profiler_sync();
                 }
@@ -127,12 +126,12 @@ void kernel_main() {
 
             case REALTIME_PROFILER_STATE_PUSH_A:
                 realtime_profiler_read_and_enqueue(true);
-                realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
                 break;
 
             case REALTIME_PROFILER_STATE_PUSH_B:
                 realtime_profiler_read_and_enqueue(false);
-                realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
                 break;
 
             case REALTIME_PROFILER_STATE_TERMINATE: ring_buffer->terminate = 1; return;

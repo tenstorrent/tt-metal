@@ -8,4 +8,7 @@ set(HOSTDEVCOMMON_JIT_API_HEADERS
     api/hostdevcommon/tensor_accessor/arg_config.hpp
 )
 
-set(HOSTDEVCOMMON_HOSTDEV_HEADERS ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h)
+set(HOSTDEVCOMMON_HOSTDEV_HEADERS
+    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h
+)

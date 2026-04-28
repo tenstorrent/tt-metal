@@ -12,7 +12,7 @@
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "hostdev/dev_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "api/debug/dprint.h"
 
@@ -28,7 +28,7 @@ constexpr uint32_t realtime_profiler_page_size = RT_PROFILER_ENTRY_SIZE;  // 64 
 // L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) on this
 // reserved RT-profiler tensix core. Mirrors cq_realtime_profiler.cpp; address via compile-time
 // define REALTIME_PROFILER_MSG_ADDR set by host.
-volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
+volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
@@ -84,7 +84,7 @@ __attribute__((noinline)) void push_entry_to_host(
 // _pad[3]  = fifo_addr_lo from socket config
 // _pad[4]  = loop iteration counter
 // _pad[5]  = push count
-// _pad[6]  = L1 address of realtime_profiler_mailbox (config_buffer_addr read site)
+// _pad[6]  = L1 address of rt_profiler_msg->config_buffer_addr (read site)
 // _pad[7]  = raw 32-bit value at that address
 // _pad[8]  = RING_BUFFER_ADDR define value
 // _pad[9]  = socket_reserve_pages entries (bumped before the blocking call)
@@ -93,7 +93,7 @@ __attribute__((noinline)) void push_entry_to_host(
 
 void kernel_main() {
     ring_buffer->_pad[0] = 1;  // stage: kernel started
-    ring_buffer->_pad[6] = reinterpret_cast<uint32_t>(&realtime_profiler_mailbox->config_buffer_addr);
+    ring_buffer->_pad[6] = reinterpret_cast<uint32_t>(&rt_profiler_msg->config_buffer_addr);
     ring_buffer->_pad[8] = RING_BUFFER_ADDR;
 
     // Wait for config_buffer_addr to be written by the host
@@ -102,7 +102,7 @@ void kernel_main() {
     uint32_t wait_iters = 0;
     while (socket_config_addr == 0) {
         invalidate_l1_cache();
-        socket_config_addr = realtime_profiler_mailbox->config_buffer_addr;
+        socket_config_addr = rt_profiler_msg->config_buffer_addr;
         // Also write the raw value we see, so host can compare
         ring_buffer->_pad[7] = socket_config_addr;
         wait_iters++;
