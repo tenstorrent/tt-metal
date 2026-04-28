@@ -78,7 +78,7 @@ Why `--bundle-python` is required here:
 ```bash
 ./tests/scripts/multihost/run_dual_t3k_tests.sh
 ./tests/scripts/multihost/run_dual_galaxy_tests.sh
-./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
+./tests/scripts/multihost/run_multihost_galaxy_tests.sh unit_tests
 ```
 
 ## Environment Propagation in `tt-run`
