@@ -84,7 +84,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  *
  * Runtime parameter signal_output:
  *   false (default): Normal operation without signaling
- *   true: Signal SFPU semaphore every other tile for pipelining with subsequent operations
+ *   true: Signal SFPU semaphore for pipelining with subsequent operations
  *
  * Usage pattern for partial K:
  *   for (k = 0; k < num_k_subblocks - 1; k++) {

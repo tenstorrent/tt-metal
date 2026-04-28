@@ -68,7 +68,6 @@ inline void _init_sdpa_reduce_max_row_8x32_replay_buffers_() {
     // ***********************************************************
     // Record replay buffer
     // LREG0 will contain the first 4 rows, LREG2 will contain the second 4 rows
-    // Max will be the first 16 instructions, SUM will be the last 16 instructions
     load_replay_buf<NoExec>(sdpa_reduce_row::replay_start, 16, [] {
         // Max instructions
         reduce_row_8x32_instrs<PoolType::MAX>();
@@ -79,7 +78,6 @@ inline void _init_sdpa_reduce_sum_row_8x32_replay_buffers_() {
     // ***********************************************************
     // Record replay buffer
     // LREG0 will contain the first 4 rows, LREG2 will contain the second 4 rows
-    // Max will be the first 16 instructions, SUM will be the last 16 instructions
     load_replay_buf<NoExec>(sdpa_reduce_row::replay_start, 16, [] {
         // Sum instructions
         reduce_row_8x32_instrs<PoolType::SUM>();
