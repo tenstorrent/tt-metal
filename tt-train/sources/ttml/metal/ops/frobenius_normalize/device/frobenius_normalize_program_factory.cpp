@@ -258,12 +258,21 @@ void FrobeniusNormalizeProgramFactory::override_runtime_arguments(
     auto& reader_rt = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& reader_origin_rt = GetRuntimeArgs(program, shared.reader_origin_id);
     auto& writer_rt = GetRuntimeArgs(program, shared.writer_kernel_id);
+    auto& compute_origin_rt = GetRuntimeArgs(program, shared.compute_origin_id);
+    auto& compute_g1_rt = GetRuntimeArgs(program, shared.compute_group_1_id);
+    auto& compute_g2_rt = GetRuntimeArgs(program, shared.compute_group_2_id);
+
+    const uint32_t epsilon_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
 
     for (uint32_t i = 0; i < shared.num_cores; ++i) {
         tt::tt_metal::CoreCoord core{i / shared.num_cores_y, i % shared.num_cores_y};
         auto& rt = (i == 0) ? reader_origin_rt : reader_rt;
         rt[core.x][core.y][kReaderInputAddrIdx] = input_buffer->address();
         writer_rt[core.x][core.y][kWriterOutputAddrIdx] = output_buffer->address();
+
+        auto& compute_rt =
+            (i == 0) ? compute_origin_rt : (shared.core_group_1.contains(core) ? compute_g1_rt : compute_g2_rt);
+        compute_rt[core.x][core.y][0] = epsilon_bits;
     }
 }
 
