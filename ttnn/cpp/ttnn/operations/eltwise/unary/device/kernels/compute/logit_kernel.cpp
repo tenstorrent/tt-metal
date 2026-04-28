@@ -2,76 +2,46 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/clamp.h"
-#include "api/compute/eltwise_unary/rsub.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include <cstdint>
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(2);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
-    constexpr auto cb_tmp0 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_input = tt::CBIndex::c_0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_2;
+    constexpr uint32_t cb_tmp0 = tt::CBIndex::c_1;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
-    experimental::CircularBuffer cb_tmp(cb_tmp0);
+    using namespace compute_kernel_lib::eltwise;
 
     init_sfpu(cb_input, cb_output);
+
+    // Two-stage pipeline interleaved per tile (keeps cb_tmp0 double-buffer
+    // discipline matching the original raw-LLK kernel).
+    //
+    // Stage 1: cb_input -> cb_tmp0           [optional clamp]
+    // Stage 2: cb_tmp0  -> cb_output         logit(x) = log(x / (1 - x))
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        cb_tmp.reserve_back(1);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_input);
-        copy_tile(cb_input, 0, 0);
 #ifdef CLAMP
-        clamp_tile_init();
-        clamp_tile(0, packed_scalar1, packed_scalar2);
+        // Aggregate-init through the CRTP base requires nested braces.
+        Clamp<Dst::D0> clamp{{}, /*param_min=*/packed_scalar1, /*param_max=*/packed_scalar2};
+        auto chain1 = eltwise_chain(CopyTile<cb_input, Dst::D0>{}, clamp);
+#else
+        auto chain1 = eltwise_chain(CopyTile<cb_input, Dst::D0>{});
 #endif
-        tile_regs_commit();
-        tile_regs_wait();
+        eltwise_pipeline<EltwiseOutputPolicy::PerTile, EltwiseDataFormatReconfig::NONE>(chain1, cb_tmp0, 1);
 
-        pack_tile(0, cb_tmp0);
-        tile_regs_release();
-
-        cb_tmp.push_back(1);
-        cb_tmp.wait_front(1);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_tmp0);
-        copy_tile(cb_tmp0, 0, 0);
-        copy_tile(cb_tmp0, 0, 1);
-
-        rsub_tile_init();
-        rsub_tile(0, 0x3F800000u);  // 1.0 - x
-
-        div_binary_tile_init();
-        div_binary_tile(1, 0, 0);
-
-        log_tile_init();
-        log_tile(0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_tmp.pop_front(1);
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+        // Stage 2 — D0 = x, D1 = x; rsub D0 = 1 - x; div D1 / D0; log result.
+        Rsub<Dst::D0> rsub_one_minus{{}, /*param0=*/0x3F800000u};
+        auto chain2 = eltwise_chain(
+            CopyTile<cb_tmp0, Dst::D0, CopyTilePolicy::WaitNoPop>{},
+            CopyTile<cb_tmp0, Dst::D1, CopyTilePolicy::NoWaitPop>{},
+            rsub_one_minus,
+            SfpuDiv<Dst::D1, Dst::D0, Dst::D0>{},
+            Log<Approx::Exact, Dst::D0>{});
+        eltwise_pipeline<EltwiseOutputPolicy::PerTile, EltwiseDataFormatReconfig::NONE>(chain2, cb_output, 1);
     }
 }
