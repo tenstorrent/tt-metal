@@ -245,7 +245,8 @@ template <
     bool transpose_v,
     uint32_t packed_tile_size,
     bool exp_approx_mode = false,
-    uint32_t output_granularity = 2>
+    uint32_t output_granularity = 2,
+    bool mm_pack_init = true>
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
@@ -262,7 +263,7 @@ void compute_sdpa_chunk(
     static_assert(DST_ACCUM_MODE == false, "FP32 destination accumulation mode is not supported");
     static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
-    sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
