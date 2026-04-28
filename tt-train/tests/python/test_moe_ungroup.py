@@ -344,10 +344,6 @@ class TestMoeUngroupDevice:
         k: int,
         label: str,
         atol: float = 5e-2,
-        # bf16 has ~7-bit mantissa → relative precision ~2^-7 ≈ 0.78%.
-        # Each fp32→bf16 round-trip in the multi-expert RMW path can drift
-        # ~1 ULP. With K up to 8 accumulations, RMS rounding is ~sqrt(K)*0.78%
-        # ≈ 2.2%; pick 3% to cover worst case + non-cancelling rounding.
         rtol: float = 3e-2,
     ):
         D, B, S, H = dispatched.shape
