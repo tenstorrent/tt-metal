@@ -42,7 +42,6 @@ from triage import (
     log_warning_risc,
     create_progress,
     log_check,
-    verbose_skips_enabled,
 )
 from triage_session import get_triage_session
 from ttexalens.context import Context
@@ -363,41 +362,10 @@ class RunChecks:
                 except RiscHaltError as e:
                     self._session.add_broken_core(location, risc_name)
                     if print_broken_cores:
-                        # Include exception type name so CI logs tell us *why* the halt
-                        # failed (RiscHaltError subclasses carry the specific reason —
-                        # e.g. halt-timeout, bad debug-state, already-halted contention).
-                        log_warning_risc(
-                            risc_name,
-                            location,
-                            f"Broken ({type(e).__name__}): {e}.",
-                        )
-                        if verbose_skips_enabled():
-                            import traceback
-
-                            log_warning_risc(
-                                risc_name,
-                                location,
-                                f"RiscHaltError traceback:\n{traceback.format_exc()}",
-                            )
+                        log_warning_risc(risc_name, location, f"Broken: {e}.")
                     continue
                 except Exception as e:
-                    # Include exception type name — the current bare str(e) hides the
-                    # actual class (TimeoutDeviceRegisterError vs TypeError vs …).
-                    # Full traceback gated on TT_TRIAGE_VERBOSE_SKIPS=1 because this
-                    # path can fire for many cores on an unhealthy chip.
-                    log_warning_risc(
-                        risc_name,
-                        location,
-                        f"Skipping ({type(e).__name__}): {e}",
-                    )
-                    if verbose_skips_enabled():
-                        import traceback
-
-                        log_warning_risc(
-                            risc_name,
-                            location,
-                            f"Exception traceback:\n{traceback.format_exc()}",
-                        )
+                    log_warning_risc(risc_name, location, f"Skipping: {str(e)}")
                     continue
 
                 # Use the common result collection helper
