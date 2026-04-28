@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, is_blackhole
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.gemma_vision_rmsnorm import RMSNorm
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 
@@ -84,14 +84,8 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
 
     reference_output = reference_model(input)
 
-    if is_blackhole() and mesh_device.get_num_devices() > 1:
-        input_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-    else:
-        input_mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape)
-        output_mesh_composer = ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
-        )
+    input_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
     tt_input = ttnn.from_torch(
