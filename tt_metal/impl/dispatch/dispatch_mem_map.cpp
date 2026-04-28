@@ -73,7 +73,8 @@ DispatchMemMap::DispatchMemMap(
             // Real-time profiler mailbox: dispatch-core-local L1 region shared between the
             // dispatch cores and the reserved RT-profiler tensix core.
             device_cq_addr_sizes_[dev_addr_idx] =
-                hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::realtime_profiler_msg_t>();
+                hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX)
+                    .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }

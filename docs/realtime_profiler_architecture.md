@@ -52,12 +52,13 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 |   | DISPATCH CORE (dispatch_s)                                          |   |
 |   | Kernel: cq_dispatch_subordinate.cpp                                 |   |
 |   |                                                                     |   |
-|   |   Mailbox (L1) realtime_profiler_msg_t:                             |   |
+|   |   L1 carve-out realtime_profiler_msg_t:                              |   |
 |   |     Ping-pong: kernel_start_a/b, kernel_end_a/b                     |   |
 |   |     program_id_fifo, realtime_profiler_core_noc_xy,                 |   |
-|   |     realtime_profiler_mailbox_addr                                  |   |
+|   |     realtime_profiler_remote_state_addr                             |   |
 |   |                                                                     |   |
-|   |   Per-command: record_realtime_timestamp(true); set_program_id();   |   |
+|   |   Per-command: record start ts, FIFO program id, process cmd,       |   |
+|   |     record end ts, signal_realtime_profiler_and_switch()            |   |
 |   |     ... process command ...                                         |   |
 |   |     record_realtime_timestamp(false); signal_realtime_profiler_and_ |   |
 |   |     switch();  (NOC-write state to profiler core)                   |   |
@@ -124,12 +125,14 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 
 ---
 
-## 4. Mailbox Layout (Conceptual)
+## 4. Carve-out layout (conceptual)
 
-| Location | Contents (realtime_profiler_msg_t) |
-|----------|------------------------------------|
-| **Dispatch_s L1 mailbox** | Ping-pong buffers (kernel_start_a/b, kernel_end_a/b), program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_mailbox_addr**, realtime_profiler_state. Host writes core_noc_xy and mailbox_addr at init so dispatch_s can signal the profiler core. |
-| **Real-time profiler core L1 mailbox** | **config_buffer_addr** (D2H socket config), **realtime_profiler_state** (written by dispatch_s or host for terminate), sync_request, sync_host_timestamp. Host writes config_buffer_addr and drives sync. |
+| Location | Contents (`realtime_profiler_msg_t`) |
+|----------|----------------------------------------|
+| **Dispatch_s L1** | Ping-pong buffers, program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state. Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
+| **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, sync_request, sync_host_timestamp. |
+
+Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.
 
 ---
 
@@ -139,6 +142,6 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 |-----------|--------|
 | Dispatch_s (timestamp record + signal) | `tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp`, `realtime_profiler.hpp` |
 | Real-time profiler kernel | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp` |
-| Host init, sync, receiver thread | `tt_metal/distributed/mesh_device.cpp` |
-| Mailbox struct | `tt_metal/hw/inc/hostdev/dev_msgs.h` (`realtime_profiler_msg_t`) |
+| Host init, sync, receiver thread | `mesh_device.cpp`, `realtime_profiler_manager.cpp` |
+| Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
 | Callbacks (Tracy, user) | `tt_metal/impl/dispatch/data_collector.cpp`, `realtime_profiler_tracy_handler.cpp` |

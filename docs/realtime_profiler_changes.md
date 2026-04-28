@@ -10,7 +10,7 @@ infrastructure, Python test scripts, and the dispatch host configuration.
 
 1. [Architecture Overview](#architecture-overview)
 2. [Firmware Changes](#firmware-changes)
-   - [dev_msgs.h — Mailbox Data Structures](#dev_msgsh--mailbox-data-structures)
+   - [realtime_profiler_msgs.h — Shared structs](#realtime_profiler_msgsh--shared-structs)
    - [realtime_profiler.hpp — Shared Helper Functions](#realtime_profilerhpp--shared-helper-functions)
    - [cq_dispatch.cpp — Program ID FIFO Producer](#cq_dispatchcpp--program-id-fifo-producer)
    - [cq_dispatch_subordinate.cpp — Core Profiler Integration](#cq_dispatch_subordinatecpp--core-profiler-integration)
@@ -47,7 +47,7 @@ pairs from device to host over a D2H socket.  The data path is:
  │                             |                      | (stream     │
  │                             |                      |  regs)      │
  │                             |                      |             │
- │                   timestamps written to L1 mailbox (shared)      │
+ │                   timestamps written to L1 carve-out (shared)    │
  │                             |                                    │
  └─────────────────────────────|────────────────────────────────────┘
                                |
@@ -59,7 +59,7 @@ pairs from device to host over a D2H socket.  The data path is:
  │  reader (BRISC)                          pusher (NCRISC)         │
  │  - polls for PUSH signal                 - drains ring buffer    │
  │  - fetches timestamps from               - writes to host via    │
- │    dispatch core mailbox via NOC read       D2H socket / PCIe    │
+ │    dispatch_s L1 carve-out via NOC read     D2H socket / PCIe    │
  │  - packages into ring buffer in L1            |                  │
  │       |                                       |                  │
  └───────|───────────────────────────────────────|──────────────────┘
@@ -72,7 +72,7 @@ pairs from device to host over a D2H socket.  The data path is:
 ```
 
 Key concepts:
-- **Ping-pong buffering**: Two buffers (A and B) in the dispatch_s mailbox
+- **Ping-pong buffering**: Two buffers (A and B) in the dispatch_s L1 carve-out
   alternate between "being written" and "being pushed to host".
 - **Program ID FIFO**: A 32-entry circular buffer where dispatch_d writes
   program IDs and dispatch_s reads them to tag profiler records.
@@ -83,25 +83,24 @@ Key concepts:
 
 ## Firmware Changes
 
-### dev_msgs.h — Mailbox Data Structures
+### realtime_profiler_msgs.h — Shared structs
 
-**File**: `tt_metal/hw/inc/hostdev/dev_msgs.h`
+**File**: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`
 
-Added the shared data structures that live in L1 mailbox memory and are
-accessed by all cores involved in the profiler pipeline:
+Defines the shared L1 carve-out layout used by dispatch_s, the profiler tensix,
+and host code. HAL exposes offsets via `Hal::get_realtime_profiler_msgs_factory`
+(generated `tt::tt_metal::realtime_profiler_msgs`). This is **not** part of
+`mailboxes_t` in `dev_msgs.h`.
 
-- **`RealtimeProfilerState` enum**: States for the ping-pong state machine
-  (`IDLE`, `PUSH_A`, `PUSH_B`, `TERMINATE`).
-- **`realtime_profiler_timestamp_t` struct**: 16-byte aligned payload carrying
-  `time_hi`, `time_lo`, `id` (program ID), and `header`.
-- **`realtime_profiler_msg_t` struct**: The complete mailbox layout including:
-  - D2H socket config buffer address
-  - Profiler state word (written by dispatch_s, read by profiler core)
-  - Remote NOC coordinates for cross-core signaling
-  - Ping-pong timestamp buffers (start_a/end_a, start_b/end_b)
-  - 32-entry program ID circular FIFO
-  - Sync request/timestamp fields for host-device clock alignment
-- **`mailboxes_t`**: Added `realtime_profiler` field after `profiler`.
+- **`RealtimeProfilerState` enum**: Ping-pong state machine (`IDLE`, `PUSH_A`,
+  `PUSH_B`, `TERMINATE`).
+- **`realtime_profiler_timestamp_t`**: 16-byte aligned payload (`time_hi`,
+  `time_lo`, `id`, `header`).
+- **`realtime_profiler_msg_t`**: Carve-out including D2H config address,
+  `realtime_profiler_state`, `realtime_profiler_core_noc_xy`,
+  `realtime_profiler_remote_state_addr` (profiler tensix L1 address of the state
+  word for NOC signaling), ping-pong timestamp buffers, program ID FIFO, and
+  sync fields for host–device clock alignment.
 
 ### realtime_profiler.hpp — Shared Helper Functions
 
@@ -129,7 +128,7 @@ When dispatch_d processes `set_write_offset`, it now also pushes the
 `program_host_id` into the real-time profiler FIFO:
 
 ```cpp
-while (!program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id)) {
+while (!program_id_fifo_append(rt_profiler_msg, cmd->set_write_offset.program_host_id)) {
     invalidate_l1_cache();
 }
 ```
@@ -153,30 +152,30 @@ This was the most heavily modified firmware file.  Changes:
 2. **Start-of-loop profiling**: Before acquiring a command page, record the
    start timestamp and consume the next program ID from the FIFO:
    ```cpp
-   record_realtime_timestamp(realtime_profiler_mailbox, true);
-   set_program_id(realtime_profiler_mailbox);
+   record_realtime_timestamp(rt_profiler_msg, true);
+   set_program_id(rt_profiler_msg);
    ```
 
 3. **End-of-loop buffer switch**: After processing each command (except
    TERMINATE), signal the profiler core and swap the active buffer:
    ```cpp
    if (!done) {
-       signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
+       signal_realtime_profiler_and_switch(rt_profiler_msg);
    }
    ```
 
 4. **`signal_realtime_profiler_and_switch()`**: New helper that toggles
-   `PUSH_A`↔`PUSH_B`, writes the new state to the local mailbox, and sends
-   a NOC inline write to the profiler core's mailbox on a remote core.
+   `PUSH_A`↔`PUSH_B`, writes the new state to the local carve-out, and sends
+   a NOC inline write to `realtime_profiler_state` on the profiler tensix.
 
 5. **TERMINATE handler**: The most delicate change.  Before writing
    `TERMINATE`, we must ensure the last profiler buffer is flushed:
    ```cpp
    case CQ_DISPATCH_CMD_TERMINATE:
-       signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
+       signal_realtime_profiler_and_switch(rt_profiler_msg);
        noc_async_writes_flushed();
        for (volatile uint32_t delay = 0; delay < 5000; delay++) {}
-       realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
+       rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
        // NOC write TERMINATE to profiler core ...
        done = true;
        break;
@@ -202,7 +201,7 @@ records the end timestamp:
   on stale values from a previous run.
 - Main loop: polls `STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG` for each
   monitored stream.  When a count changes (workers completed), calls
-  `record_realtime_timestamp(mailbox, false)` to write the end timestamp.
+  `record_realtime_timestamp(rt_profiler_msg, false)` to write the end timestamp.
 - Terminates when `realtime_profiler_state == TERMINATE`.
 
 ### cq_realtime_profiler.cpp — Profiler Core Kernel
@@ -210,7 +209,7 @@ records the end timestamp:
 **File**: `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp`
 
 **New file**. BRISC kernel running on a dedicated profiler core.  Reads
-the dispatch_s mailbox via NOC, packages timestamp pairs into the ring
+the dispatch_s L1 carve-out via NOC, packages timestamp pairs into the ring
 buffer, and handles sync requests for host-device clock alignment.
 
 ### cq_realtime_profiler_push.cpp — D2H Push Kernel
@@ -262,7 +261,7 @@ Key additions:
    ```
 
 4. **Diagnostic state dumping**: `dump_realtime_profiler_state()` reads back
-   mailbox contents, ring buffer header, and socket config for debug logging.
+   profiler carve-out contents, ring buffer header, and socket config for debug logging.
 
 ### dispatch_s.cpp — Compute Kernel Co-deployment
 

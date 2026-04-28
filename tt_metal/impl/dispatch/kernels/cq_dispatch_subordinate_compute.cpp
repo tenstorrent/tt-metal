@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#include "hostdev/dev_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 
 // Stream register definitions
@@ -30,23 +30,23 @@ void kernel_main() {
     // Dispatch-core-local L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::
     // REALTIME_PROFILER_MSG). Address is supplied by host via the REALTIME_PROFILER_MSG_ADDR
     // compile-time define; mirrors cq_dispatch.cpp / cq_dispatch_subordinate.cpp on the same core.
-    volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
+    volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
         reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
-    // Clear stale RT-profiler mailbox state left in L1 from prior runs.
-    realtime_profiler_mailbox->realtime_profiler_core_noc_xy = 0;
-    realtime_profiler_mailbox->realtime_profiler_mailbox_addr = 0;
-    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    // Clear stale RT-profiler carve-out state left in L1 from prior runs.
+    rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
+    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     // Wait until host explicitly enables RT profiler, or terminate if RT is not used.
-    while (realtime_profiler_mailbox->realtime_profiler_core_noc_xy == 0) {
-        if (realtime_profiler_mailbox->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
+    while (rt_profiler_msg->realtime_profiler_core_noc_xy == 0) {
+        if (rt_profiler_msg->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
             return;
         }
     }
 
-    if (realtime_profiler_mailbox->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
-        realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    if (rt_profiler_msg->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
+        rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
     }
 
     uint32_t last_counts[num_streams_to_monitor];
@@ -57,7 +57,7 @@ void kernel_main() {
         last_counts[i] = *stream_reg;
     }
 
-    while (realtime_profiler_mailbox->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
+    while (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
         for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
             uint32_t stream_id = first_stream_index + i;
             volatile uint32_t* stream_reg =
@@ -67,7 +67,7 @@ void kernel_main() {
             if (current_count != last_counts[i]) {
                 DeviceZoneScopedN("TRISC0-record-end-ts");
                 last_counts[i] = current_count;
-                record_realtime_timestamp(realtime_profiler_mailbox, false);
+                record_realtime_timestamp(rt_profiler_msg, false);
             }
         }
     }
