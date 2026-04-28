@@ -104,7 +104,18 @@ def run_test_concat_head(
 
 @pytest.mark.parametrize(
     "n_local_heads, padded_local_heads, head_dim, batch_size",
-    ((8, 32, 128, 32), (17, 32, 96, 32), (32, 32, 64, 32), (8, 32, 128, 16)),
+    (
+        # Single head-tile (padded_local_heads == 32)
+        (8, 32, 128, 32),
+        (17, 32, 96, 32),
+        (32, 32, 64, 32),
+        (8, 32, 128, 16),
+        # Multiple head-tiles (padded_local_heads > 32)
+        (8, 64, 64, 32),  # 2 head-tiles, low utilization
+        (32, 64, 64, 32),  # 2 head-tiles, fully populated within first tile
+        (32, 64, 128, 32),  # 2 head-tiles + multi-tile head_dim
+        (16, 96, 64, 32),  # 3 head-tiles (non-power-of-2 padded_local_heads)
+    ),
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_concat_head(
@@ -150,6 +161,24 @@ def test_concat_head(
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+                ]
+            ),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            ),
+        ),
+        (  # Test Case 2: padded_local_heads=64 (multi head-tile path) on subcoregrids
+            8,
+            64,
+            128,
+            8,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
                 ]
             ),
             ttnn.CoreRangeSet(
