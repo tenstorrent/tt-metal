@@ -5,9 +5,9 @@
 SFPU / FPU operation domain registry and helpers.
 
 Maps every MathOperation to safe per-operand input domains (OperandSpecs).
-Provides ``for_op()`` to look up domains by op + format, and
-``exclude_undefined()`` to subtract known-undefined regions from a
-user-supplied StimuliSpec.
+Provides for_op() to look up domains by op + format, and
+exclude_undefined()/exclude_intervals()/exclude_values() to subtract known-undefined
+regions from a user-supplied StimuliSpec.
 """
 
 from __future__ import annotations
@@ -99,7 +99,6 @@ def _square_spec(fmt: DataFormat) -> OperandSpecs:
 # For binary operations where operands require different domains the entry
 # uses explicit spec_A and spec_B.
 #
-# Rationale for each entry is documented inline.
 
 _OP_DOMAIN_REGISTRY: Dict[
     MathOperation,
@@ -166,15 +165,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Neg: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # reciprocal: domain x != 0; log-uniform avoids zero and covers decades.
-    # Only strictly positive values are generated here so that negative-
-    # reciprocal paths are intentionally not exercised by default.
-    # To test negative inputs, supply an explicit spec such as:
-    #   StimuliSpec.uniform(low=-100.0, high=-0.1)
+    # reciprocal: domain x != 0; avoid a small band around 0 and cover both signs
     MathOperation.Reciprocal: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=0.1, high=100.0
-        )
+        spec_A=StimuliSpec.uniform(intervals=[(-100.0, -0.1), (0.1, 100.0)])
     ),
     # relu / relu_max / relu_min / threshold: include negatives (zero branch)
     MathOperation.Relu: OperandSpecs(
@@ -250,15 +243,12 @@ _OP_DOMAIN_REGISTRY: Dict[
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
     # div: srcA is the dividend (any value); srcB is the divisor.
-    # The divisor uses log-uniform over strictly positive values so that
-    # divide-by-zero and near-zero instability are avoided.
-    # This means negative-divisor paths are intentionally not exercised here.
-    # To test negative-divisor behaviour, supply an explicit spec_B such as:
-    #   StimuliSpec.uniform(low=-10.0, high=-0.1)
+    # Use uniform over two bands to exercise both negative and positive divisors
+    # while avoiding a small region around 0.
     MathOperation.SfpuElwdiv: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0),
-        spec_B=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=0.1, high=10.0
+        spec_B=StimuliSpec.uniform(
+            intervals=[(-10.0, -0.1), (0.1, 10.0)],
         ),
     ),
     MathOperation.SfpuElwrsub: OperandSpecs(

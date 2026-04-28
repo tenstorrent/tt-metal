@@ -59,16 +59,16 @@ class StimuliSpec:
     Parameters
     ----------
     distribution : DistributionKind or callable
-        How values are sampled.  Supported enum members (from DistributionKind):
+        How values are sampled. Supported enum members (from DistributionKind):
 
         "uniform"
-            Uniform random in [low, high].  For integer formats the bounds
+            Uniform random in [low, high]. For integer formats the bounds
             are narrowed to the tightest enclosing integers via
             torch.randint(ceil(low), floor(high) + 1), so only integers
             that actually lie within [low, high] are generated.
 
         "gaussian"
-            Normal distribution with *mean* and *std*.  For integer formats
+            Normal distribution with *mean* and *std*. For integer formats
             the result is rounded and clamped to the representable range.
 
         "saw"
@@ -140,49 +140,49 @@ class StimuliSpec:
             tensor of exactly *size* elements and returning it as the
             requested *dtype*.
 
-    low : float
+    low: float
         Lower bound for "uniform", "saw", "ramp",
         "log_uniform", and "log_uniform_linspace".
         Defaults to 0.0.
-    high : float
+    high: float
         Upper bound for "uniform", "saw", "ramp",
         "log_uniform", and "log_uniform_linspace".
         Defaults to 1.0.
-    value : float
+    value: float
         Fill value used by "constant" (all elements), "identity"
         (diagonal elements), and "face_identity" (face diagonal
         elements).  Defaults to 1.0.
-    values : list[float], optional
+    values: list[float], optional
         Explicit value list for "custom".  Written at the start of
         the flattened face; remaining elements are zero.  For integer
         formats each value is rounded and clamped to the representable
         range.  Must not be empty when distribution="custom".
-    mean : float
+    mean: float
         Mean for "gaussian" and "gaussian_linspace".  Defaults to
         0.0.
-    std : float
+    std: float
         Standard deviation for "gaussian" and "gaussian_linspace".
         Defaults to 1.0.
-    seed : int, optional
+    seed: int, optional
         Seed for a per-spec torch.Generator.  "None" uses the global
         torch RNG state.  When an external generator is supplied to
         generate_face_v2 function the *seed* field is ignored so the caller
         controls state across faces.
-    face_specs : list[StimuliSpec | None], optional
+    face_specs: list[StimuliSpec | None], optional
         Per-face overrides. face_specs itself may be "None"
         (no overrides at all).  Individual entries may also be "None",
         meaning "use the outer/base spec for this face."  Face *i* is
         generated with face_specs[i] when that entry is a
         StimuliSpec class, a "None" entry or an index beyond the
         list length falls back to the outer spec.
-    masked_faces : set[int], optional
+    masked_faces: set[int], optional
         Set of 0-based face indices whose output should be zeroed.
         Masking is applied *after* face generation (including any
         face_specs overrides), so it always wins.  Not compatible
         with global short-circuit distributions ("identity",
         "sequential", linspace variants) — raises ValueError
         if combined.
-    intervals : list[tuple[float, float]], optional
+    intervals: list[tuple[float, float]], optional
         Union of [low, high] ranges.  When set, *low*/*high* are ignored
         and values are generated from the union of these intervals.
         Supported distributions:
@@ -345,7 +345,7 @@ class StimuliSpec:
     def log_uniform(
         cls, low: float = 1e-4, high: float = 1.0, **kwargs
     ) -> "StimuliSpec":
-        """Log-uniform in [low, high].  Both bounds must be strictly positive."""
+        """Log-uniform in [low, high]. Both bounds must be strictly positive."""
         if low <= 0 or high <= 0:
             raise ValueError(
                 f"log_uniform requires strictly positive low and high, "
@@ -737,8 +737,8 @@ _LINSPACE_DISTRIBUTIONS = frozenset(
     }
 )
 
-# Small epsilon to keep the Gaussian inverse-CDF quantiles away from 0 and 1
-# (which would map to ±inf).
+# Tiny offset so we never hit exact 0 or 1 in the Gaussian CDF,
+# which would otherwise produce +/- infinity.
 _GAUSSIAN_LINSPACE_EPS = 1e-6
 
 
@@ -1193,18 +1193,17 @@ def _generate_sequential(
     """Generate a sequential arithmetic progression.
 
     Three modes:
-
-    1. **Legacy** (StimuliSpec.sequential() with no args): 1, 2, 3, …, size.
-    2. **Intervals** (spec.intervals is set): base sequence
+    1. *Default* (StimuliSpec.sequential() with no args): 1, 2, 3, …, size.
+    2. *Intervals* (spec.intervals is set): base sequence
        1, 1+step, 1+2*step, … filling the full *size*, then values
-       outside the interval union are zeroed.  spec.low/spec.high
+       outside the interval union are zeroed. spec.low/spec.high
        are ignored.
-    3. **Custom** (low/high/step without intervals): start at
+    3. *Custom* (low/high/step without intervals): start at
        *low*, increment by *step*, zero-fill positions beyond *high*.
     """
     is_int = stimuli_format is not None and stimuli_format.is_integer()
 
-    # -- Mode 1: legacy (all dataclass defaults, no intervals) ---------------
+    # -- Mode 1: default (all dataclass defaults, no intervals) ---------------
     if (
         spec.low == 0.0
         and spec.high == 1.0
