@@ -36,6 +36,12 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool input_nd_sharded = (TensorMemoryLayout::ND_SHARDED == input_tensors[0].memory_config().memory_layout());
     const bool output_nd_sharded = (TensorMemoryLayout::ND_SHARDED == args.output_mem_config.memory_layout());
     if (!input_nd_sharded && !output_nd_sharded) {
+        const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            return ConcatBlockShardedProgramFactory{};
+        }
+
         // specific cases for 2 tensors
         if (input_tensors.size() == 2) {
             if (input_tensors[0].layout() == input_tensors[1].layout()) {
@@ -105,13 +111,9 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
-            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
             TT_FATAL(
-                input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                "Width sharded inputs are not supported for two tensors concat yet");
-            TT_FATAL(
-                in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
-                "Block sharded inputs are not supported");
+                in_ref.shard_spec().value().orientation == first_input.shard_spec().value().orientation,
+                "Sharded tensors must have the same shard orientation.");
         }
     }
     if (warn_about_alignment) {
@@ -144,13 +146,21 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             args.output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
         if (args.dim == shape_first.rank() - 1) {
+            // Original: only height-sharded allowed for width concat
+            // TT_FATAL(memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            //     "Only support width concat on height-sharded tensors.");
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Only support width concat on height-sharded tensors.");
+                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                    memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+                "Only support width concat on height-sharded or block-sharded tensors.");
         } else if (args.dim == shape_first.rank() - 2) {
+            // Original: only width-sharded allowed for height concat
+            // TT_FATAL(memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+            //     "Only support height concat on width-sharded tensors.");
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-                "Only support height concat on width-sharded tensors.");
+                memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                    memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+                "Only support height concat on width-sharded or block-sharded tensors.");
         } else {
             TT_FATAL(false, "Only width or height concat on sharded tensors");
         }

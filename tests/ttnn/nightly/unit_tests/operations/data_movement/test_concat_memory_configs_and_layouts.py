@@ -13,7 +13,7 @@ Covers:
 - Concat on every valid dimension
 - Edge cases: single tensor, many tensors (batched concat), unaligned shapes
 - Groups parameter for height-sharded width concat
-- Known unsupported cases (block sharding, width-sharded 2-tensor, etc.)
+- Known unsupported cases (block sharding)
 """
 
 import pytest
@@ -439,6 +439,221 @@ class TestWidthShardedConcat:
 
 
 # ===========================================================================
+# 5b. Block-sharded concat
+# ===========================================================================
+
+
+class TestBlockShardedConcat:
+    """Block-sharded inputs with block-sharded output (s2s)."""
+
+    @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["RM", "TILE"])
+    def test_block_sharded_width_concat(self, device, layout):
+        """2 block-sharded tensors, width concat (dim=3)."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        shape = (1, 1, 64, 64)
+        shard_shape = (32, 32)
+        output_shard_shape = (32, 64)
+
+        input_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_mem = ttnn.create_sharded_memory_config(
+            output_shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        torch_a = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_b = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_out = torch.concat([torch_a, torch_b], dim=3)
+
+        ttnn_a = ttnn.to_memory_config(
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+        ttnn_b = ttnn.to_memory_config(
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+
+        ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
+        assert ttnn_out.is_sharded()
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        assert_equal(torch_out, ttnn_out)
+
+    @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["RM", "TILE"])
+    def test_block_sharded_height_concat(self, device, layout):
+        """2 block-sharded tensors, height concat (dim=2)."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        shape = (1, 1, 64, 64)
+        shard_shape = (32, 32)
+        output_shard_shape = (64, 32)
+
+        input_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_mem = ttnn.create_sharded_memory_config(
+            output_shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        torch_a = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_b = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_out = torch.concat([torch_a, torch_b], dim=2)
+
+        ttnn_a = ttnn.to_memory_config(
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+        ttnn_b = ttnn.to_memory_config(
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+
+        ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=2, memory_config=output_mem)
+        assert ttnn_out.is_sharded()
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        assert_equal(torch_out, ttnn_out)
+
+    def test_block_sharded_three_tensors_width_concat(self, device):
+        """3 block-sharded tensors, width concat."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        shape = (1, 1, 64, 64)
+        shard_shape = (32, 32)
+        output_shard_shape = (32, 96)
+
+        input_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_mem = ttnn.create_sharded_memory_config(
+            output_shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        torch_inputs = [random_torch_tensor(ttnn.bfloat16, shape) for _ in range(3)]
+        torch_out = torch.concat(torch_inputs, dim=3)
+
+        ttnn_inputs = [
+            ttnn.to_memory_config(
+                ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+            )
+            for t in torch_inputs
+        ]
+
+        ttnn_out = ttnn.concat(ttnn_inputs, dim=3, memory_config=output_mem)
+        assert ttnn_out.is_sharded()
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        assert_equal(torch_out, ttnn_out)
+
+    def test_block_sharded_three_tensors_height_concat(self, device):
+        """3 block-sharded tensors, height concat."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        shape = (1, 1, 64, 64)
+        shard_shape = (32, 32)
+        output_shard_shape = (96, 32)
+
+        input_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_mem = ttnn.create_sharded_memory_config(
+            output_shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        torch_inputs = [random_torch_tensor(ttnn.bfloat16, shape) for _ in range(3)]
+        torch_out = torch.concat(torch_inputs, dim=2)
+
+        ttnn_inputs = [
+            ttnn.to_memory_config(
+                ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+            )
+            for t in torch_inputs
+        ]
+
+        ttnn_out = ttnn.concat(ttnn_inputs, dim=2, memory_config=output_mem)
+        assert ttnn_out.is_sharded()
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        assert_equal(torch_out, ttnn_out)
+
+    @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1], ids=["DRAM", "L1"])
+    def test_block_sharded_s2i_width_concat(self, device, buffer_type):
+        """Block-sharded inputs → interleaved output, width concat."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        shape = (1, 1, 64, 64)
+        shard_shape = (32, 32)
+
+        input_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+
+        torch_a = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_b = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_out = torch.concat([torch_a, torch_b], dim=3)
+
+        ttnn_a = ttnn.to_memory_config(
+            ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+        ttnn_b = ttnn.to_memory_config(
+            ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+
+        ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
+        assert not ttnn_out.is_sharded()
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        assert_equal(torch_out, ttnn_out)
+
+    @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1], ids=["DRAM", "L1"])
+    def test_block_sharded_s2i_height_concat(self, device, buffer_type):
+        """Block-sharded inputs → interleaved output, height concat."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        shape = (1, 1, 64, 64)
+        shard_shape = (32, 32)
+
+        input_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+
+        torch_a = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_b = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_out = torch.concat([torch_a, torch_b], dim=2)
+
+        ttnn_a = ttnn.to_memory_config(
+            ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+        ttnn_b = ttnn.to_memory_config(
+            ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+
+        ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=2, memory_config=output_mem)
+        assert not ttnn_out.is_sharded()
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        assert_equal(torch_out, ttnn_out)
+
+
+# ===========================================================================
 # 6. Sharded-to-interleaved and interleaved-to-sharded concat
 # ===========================================================================
 
@@ -510,8 +725,8 @@ class TestShardedToInterleavedConcat:
         assert_equal(torch_out, ttnn_out)
 
     @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1], ids=["DRAM", "L1"])
-    def test_s2i_width_sharded_height_concat(self, device, buffer_type):
-        """Width-sharded inputs → interleaved output, height concat. Uses 3 tensors to avoid 2-tensor restriction."""
+    def test_s2i_width_sharded_height_concat_3_tensors(self, device, buffer_type):
+        """Width-sharded inputs → interleaved output, height concat, 3 tensors."""
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
         shapes = [(1, 1, 8, 64), (1, 1, 8, 64), (1, 1, 8, 64)]
         shard_shape = (8, 16)
@@ -533,6 +748,38 @@ class TestShardedToInterleavedConcat:
             ttnn_inputs.append(ttnn.to_memory_config(tt, mem))
 
         ttnn_out = ttnn.concat(ttnn_inputs, dim=2, memory_config=output_mem)
+        assert not ttnn_out.is_sharded()
+        ttnn_out = ttnn.to_torch(ttnn_out)
+        assert_equal(torch_out, ttnn_out)
+
+    @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1], ids=["DRAM", "L1"])
+    def test_s2i_width_sharded_height_concat_2_tensors(self, device, buffer_type):
+        """2 width-sharded inputs → interleaved output, height concat."""
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+        shape = (1, 1, 8, 64)
+        shard_shape = (8, 16)
+
+        output_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+
+        torch_a = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_b = random_torch_tensor(ttnn.bfloat16, shape)
+        torch_out = torch.concat([torch_a, torch_b], dim=2)
+
+        input_mem = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        ttnn_a = ttnn.to_memory_config(
+            ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+        ttnn_b = ttnn.to_memory_config(
+            ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), input_mem
+        )
+
+        ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=2, memory_config=output_mem)
         assert not ttnn_out.is_sharded()
         ttnn_out = ttnn.to_torch(ttnn_out)
         assert_equal(torch_out, ttnn_out)
