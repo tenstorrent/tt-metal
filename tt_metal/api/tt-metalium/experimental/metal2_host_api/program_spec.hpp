@@ -33,10 +33,11 @@ using WorkUnitSpecName = std::string;
 // ProgramSpec & WorkUnitSpec
 //------------------------------------------------
 
-// A WorkUnitSpec describes a unit of execution:
-// A set of kernels that run together on a shared set of nodes.
-// It is the sole source of kernel placement — each listed kernel is instantiated
-// once per node in target_nodes.
+// A WorkUnitSpec describes a set of kernels that run together on a set of nodes.
+// Each node in the WorkUnitSpec's target_nodes runs an identical set of kernel instances.
+//
+// Placement: The WorkUnitSpec defines the node placement of its kernels.
+// (A kernel may be included in multiple WorkUnitSpecs.)
 struct WorkUnitSpec {
     WorkUnitSpecName unique_id;
 
@@ -48,7 +49,7 @@ struct WorkUnitSpec {
 };
 
 // A ProgramSpec describes the immutable properties of a Program:
-// its kernels, DFBs, semaphores, and where they run.
+// its kernels, DFBs, semaphores, and where they all run.
 // Analogous to a function's signature and body — declared once, executed many times.
 // (Each time with a new ProgramRunParams configuring the mutable execution parameters.)
 struct ProgramSpec {

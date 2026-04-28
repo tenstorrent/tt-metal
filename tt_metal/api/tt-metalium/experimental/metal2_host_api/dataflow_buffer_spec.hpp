@@ -24,19 +24,27 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // Reusing a single constant helps catch typos and errors at compile time.
 using DFBSpecName = std::string;
 
+// DataflowBuffer endpoint access pattern:
+//  - STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
+//  - BLOCKED: each kernel thread accesses all N entries in a contiguous block
+//  - CONTIGUOUS: ???
 enum class DFBAccessPattern { STRIDED, BLOCKED, CONTIGUOUS };
 
-// A DataflowBufferSpec describes a "local" Dataflow Buffer (DFB):
-//  - Backing memory parameters
-//  - Entry format metadata (data format, tile layout)
-//  - Advanced options
+// A DataflowBufferSpec is a descriptor for a Dataflow Buffer (DFB):
+// A software FIFO for sharing data between a producer kernel and a consumer kernel.
 //
-// A DFB's endpoint info is specified at the DFB binding site in KernelSpec, not here.
+// A DFB has the following properties:
+//  - Entry size
+//  - Number of entries
+//  - (Optional) entry format metadata (data format, tile format)
+//  - (Additional advanced options)
+//
+// A DFB's endpoint configuration is specified at the DFB binding site in KernelSpec, not here.
 // (producer/consumer kernel identity, threads, and access patterns)
 //
 // Invariant: A local DFB has exactly one producer kernel and one consumer kernel.
 // Both must share identical WorkUnitSpec membership.
-// (For cross-node communication, use RemoteDataflowBufferSpec instead.)
+// (For cross-node communication, use RemoteDataflowBufferSpec.)
 //
 // Instancing: Like KernelSpec, a DataflowBufferSpec is a *per-node template*. One
 // independent DFB instance is allocated per node where its endpoint kernels run, in
