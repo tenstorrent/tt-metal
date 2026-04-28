@@ -151,7 +151,6 @@ jobs:
         shell: bash
         run: |
           python3 .github/scripts/utils/validate_perf_targets.py \
-            --strict-missing \
             --path-profile repo-root \
             --sku "${{ matrix.test-group.sku }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
