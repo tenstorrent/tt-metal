@@ -303,7 +303,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -326,7 +327,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        mesh_coords);
 }
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(

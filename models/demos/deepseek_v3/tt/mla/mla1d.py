@@ -1630,6 +1630,7 @@ class MLA1D(AbstractModule):
         qk_head_dim: int,
         v_head_dim: int,
         chunk_start_idx: int = 0,
+        mesh_coords: set | None = None,
     ) -> ttnn.Tensor:
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
         device = tt_q.device()
@@ -1674,6 +1675,14 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
 
+        # Replicate the heads-sharded tt_q across cluster_axis=1 so the device
+        # at the target mesh coord holds the full [1, num_heads, seq_len, qk_head_dim].
+        tt_q_full = ttnn.experimental.all_gather_async(
+            tt_q, **ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
+        )
+        ttnn.deallocate(tt_q)
+        tt_q = tt_q_full
+
         attn_out = ttnn.transformer.chunked_flash_mla_prefill(
             tt_q,
             kvpe_cache,
@@ -1684,8 +1693,35 @@ class MLA1D(AbstractModule):
             program_config=cfg["flash_mla"]["program_config"],
             compute_kernel_config=cfg["flash_mla"]["compute_kernel_config"],
             memory_config=cfg["flash_mla"]["memory_config"],
-        )  # [1, num_heads_local, seq_len, kv_lora_rank]
+            mesh_coords=mesh_coords,
+        )  # [1, num_heads, seq_len, kv_lora_rank], valid only on mesh_coords device
         ttnn.deallocate(tt_q)
+
+        # Per-coord scatter via host roundtrip: pull the full valid tensor from mesh_coords,
+        # then re-upload as a mesh tensor sharded on dim=1 across cluster_axis=1, so col c
+        # ends up with heads [c*num_heads_local, (c+1)*num_heads_local) — matching tt_q's
+        # original layout. cluster_axis=0 is replicated.
+        sender_coord = next(iter(mesh_coords))
+        attn_out_host = attn_out.cpu()
+        host_shards = ttnn.get_device_tensors(attn_out_host)
+        host_coords = attn_out_host.tensor_topology().mesh_coords()
+        sender_torch = None
+        for shard, coord in zip(host_shards, host_coords):
+            if (int(coord[0]), int(coord[1])) == (int(sender_coord[0]), int(sender_coord[1])):
+                sender_torch = ttnn.to_torch(shard)
+                break
+        assert sender_torch is not None, f"sender_coord {sender_coord} not found in mesh shards"
+
+        attn_out_sharded = ttnn.from_torch(
+            sender_torch,
+            dtype=attn_out.dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=cfg["flash_mla"]["memory_config"],
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 1), mesh_shape=tuple(device.shape)),
+        )
+        ttnn.deallocate(attn_out)
+        attn_out = attn_out_sharded
 
         wkv_b2_ag_prefill_runtime_args = ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
         num_heads_padded = pad_batch_to_dram_banks(num_heads)
@@ -1980,6 +2016,7 @@ class MLA1D(AbstractModule):
                     qk_head_dim,
                     v_head_dim,
                     chunk_start_idx=abs_chunk_start,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
                 )
                 ttnn.deallocate(user_page_table, force=False)
 

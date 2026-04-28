@@ -38,4 +38,24 @@ struct SDPAProgramFactory {
         Tensor& tensor_return_value);
 };
 
+// Selected when SDPAParams::mesh_coords is set. Builds a mesh workload that
+// only runs the SDPA program on the listed mesh coordinates; other coords are
+// left without a program and stay idle for this op.
+struct SDPAMeshWorkloadFactory {
+    using shared_variables_t = SDPASharedVariables;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const SDPAParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const SDPAInputs& tensor_args,
+        Tensor& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const SDPAParams& operation_attributes,
+        const SDPAInputs& tensor_args,
+        Tensor& tensor_return_value);
+};
+
 }  // namespace ttnn::prim

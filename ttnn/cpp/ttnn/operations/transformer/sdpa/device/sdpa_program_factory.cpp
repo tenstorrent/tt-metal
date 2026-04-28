@@ -10,9 +10,12 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/mesh_device_operation_utils.hpp"
 #include <optional>
+#include <set>
 #include <string>
 #include <cmath>
+#include <unordered_map>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -1484,6 +1487,59 @@ void SDPAProgramFactory::override_runtime_arguments(
 
         compute_args[8] = use_chunk_start_idx_tensor;
         compute_args[9] = chunked_q_chunk_offset;
+    }
+}
+
+SDPAMeshWorkloadFactory::cached_mesh_workload_t SDPAMeshWorkloadFactory::create_mesh_workload(
+    const SDPAParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const SDPAInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    TT_FATAL(
+        operation_attributes.mesh_coords.has_value(), "SDPAMeshWorkloadFactory selected without mesh_coords being set");
+    const auto& mesh_coords_set = operation_attributes.mesh_coords.value();
+
+    // Validate that every requested coordinate is covered by the tensor placement
+    // before we begin building per-coord programs.
+    const auto tensor_coords_vector = tensor_coords.coords();
+    std::set<ttnn::MeshCoordinate> tensor_coords_set(tensor_coords_vector.begin(), tensor_coords_vector.end());
+    for (const auto& mesh_coord : mesh_coords_set) {
+        TT_FATAL(
+            tensor_coords_set.contains(mesh_coord),
+            "Mesh coordinate ({}, {}) is in mesh_coords but not present in tensor_coords. "
+            "mesh_coords size: {}, tensor_coords size: {}",
+            mesh_coord[0],
+            mesh_coord[1],
+            mesh_coords_set.size(),
+            tensor_coords_set.size());
+    }
+
+    // Only emit a program at coordinates listed in mesh_coords; other coords stay
+    // idle for this op, so the caller controls exactly where SDPA runs.
+    for (const auto& mesh_coord : mesh_coords_set) {
+        const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
+        auto cached_program = SDPAProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
+        shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
+        mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void SDPAMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const SDPAParams& operation_attributes,
+    const SDPAInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    SDPAProgramFactory program_factory;
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
+        const ttnn::MeshCoordinate coord = *(coordinate_range.begin());
+        ttnn::device_operation::mesh_device_operation_utils::apply_override_runtime_arguments(
+            program_factory, program, shared_variables, operation_attributes, coord, tensor_args, tensor_return_value);
     }
 }
 

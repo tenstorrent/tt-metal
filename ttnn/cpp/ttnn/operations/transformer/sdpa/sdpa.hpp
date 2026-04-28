@@ -9,7 +9,10 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
+
+#include <set>
 
 namespace ttnn::transformer {
 
@@ -138,7 +141,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,

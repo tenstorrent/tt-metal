@@ -9,7 +9,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <optional>
+#include <set>
 #include <variant>
 #include <tt-metalium/constants.hpp>
 
@@ -20,7 +22,9 @@ struct SDPAOperation {
     using tensor_args_t = SDPAInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<SDPAProgramFactory>;
+    using program_factory_t = std::variant<SDPAProgramFactory, SDPAMeshWorkloadFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -49,6 +53,7 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
 
 }  // namespace ttnn::prim
