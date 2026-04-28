@@ -201,8 +201,13 @@ run_t3000_ttnn_tests() {
   # PhaseZFixture: FIX Z regression — relay-broken CQ fast-throw accessor check.
   # FixAvRelayBrokenSysmemGuardFixture: GAP-28 — FIX AV relay-broken guard in
   #   configure_command_queue_programs prevents hang on dead relay sysmem reset.
+  # ClusterTeardownHangRelayBrokenFixture: GAP-29 — FIX AW ~Cluster doesn't hang
+  #   in wait_for_non_mmio_flush after relay-broken quiesce (FIX AC PCIe reset).
+  # FixAyDeferredNonMmioResetFixture: GAP-31 — FIX AY deferred non-MMIO ERISC
+  #   reset after FIX AC restores MMIO relay; second MeshDevice::create() must
+  #   not hang on write_non_mmio with FABRIC-firmware non-MMIO ERISCs.
   timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*' ; record_test
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*' ; record_test
 
   # GAP regression tests — validate race condition / ETH hang fixes.
   # Each test is a direct regression for one or more numbered fixes.

@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|teardown:.*relay|canary|force.reset|NOT ready after|UMD ready after|marking dead)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|FIX AU|FIX AX|FIX AY|FIX AJ|FIX AK|teardown:.*relay|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -721,6 +721,18 @@ FIX_AS_PASS0=$(grep -cE 'Pass-0 \(FIX AS\)|Pass-0 \(FIX AR\+AS\) complete' "$CLE
 FIX_AS_TIMEOUT=$(grep -cE 'Pass-0.*NOT ready after|Pass-0.*did NOT reach.*UMD ready|Pass-0.*marking dead|canary not seen' "$CLEAN" 2>/dev/null || echo 0)
 # FIX AC: teardown MMIO ETH reset events
 FIX_AC_FIRES=$(grep -cE 'FIX AC' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AU: relay-broken non-MMIO channels bypassed poll loop (FIX AU #42429)
+FIX_AU_FIRES=$(grep -cE 'FIX AU|bypassed the poll loop.*relay-broken' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AX: relay-confirmed-dead non-MMIO channels skipped assert_risc_reset
+FIX_AX_FIRES=$(grep -cE 'FIX AX|relay confirmed dead.*skipping assert_risc_reset' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AJ: relay path confirmed dead during assert_risc_reset (marks relay_dead_devices)
+FIX_AJ_FIRES=$(grep -cE 'FIX AJ|relay path confirmed dead during force-reset' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AK (FabricFirmware): transitive relay guard — skipping l1_barrier for ALL non-MMIO
+FIX_AK_FIRES=$(grep -cE 'relay-dead device.*confirmed.*skipping l1_barrier.*FIX AK|FIX AK.*skipping l1_barrier' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AY: deferred non-MMIO ETH ERISC reset via restored MMIO relay
+FIX_AY_FIRES=$(grep -cE 'FIX AY' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AY_SUCCEEDED=$(grep -cE 'FIX AY.*all.*reset to base firmware|FIX AY.*succeeded' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AY_FAILED=$(grep -cE 'FIX AY.*failed|FIX AY.*non-std exception' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -789,6 +801,25 @@ if [ "${FIX_AS_TIMEOUT:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_AC_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AC] teardown ETH reset path fired (${FIX_AC_FIRES} event(s)) — MMIO ETH cores PCIe-reset at process teardown"
+fi
+if [ "${FIX_AU_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AU] relay-broken non-MMIO channels bypassed poll loop (${FIX_AU_FIRES} event(s)) — pre-populated relay_dead_devices skipped heartbeat"
+fi
+if [ "${FIX_AX_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AX] relay-confirmed-dead non-MMIO ETH: assert_risc_reset_at_core skipped (${FIX_AX_FIRES} event(s)) — ERISCs left in FABRIC fw; FIX AY should clean up next"
+fi
+if [ "${FIX_AJ_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AJ] relay path confirmed dead during force-reset pass (${FIX_AJ_FIRES} event(s)) — device added to relay_dead_devices set"
+fi
+if [ "${FIX_AK_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AK] transitive relay guard: l1_barrier skipped for ALL non-MMIO devices (${FIX_AK_FIRES} event(s)) — relay-dead device(s) present"
+fi
+if [ "${FIX_AY_FIRES:-0}" -gt 0 ]; then
+    if [ "${FIX_AY_FAILED:-0}" -eq 0 ]; then
+        echo "  => [FIX AY] deferred non-MMIO ERISC reset succeeded (${FIX_AY_FIRES} event(s), ${FIX_AY_SUCCEEDED} ERISCs reset) — next session should find base fw"
+    else
+        echo "  => [FIX AY] deferred non-MMIO ERISC reset PARTIAL (${FIX_AY_FIRES} event(s), ${FIX_AY_SUCCEEDED} ok / ${FIX_AY_FAILED} failed) — some ERISCs may retain FABRIC fw"
+    fi
 fi
 # FIX AV: sysmem_manager_->reset() skipped for relay-broken non-MMIO devices
 FIX_AV_SKIP=$(grep -cE 'running in degraded mode|configure_fabric.*degraded' "$CLEAN" 2>/dev/null || echo 0)

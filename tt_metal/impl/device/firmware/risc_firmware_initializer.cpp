@@ -378,6 +378,93 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             }
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channels rebooted; relay should be restored.");
 
+            // FIX AY (#42429): Deferred non-MMIO ETH ERISC reset via restored relay.
+            //
+            // Root cause of second-session hang (run 25040706453):
+            //   FIX AX skipped assert_risc_reset_at_core for non-MMIO channels whose
+            //   relay was dead (to avoid 5s-per-channel UMD timeout).  Those ERISCs
+            //   remained running FABRIC firmware after the first session ended.
+            //   When the next process started (unit_tests_ttnn), TopologyDiscovery::
+            //   discover_remote_devices() → init_tt_device hit the 5s timeout for each
+            //   non-MMIO device (FABRIC firmware ignores UMD relay reads).  After the
+            //   timeout, MetalContext initialization was partially complete / in a broken
+            //   state; subsequent tests that tried to open MeshDevice triggered
+            //   configure_fabric() → write_non_mmio → UMD relay queue fill →
+            //   while(full) spin → 15-min SIGALRM.
+            //
+            // Fix: Now that MMIO ETH relay is hardware-restored (FIX AC heartbeat poll
+            //   passed), attempt assert+deassert of each non-MMIO ETH ERISC that was
+            //   skipped by FIX AX.  The write goes: PCIe → MMIO relay ERISC (BASE fw) →
+            //   ETH → non-MMIO chip hardware reset register.  The non-MMIO ERISC does not
+            //   need to respond — the hardware reset fires regardless of its firmware state.
+            //
+            //   If assert_risc_reset_at_core still fails (UMD relay protocol state not
+            //   re-synced in the current process after MMIO ERISC PCIe reset), we log a
+            //   warning and continue.  FIX AC registered the channels in
+            //   force_reset_channels_ so the next session's verify_all_fabric_channels_
+            //   healthy() can distinguish "was force-reset" from "fresh crash".
+            if (get_control_plane_) {
+                log_info(
+                    tt::LogAlways,
+                    "teardown: FIX AY — attempting deferred ETH ERISC reset for {} "
+                    "relay-broken non-MMIO device(s) via restored MMIO relay.",
+                    relay_broken_non_mmio.size());
+                uint32_t ay_succeeded = 0;
+                uint32_t ay_failed = 0;
+                for (const tt::ChipId non_mmio_id : relay_broken_non_mmio) {
+                    for (const auto& eth_logical_core :
+                         this->get_control_plane_().get_active_ethernet_cores(non_mmio_id)) {
+                        CoreCoord eth_virt;
+                        try {
+                            eth_virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                non_mmio_id, eth_logical_core, CoreType::ETH);
+                        } catch (...) {
+                            ++ay_failed;
+                            continue;
+                        }
+                        try {
+                            cluster_.assert_risc_reset_at_core(
+                                tt_cxy_pair(non_mmio_id, eth_virt), tt::umd::RiscType::ALL);
+                            cluster_.deassert_risc_reset_at_core(
+                                tt_cxy_pair(non_mmio_id, eth_virt), tt::umd::RiscType::ALL);
+                            ++ay_succeeded;
+                        } catch (const std::exception& e) {
+                            log_warning(
+                                tt::LogAlways,
+                                "teardown: FIX AY — deferred reset of ETH {} on non-MMIO "
+                                "device {} failed (UMD relay not re-synced in current process): {}",
+                                eth_virt.str(),
+                                non_mmio_id,
+                                e.what());
+                            ++ay_failed;
+                        } catch (...) {
+                            log_warning(
+                                tt::LogAlways,
+                                "teardown: FIX AY — deferred reset of ETH {} on non-MMIO "
+                                "device {} threw non-std exception (UMD relay timeout).",
+                                eth_virt.str(),
+                                non_mmio_id);
+                            ++ay_failed;
+                        }
+                    }
+                }
+                if (ay_failed == 0) {
+                    log_info(
+                        tt::LogAlways,
+                        "teardown: FIX AY — all {} non-MMIO ETH ERISCs reset to base firmware "
+                        "via restored relay. Next session should not encounter FABRIC fw.",
+                        ay_succeeded);
+                } else {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AY — {}/{} non-MMIO ETH ERISCs reset successfully "
+                        "({} failed). Next session may encounter stale FABRIC fw on failed channels.",
+                        ay_succeeded,
+                        ay_succeeded + ay_failed,
+                        ay_failed);
+                }
+            }
+
             // FIX AW: Notify Cluster that these non-MMIO chips have stale UMD relay CMD
             // queue state (prefetch_q_in_flight may be non-zero after MMIO ERISC reset).
             // ~Cluster will run driver_->close_device() with a timeout rather than

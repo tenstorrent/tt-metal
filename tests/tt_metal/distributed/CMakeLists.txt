@@ -35,6 +35,8 @@ target_sources(
         test_gap11_relay_timeout_tolerance.cpp
         test_gap14_teardown_reopen_eth_ordering.cpp
         test_gap28_fixav_relay_broken_sysmem_guard.cpp
+        test_gap29_cluster_teardown_hang_relay_broken.cpp
+        test_gap31_fixay_deferred_nonmmio_reset.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
