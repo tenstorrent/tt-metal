@@ -713,8 +713,12 @@ class TTNNTurboQuantCache:
             pos_tt = current_pos
             _own_pos_tt = False
 
+        # When rotation is absorbed into W_v, V already comes pre-rotated from
+        # the QKV projection — skip the in-quantize Π matmul to avoid double-
+        # rotation (V @ Π @ Π). K is not absorbed (RoPE dependency), so it
+        # still needs the rotation step here.
         k_idx_bf16, k_norms_new = self.quantize(k_heads)
-        v_idx_bf16, v_norms_new = self.quantize(v_heads)
+        v_idx_bf16, v_norms_new = self.quantize(v_heads, skip_rotation=getattr(self, "rotation_absorbed", False))
 
         _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 
