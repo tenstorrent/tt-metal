@@ -34,6 +34,7 @@ target_sources(
         test_gap10_channels_not_ready_lifecycle.cpp
         test_gap11_relay_timeout_tolerance.cpp
         test_gap14_teardown_reopen_eth_ordering.cpp
+        test_gap28_fixav_relay_broken_sysmem_guard.cpp
         test_dispatch_context.cpp
         utils.cpp
 )

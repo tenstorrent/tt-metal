@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|teardown:.*relay|canary|force.reset)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AC|teardown:.*relay|canary|force.reset|NOT ready after|UMD ready after|marking dead)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -198,7 +198,9 @@ echo ""
 
 # ─── NEWLY DEAD CHANNELS ───
 echo "=== NEWLY DEAD CHANNELS ==="
-grep -E 'newly.dead|newly_dead|dead.*channel|channel.*dead|configure_fabric_cores.*newly.dead' "$CLEAN" 2>/dev/null | \
+# Also capture FIX AS Pass-0 "marking dead" messages (the log text uses "marking dead"
+# rather than "newly_dead", but the semantic meaning is identical)
+grep -E 'newly.dead|newly_dead|dead.*channel|channel.*dead|configure_fabric_cores.*newly.dead|marking dead.*skipping launch|Pass-0.*marking dead' "$CLEAN" 2>/dev/null | \
 grep -iE '(info|warning|error)' | \
 python3 -c "
 import sys, re, signal
@@ -714,7 +716,9 @@ RELAY_RESTORED=$(grep -c 'relay-broken flag reset by configure_fabric' "$CLEAN" 
 FIX_1_MMIO=$(grep -cE 'Setting fabric_relay_path_broken_=true|Phase 5.*timeout.*0x0.*MMIO|fabric_relay_path_broken_.*MMIO' "$CLEAN" 2>/dev/null || echo 0)
 # FIX AS: Pass-0 canary poll events (per-channel polling before write_launch_msg)
 FIX_AS_PASS0=$(grep -cE 'Pass-0 \(FIX AS\)|Pass-0 \(FIX AR\+AS\) complete' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AS_TIMEOUT=$(grep -cE 'Pass-0.*timed out|canary not seen|newly.dead.*FIX AS' "$CLEAN" 2>/dev/null || echo 0)
+# FIX_AS_TIMEOUT: actual log messages are "NOT ready after ... marking dead" and
+# "did NOT reach UMD ready after ... marking dead, skipping launch"
+FIX_AS_TIMEOUT=$(grep -cE 'Pass-0.*NOT ready after|Pass-0.*did NOT reach.*UMD ready|Pass-0.*marking dead|canary not seen' "$CLEAN" 2>/dev/null || echo 0)
 # FIX AC: teardown MMIO ETH reset events
 FIX_AC_FIRES=$(grep -cE 'FIX AC' "$CLEAN" 2>/dev/null || echo 0)
 
@@ -785,6 +789,11 @@ if [ "${FIX_AS_TIMEOUT:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_AC_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AC] teardown ETH reset path fired (${FIX_AC_FIRES} event(s)) — MMIO ETH cores PCIe-reset at process teardown"
+fi
+# FIX AV: sysmem_manager_->reset() skipped for relay-broken non-MMIO devices
+FIX_AV_SKIP=$(grep -cE 'running in degraded mode|configure_fabric.*degraded' "$CLEAN" 2>/dev/null || echo 0)
+if [ "${FIX_AV_SKIP:-0}" -gt 0 ]; then
+    echo "  => [FIX AV / DEGRADED] configure_fabric degraded mode fired (${FIX_AV_SKIP} event(s)) — pre-dead channels skipped; relay-broken sysmem reset guard may have applied"
 fi
 echo ""
 echo "========================================================================"

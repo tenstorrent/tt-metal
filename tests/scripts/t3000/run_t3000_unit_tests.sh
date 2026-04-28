@@ -199,8 +199,10 @@ run_t3000_ttnn_tests() {
   # QuiesceStressFixture: 5-cycle FABRIC_2D quiesce stress (Scenario AB).
   # PhaseWFixture: FIX W regression — all-dead MMIO clean-return invariant.
   # PhaseZFixture: FIX Z regression — relay-broken CQ fast-throw accessor check.
+  # FixAvRelayBrokenSysmemGuardFixture: GAP-28 — FIX AV relay-broken guard in
+  #   configure_command_queue_programs prevents hang on dead relay sysmem reset.
   timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*' ; record_test
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*' ; record_test
 
   # GAP regression tests — validate race condition / ETH hang fixes.
   # Each test is a direct regression for one or more numbered fixes.
