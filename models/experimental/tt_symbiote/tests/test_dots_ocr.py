@@ -28,7 +28,23 @@ MESH_DEVICE_MAP = {
     "BHGLX": (8, 4),
 }
 
-DOTS_OCR_LOCAL_PATH = "/home/salnahari/.cache/huggingface/hub/models--rednote-hilab--dots.ocr/snapshots/c0111ce6bc07803dbc267932ffef0ae3a51dc951"
+DOTS_OCR_MODEL_ID = "rednote-hilab/dots.ocr"
+
+
+def _resolve_model_path():
+    """Resolve dots.ocr model path: env var > HF cache > model ID for auto-download."""
+    env_path = os.environ.get("DOTS_OCR_MODEL_PATH")
+    if env_path and os.path.isdir(env_path):
+        return env_path
+    try:
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(DOTS_OCR_MODEL_ID)
+    except Exception:
+        return DOTS_OCR_MODEL_ID
+
+
+DOTS_OCR_LOCAL_PATH = _resolve_model_path()
 
 
 @pytest.mark.parametrize(
