@@ -5,7 +5,7 @@
 #include "op_slicing.hpp"
 #include <tuple>
 #include <ttnn/operations/core/core.hpp>
-#include <ttnn/operations/data_movement/untilize/untilize.hpp>
+// TODO(nuked-op untilize): header removed
 #include <ttnn/operations/functions.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
@@ -509,7 +509,8 @@ void run_sliced_op(
                     sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
             }
             if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
-                sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
+                // TODO(nuked-op untilize): restore real call
+                // (passthrough — no-op)
             }
             if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
                 // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.

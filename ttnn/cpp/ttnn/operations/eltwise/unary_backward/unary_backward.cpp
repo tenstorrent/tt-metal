@@ -13,8 +13,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+// TODO(nuked-op tilize_with_val_padding/untilize): headers removed
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -1679,8 +1678,9 @@ Tensor change_layout_to_tile(const Tensor& input_tensor, const MemoryConfig& /*o
     auto formatted_input_tensor = input_tensor;
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        formatted_input_tensor =
-            ttnn::tilize_with_val_padding(input_tensor, a_pad_shape, PadValue(1.0f), input_tensor.memory_config());
+        (void)a_pad_shape;
+        // TODO(nuked-op tilize_with_val_padding): restore real call
+        formatted_input_tensor = input_tensor;
     }
     return formatted_input_tensor;
 }
@@ -1792,7 +1792,7 @@ std::vector<Tensor> prod_bw(
         if (tensor_1.layout() == Layout::ROW_MAJOR) {
             // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
             bool pad_needed = tensor_2.padded_shape() != padded_shape;
-            tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+            // TODO(nuked-op untilize): restore real call
             if (pad_needed) {
                 tensor_2 = ttnn::pad(
                     tensor_2,
@@ -1841,7 +1841,7 @@ std::vector<Tensor> prod_bw(
     if (tensor_1.layout() == Layout::ROW_MAJOR) {
         // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
         bool pad_needed = tensor_2.padded_shape() != padded_shape;
-        tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+        // TODO(nuked-op untilize): restore real call
         if (pad_needed) {
             tensor_2 = ttnn::pad(
                 tensor_2,

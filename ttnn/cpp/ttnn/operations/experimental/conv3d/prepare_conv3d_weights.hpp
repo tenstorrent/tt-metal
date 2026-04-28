@@ -9,7 +9,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+// TODO(nuked-op tilize_with_val_padding): header removed
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <vector>

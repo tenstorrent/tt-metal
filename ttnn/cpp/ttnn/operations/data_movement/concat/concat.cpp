@@ -10,14 +10,11 @@
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
+// TODO(nuked-op tilize/untilize/tilize_with_val_padding/untilize_with_unpadding): headers removed
 
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
@@ -117,15 +114,17 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     ttnn::SmallVector<uint32_t> ends(
                         input_tensor.logical_shape().cbegin(), input_tensor.logical_shape().cend());
                     std::transform(ends.begin(), ends.end(), ends.begin(), [](const auto l) { return l - 1; });
-                    return ttnn::untilize_with_unpadding(input_tensor, ttnn::Shape(ends), std::nullopt);
+                    // TODO(nuked-op untilize_with_unpadding): restore real call
+                    (void)ends;
+                    return input_tensor;
                 });
             return std::make_tuple(itensors, dim, groups);
         },
         .post_transform = [&logical_output_shape](const ttnn::Tensor& output) -> ttnn::Tensor {
             // now we have a rm tensor, so we need to re-tilize it
             if (output.layout() != ttnn::TILE_LAYOUT) {
-                return ttnn::tilize_with_val_padding(
-                    output, compute_padded_shape(output.padded_shape()), 0.0f, output.memory_config());
+                // TODO(nuked-op tilize_with_val_padding): restore real call
+                return output;
             }
             concat_db_print(true, "[DEBUG] already tilized");
             return output;

@@ -64,7 +64,6 @@
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
-#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
@@ -163,7 +162,6 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_extract(mod);
     deepseek_prefill::detail::bind_insert(mod);
 
-    deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
     fusion::detail::bind_fusion_dispatch_op(mod);
 }
 

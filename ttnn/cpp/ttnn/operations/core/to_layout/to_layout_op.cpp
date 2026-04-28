@@ -9,10 +9,7 @@
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
+// TODO(nuked-op tilize/untilize): headers removed
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -98,7 +95,8 @@ Tensor to_layout_impl(
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-                return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
+                // TODO(nuked-op untilize): restore real call
+                return tensor;
             }
             if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
@@ -112,13 +110,8 @@ Tensor to_layout_impl(
                             "TILE_SIZE!");
                     }
                 }
-                return ttnn::tilize(
-                    tensor,
-                    output_memory_config,
-                    dtype,
-                    use_multicore_tilize,
-                    false /* low perf mode */,
-                    sub_core_grids);
+                // TODO(nuked-op tilize): restore real call
+                return tensor;
             }
             throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
         }
@@ -136,8 +129,9 @@ Tensor to_layout_impl(
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
-            tensor = ttnn::untilize_with_unpadding(
-                tensor, output_tensor_end, output_memory_config, use_multicore_untilize, sub_core_grids);
+            // TODO(nuked-op untilize_with_unpadding): restore real call
+            (void)output_tensor_end;
+            (void)use_multicore_untilize;
             return ttnn::reshape(
                 tensor,
                 ttnn::Shape{output_shape},
@@ -157,7 +151,8 @@ Tensor to_layout_impl(
                     {0, padded_output_shape[3] - output_shape[3]}};
                 TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
                 tensor = ttnn::pad(tensor, padding, pad_value, true, std::nullopt);
-                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+                // TODO(nuked-op tilize): restore real call
+                return tensor;
             } else {
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
@@ -177,14 +172,9 @@ Tensor to_layout_impl(
                         "Pad value must be in the range of UINT32 type");
                     pad_value_variant = (uint32_t)pad_value;
                 }
-                tensor = ttnn::tilize_with_val_padding(
-                    tensor,
-                    Shape(padded_output_shape),
-                    pad_value_variant,
-                    output_memory_config,
-                    dtype,
-                    use_multicore_tilize,
-                    sub_core_grids);
+                // TODO(nuked-op tilize_with_val_padding): restore real call
+                (void)pad_value_variant;
+                (void)use_multicore_tilize;
             }
             if (original_rank == 1) {
                 return ttnn::reshape(

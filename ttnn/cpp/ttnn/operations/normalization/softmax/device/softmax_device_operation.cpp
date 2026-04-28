@@ -12,7 +12,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+// TODO(nuked-op tilize_with_val_padding): header removed
 
 using namespace tt::tt_metal;
 
@@ -457,13 +457,10 @@ Tensor softmax(
         // Input tensor formatting
         const ttnn::Shape input_pad_shape =
             ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_4D.padded_shape());
+        (void)input_pad_shape;
         auto formatted_input_tensor = input_tensor_4D;
         if (formatted_input_tensor.layout() != Layout::TILE) {
-            formatted_input_tensor = ttnn::tilize_with_val_padding(
-                input_tensor_4D,
-                input_pad_shape,
-                -std::numeric_limits<float>::infinity(),
-                input_tensor_4D.memory_config());
+            // TODO(nuked-op tilize_with_val_padding): restore real call
         }
 
         // Attention optimized softmax
@@ -512,10 +509,10 @@ Tensor scale_mask_softmax(
 
     // Input tensor formatting
     const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    (void)input_pad_shape;
     auto formatted_input_tensor = input_tensor;
     if (formatted_input_tensor.layout() != Layout::TILE) {
-        formatted_input_tensor = ttnn::tilize_with_val_padding(
-            input_tensor, input_pad_shape, -std::numeric_limits<float>::infinity(), input_tensor.memory_config());
+        // TODO(nuked-op tilize_with_val_padding): restore real call
     }
     const auto rank = formatted_input_tensor.logical_shape().size();
     const auto dim = rank - 1;
@@ -545,10 +542,10 @@ Tensor scale_mask_softmax(
         }
         const ttnn::Shape mask_pad_shape =
             ttnn::operations::data_movement::pad_to_tile_shape(mask.value().padded_shape());
+        (void)mask_pad_shape;
         auto formatted_mask = mask.value();
         if (formatted_mask.layout() != Layout::TILE) {
-            formatted_mask = ttnn::tilize_with_val_padding(
-                formatted_mask, mask_pad_shape, -std::numeric_limits<float>::infinity(), mask.value().memory_config());
+            // TODO(nuked-op tilize_with_val_padding): restore real call
         }
 
         // Operation

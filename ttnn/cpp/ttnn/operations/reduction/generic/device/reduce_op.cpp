@@ -10,7 +10,7 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+// TODO(nuked-op tilize_with_val_padding): header removed
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace reduce_op_utils {
@@ -52,14 +52,8 @@ Tensor reduce_min(
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
         // Changing layout to TILE with +inf padding
         auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
-        input = ttnn::tilize_with_val_padding(
-            input,
-            pad_shape,
-            std::numeric_limits<float>::infinity(),
-            output_mem_config,
-            std::nullopt,
-            true,
-            sub_core_grids);
+        (void)pad_shape;
+        // TODO(nuked-op tilize_with_val_padding): restore real call
     }
     return detail::reduce(
         input,
@@ -110,8 +104,10 @@ Tensor reduce(
 
     // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-    auto tilized_input = ttnn::tilize_with_val_padding(
-        input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+    (void)padded_shape;
+    (void)pad_value;
+    // TODO(nuked-op tilize_with_val_padding): restore real call
+    auto tilized_input = input_tensor;
 
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
     // scaler twice internally (once per dimension).  The host compensates with

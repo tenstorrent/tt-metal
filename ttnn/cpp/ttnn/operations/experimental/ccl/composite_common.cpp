@@ -7,8 +7,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
+// TODO(nuked-op tilize_with_val_padding/untilize_with_unpadding): headers removed
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace composite_common {
@@ -115,10 +114,8 @@ ttnn::Tensor composite_reduce_scatter(
     std::vector<ttnn::Tensor> split_tensors =
         ttnn::split(input_tensor, output_shape[scatter_dim], scatter_dim, input_tensor.memory_config());
     if (is_row_major) {
-        for (uint32_t i = 0; i < num_devices; ++i) {
-            split_tensors[i] =
-                ttnn::tilize_with_zero_padding(split_tensors[i], split_tensors[i].memory_config(), std::nullopt, true);
-        }
+        // TODO(nuked-op tilize_with_zero_padding): restore real call
+        // (passthrough — no-op)
     }
 
     // insert the internal padding (only pad on the dim we're scattering on)
@@ -160,8 +157,10 @@ ttnn::Tensor composite_reduce_scatter(
             ends[i] = output_shape[i] - 1;
         }
 
-        rs_output_tensor =
-            ttnn::untilize_with_unpadding(padded_native_rs_output_tensor, ends, native_rs_output_memory_config);
+        // TODO(nuked-op untilize_with_unpadding): restore real call
+        (void)ends;
+        (void)native_rs_output_memory_config;
+        rs_output_tensor = padded_native_rs_output_tensor;
     } else {
         const ttnn::SmallVector<int32_t> steps(output_shape.rank(), 1);
         ttnn::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
