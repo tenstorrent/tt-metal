@@ -115,7 +115,7 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
 
     num_faces = 4
 
-    # fill_const_value=5.0 matches the FILL_CONST_BITS = 0x40A00000 in the test C++
+    # FILL_CONST_VALUE must match FILL_CONST = 5.0f in sfpu_fill_quasar_test.cpp
     FILL_CONST_VALUE = 5.0
 
     generate_golden = get_golden_generator(UnarySFPUGolden)

@@ -27,8 +27,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    // is_fp32_dest_acc_en is true for Int32 (32-bit dest) and false for UInt16
-    // (16-bit dest), which maps exactly to EN_INT32_MATH_FORMAT for these two formats.
+    // is_fp32_dest_acc_en mirrors EN_INT32_MATH_FORMAT: true for Int32 (32-bit dest),
+    // false for 16/8-bit integer formats (Int16, Int8, UInt8).
     _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*EN_FP32_MATH_FORMAT*/, is_fp32_dest_acc_en /*EN_INT32_MATH_FORMAT*/>();
 
     buffer_descriptor_u bd_val = {0};

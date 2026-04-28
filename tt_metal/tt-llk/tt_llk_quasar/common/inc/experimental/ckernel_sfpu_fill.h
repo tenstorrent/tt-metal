@@ -62,8 +62,9 @@ inline void _calculate_fill_int_(const std::uint32_t value)
     }
 }
 
-// Broadcast a bit-pattern constant to all elements of Dest.
-// value: Raw bit-pattern to write, not reinterpreted as float.
+// Broadcast a 32-bit bit-pattern to all elements of Dest verbatim.
+// value: Raw bits written as-is; the float bit-cast below is just a delegation
+// detail — the same bits are reassembled and stored via SFPSTORE(sfpmem::DEFAULT).
 template <int ITERATIONS>
 inline void _calculate_fill_bitcast_(const std::uint32_t value)
 {

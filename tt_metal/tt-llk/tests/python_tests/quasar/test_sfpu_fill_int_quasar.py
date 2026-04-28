@@ -65,7 +65,7 @@ def test_sfpu_fill_int_quasar(input_dimensions, formats):
     Stimuli content is irrelevant — fill ignores inputs — but typed stimuli
     are still generated so the unpack path sees a valid buffer.
     """
-    # Int32 is 32-bit → dest_acc Yes; Int16/Int8/UInt8 are 16-bit → dest_acc No.
+    # Int32 is 32-bit → dest_acc Yes; Int16 (16-bit) and Int8/UInt8 (8-bit) → dest_acc No.
     dest_acc = (
         DestAccumulation.Yes
         if formats.output_format.is_32_bit()
