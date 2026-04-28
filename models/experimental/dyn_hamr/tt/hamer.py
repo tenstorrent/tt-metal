@@ -119,12 +119,7 @@ class TtHamer:
         self.device: Optional[Any] = None
         self.peak_dram_bytes = 0
         self._vit_params: Optional[dict] = None
-        # Per-input cache: data_ptr + shape + version → on-device patch tokens.
-        # The benchmark loop repeats the same image many times, so caching the
-        # already-projected/uploaded tokens skips a CPU Conv2d + ~MB transfer
-        # on every call after the first.
-        self._patch_cache: dict = {}
-        # Trace replay state: (trace_id, cached_input_tt, dec_output_tt).
+        # Trace replay state: (trace_id, dec_output_tt).
         # Captured lazily on the first repeat call so the warmup forward JITs
         # all kernels first (trace can't capture compilation).  Subsequent
         # forwards execute the captured trace, eliminating per-op Python
@@ -152,7 +147,7 @@ class TtHamer:
             self.device = ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(1, 1),
                 physical_device_ids=[self.device_id],
-                trace_region_size=200 * 1024 * 1024,  # 200 MiB scratch for the trace
+                trace_region_size=400 * 1024 * 1024,  # 400 MiB scratch for full e2e trace
             )
             self._is_mesh = True
         except Exception as e:
@@ -181,6 +176,13 @@ class TtHamer:
                 torch.zeros(1, 1, 1, dtype=torch.bfloat16),
                 device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
             )
+            # Pre-allocated mutable buffer for patch tokens — the CPU writes new
+            # patch embeddings here each call via copy_host_to_device_tensor, then
+            # the trace replay reads from the same device address.
+            self._tt_tokens_buf = ttnn.from_torch(
+                torch.zeros(1, 192, 1280, dtype=torch.bfloat16),
+                device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+            )
             # Cache MANO init params (host-side, used to add back final regressions).
             self._init_pose = self.ref.head.init_hand_pose.detach().clone()
             self._init_betas = self.ref.head.init_betas.detach().clone()
@@ -194,11 +196,10 @@ class TtHamer:
             self._head_params = None
 
     def _forward_device(self, image: torch.Tensor) -> Optional[torch.Tensor]:
-        """NPU forward: ViT on device, MANO head on CPU (head port is still
-        code-only).  Returns ``None`` if the device path isn't available.
-        """
-        ptr = image.data_ptr()  # needed for patch_cache + tt-nn uploads
+        """Full e2e NPU forward: patch_embed on CPU → copy to device → ViT+MANO trace.
 
+        Returns ``None`` if the device path isn't available.
+        """
         if self.device is None or self._vit_params is None:
             return None
         try:
@@ -206,41 +207,36 @@ class TtHamer:
             from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_mano_head  # noqa: WPS433
 
-            cache_key = (ptr, tuple(image.shape))
-            tt_tokens = self._patch_cache.get(cache_key)
-            if tt_tokens is None:
-                with torch.no_grad():
-                    pe_torch, (_Hp, _Wp) = self.ref.backbone.patch_embed(image)
-                tt_tokens = ttnn.from_torch(
-                    pe_torch.to(torch.bfloat16).contiguous(),
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                )
-                if len(self._patch_cache) >= 4:
-                    self._patch_cache.clear()
-                self._patch_cache[cache_key] = tt_tokens
-                # New input — invalidate any captured trace bound to a
-                # different cached token tensor.
-                self._trace = None
-
             B = image.shape[0]
-            # Trace replay: skips Python dispatch overhead for the entire
-            # ViT + MANO chain.  Captured lazily on the second hit so warmup
-            # JITs all kernels first.
+
+            # Patch embedding stays on CPU (asymmetric Conv2d with pad=2 doesn't
+            # decompose cleanly on device).  We copy the resulting (1, 192, 1280)
+            # tile into the pre-allocated device buffer so the trace replay always
+            # reads from the same device address.
+            with torch.no_grad():
+                pe_torch, (_Hp, _Wp) = self.ref.backbone.patch_embed(image)
+            host_tile = ttnn.from_torch(
+                pe_torch.to(torch.bfloat16).contiguous(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+            ttnn.copy_host_to_device_tensor(host_tile, self._tt_tokens_buf)
+
+            # Capture full ViT+MANO trace lazily after the first (warmup) eager
+            # forward so all kernels are already compiled.
             if (
                 self._trace is None
                 and getattr(self, "_is_mesh", False)
                 and getattr(self, "_warmup_done", False)
             ):
-                self._capture_trace(tt_tokens)
+                self._capture_trace()
 
-            if self._trace is not None and self._trace[1] is tt_tokens:
-                trace_id, _, dec_buffer = self._trace
+            if self._trace is not None:
+                trace_id, dec_buffer = self._trace
                 ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
                 dec_h = ttnn.to_torch(dec_buffer).to(torch.float32).reshape(B, -1)
             else:
-                tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)
+                tt_feat = ttnn_vit.forward(self._tt_tokens_buf, self._vit_params)
                 dec = ttnn_mano_head.forward_device(
                     tt_feat, self._head_params, device=self.device, cached_token=(self._head_token,),
                 )
@@ -260,33 +256,27 @@ class TtHamer:
             self._trace = None
             return None
 
-    def _capture_trace(self, tt_tokens) -> None:
-        """Capture MANO-only trace with pre-computed ViT output + CA KV.
+    def _capture_trace(self) -> None:
+        """Capture full e2e ViT+MANO trace on the pre-allocated token buffer.
 
-        For same-image repeated inference the ViT output is constant.  We run
-        ViT once eagerly here, precompute all 6 CA KV head tensors, then
-        capture only the MANO decoder in the trace — eliminating 354 ViT ops
-        + 30 CA KV ops from every replay.  self._kv_cache keeps the tensors
-        alive; self._trace = None on a new image invalidates and retriggers.
+        The trace reads from ``self._tt_tokens_buf`` which is updated in-place
+        by ``copy_host_to_device_tensor`` before each replay — so the same
+        captured trace works for any input image.
         """
         try:
             import ttnn  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_mano_head  # noqa: WPS433
 
-            tt_feat_warm = ttnn_vit.forward(tt_tokens, self._vit_params)
-            self._kv_cache = ttnn_mano_head.precompute_ca_kv(
-                tt_feat_warm, self._head_params, self.device,
-            )
-
             trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            tt_feat = ttnn_vit.forward(self._tt_tokens_buf, self._vit_params)
             dec_buffer = ttnn_mano_head.forward_device(
-                None, self._head_params, device=self.device,
-                cached_token=(self._head_token,), kv_cache=self._kv_cache,
+                tt_feat, self._head_params, device=self.device,
+                cached_token=(self._head_token,),
             )
             ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
-            self._trace = (trace_id, tt_tokens, dec_buffer)
-            print("[dyn_hamr] MANO-only trace captured (ViT+KV cached)")
+            self._trace = (trace_id, dec_buffer)
+            print("[dyn_hamr] full e2e ViT+MANO trace captured")
         except Exception as e:
             print(f"[dyn_hamr] trace capture failed: {e}; sticking with eager path")
             self._trace = None
