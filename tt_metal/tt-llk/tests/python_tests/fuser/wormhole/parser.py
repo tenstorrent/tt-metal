@@ -248,11 +248,6 @@ class FpuMathSchema(BaseModel):
                     "SrcA transpose is not supported with scalar broadcast"
                 )
 
-            if self.unpack_transpose_within_face != self.unpack_transpose_faces:
-                raise ValueError(
-                    "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
-                )
-
         # LLK contract: eltwise add/sub only support LoFi fidelity.
         if (
             self.operation in [FpuOperationEnum.Elwadd, FpuOperationEnum.Elwsub]
