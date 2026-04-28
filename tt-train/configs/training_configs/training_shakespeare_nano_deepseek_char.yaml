@@ -1,23 +1,22 @@
 training_config:
-  project_name: "tt_train_tinyllama_bpe"
+  project_name: "tt_train_nano_deepseek"
   seed: 5489
   model_save_interval: 500
-  batch_size: 5
+  batch_size: 32
   num_epochs: 1
-  max_steps: 1000
-  use_clip_grad_norm: false
+  max_steps: 5000
+  use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
-  data_path: "data/tokenized_shakespeare_tinyllama.yaml"
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
+  data_path: "data/shakespeare.txt"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/nano_deepseek_char.yaml"
   optimizer:
-    type: AdamW
+    type: AdamWFullPrecision
     lr: 0.0003
     beta1: 0.9
     beta2: 0.999
     epsilon: 1.0e-8
     weight_decay: 0.01
     amsgrad: false
-    stochastic_rounding: false
 
 device_config:
   enable_ddp: false

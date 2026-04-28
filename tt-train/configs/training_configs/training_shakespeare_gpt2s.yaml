@@ -1,14 +1,15 @@
+
 training_config:
-  project_name: "tt_train_tinyllama_bpe"
+  project_name: "tt_train_nano_gpt"
+  #model_path: "data/gpt2s_exported"
   seed: 5489
   model_save_interval: 500
-  batch_size: 5
+  batch_size: 4
   num_epochs: 1
-  max_steps: 1000
-  use_clip_grad_norm: false
-  clip_grad_norm_max_norm: 1.0
-  data_path: "data/tokenized_shakespeare_tinyllama.yaml"
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
+  max_steps: 5000
+  gradient_accumulation_steps: 1
+  data_path: "data/tokenized_shakespeare.csv"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/gpt2s.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003
