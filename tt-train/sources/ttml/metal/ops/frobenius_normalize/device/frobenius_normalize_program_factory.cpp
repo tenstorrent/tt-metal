@@ -149,14 +149,15 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
 
     auto writer_kernel = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
-    std::vector<UnpackToDestMode> unpack_to_dest(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest[kCbInput] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest[kCbSqAcc] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest[kCbRecv] = UnpackToDestMode::UnpackToDestFp32;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    unpack_to_dest[kCbInput] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest[kCbSqAcc] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest[kCbRecv] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
 
     auto make_compute_config = [&](const std::vector<uint32_t>& args, const std::map<std::string, std::string>& defs) {
         return tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_to_dest,
             .math_approx_mode = false,
