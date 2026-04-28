@@ -152,7 +152,6 @@ target_sources(
             gather/gather_nanobind.hpp
             gather/device/gather_device_operation.hpp
             gather/device/gather_device_operation_types.hpp
-            gather/device/gather_program_factory.hpp
             gather/tosa/gather_tosa.hpp
             gather/tosa/gather_tosa_nanobind.hpp
             # indexed_fill/
