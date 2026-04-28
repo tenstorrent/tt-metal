@@ -8,7 +8,7 @@ Compute-kernel and activation-memory policy for the BGE-M3 encoder on TTNN.
   Blackhole and Wormhole (Wormhole previously used HiFi2, which drifts on long sequence).
 - **LayerNorm:** HiFi4 + FP32 on all archs (aligned with ttnn layer_norm in Metal).
 - **Activations:** ``bge_m3_linear_activation_memory_config`` (and MLP ``Wi`` via
-  ``bge_m3_mlp_wi_output_memory_config`` on Wormhole) pick L1 vs DRAM from ``max_seq_len`` and
+  ``bge_m3_mlp_wi_output_memory_config`` for tuned exact-shape paths) pick L1 vs DRAM from ``max_seq_len`` and
   ``max_batch_size * max_seq_len``. Do not use mixed L1/DRAM envelopes across matmul, SDPA, LayerNorm, MLP,
   and attention WO, or Wormhole can OOM or fail circular-buffer validation. MLP fuses GELU with
   ``ttnn.linear(..., activation="gelu")`` on Wi.
@@ -107,7 +107,11 @@ def bge_m3_mlp_wi_output_memory_config(
     max_batch_size: int | None,
     mesh_device: ttnn.MeshDevice | None,
 ) -> ttnn.MemoryConfig:
-    """Output memory for MLP ``Wi`` (fused GELU). Uses DRAM when matmul envelope does, or WH mid-seq L1 clash band."""
+    """Output memory for MLP ``Wi`` (fused GELU), with exact-shape overrides from isolated layout sweeps."""
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return ttnn.L1_MEMORY_CONFIG
+
     base = bge_m3_linear_activation_memory_config(max_seq_len, max_batch_size)
     if base == ttnn.DRAM_MEMORY_CONFIG:
         return base
@@ -189,9 +193,24 @@ def bge_m3_mlp_wi_compute_kernel_config(
 
     B1/S512 is an isolated performance sweep: ``Wi`` is the repeated slow BFP8 x BFP8 matmul, so test LoFi
     there while keeping FP32 destination accumulation and leaving attention/``Wo`` matmuls on the default policy.
+
+    B32/S512 is also isolated: after HiFi2 improves the repeated slow MLP ``Wi`` matmul family, test LoFi
+    only there while preserving FP32 destination accumulation and the DRAM-interleaved envelope.
     """
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
     if max_seq_len == 512 and max_batch == 1:
+        packer_l1_acc = True
+        if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
+            if _wormhole_use_fast_packer_offload(max_seq_len, max_batch):
+                packer_l1_acc = False
+        return ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=packer_l1_acc,
+        )
+    if max_seq_len == 512 and max_batch == 32:
         packer_l1_acc = True
         if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
             if _wormhole_use_fast_packer_offload(max_seq_len, max_batch):
@@ -217,8 +236,8 @@ def bge_m3_mlp_wo_compute_kernel_config(
 ) -> ttnn.WormholeComputeKernelConfig:
     """MLP ``Wo`` matmul compute config.
 
-    B1/S512 sweep matching ``Wi``: test HiFi2 only on the MLP output projection while preserving FP32
-    destination accumulation.
+    B1/S512 sweep matching ``Wi``: test LoFi on the MLP output projection while preserving FP32
+    destination accumulation. B32/S512 follows after the ``Wi`` LoFi win and isolates MLP ``Wo`` LoFi.
     """
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
     if max_seq_len == 512 and max_batch == 1:
@@ -228,7 +247,19 @@ def bge_m3_mlp_wo_compute_kernel_config(
                 packer_l1_acc = False
         return ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=packer_l1_acc,
+        )
+    if max_seq_len == 512 and max_batch == 32:
+        packer_l1_acc = True
+        if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
+            if _wormhole_use_fast_packer_offload(max_seq_len, max_batch):
+                packer_l1_acc = False
+        return ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=packer_l1_acc,
@@ -248,9 +279,22 @@ def bge_m3_attention_output_compute_kernel_config(
     """Attention output projection compute config.
 
     B1/S512 sweep: test HiFi2 on the BFP8 x BFP8 attention ``Wo`` matmul only.
+    B32/S512 follows after MLP and QKV LoFi wins, isolating the attention output projection.
     """
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
     if max_seq_len == 512 and max_batch == 1:
+        packer_l1_acc = True
+        if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
+            if _wormhole_use_fast_packer_offload(max_seq_len, max_batch):
+                packer_l1_acc = False
+        return ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=packer_l1_acc,
+        )
+    if max_seq_len == 512 and max_batch == 32:
         packer_l1_acc = True
         if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
             if _wormhole_use_fast_packer_offload(max_seq_len, max_batch):
@@ -277,6 +321,7 @@ def bge_m3_attention_qkv_compute_kernel_config(
     """Attention QKV projection compute config.
 
     B1/S512 sweep: test HiFi2 on QKV only after attention/MLP output projections have passed PCC.
+    B32/S512 follows after the MLP ``Wi``/``Wo`` LoFi wins and targets only the QKV projection family.
     """
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
     if max_seq_len == 512 and max_batch == 1:
@@ -287,6 +332,18 @@ def bge_m3_attention_qkv_compute_kernel_config(
         return ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=packer_l1_acc,
+        )
+    if max_seq_len == 512 and max_batch == 32:
+        packer_l1_acc = True
+        if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
+            if _wormhole_use_fast_packer_offload(max_seq_len, max_batch):
+                packer_l1_acc = False
+        return ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=packer_l1_acc,
