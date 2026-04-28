@@ -254,6 +254,13 @@ run_t3000_ttnn_tests() {
   #   clean up ERISCs. Second open in this test must complete < 15s.
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
 
+  # GAP-38: AllGather correctness after FIX BA teardown chain (FIX BA + FIX AC + FIX AY).
+  # GAP-37 verifies the second open is FAST. GAP-38 verifies the second session AllGather
+  # produces numerically correct output (PCC >= 0.9999). These are orthogonal: a regression
+  # where FIX BA cleans up timing but leaves stale EDM routing tables would pass GAP-37 but
+  # fail GAP-38 (wrong AllGather output or hang).
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
