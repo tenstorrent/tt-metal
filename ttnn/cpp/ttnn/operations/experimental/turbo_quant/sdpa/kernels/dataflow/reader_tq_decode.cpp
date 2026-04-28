@@ -51,6 +51,11 @@ void kernel_main() {
     const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_nh_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
+    // Tier 2A Phase 2.3 — chunk-slice routing args (must match compute kernel's
+    // [7] and [8] slot semantics). Currently the program factory sends (0, 1)
+    // so this reader reads the full [0, valid_k_chunks) range as before.
+    const uint32_t core_idx_in_group_arg = get_arg_val<uint32_t>(argidx++);
+    const uint32_t cores_per_head_arg = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     // When pre_rescaled: push KV directly to sdpa's native CBs (c_1/c_2).
@@ -124,7 +129,17 @@ void kernel_main() {
             const uint32_t valid_k_chunks_raw = (cur_pos_nb + k_chunk_size_tokens) / k_chunk_size_tokens;
             const uint32_t valid_k_chunks = valid_k_chunks_raw < k_num_chunks ? valid_k_chunks_raw : k_num_chunks;
 
-            for (uint32_t k_chunk = 0; k_chunk < valid_k_chunks; ++k_chunk) {
+            // Tier 2A Phase 2.3: each core in a (B, NQH) group reads only its
+            // chunk slice. Bounds derive from the same args the compute kernel
+            // uses (slots [7] / [8]). With cores_per_head_arg = 1 the slice is
+            // [0, valid_k_chunks) — same as before.
+            const uint32_t chunks_per_worker_r = (valid_k_chunks + cores_per_head_arg - 1) / cores_per_head_arg;
+            const uint32_t k_chunk_start_r = core_idx_in_group_arg * chunks_per_worker_r;
+            const uint32_t k_chunk_end_r = (k_chunk_start_r + chunks_per_worker_r < valid_k_chunks)
+                                               ? k_chunk_start_r + chunks_per_worker_r
+                                               : valid_k_chunks;
+
+            for (uint32_t k_chunk = k_chunk_start_r; k_chunk < k_chunk_end_r; ++k_chunk) {
                 const uint32_t chunk_start_row = k_chunk * Sk_chunk_t;
                 const uint32_t chunk_end_row =
                     (chunk_start_row + Sk_chunk_t < Skt) ? chunk_start_row + Sk_chunk_t : Skt;

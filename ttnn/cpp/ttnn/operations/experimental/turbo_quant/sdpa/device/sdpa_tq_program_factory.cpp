@@ -496,6 +496,8 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 batch_end,
                 head_start,
                 head_end,
+                kernel_core_idx_in_group,  // Tier 2A: chunk-slice routing (mirrors compute kernel slot [7])
+                kernel_cores_per_head,     // Tier 2A: chunk-slice routing (mirrors compute kernel slot [8])
             });
 
         SetRuntimeArgs(
