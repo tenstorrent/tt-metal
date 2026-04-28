@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
-from models.common.utility_functions import skip_for_n_dev
+from models.common.utility_functions import skip_for_n_dev, skip_for_n_or_less_dev
 
 from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
     num_cores_to_rectangle_grid,
@@ -57,6 +57,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_new_all_
 
 
 @skip_for_n_dev(8)
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("output_shape", [[1, 1, 32, 1280]])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("num_links", [2])
@@ -84,7 +85,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_new_all_
     indirect=True,
 )
 def test_all_reduce_2d_fabric(
-    bh_2d_mesh_device,
+    bh_1d_mesh_device,
     output_shape,
     cluster_axis,
     input_dtype,
@@ -98,21 +99,8 @@ def test_all_reduce_2d_fabric(
     trace_mode,
     function_level_defaults,
 ):
-    if bh_2d_mesh_device.shape[0] != 1 and bh_2d_mesh_device.shape[1] != 1:
-        pytest.skip("2D dynamic requires one dimension to be 1")
-
-    # Determine which axis has enough devices (need 4 for this test)
-    num_devices = 4
-    if bh_2d_mesh_device.shape[0] >= num_devices:
-        cluster_axis_actual = 0
-        mesh_shape = (num_devices, 1)
-    elif bh_2d_mesh_device.shape[1] >= num_devices:
-        cluster_axis_actual = 1
-        mesh_shape = (1, num_devices)
-    else:
-        pytest.skip(f"Need at least {num_devices} devices in one dimension, have {bh_2d_mesh_device.shape}")
-
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+    num_devices = bh_1d_mesh_device.shape[0]
+    cluster_axis_actual = 0
 
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
@@ -120,7 +108,7 @@ def test_all_reduce_2d_fabric(
     profiler = BenchmarkProfiler()
 
     run_all_reduce_impl(
-        submesh_device,
+        bh_1d_mesh_device,
         output_shape,
         cluster_axis_actual,
         input_dtype,
@@ -134,6 +122,7 @@ def test_all_reduce_2d_fabric(
         trace_mode=trace_mode,
         validate_all=False,
         profiler=profiler,
+        cluster_shape=(num_devices, 1),
     )
 
     time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(

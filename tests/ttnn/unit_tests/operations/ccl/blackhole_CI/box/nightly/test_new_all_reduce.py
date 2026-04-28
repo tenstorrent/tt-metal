@@ -70,9 +70,8 @@ def run_all_reduce_impl(
     validate_all=True,
     profiler=BenchmarkProfiler(),
     linear=True,
+    cluster_shape=(4, 1),
 ):
-    cluster_shape = (4, 1)
-
     if output_dtype is None:
         output_dtype = input_dtype
 
@@ -304,7 +303,7 @@ def run_all_reduce_impl(
     mesh_device.reset_sub_device_stall_group()
 
 
-@skip_for_n_or_less_dev(3)
+# @skip_for_n_or_less_dev(3)
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",

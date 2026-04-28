@@ -5,16 +5,13 @@
 import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from models.common.utility_functions import (
-    skip_for_wormhole_b0,
-    skip_for_n_dev,
-)
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_dev, skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0()
 @skip_for_n_dev(8)
-@pytest.mark.parametrize("num_devices", [2])
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("rs_input_shape", [[1, 1, 64, 512]])
 @pytest.mark.parametrize("dim", [3])
@@ -42,8 +39,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
 def test_reduce_scatter_2d_fabric(
-    bh_2d_mesh_device,
-    num_devices,
+    bh_1d_mesh_device,
     num_links,
     rs_input_shape,
     dim,
@@ -58,18 +54,15 @@ def test_reduce_scatter_2d_fabric(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if bh_2d_mesh_device.shape[0] != 1 and bh_2d_mesh_device.shape[1] != 1:
-        pytest.skip("2D dynamic requires one dimension to be 1")
+    num_devices = bh_1d_mesh_device.shape[0]
+    cluster_axis = 0
 
-    # Determine which axis has enough devices
-    cluster_axis = 0 if bh_2d_mesh_device.shape[0] >= num_devices else 1
-    mesh_shape = (num_devices, 1) if cluster_axis == 0 else (1, num_devices)
+    mesh_shape = (num_devices, 1)
 
-    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, cluster_axis)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, cluster_axis)
 
     run_reduce_scatter_impl(
-        submesh_device,
+        bh_1d_mesh_device,
         num_devices,
         rs_input_shape,
         dim,
@@ -86,4 +79,4 @@ def test_reduce_scatter_2d_fabric(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
     )
-    ttnn.ReadDeviceProfiler(submesh_device)
+    ttnn.ReadDeviceProfiler(bh_1d_mesh_device)
