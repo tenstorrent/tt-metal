@@ -456,16 +456,15 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 4: Combine (enabled)
         # ========================================
-        # Combine expects ROW_MAJOR or TILE_LAYOUT input
-        expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
-        logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
+        # Combine expects TILE_LAYOUT input
+        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
         combined_output = self.combine_module(
-            expert_outputs_rm,
+            expert_outputs,
             metadata,
             tt_expert_token_counts,
         )
-        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
+        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)

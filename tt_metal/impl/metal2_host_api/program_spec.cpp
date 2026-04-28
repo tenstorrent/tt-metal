@@ -102,6 +102,7 @@ using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 
 // DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
+using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -324,6 +325,29 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     for (const auto& semaphore : spec.semaphores) {
         auto [it, inserted] = collected.semaphore_by_name.try_emplace(semaphore.unique_id, &semaphore);
         TT_FATAL(inserted, "Duplicate SemaphoreSpec name '{}'", semaphore.unique_id);
+    }
+
+    // Validate semaphore bindings
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.semaphore_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate semaphore accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.semaphore_by_name.contains(binding.semaphore_spec_name),
+                "Kernel '{}' references unknown semaphore '{}'",
+                kernel.unique_id,
+                binding.semaphore_spec_name);
+        }
     }
 
     // Check for duplicate WorkerSpec unique_ids (not collected)
@@ -651,15 +675,31 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate SemaphoreSpecs
     //////////////////////////////////
 
-    // Semaphores aren't supported yet for Quasar
-    TT_FATAL(spec.semaphores.empty(), "Semaphores are not supported yet");
-
-    // Validate no semaphore bindings are used (semaphores not yet implemented)
-    for (const auto& kernel : spec.kernels) {
+    for (const auto& sem : spec.semaphores) {
         TT_FATAL(
-            kernel.semaphore_bindings.empty(),
-            "KernelSpec '{}' has semaphore bindings, but semaphores are not yet implemented",
-            kernel.unique_id);
+            sem.memory_type == SemaphoreSpec::SemaphoreMemoryType::L1,
+            "SemaphoreSpec '{}' uses non-L1 memory type, which is not yet supported",
+            sem.unique_id);
+        if (is_gen2_arch()) {
+            TT_FATAL(
+                sem.initial_value == 0,
+                "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
+                sem.unique_id,
+                sem.initial_value);
+        }
+    }
+
+    // On Gen1 (WH/BH), semaphores can only be bound to DM kernels, not compute kernels.
+    // Compute-kernel semaphore access is a Quasar-only feature.
+    if (is_gen1_arch()) {
+        for (const auto& kernel : spec.kernels) {
+            if (kernel.is_compute_kernel() && !kernel.semaphore_bindings.empty()) {
+                TT_THROW(
+                    "KernelSpec '{}' has semaphore bindings, but it is a compute kernel. "
+                    "On WH/BH, semaphores can only be bound to data movement kernels.",
+                    kernel.unique_id);
+            }
+        }
     }
 
     //////////////////////////////
@@ -1145,6 +1185,24 @@ tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccess
     return out;
 }
 
+// Create map of local accessor name -> logical Semaphore id
+tt::tt_metal::SemaphoreLocalAccessorHandleMap MakeSemaphoreLocalAccessorHandles(
+    const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
+    tt::tt_metal::SemaphoreLocalAccessorHandleMap out;
+    out.reserve(kernel_spec.semaphore_bindings.size());
+    for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
+        const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
+        TT_FATAL(
+            id <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' semaphore '{}' id {} does not fit uint16_t",
+            kernel_spec.unique_id,
+            semaphore_binding.semaphore_spec_name,
+            id);
+        out.emplace(semaphore_binding.accessor_name, static_cast<uint16_t>(id));
+    }
+    return out;
+}
+
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
@@ -1403,6 +1461,17 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         dfb_name_to_id[dfb_name] = dfb_id;
     }
 
+    // Create Semaphores and build name -> ID map.
+    // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
+    SemaphoreNameToIdMap semaphore_name_to_id;
+    for (const auto& semaphore_spec : spec.semaphores) {
+        const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
+        uint32_t sem_id = program_impl->create_semaphore(
+            to_node_range_set(semaphore_spec.target_nodes), semaphore_spec.initial_value, CoreType::WORKER);
+        program_impl->register_semaphore_spec_name(semaphore_name, sem_id);
+        semaphore_name_to_id[semaphore_name] = sem_id;
+    }
+
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
@@ -1411,6 +1480,8 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         // Make the local accessor name -> DFB ID map for this kernel
         const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
             MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
+        const tt::tt_metal::SemaphoreLocalAccessorHandleMap semaphore_handles =
+            MakeSemaphoreLocalAccessorHandles(kernel_spec, semaphore_name_to_id);
 
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time
         // to emit kernel_args_generated.h and factor into the kernel cache key.
@@ -1435,6 +1506,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
                     processors,
                     is_metal2_kernel,
                     dfb_handles,
+                    semaphore_handles,
                     named_rtas,
                     named_crtas);
             } else {
@@ -1447,6 +1519,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
                     processors,
                     is_metal2_kernel,
                     dfb_handles,
+                    semaphore_handles,
                     named_rtas,
                     named_crtas);
             }
@@ -1454,11 +1527,25 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
                 kernel = std::make_shared<DataMovementKernel>(
-                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    semaphore_handles,
+                    named_rtas,
+                    named_crtas);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
                 kernel = std::make_shared<ComputeKernel>(
-                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    semaphore_handles,
+                    named_rtas,
+                    named_crtas);
             }
         }
 

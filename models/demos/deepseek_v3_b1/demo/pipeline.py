@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageKind,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlockKind, StageMetadata
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -108,39 +108,6 @@ def create_single_galaxy_pipeline_configuration(
             1: stage_1,
             2: lambda d: PassthroughStage(fwd_payload),
             3: lambda d: PassthroughStage(fwd_payload),
-        }
-    )
-
-
-def create_single_galaxy_pipeline_spec_stage_only_configuration(
-    weight_provider: WeightProvider,
-    *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
-) -> PipelineConfiguration:
-    """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
-    fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META
-
-    def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(
-            weight_provider.load_embedding(device),
-            d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
-            forward_metadata=True,
-        )
-
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
-        return SpecLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-        )
-
-    return PipelineConfiguration(
-        {
-            0: stage_0,
-            1: lambda d: PassthroughStage(fwd_payload),
-            2: lambda d: PassthroughStage(fwd_payload),
-            3: stage_1,
         }
     )
 
@@ -299,9 +266,6 @@ def create_single_galaxy_deepseek_pipeline_configuration(
     )
 
 
-create_single_galaxy_deepseek_pipeline = create_single_galaxy_deepseek_pipeline_configuration
-
-
 def create_single_pod_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
@@ -356,7 +320,7 @@ def create_single_pod_pipeline_configuration(
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
-    moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
+    moe_layer_id = moe_layer_id_override
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
@@ -438,7 +402,7 @@ def create_sp4_pipeline_configuration(
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
-    moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
+    moe_layer_id = moe_layer_id_override
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
@@ -575,7 +539,7 @@ class Pipeline:
             my_stage_idx=self._my_stage_idx,
             stages_metadata=stages_metadata,
         )
-        self._pipeline_block: PipelineBlock | None = None
+        self._pipeline_block: PipelineBlockKind | None = None
 
     @property
     def my_mesh_id(self) -> int:
@@ -585,6 +549,13 @@ class Pipeline:
     @property
     def my_stage_idx(self) -> int:
         return self._my_stage_idx
+
+    @property
+    def _block(self) -> PipelineBlockKind:
+        """Non-null view of ``_pipeline_block``; raises if :meth:`configure_block` hasn't run."""
+        if self._pipeline_block is None:
+            raise RuntimeError("Pipeline.configure_block() must be called first")
+        return self._pipeline_block
 
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
@@ -596,22 +567,16 @@ class Pipeline:
         Decoder/dense stages also build :meth:`DecoderBlock.get_program_context` here so
         program construction finishes before :meth:`start_pipeline`.
         """
-        if self._pipeline_block is None:
-            raise RuntimeError("Pipeline.configure_block() must be called before setup()")
-        self._stage_kind.setup(self._ctx, self._pipeline_block)
+        self._stage_kind.setup(self._ctx, self._block)
 
     def start_pipeline(self) -> None:
         """Phase 3: Start pipeline block kernels (socket interfaces + auxiliary bypass sockets)."""
-        if self._pipeline_block is None:
-            raise RuntimeError("Pipeline.configure_block() must be called before start_pipeline()")
-        self._pipeline_block.run()
+        self._block.run()
         self._stage_kind.run_auxiliary_sockets()
 
     def start_compute(self) -> None:
         """Phase 4: Launch stage compute (e.g. ``LMHeadSampling.op``, ``DecoderBlock.execute``)."""
-        if self._pipeline_block is None:
-            raise RuntimeError("Pipeline.configure_block() must be called before start_compute()")
-        self._stage_kind.launch_compute(self._ctx, self._pipeline_block)
+        self._stage_kind.launch_compute(self._ctx, self._block)
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
@@ -636,28 +601,62 @@ class Pipeline:
         self.barrier()
 
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
-        if self._pipeline_block is None:
-            raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
-        self._pipeline_block.write_token(token_tensor)
+        self._block.write_token(token_tensor)
 
-    def read_output(self, output_tensor: ttnn.Tensor):
-        if self._pipeline_block is None:
-            raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
-        return self._pipeline_block.read_output(output_tensor)
+    def read_output(self, output_tensor: ttnn.Tensor) -> None:
+        self._block.read_output(output_tensor)
 
     def export_host_socket_descriptors(self, prefix: str) -> None:
-        if self._pipeline_block is None:
-            raise RuntimeError("Pipeline.setup_and_run() must complete before exporting host socket descriptors")
-        self._pipeline_block.export_host_socket_descriptors(prefix)
+        self._block.export_host_socket_descriptors(prefix)
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()
 
     def terminate(self) -> None:
-        """Terminate the pipeline block and any auxiliary sockets."""
+        """Terminate the pipeline block.
+
+        Compute kernels and the d2d_exchange / host_io kernels are independent
+        persistent programs that communicate over sockets; each has its own
+        termination semaphore.
+
+        The shutdown sequence is:
+
+          1. Barrier — all ranks start teardown together.
+          2. Set the compute-kernel termination semaphore.  The flag is written
+             to L1 but no core observes it yet: they are all blocked at the
+             iteration gate (``persistent_next_iter_sem``) or mid-iteration.
+          3. Barrier — all ranks have written their termination flags.
+          4. Stage 0 pushes a dummy token and drains the round-trip result.
+             The token naturally triggers ``persistent_next_iter_sem`` via the
+             pipeline's socket/d2d flow, providing both the gate release AND
+             the data payload.  All cores complete this final iteration
+             together, loop back to the top-of-loop termination check, see the
+             flag, and break.
+          5. Barrier — non-stage-0 ranks wait for the dummy round-trip.
+             (No ``synchronize_device`` here: d2d/host_io kernels are still
+             running and would block.)
+          6. Tear down d2d_exchange / host_io via ``PipelineBlock.terminate``
+             (sets socket termination semaphores + ``synchronize_device``).
+          7. Final ``synchronize_device``.
+        """
+        if self._pipeline_block is None:
+            return
+
+        ttnn.distributed_context_barrier()
+
+        self._stage_kind.terminate(self._ctx, self._pipeline_block)
         self._stage_kind.terminate_auxiliary()
-        if self._pipeline_block is not None:
-            self._pipeline_block.terminate()
+
+        ttnn.distributed_context_barrier()
+
+        if self._pipeline_block.is_first_pipeline_stage():
+            self._pipeline_block.push_dummy_token()
+            self._pipeline_block.drain_dummy_output()
+
+        ttnn.distributed_context_barrier()
+
+        self._pipeline_block.terminate()
+        ttnn.synchronize_device(self._mesh_device)
 
 
 def create_single_pod_spec_decode_pipeline_configuration(
@@ -723,7 +722,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
-    moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
+    moe_layer_id = moe_layer_id_override
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
@@ -760,7 +759,7 @@ def create_single_pod_combined_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            shared_head_norm=weight_provider.load_shared_head_norm(device),
+            spec_weights=weight_provider.load_spec(device),
         )
 
     def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
