@@ -183,43 +183,6 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
-    std::optional<uint32_t> semaphore_id = std::nullopt;
-    std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-            CoreCoord logical_core(x, y);
-            auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
-            if (semaphores.size() == NUM_SEMAPHORES) {
-                TT_THROW(
-                    "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
-                    logical_core.str(),
-                    NUM_SEMAPHORES);
-            }
-
-            for (const auto& semaphore : semaphores) {
-                semaphore_histogram[semaphore.get().id()]++;
-            }
-        }
-    }
-
-    std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
-    for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
-        if (semaphore_histogram.at(sem_id) == 0) {
-            uninitialized_sem_id = sem_id;
-            break;
-        }
-    }
-
-    if (uninitialized_sem_id.has_value()) {
-        semaphore_id = uninitialized_sem_id;
-    } else {
-        TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
-    }
-
-    return semaphore_id;
-}
-
 inline void SetRuntimeArgsImpl(
     const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
@@ -1593,24 +1556,7 @@ uint32_t CreateSemaphore(
             },
         },
         core_spec);
-    std::optional<uint32_t> semaphore_id;
-    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
-    TT_FATAL(
-        MetalContext::instance().is_coord_in_range((crs.ranges().back()).end_coord, core_type),
-        "Coordinates out of range");
-    for (const auto& core_range : crs.ranges()) {
-        std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
-        if (!semaphore_id.has_value()) {
-            semaphore_id = semaphore_id_candidate;
-        } else {
-            semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
-        }
-    }
-    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
-
-    program.impl().add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
-
-    return semaphore_id.value();
+    return program.impl().create_semaphore(crs, initial_value, core_type);
 }
 
 GlobalSemaphore CreateGlobalSemaphore(

@@ -221,6 +221,7 @@ class TtMoEGatePrefill(LightweightModule):
         config,
         mesh_device,
         dispatch_table: torch.Tensor,
+        experts_per_chip: int,
         weight: torch.Tensor = None,
         bias: torch.Tensor = None,
         fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
@@ -231,6 +232,7 @@ class TtMoEGatePrefill(LightweightModule):
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
+            experts_per_chip: Number of experts per chip (for expert region offset grouping in offset_cumsum).
         """
         self.config = config
         self.mesh_device = mesh_device
@@ -272,7 +274,9 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
         )
 
-        self.routing_setup = TtMoERoutingSetup(mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"])
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"], experts_per_chip=experts_per_chip
+        )
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
         if fallback_mode not in (GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32):
@@ -500,7 +504,7 @@ class TtMoEGatePrefill(LightweightModule):
         signpost(header="moe_gate_calculate_dispatch_offsets")
         ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
 
-        dispatch_offsets, total_counts_per_expert, _ = self.routing_setup(
+        dispatch_offsets, total_counts_per_expert, expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=ttnn_top_k_experts_indices,
             num_routed_experts=self.config.n_routed_experts,
             seq_len_per_chip=self.config.sp_dim,
@@ -508,4 +512,11 @@ class TtMoEGatePrefill(LightweightModule):
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
 
-        return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets, total_counts_per_expert)
+        return (
+            ttnn_scores,
+            ttnn_top_k_experts_indices,
+            logits,
+            dispatch_offsets,
+            total_counts_per_expert,
+            expert_region_offsets,
+        )
