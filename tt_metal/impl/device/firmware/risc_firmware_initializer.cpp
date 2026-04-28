@@ -245,6 +245,42 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 if (!mmio_ids_set.count(device_id) && dev->is_fabric_relay_path_broken()) {
                     relay_broken_non_mmio.insert(device_id);
                 }
+                // FIX BA (#42429): Also include non-MMIO devices where FIX AM fired
+                // (fabric_channels_not_ready_for_traffic_ set, fabric_relay_path_broken_ NOT set).
+                //
+                // Root cause of run 25066686656 failure:
+                //   Phase 5 for non-MMIO devices 4 and 5 saw master chan stuck at STARTED after
+                //   3001ms (FIX AL early-exit).  FIX AM fired: set
+                //   fabric_channels_not_ready_for_traffic_=true but did NOT set
+                //   fabric_relay_path_broken_ (STARTED means ERISC firmware is running — just the
+                //   out-of-mesh ETH handshake partner isn't responding).
+                //
+                //   Because fabric_relay_path_broken_ was false, Step 1 here did NOT add devices
+                //   4/5 to relay_broken_non_mmio.  Consequently FIX AC (MMIO ETH PCIe reset) and
+                //   FIX AY (deferred non-MMIO ERISC reset via restored relay) did NOT run for
+                //   them.  The non-MMIO ERISCs remained running FABRIC firmware in STARTED state.
+                //
+                //   When the next process started (t3k_ttnn_tests), TopologyDiscovery::
+                //   discover_remote_devices() called create_remote_device() → init_tt_device() →
+                //   read_from_arc_apb() → read_non_mmio().  The FABRIC-mode ERISC on the non-MMIO
+                //   device does not respond to UMD relay reads → 5s timeout per device → every
+                //   test fixture constructor threw → all 359 tests failed.
+                //
+                // Fix: treat non-MMIO devices with fabric_channels_not_ready_for_traffic_=true as
+                // relay-broken for teardown purposes.  This forces FIX AC (MMIO ETH PCIe reset)
+                // and FIX AY (deferred non-MMIO ETH reset via restored relay), cleaning up the
+                // STARTED-state ERISCs before the process exits.  FIX AV and FIX AW handle the
+                // case where relay re-sync fails within the current process.
+                if (!mmio_ids_set.count(device_id) && dev->is_fabric_channels_not_ready_for_traffic() &&
+                    !relay_broken_non_mmio.count(device_id)) {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX BA — non-MMIO device {} has fabric_channels_not_ready_for_traffic "
+                        "(FIX AM STARTED early-exit) but relay not marked broken. Adding to "
+                        "relay_broken_non_mmio to trigger FIX AC + FIX AY cleanup. (#42429)",
+                        device_id);
+                    relay_broken_non_mmio.insert(device_id);
+                }
                 if (dev->is_fabric_teardown_timed_out()) {
                     any_teardown_timed_out = true;
                 }
