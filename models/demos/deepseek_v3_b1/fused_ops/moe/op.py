@@ -68,8 +68,10 @@ class MoeSem:
     REDUCE_FC_BWD_R1 = 21
     REDUCE_FC_BWD_R2 = 22
     REDUCE_FC_R3_FWD = 23
-    FORWARD_CROSS_COL_SYNC = 24
-    NUM_SEMAPHORES = 25
+    REDUCE_FC_BARRIER_GATHER = 24
+    REDUCE_FC_BARRIER_RELEASE = 25  # unused, kept for enum stability
+    FORWARD_CROSS_COL_SYNC = 26
+    NUM_SEMAPHORES = 27
 
 
 @dataclass
@@ -1832,6 +1834,8 @@ class MoeRoutedExpertOp:
             ("reduce_is_residual_device", 0),
             ("reduce_output_core_noc_x", 0),
             ("reduce_output_core_noc_y", 0),
+            ("reduce_mesh_rows", 0),
+            ("reduce_my_row", 0),
             # Broadcast / Forward (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
             # Forward BRISC CT args
@@ -4354,6 +4358,8 @@ class MoeOp:
         _update_brisc_ct("reduce_output_core_noc_x", output_core_phys.x)
         _update_brisc_ct("reduce_output_core_noc_y", output_core_phys.y)
         _update_brisc_ct("reduce_socket_page_size", socket_page_size)
+        _update_brisc_ct("reduce_mesh_rows", mesh_rows)
+        _update_brisc_ct("reduce_my_row", row)
 
         # Only ONE device adds the residual before the reduce so it is counted
         # exactly once in the cross-device sum (same semantics as main's ROOT1).
@@ -4927,6 +4933,11 @@ class MoeOp:
                 )
                 program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(fwd_conn)
 
+                # barrier_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BARRIER_GATHER]
+                # program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(
+                #    [barrier_sem_addr]
+                # )
+
                 is_exit_col = self.reduce_exit_column is not None and col == self.reduce_exit_column
                 if not is_exit_col:
                     r3_conn = ttnn.setup_fabric_connection(fabric_node_id, r3_fabric_node_id, link_idx, program, fc)
@@ -4944,6 +4955,13 @@ class MoeOp:
                     flush=True,
                 )
                 program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend(bwd_conn)
+
+                # if mesh_rows > 1:
+                #    program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend(
+                #        [barrier_sem_addr, bwd_fabric_node_id.chip_id, int(bwd_fabric_node_id.mesh_id)]
+                #    )
+                # else:
+                #    program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend([0, 0, 0])
 
         if ctx.enable_reduce_to_all and self._persistent_fabric_core is not None:
             mesh_device = ctx.mesh_device

@@ -168,11 +168,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
-    // Prepare packet headers and routes at init, but DEFER open() until first
-    // worker data arrives.  The ring-reduce FCs hold fabric connections that
-    // would collide with ours; by the time any worker pushes, those FCs have
-    // already closed their connections.
     bool fabric_sender_opened = false;
+    bool fabric_receiver_opened = false;
     if constexpr (use_fabric_on_sender) {
         downstream_data_packet_header_addr =
             reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
@@ -197,31 +194,6 @@ void kernel_main() {
 
     while (!terminated) {
         socket_reserve_pages(sender_socket, 1);
-        /*
-        {
-            uint32_t reserve_bytes = 1 * sender_socket.page_size;
-            volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_socket.bytes_acked_base_addr);
-            uint32_t bytes_acked_end =
-                sender_socket.bytes_acked_base_addr + sender_socket.num_downstreams * bytes_acked_size_bytes;
-            while (reinterpret_cast<uint32_t>(bytes_acked_ptr) < bytes_acked_end) {
-                uint32_t bytes_free;
-                do {
-                    invalidate_l1_cache();
-                    if (termination_semaphore[0] == 1) {
-                        terminated = true;
-                        break;
-                    }
-                    bytes_free = sender_socket.downstream_fifo_total_size -
-                                 (sender_socket.bytes_sent - *bytes_acked_ptr);
-                } while (bytes_free < reserve_bytes);
-                if (terminated) break;
-                bytes_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    reinterpret_cast<uint32_t>(bytes_acked_ptr) + bytes_acked_size_bytes);
-            }
-        }
-        if (terminated) break;
-        */
 
         invalidate_l1_cache();
         if (termination_semaphore[0] == 1) {
@@ -264,14 +236,17 @@ void kernel_main() {
                 socket_pop_pages(receiver_sockets[worker_idx], 1);
 
                 if constexpr (use_fabric_on_receiver) {
+                    if (!fabric_receiver_opened) {
+                        upstream_fabric_connection.open();
+                        fabric_receiver_opened = true;
+                    }
                     fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_sockets[worker_idx]);
-                    upstream_fabric_connection.open();
                     fabric_socket_notify_sender_stateful(
                         receiver_sockets[worker_idx],
                         upstream_fabric_connection,
                         upstream_socket_packet_header_addr,
                         upstream_bytes_acked_noc_addrs[worker_idx]);
-                    upstream_fabric_connection.close();
+                    noc_async_full_barrier();
                 } else {
                     socket_notify_sender(receiver_sockets[worker_idx]);
                 }
@@ -303,6 +278,12 @@ void kernel_main() {
         if (fabric_sender_opened) {
             downstream_fabric_connection.close();
             downstream_fabric_connection_2.close();
+        }
+    }
+    if constexpr (use_fabric_on_receiver) {
+        if (fabric_receiver_opened) {
+            upstream_fabric_connection.close();
+            noc_async_full_barrier();
         }
     }
     DPRINT << "D2D_MU done\n";

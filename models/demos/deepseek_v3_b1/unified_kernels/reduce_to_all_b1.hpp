@@ -112,7 +112,9 @@ struct ReduceToAllB1 {
         uint32_t useRawSemAddrs = 0,
         uint32_t isReduceToAll = 0,
         uint32_t outputCoreNocX = 0,
-        uint32_t outputCoreNocY = 0>
+        uint32_t outputCoreNocY = 0,
+        uint32_t meshRows = 0,
+        uint32_t myRow = 0>
     struct WriterCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t payload_size_bytes = payloadSizeBytes;
@@ -142,6 +144,9 @@ struct ReduceToAllB1 {
         static constexpr uint32_t is_reduce_to_all = isReduceToAll;
         static constexpr uint32_t output_core_noc_x = outputCoreNocX;
         static constexpr uint32_t output_core_noc_y = outputCoreNocY;
+        static constexpr uint32_t mesh_rows = meshRows;
+        static constexpr uint32_t my_row = myRow;
+        static constexpr bool ring_barrier_enable = meshRows > 1;
 
         static constexpr uint32_t all_sent_mask =
             (slotsPerDirection == 32) ? 0xFFFF'FFFFu : ((1u << slotsPerDirection) - 1u);
@@ -328,25 +333,56 @@ struct ReduceToAllB1 {
 
                 volatile tt_l1_ptr uint32_t* r1_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_sem_addr);
                 volatile tt_l1_ptr uint32_t* r2_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
-
-                bwd_sender.open();
                 DPRINT << "BWD\n";
+                bwd_sender.open();
+
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
-                    uint32_t bwd_spin = 0;
                     do {
                         invalidate_l1_cache();
                         r1_sent = process_ready_slots(r1_sem, r1_sent, r1_base, bwd_sender);
                         r2_sent = process_ready_slots(r2_sem, r2_sent, r2_base, bwd_sender);
-                        bwd_spin++;
-                        if ((bwd_spin & 0xFFFFFFF) == 0) {
-                            invalidate_l1_cache();
-                        }
                     } while (r1_sent != CTArgs::all_sent_mask || r2_sent != CTArgs::all_sent_mask);
                     noc_semaphore_set(r1_sem, 0);
                     noc_semaphore_set(r2_sem, 0);
                 }
+                // Signal the BWD neighbor that our BWD forwarding is done.
+                // The neighbor's FC BRISC waits for barrier_sem == 2 (one from
+                // its FWD neighbor's BRISC, one from its BWD neighbor's NCRISC)
+                // before opening R3, preventing fabric link contention.
+                /*
+                {
+                    uint32_t barrier_sem_addr_val = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t bwd_chip_id = get_arg_val<uint32_t>(arg_idx++);
+                    uint32_t bwd_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+
+                    if (barrier_sem_addr_val != 0) {
+                        const uint32_t my_fc_noc_x = my_x[0];
+                        const uint32_t my_fc_noc_y = my_y[0];
+
+                        constexpr uint32_t pkt_hdr_bytes_nc = sizeof(PACKET_HEADER_TYPE);
+                        PacketHeaderPool::reset();
+                        auto route_id = PacketHeaderPool::allocate_header_n(1);
+                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr =
+                            PacketHeaderPool::header_table[route_id].first;
+                        if constexpr (std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader>) {
+                            fabric_set_unicast_route(hdr, static_cast<uint16_t>(bwd_chip_id),
+                                static_cast<uint16_t>(bwd_mesh_id));
+                        } else {
+                            fabric_set_unicast_route<false>(hdr, static_cast<uint16_t>(1));
+                        }
+                        hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            get_noc_addr(my_fc_noc_x, my_fc_noc_y, barrier_sem_addr_val), 1});
+                        bwd_sender.wait_for_empty_write_slot();
+                        bwd_sender.send_payload_flush_blocking_from_address(
+                            reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes_nc);
+                        //DPRINT << "NB\n";
+                    }
+                }
+                */
+
+                noc_async_full_barrier();
                 bwd_sender.close();
                 noc_async_full_barrier();
                 DPRINT << "BD\n";
@@ -360,9 +396,7 @@ struct ReduceToAllB1 {
 
             auto wait_round = [](uint32_t sem_addr) {
                 volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
-                while (*sem_ptr < 1) {
-                    invalidate_l1_cache();
-                }
+                noc_semaphore_wait_min(sem_ptr, 1);
                 unified_kernels::semaphore_dec(sem_ptr);
             };
 
@@ -386,7 +420,7 @@ struct ReduceToAllB1 {
             // ================================================================
             constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
-                DPRINT << "fabric core\n";
+                // DPRINT << "fabric core\n";
                 const uint32_t buf_base = get_write_ptr(CTArgs::packet_cb);
                 const uint32_t r1_base = buf_base;
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
@@ -409,47 +443,51 @@ struct ReduceToAllB1 {
                 auto fwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
+                uint32_t barrier_sem_addr;
+
+                // if constexpr (CTArgs::use_raw_sem_addrs) {
+                //     barrier_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                // } else {
+                //     barrier_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                // }
+
                 volatile tt_l1_ptr uint32_t* r1_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_sem_addr);
                 volatile tt_l1_ptr uint32_t* r2_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
                 volatile tt_l1_ptr uint32_t* r3_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r3_sem_addr_val);
 
-                fwd_sender.open();
+                constexpr bool has_r3 = !CTArgs::is_exit_column || CTArgs::is_reduce_to_all;
+                // Build R3 sender eagerly (consuming its runtime args now) so we
+                // can open both connections at init before any fabric traffic.
+                auto r3_sender = [&]() {
+                    if constexpr (has_r3) {
+                        return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                            arg_idx);
+                    } else {
+                        return tt::tt_fabric::WorkerToFabricEdmSender{};
+                    }
+                }();
                 DPRINT << "FWD\n";
+                fwd_sender.open();
+
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
-                    uint32_t fwd_spin = 0;
                     do {
                         invalidate_l1_cache();
                         r1_sent = process_ready_slots(r1_sem, r1_sent, r1_base, fwd_sender);
                         r2_sent = process_ready_slots(r2_sem, r2_sent, r2_base, fwd_sender);
-                        fwd_spin++;
-                        if ((fwd_spin & 0xFFFFFFF) == 0) {
-                            invalidate_l1_cache();
-                        }
                     } while (r1_sent != CTArgs::all_sent_mask || r2_sent != CTArgs::all_sent_mask);
                     noc_semaphore_set(r1_sem, 0);
                     noc_semaphore_set(r2_sem, 0);
                 }
-                fwd_sender.close();
-                noc_async_full_barrier();
                 DPRINT << "FD\n";
-
-                if constexpr (!CTArgs::is_exit_column || CTArgs::is_reduce_to_all) {
-                    auto r3_sender =
-                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                if constexpr (has_r3) {
                     r3_sender.open();
-                    DPRINT << "R3O\n";
                     {
                         uint32_t r3_sent = 0;
-                        uint32_t r3_spin = 0;
                         do {
                             invalidate_l1_cache();
                             r3_sent = process_ready_slots(r3_sem, r3_sent, r3_base, r3_sender);
-                            r3_spin++;
-                            if ((r3_spin & 0xFFFFFFF) == 0) {
-                                invalidate_l1_cache();
-                            }
                         } while (r3_sent != CTArgs::r3_all_sent_mask);
                         noc_semaphore_set(r3_sem, 0);
                     }
@@ -459,6 +497,7 @@ struct ReduceToAllB1 {
                 } else {
                     DPRINT << "RD(exit)\n";
                 }
+                fwd_sender.close();
 
                 // Persistent next-iteration signal. On exit devices, all reduce
                 // workers bump this FC's wait_sem directly after finishing their
@@ -470,6 +509,7 @@ struct ReduceToAllB1 {
                 //                        device, plus optional local_dst release.
                 //   dst_sem_addr == 0  → local-only: entry == exit on same chip,
                 //                        just do a local NoC inc via local_dst.
+                // DPRINT << "persistent signal: " << (uint32_t)CTArgs::persistent_fabric_signal_enable << "\n";
                 if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
                     DPRINT << "persistent: waiting for workers\n";
                     uint32_t wait_sem_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -723,7 +763,6 @@ struct ReduceToAllB1 {
             // ================================================================
             // TRISC — 3-round add_tiles (same as reduce_to_one_b1)
             // ================================================================
-            DPRINT << "TRISC start\n";
             if constexpr (CTArgs::is_fabric_core) {
                 return;
             }
@@ -792,7 +831,7 @@ struct ReduceToAllB1 {
                 }
                 tile_regs_release();
                 cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-                DPRINT << "TRd\n";
+                // DPRINT << "TRd\n";
             }
 #endif
         }

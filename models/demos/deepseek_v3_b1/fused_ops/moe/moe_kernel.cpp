@@ -566,7 +566,9 @@ void kernel_main() {
                 1,  // useRawSemAddrs
                 0,  // isReduceToAll
                 get_named_compile_time_arg_val("reduce_output_core_noc_x"),
-                get_named_compile_time_arg_val("reduce_output_core_noc_y")>;
+                get_named_compile_time_arg_val("reduce_output_core_noc_y"),
+                get_named_compile_time_arg_val("reduce_mesh_rows"),
+                get_named_compile_time_arg_val("reduce_my_row")>;
 
             deepseek_b1_ops::ReduceToAllB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -1463,7 +1465,7 @@ void kernel_main() {
 
         if constexpr (persistent_mode == 0) {
             if (iteration >= num_iterations) {
-                DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
+                // DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
                 break;
             }
         }
@@ -1477,6 +1479,6 @@ void kernel_main() {
     noc_async_atomic_barrier();
 #endif
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
-    DPRINT << "MOE: kernel done\n";
+    // DPRINT << "MOE: kernel done\n";
 #endif
 }
