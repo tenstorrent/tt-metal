@@ -38,6 +38,16 @@ def resolve_output_dir(output_dir_arg: str) -> str:
     return resolved
 
 
+def resolve_output_path(base_dir: str, relative_name: str) -> str:
+    """Resolve a child path under a validated output directory."""
+    resolved = os.path.abspath(os.path.join(base_dir, relative_name))
+    if os.path.commonpath([resolved, base_dir]) != base_dir:
+        raise ValueError(
+            f"Refusing output path outside allowed base directory: {resolved}. " f"Allowed base: {base_dir}"
+        )
+    return resolved
+
+
 def build_etth2_datasets(
     context_length: int,
     prediction_length: int,
@@ -243,7 +253,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     best_val_loss = float("inf")
-    best_path = os.path.join(args.output_dir, "best_model.pt")
+    best_path = resolve_output_path(args.output_dir, "best_model.pt")
 
     print("=== Training ===")
     for epoch in range(1, args.num_epochs + 1):
@@ -265,11 +275,11 @@ def main():
     print(f"Test MSE: {test_loss:.6f}")
 
     # Save model + preprocessor for later reference / TTNN comparison
-    model_path = os.path.join(args.output_dir, "final_model.pt")
+    model_path = resolve_output_path(args.output_dir, "final_model.pt")
     torch.save(model.state_dict(), model_path)
     print(f"Final model weights saved to {model_path}")
 
-    preproc_dir = os.path.join(args.output_dir, "preprocessor")
+    preproc_dir = resolve_output_path(args.output_dir, "preprocessor")
     os.makedirs(preproc_dir, exist_ok=True)
     time_series_processor.save_pretrained(preproc_dir)
     print(f"Preprocessor saved to {preproc_dir}")
