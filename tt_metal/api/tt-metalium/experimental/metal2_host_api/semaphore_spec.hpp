@@ -22,6 +22,12 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // Reusing a single constant helps catch typos and errors at compile time.
 using SemaphoreSpecName = std::string;
 
+// A SemaphoreSpec describes a semaphore, which can be used for kernel synchronization.
+//
+// Instancing: Unlike KernelSpec and DataflowBufferSpec, a SemaphoreSpec is *program-scope*,
+// not per-node. target_nodes specify where the SRAM (L1) cells live, but any kernel with a
+// noc-addressable view can signal or wait on it.
+//
 struct SemaphoreSpec {
     // Semaphore identifier: used to reference this Semaphore within the ProgramSpec
     SemaphoreSpecName unique_id;

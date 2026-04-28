@@ -27,7 +27,25 @@ using DFBSpecName = std::string;
 enum class DFBAccessPattern { STRIDED, BLOCKED, CONTIGUOUS };
 
 // A DataflowBufferSpec describes a "local" Dataflow Buffer (DFB):
-// Its producer and consumer kernels run on the SAME node, and the DFB is allocated in that node's local SRAM.
+//  - Backing memory parameters
+//  - Entry format metadata (data format, tile layout)
+//  - Advanced options
+//
+// A DFB's endpoint info is specified at the DFB binding site in KernelSpec, not here.
+// (producer/consumer kernel identity, threads, and access patterns)
+//
+// Invariant: A local DFB has exactly one producer kernel and one consumer kernel.
+// Both must share identical WorkUnitSpec membership.
+// (For cross-node communication, use RemoteDataflowBufferSpec instead.)
+//
+// Instancing: Like KernelSpec, a DataflowBufferSpec is a *per-node template*. One
+// independent DFB instance is allocated per node where its endpoint kernels run, in
+// that node's local SRAM. That instance serves the same-node producer and consumer
+// kernel instances.
+//
+// Placement: Derived — the DFB's effective node set is the union of its bound
+// kernels' WorkUnitSpec target_nodes.
+//
 struct DataflowBufferSpec {
     // DFB identifier: used to reference this DFB within the ProgramSpec
     DFBSpecName unique_id;
@@ -36,16 +54,6 @@ struct DataflowBufferSpec {
     uint32_t entry_size = 0;  // in bytes
     uint32_t num_entries = 0;
     // Note: It is possible to override these per-Program execution (via ProgramRunParams).
-
-    // Endpoint info
-    // Configuring a DFB requires endpoint-specific info.
-    // This endpoint info is specified at the DFB binding site in the KernelSpec:
-    //   - Producer and consumer kernel identity
-    //   - Number of producer threads, number of consumer threads
-    //   - Producer and consumer access patterns
-
-    // Target nodes
-    // This is a derived property, based on the kernel bindings for this DFB
 
     ////////////////////////////////////
     // Entry format metadata
@@ -70,7 +78,8 @@ struct DataflowBufferSpec {
 
     // Alias two or more DFBs
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
-    // All aliased DFBs must have size and target nodes, and must mutually declare each other as aliases.
+    // All aliased DFBs must have the same total size (num_entries * entry_size), must be bound to the same kernels,
+    // and must mutually declare each other as aliases.
     // (Aliased DFBs offer NO guarantees against data clobbering; the kernel author must ensure safety.)
     using DFBIdentifiers = std::vector<DFBSpecName>;
     DFBIdentifiers alias_with;  // empty vector means no aliasing
@@ -81,14 +90,30 @@ struct DataflowBufferSpec {
     bool disable_implicit_sync = false;
 };
 
-// A RemoteDataflowBufferSpec describes a "remote" DFB:
-// Its producer and consumer kernels run on DIFFERENT nodes, and data is transferred over the NOC.
+// A RemoteDataflowBufferSpec describes a "remote" DFB: like DataflowBufferSpec, but
+// its producer and consumer kernels run on DIFFERENT nodes, with data flowing over
+// the NoC. The producer_consumer_map enumerates the (producer_node, consumer_node)
+// pairs.
+//
+// Invariant: Every entry in producer_consumer_map has producer_node != consumer_node.
+// (Same-node communication is structurally local and belongs in DataflowBufferSpec.)
+// Producer-WorkUnit and consumer-WorkUnit target_nodes are allowed to overlap, even
+// to be equal: e.g. an A↔B pattern (map = [(A, B), (B, A)]) is legal because every
+// pair is genuinely cross-node.
+//
+// Instancing: At runtime, one remote DFB instance is allocated per entry in
+// producer_consumer_map, mediating data flow between its named producer and consumer
+// nodes over the NoC.
+//
+// Placement: Specified directly via producer_consumer_map (rather than derived as
+// for local DFBs).
+//
 struct RemoteDataflowBufferSpec {
     // A remote DFB has all of the same properties as a local DFB
     DataflowBufferSpec dfb_spec;
 
-    // You must additionally specify a producer-consumer node mapping:
-    // This specifies which producer node communicates with which consumer node.
+    // Producer-consumer node mapping: each entry pairs a producer node with the
+    // consumer node it feeds.
     using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
     ProducerConsumerMap producer_consumer_map;
 };
