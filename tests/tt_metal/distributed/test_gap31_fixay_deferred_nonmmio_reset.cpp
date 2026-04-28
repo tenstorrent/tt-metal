@@ -79,7 +79,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <ttnn/operations/ccl/all_gather/all_gather.hpp>
-#include <ttnn/operations/ccl/all_gather/all_gather_utils.hpp>
 
 #include "fabric/fabric_init.hpp"
 #include "impl/context/metal_context.hpp"
