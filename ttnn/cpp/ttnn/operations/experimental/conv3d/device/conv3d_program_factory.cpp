@@ -126,6 +126,53 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // that many patches. The reader pushes in matching chunks.
     uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
 
+    // If the static CBs would overflow L1, reduce C_in_block until they fit.
+    // Both the activation and weight CBs scale with K_t = f(C_in_block), so reducing
+    // C_in_block (and looping over more C_in_num_blocks) is the only way to shrink them.
+    // This fires regardless of whether config.C_in_block was set explicitly.
+    {
+        const uint32_t l1_budget = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - 200 * 1024;
+        const uint32_t current_cbs =
+            padded_patch_size_bytes * vol2col_rm_pages +              // vol2col_rm
+            tile_size * matmul_M_t * matmul_K_t +                    // vol2col_tiled
+            tile_size * matmul_K_t * matmul_N_t +                    // weight_tiled
+            2 * tile_size * matmul_M_t * matmul_N_t +                // matmul_interm (fp32 worst case)
+            tile_size * matmul_M_t * matmul_N_t;                     // matmul_result
+        if (current_cbs > l1_budget) {
+            for (uint32_t trial = C_in_block - 1; trial >= 1; trial--) {
+                if (C_in % trial != 0) {
+                    continue;
+                }
+                const uint32_t trial_ps =
+                    operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
+                    operation_attributes.kernel_size[2] * trial;
+                const uint32_t trial_K_t = tt::div_up(trial_ps, tt::constants::TILE_WIDTH);
+                const uint32_t trial_ppsb =
+                    tt::round_up(trial_ps, tt::constants::TILE_WIDTH) * dtype_bytes;
+                // Over-estimate matmul_interm as fp32 (2x bf16 tile) for a conservative check.
+                const uint32_t trial_cbs =
+                    trial_ppsb * vol2col_rm_pages +                   // vol2col_rm
+                    tile_size * matmul_M_t * trial_K_t +              // vol2col_tiled
+                    tile_size * trial_K_t * matmul_N_t +              // weight_tiled
+                    2 * tile_size * matmul_M_t * matmul_N_t +         // matmul_interm (fp32 worst case)
+                    tile_size * matmul_M_t * matmul_N_t;              // matmul_result
+                if (trial_cbs <= l1_budget) {
+                    C_in_block = trial;
+                    break;
+                }
+            }
+            patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
+                         operation_attributes.kernel_size[2] * C_in_block;
+            padded_patch_size = tt::round_up(patch_size, tt::constants::TILE_WIDTH);
+            patch_size_bytes = patch_size * dtype_bytes;
+            padded_patch_size_bytes = padded_patch_size * dtype_bytes;
+            patch_pad_bytes = padded_patch_size_bytes - patch_size_bytes;
+            C_in_num_blocks = C_in / C_in_block;
+            matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
+            C_in_block_bytes = C_in_block * dtype_bytes;
+        }
+    }
+
     // When C_out_block was not explicitly set, find the largest divisor of padded_C_out
     // (multiple of TILE_WIDTH) whose total static CB allocation fits within the L1 budget.
     if (config.C_out_block == 0) {
@@ -138,11 +185,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             const uint32_t trial_N_t = trial / tt::constants::TILE_WIDTH;
             // Over-estimate matmul_interm as fp32 (2x bf16 tile) for a conservative check.
             const uint32_t total_cbs =
-                padded_patch_size_bytes * vol2col_rm_pages +   // vol2col_rm
-                tile_size * matmul_M_t * matmul_K_t +          // vol2col_tiled
-                tile_size * matmul_K_t * trial_N_t +           // weight_tiled
-                2 * tile_size * matmul_M_t * trial_N_t +       // matmul_interm (fp32 worst case)
-                tile_size * matmul_M_t * trial_N_t;            // matmul_result
+                padded_patch_size_bytes * vol2col_rm_pages +      // vol2col_rm
+                tile_size * matmul_M_t * matmul_K_t +             // vol2col_tiled
+                tile_size * matmul_K_t * trial_N_t +              // weight_tiled
+                2 * tile_size * matmul_M_t * trial_N_t +          // matmul_interm (fp32 worst case)
+                tile_size * matmul_M_t * trial_N_t;               // matmul_result
             if (total_cbs <= l1_budget) {
                 C_out_block = trial;
                 break;
