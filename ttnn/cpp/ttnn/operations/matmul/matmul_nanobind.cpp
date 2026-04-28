@@ -4,11 +4,17 @@
 
 #include "matmul_nanobind.hpp"
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <optional>
+#include <utility>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -16,6 +22,7 @@
 #include <fmt/ranges.h>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_tuner.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
@@ -1311,6 +1318,141 @@ void py_module(nb::module_& mod) {
         nb::arg("input_tensor_b"),
         nb::arg("parameters"),
         nb::arg("optional_output_tensors"));
+
+    // ------------------------------------------------------------------
+    // Matmul auto-tuner sub-module: pure host-side helpers for picking
+    // (out_subblock_h, out_subblock_w) and in0_block_w from per-core dims,
+    // compute config, and an L1 budget. Lets Python program-descriptor
+    // code reuse the same tuning logic the C++ factories use, instead of
+    // hardcoding subblock / in0_block_w guesses.
+    // ------------------------------------------------------------------
+    auto m_auto_tune = mod.def_submodule("auto_tune", R"doc(
+        Matmul auto-tuner: pick optimal subblock dims and in0_block_w
+        given per-core M/N, K, the compute kernel config, and an L1 budget.
+    )doc");
+
+    m_auto_tune.def(
+        "determine_largest_subblock",
+        [](uint32_t per_core_M,
+           uint32_t per_core_N,
+           const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+           bool subblock_w_eq_per_core_n_required,
+           bool subblock_h_eq_per_core_m_required,
+           std::optional<uint32_t> max_subblock_h,
+           std::optional<uint32_t> max_subblock_w,
+           std::optional<std::array<uint32_t, 2>> tile_shape,
+           bool prefer_fast_path) {
+            ttnn::operations::matmul::auto_tune::SubblockTuneInputs inputs{
+                .compute_kernel_config = compute_kernel_config};
+            inputs.per_core_M = per_core_M;
+            inputs.per_core_N = per_core_N;
+            inputs.subblock_w_eq_per_core_n_required = subblock_w_eq_per_core_n_required;
+            inputs.subblock_h_eq_per_core_m_required = subblock_h_eq_per_core_m_required;
+            inputs.max_subblock_h = max_subblock_h;
+            inputs.max_subblock_w = max_subblock_w;
+            inputs.tile_shape = tile_shape;
+            inputs.prefer_fast_path = prefer_fast_path;
+            const auto choice = ttnn::operations::matmul::auto_tune::determine_largest_subblock(inputs);
+            return std::pair<uint32_t, uint32_t>{choice.out_subblock_h, choice.out_subblock_w};
+        },
+        nb::kw_only(),
+        nb::arg("per_core_M"),
+        nb::arg("per_core_N"),
+        nb::arg("compute_kernel_config"),
+        nb::arg("subblock_w_eq_per_core_n_required") = false,
+        nb::arg("subblock_h_eq_per_core_m_required") = false,
+        nb::arg("max_subblock_h") = std::nullopt,
+        nb::arg("max_subblock_w") = std::nullopt,
+        nb::arg("tile_shape") = std::nullopt,
+        nb::arg("prefer_fast_path") = true,
+        R"doc(
+        Pick the largest (out_subblock_h, out_subblock_w) that fits in DEST and divides per_core_M / per_core_N.
+
+        DEST capacity is derived internally from compute_kernel_config (dst_full_sync_en, fp32_dest_acc_en)
+        and tile_shape via ttnn.get_dest_reg_count, matching the kernel-side DEST_AUTO_LIMIT constexpr.
+
+        Args:
+            per_core_M: per-core output tiles along M.
+            per_core_N: per-core output tiles along N.
+            compute_kernel_config: ttnn.DeviceComputeKernelConfig used for the matmul.
+            subblock_w_eq_per_core_n_required: legacy subblock-major writer constraint
+                (out_subblock_w == per_core_N OR out_subblock_h == 1). Pass False when the
+                program config sets row_major_output=True. Defaults to False.
+            subblock_h_eq_per_core_m_required: mirror constraint for 1D mcast_in0 sharded-output
+                (out_subblock_h == per_core_M OR out_subblock_w == 1). Defaults to False.
+            max_subblock_h: optional cap on out_subblock_h (e.g. SDPA streaming-compute uses 2).
+            max_subblock_w: optional cap on out_subblock_w.
+            tile_shape: [tile_h, tile_w] for DEST capacity. Defaults to [32, 32].
+            prefer_fast_path: prefer h==1 / w==1 shapes among ties-on-volume so the
+                matmul_block helper hits its pack_tile_block fast path. Set False to match
+                the legacy SUBBLOCK_HW_CHOICES iteration order. Defaults to True.
+
+        Returns:
+            (out_subblock_h, out_subblock_w) tuple. Falls back to (1, 1) if nothing fits.
+        )doc");
+
+    m_auto_tune.def(
+        "determine_largest_in0_block_w",
+        [](uint32_t Kt,
+           uint32_t per_core_M,
+           uint32_t per_core_N,
+           uint32_t in0_single_tile_size,
+           uint32_t in1_single_tile_size,
+           uint32_t out_single_tile_size,
+           uint32_t l1_budget_bytes,
+           uint32_t interm_single_tile_size,
+           bool fuse_bias,
+           uint32_t max_in0_block_w,
+           uint32_t num_buffered_blocks) {
+            ttnn::operations::matmul::auto_tune::InBlockWTuneInputs inputs;
+            inputs.Kt = Kt;
+            inputs.per_core_M = per_core_M;
+            inputs.per_core_N = per_core_N;
+            inputs.in0_single_tile_size = in0_single_tile_size;
+            inputs.in1_single_tile_size = in1_single_tile_size;
+            inputs.out_single_tile_size = out_single_tile_size;
+            inputs.interm_single_tile_size = interm_single_tile_size;
+            inputs.fuse_bias = fuse_bias;
+            inputs.l1_budget_bytes = l1_budget_bytes;
+            inputs.max_in0_block_w = max_in0_block_w;
+            inputs.num_buffered_blocks = num_buffered_blocks;
+            return ttnn::operations::matmul::auto_tune::determine_largest_in0_block_w(inputs);
+        },
+        nb::kw_only(),
+        nb::arg("Kt"),
+        nb::arg("per_core_M"),
+        nb::arg("per_core_N"),
+        nb::arg("in0_single_tile_size"),
+        nb::arg("in1_single_tile_size"),
+        nb::arg("out_single_tile_size"),
+        nb::arg("l1_budget_bytes"),
+        nb::arg("interm_single_tile_size") = 0u,
+        nb::arg("fuse_bias") = false,
+        nb::arg("max_in0_block_w") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("num_buffered_blocks") = 2u,
+        R"doc(
+        Pick the largest in0_block_w that divides Kt, fits in l1_budget_bytes, and stays under max_in0_block_w.
+
+        L1 budget formula: fixed output (and optional fused-bias interm) footprint plus
+        num_buffered_blocks copies of (per_core_M * in0_tile_size + per_core_N * in1_tile_size).
+        Conservative: pass a budget that already excludes reader/writer scratch and sync CB reserves.
+
+        Args:
+            Kt: K dimension in tiles.
+            per_core_M: per-core output tiles along M.
+            per_core_N: per-core output tiles along N.
+            in0_single_tile_size: in0 tile size in bytes.
+            in1_single_tile_size: in1 tile size in bytes.
+            out_single_tile_size: output tile size in bytes.
+            l1_budget_bytes: L1 budget for in0 + in1 + output (+ interm) CBs.
+            interm_single_tile_size: interm tile size in bytes; only consulted when fuse_bias=True.
+            fuse_bias: whether bias-fusion is on (adds per_core_M * per_core_N * interm_single_tile_size to fixed footprint).
+            max_in0_block_w: hard cap (architectural / numerical). Defaults to UINT32_MAX.
+            num_buffered_blocks: typically 2 for double-buffering. Defaults to 2.
+
+        Returns:
+            in0_block_w. Falls back to 1 if budget already consumed by fixed footprint or no divisor of Kt fits.
+        )doc");
 }
 
 }  // namespace ttnn::operations::matmul

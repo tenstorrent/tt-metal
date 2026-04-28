@@ -24,6 +24,7 @@ MatmulInputs = ttnn._ttnn.operations.matmul.MatmulInputs
 MatmulDeviceOperation = ttnn._ttnn.operations.matmul.MatmulDeviceOperation
 MatmulMultiCoreReuseOptimizedProgramFactory = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory
 create_matmul_attributes = ttnn._ttnn.operations.matmul.create_matmul_attributes
+auto_tune = ttnn._ttnn.operations.matmul.auto_tune
 
 
 def _golden_function(
