@@ -98,6 +98,13 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # build_op_kwargs strips None values, but clamp needs min/max passed explicitly
+    # even when None (the master trace records them). Re-inject from kwargs.
+    if "min" not in op_kwargs and "min" in kwargs:
+        op_kwargs["min"] = kwargs["min"]
+    if "max" not in op_kwargs and "max" in kwargs:
+        op_kwargs["max"] = kwargs["max"]
+
     # Extract min/max from op_kwargs for golden computation (avoid shadowing Python built-ins)
     min_val = op_kwargs.get("min", None)
     max_val = op_kwargs.get("max", None)

@@ -134,11 +134,17 @@ def run(
     is_host = storage_type and "HOST" in str(storage_type)
 
     if not is_host:
-        if is_mesh_device:
-            # Typecast is element-wise: replicate to all devices and compare
-            # device-0 output against the original reference tensor.
-            # Using create_tensor_on_mesh with ShardTensor2dMesh repeats/shards
-            # the input, causing a mismatch when extracting device 0 only.
+        if is_mesh_device and input_a_tensor_placement:
+            # Use the traced tensor placement to match the master trace's distribution
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        elif is_mesh_device:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -159,7 +165,8 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
+    # Call positionally to match the master trace (arg1=dtype)
+    output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
     # Use device-0 extraction (no mesh composer) to get per-device output that
     # matches the per-device reference tensor.  Typecast is element-wise so each
     # device's output independently matches the reference.

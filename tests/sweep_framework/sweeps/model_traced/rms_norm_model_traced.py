@@ -124,14 +124,9 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Re-inject memory_config from kwargs (build_op_kwargs strips it by default)
-    mc_raw = kwargs.get("memory_config")
-    if mc_raw is not None:
-        parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
-    elif output_memory_config is not None:
-        op_kwargs["memory_config"] = output_memory_config
+    # Do NOT inject memory_config — the master trace only records it when the model
+    # explicitly passed it as a kwarg.  Injecting from vector metadata causes
+    # extra_key diffs in validation.
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

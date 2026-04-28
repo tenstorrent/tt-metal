@@ -91,6 +91,10 @@ def run(
         torch_output_tensor = torch.unsqueeze(torch_output_tensor, 0)
 
     is_host = storage_type and "HOST" in str(storage_type)
+    # V2 loader doesn't expose storage_type directly; detect HOST from memory_config=None
+    # (HOST tensors have no device memory config)
+    if input_a_memory_config is None:
+        is_host = True
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:

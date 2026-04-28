@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
+    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -41,11 +41,25 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
 
 
 def run(
@@ -76,15 +90,8 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Only pass memory_config to ttnn.transpose if the master trace actually had it.
-    # The sweep may provide output_memory_config even when the traced config does
-    # not include memory_config — in that case we must not inject it.
-    # The traced memory_config comes through the explicit `memory_config` parameter;
-    # if the trace didn't have it, `memory_config` is None and we should not inject.
-    if memory_config is not None and output_memory_config is not None and "memory_config" not in op_kwargs:
-        parsed_mc = parse_dict_value("memory_config", output_memory_config)
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
+    # Do NOT inject memory_config from output_memory_config — the master trace only
+    # records it when the model explicitly passed it.  Injecting causes extra_key diffs.
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
