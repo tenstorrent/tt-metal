@@ -163,17 +163,27 @@ MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferTy
     auto stats = device->allocator()->get_statistics(buffer_type);
     auto num_banks_ = device->allocator()->get_num_banks(buffer_type);
 
+    size_t alloc_hwm = 0;
+    if (buffer_type == BufferType::DRAM) {
+        alloc_hwm = static_cast<size_t>(device->allocator_impl()->get_dram_persistent_bottom_up_hwm());
+    }
+
     return MemoryView{
         .num_banks = num_banks_,
         .total_bytes_per_bank = stats.total_allocatable_size_bytes,
         .total_bytes_allocated_per_bank = stats.total_allocated_bytes,
         .total_bytes_free_per_bank = stats.total_free_bytes,
         .largest_contiguous_bytes_free_per_bank = stats.largest_free_block_bytes,
+        .allocation_high_water_mark_per_bank = alloc_hwm,
         .block_table = device->allocator_impl()->get_memory_block_table(buffer_type)};
 }
 
 MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type) {
     return MemoryReporter::inst().get_memory_view(device, buffer_type);
+}
+
+void ResetDramPersistentBottomUpHwm(IDevice* device) {
+    device->allocator_impl()->reset_dram_persistent_bottom_up_hwm();
 }
 
 bool MemoryReporter::enabled() { return is_enabled_; }

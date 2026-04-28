@@ -486,6 +486,16 @@ DeviceAddr AllocatorImpl::get_dram_deletion_high_water_mark() const {
     return dram_manager_->get_deletion_high_water_mark();
 }
 
+DeviceAddr AllocatorImpl::get_dram_persistent_bottom_up_hwm() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_persistent_bottom_up_hwm();
+}
+
+void AllocatorImpl::reset_dram_persistent_bottom_up_hwm() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dram_manager_->reset_persistent_bottom_up_hwm();
+}
+
 void AllocatorImpl::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->clear();

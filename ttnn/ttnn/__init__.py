@@ -300,6 +300,7 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
+    reset_dram_persistent_bottom_up_hwm,
     get_max_worker_l1_unreserved_size,
     get_dram_alignment,
     get_l1_alignment,

@@ -172,6 +172,9 @@ void py_device_module_types(nb::module_& m_device) {
         .def_ro(
             "largest_contiguous_bytes_free_per_bank",
             &tt::tt_metal::detail::MemoryView::largest_contiguous_bytes_free_per_bank)
+        .def_ro(
+            "allocation_high_water_mark_per_bank",
+            &tt::tt_metal::detail::MemoryView::allocation_high_water_mark_per_bank)
         .def_ro("block_table", &tt::tt_metal::detail::MemoryView::block_table);
 }
 
@@ -521,6 +524,31 @@ void device_module(nb::module_& m_device) {
         nb::arg("device").noconvert(),
         nb::arg("buffer_type").noconvert(),
         get_allocator_base_address_doc.data());
+
+    constexpr std::string_view reset_dram_persistent_hwm_doc = R"doc(
+        Reset the persistent bottom-up DRAM high-water mark to 0.
+
+        Unlike begin_dram_high_water_mark_tracking, this counter is always on,
+        tracks only bottom-up allocations, and is never reset by trace internals.
+        Intended for end-to-end memory profiling: reset before the workload, run,
+        then read the result via GetMemoryView(device, BufferType::DRAM).allocation_high_water_mark_per_bank.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device whose DRAM HWM is reset   | ttnn.Device           |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc";
+    m_device.def(
+        "ResetDramPersistentBottomUpHwm",
+        &tt::tt_metal::detail::ResetDramPersistentBottomUpHwm,
+        nb::arg("device").noconvert(),
+        reset_dram_persistent_hwm_doc.data());
+    m_device.def(
+        "ResetDramPersistentBottomUpHwm",
+        [](MeshDevice* device) { tt::tt_metal::detail::ResetDramPersistentBottomUpHwm(device); },
+        nb::arg("device").noconvert(),
+        reset_dram_persistent_hwm_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.

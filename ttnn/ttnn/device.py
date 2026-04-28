@@ -282,6 +282,10 @@ def get_allocator_base_address(device, buffer_type):
     return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
 
 
+def reset_dram_persistent_bottom_up_hwm(device):
+    ttnn._ttnn.device.ResetDramPersistentBottomUpHwm(device)
+
+
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice
