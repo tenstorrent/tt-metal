@@ -50,7 +50,7 @@ struct DataMovementConfiguration {
 
     struct Gen2DataMovementConfig {
         // Currently, no configuration is needed for Gen2!
-        // Might want to revisit the API if so....
+        // The empty struct is still used to express a Gen2 DM kernel.
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
@@ -63,15 +63,17 @@ struct DataMovementConfiguration {
 // Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
-// A KernelSpec describes a compute or data movement kernel:
-//  - The kernel's source code
-//  - Compiler options for generating the kernel binary
-//  - Resource bindings, giving the kernel access to DFBs, semaphores, etc.
-//  - Kernel argument schema (for runtime arguments, specified when the Program is enqueued)
+// A KernelSpec is a descriptor for a Tenstorrent kernel:
+// A single computational task compiled into one or more executable files that work
+// collaboratively on a single node.
+//
+// The KernelSpec describes the properties of a compute or data movement kernel:
+//  - Source code
+//  - Compiler options for generating the kernel binary(ies)s
+//  - Resource bindings (access to DFBs, semaphores, etc.)
+//  - Kernel argument schema (for arguments specified when the Program is enqueued)
 //  - Kernel argument bindings (for compile-time constant arguments)
 //  - The configuration of any hardware resources controlled by the kernel
-//
-// Invariant: A KernelSpec maps 1:1 with a kernel binary within the Program.
 //
 // Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
 // instance runs on each node where the kernel is placed, with its own runtime arguments.
@@ -87,8 +89,7 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // (Wrapper types disambiguate the string-constructible variant alternatives,
-    // ensuring compile-time enforcement.)
+    // (Force callers to choose explicitly between path and inline code.)
     struct SourceFilePath {
         std::filesystem::path path;
     };
@@ -104,7 +105,7 @@ struct KernelSpec {
     // Number of kernel threads
     uint8_t num_threads = 1;
 
-    // OPTIONAL per-node thread count specification
+    // (Optional) Per-node thread count specification
     // The default threading is num_threads. However, you may override this on a per-node basis.
     // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
     //       Here as a placeholder; specifying it will trigger a runtime error.
