@@ -612,6 +612,10 @@ class Pipeline:
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()
 
+    def dump_kv_cache(self, out_dir) -> None:
+        """Dump on-device KV cache for this rank's stage. No-op for non-decoder stages."""
+        self._stage_kind.dump_kv_cache(out_dir, self._my_stage_idx)
+
     def terminate(self) -> None:
         """Terminate the pipeline block.
 

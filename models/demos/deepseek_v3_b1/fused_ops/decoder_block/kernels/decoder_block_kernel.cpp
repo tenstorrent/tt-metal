@@ -56,6 +56,7 @@
 #include "../../../unified_kernels/eltwise_add.hpp"
 #include "../../../unified_kernels/gated_reduce.hpp"
 #include "../../../unified_kernels/residual_add.hpp"
+#include "../../../unified_kernels/persistent_loop.hpp"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
