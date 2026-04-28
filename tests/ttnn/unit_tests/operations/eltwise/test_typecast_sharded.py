@@ -1,11 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -89,7 +88,6 @@ def test_typecast_sharded_fp32_bf16(
 
     # Verify values match: device typecast must exactly match PyTorch's float32 <-> bfloat16 conversion
     assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
-    assert_with_ulp(expected_output, tt_output_torch, 0)
 
 
 @pytest.mark.parametrize(
@@ -150,7 +148,6 @@ def test_typecast_interleaved(shape, input_dtype, output_dtype, memory_config, d
 
     # Verify TTNN matches PyTorch's bfloat16 <-> float32 conversion
     assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
-    assert_with_ulp(expected_output, tt_output_torch, 0)
 
 
 @pytest.mark.parametrize(
