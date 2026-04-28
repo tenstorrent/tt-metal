@@ -145,7 +145,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -240,7 +241,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
