@@ -36,6 +36,66 @@ Validation:
 - 32-layer e2e: max=32.5 (matches baseline 33.5), top-1 = "The", coherent
   multi-token output.
 
+## Mesh + seqlen sweep (2026-04-28, post-fix)
+
+**3B mesh validation:** `test_mesh_fused_sdpa.py` on T3K, all 8 devices
+PASS (cos 0.995-0.998 vs masked ref, ratio 0.96-1.00).
+
+**3C T3K e2e:** `eval_e2e.py --tq-full-dequant TT_NUM_DEVICES=8` traced =
+**32.6 ms/tok (30.6 tok/s)**, output "The capital of France is Paris."
+
+### Seqlen sweep — `bench_seqlen_sweep.py`
+
+Per-call SDPA decode latency at `cur_pos = seq - 1`, 32-layer Llama-3.1-8B
+(8 KV heads / 32 Q heads / head_dim=128). KV totals are summed across
+all 32 layers and all devices.
+
+**N150 (1 chip):**
+
+| seq | TQ FD ms | BFP8 ms | speedup | TQ KV total | BFP8 total | TQ/BFP8 | TQ idx (BFP4) | TQ norms (BF16) |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 0.48 | 0.04 | 0.09× | 8 MB | 8 MB | 1.00× | 4 MB | 4 MB |
+| 256 | 0.94 | 0.04 | 0.05× | 16 MB | 16 MB | 1.00× | 8 MB | 8 MB |
+| 512 | 1.84 | 0.05 | 0.03× | 32 MB | 32 MB | 1.00× | 16 MB | 16 MB |
+| 1 024 | 3.66 | 0.06 | 0.02× | 64 MB | 64 MB | 1.00× | 32 MB | 32 MB |
+| 2 048 | 7.29 | 0.07 | 0.01× | 128 MB | 128 MB | 1.00× | 64 MB | 64 MB |
+| 4 096 | 14.56 | 0.09 | 0.01× | 256 MB | 256 MB | 1.00× | 128 MB | 128 MB |
+| 8 192 | 29.08 | 0.16 | 0.01× | 512 MB | 512 MB | 1.00× | 256 MB | 256 MB |
+| 16 384 | 58.11 | 0.24 | 0.00× | 1.00 GB | 1.00 GB | 1.00× | 512 MB | 512 MB |
+| 32 768 | 116.16 | 0.42 | 0.00× | 2.00 GB | 2.00 GB | 1.00× | 1.00 GB | 1.00 GB |
+| 65 536 | 232.30 | 0.78 | 0.00× | 4.00 GB | 4.00 GB | 1.00× | 2.00 GB | 2.00 GB |
+| 131 072 | 464.37 | 1.47 | 0.00× | 8.00 GB | 8.00 GB | 1.00× | 4.00 GB | 4.00 GB |
+
+**T3K (8 chips, KV heads sharded 1 per device):**
+
+| seq | TQ FD ms | BFP8 ms | speedup | TQ KV total | BFP8 total | TQ/BFP8 | TQ idx (BFP4) | TQ norms (BF16) |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 0.48 | 0.10 | 0.21× | 8 MB | 8 MB | 1.00× | 4 MB | 4 MB |
+| 256 | 0.94 | 0.16 | 0.17× | 16 MB | 16 MB | 1.00× | 8 MB | 8 MB |
+| 512 | 1.85 | 0.11 | 0.06× | 32 MB | 32 MB | 1.00× | 16 MB | 16 MB |
+| 1 024 | 3.66 | 0.11 | 0.03× | 64 MB | 64 MB | 1.00× | 32 MB | 32 MB |
+| 2 048 | 7.28 | 0.11 | 0.02× | 128 MB | 128 MB | 1.00× | 64 MB | 64 MB |
+| 4 096 | 14.55 | 0.12 | 0.01× | 256 MB | 256 MB | 1.00× | 128 MB | 128 MB |
+| 8 192 | 29.08 | 0.15 | 0.01× | 512 MB | 512 MB | 1.00× | 256 MB | 256 MB |
+| 16 384 | 58.08 | 0.15 | 0.00× | 1.00 GB | 1.00 GB | 1.00× | 512 MB | 512 MB |
+| 32 768 | 116.09 | 0.15 | 0.00× | 2.00 GB | 2.00 GB | 1.00× | 1.00 GB | 1.00 GB |
+| 65 536 | 232.16 | 0.24 | 0.00× | 4.00 GB | 4.00 GB | 1.00× | 2.00 GB | 2.00 GB |
+| 131 072 | 464.15 | 0.33 | 0.00× | 8.00 GB | 8.00 GB | 1.00× | 4.00 GB | 4.00 GB |
+
+### Two big findings
+
+**1. KV cache savings are 0%** — TQ FD is the same size as BFP8. The BF16
+norms tensor is shaped `[max_blocks, num_kv_heads, block_size, 1]` and
+`TILE_LAYOUT` pads `[block_size, 1]` to `[32, 32]`, so 31/32 of the norms
+storage is wasted padding. That waste is exactly the size of the BFP4
+indices, so the savings cancel out at every seqlen. **NEXT: repack norms
+to recover the 2× savings.**
+
+**2. TQ FD per-call latency is 5-100× slower than BFP8** and scales linearly
+with `cur_pos` (~0.48 ms / 128 tokens per layer). T3K does not help — each
+device runs the full chunk loop on its local head shard. BFP8 stays
+sub-millisecond up to 128K. At long context this gap dominates e2e.
+
 ## Earlier (2026-04-27 evening) — perf bottleneck
 
 **Headline:** the fused-SDPA kernel was iterating ALL 256 padded k_chunks
