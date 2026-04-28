@@ -27,7 +27,10 @@
  * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
  * IMPORTANT: Requires compute kernel hardware initialization.
- * Call compute_kernel_hw_startup() before using.
+ * Call compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) exactly once at the
+ * start of your kernel before using. Do NOT re-call it later (and never inside
+ * a loop) — re-running mid-kernel can race the compute pipeline and produce
+ * undefined behavior.
  *
  * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
  *
@@ -290,7 +293,9 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  *
  * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
  * Before calling this function, you MUST initialize the compute kernel hardware by
- * calling compute_kernel_hw_startup() at the start of your kernel.
+ * calling compute_kernel_hw_startup() exactly once at the start of your kernel.
+ * Do NOT re-call it later (and never inside a loop) — re-running mid-kernel can
+ * race the compute pipeline and produce undefined behavior.
  *
  * IMPORTANT - SCALER CB REQUIREMENT:
  * The scaler CB (scaler_cb) must contain the scaling factor tile BEFORE calling
