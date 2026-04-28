@@ -446,8 +446,8 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     spec.program_id = "multi_node_program";
 
     // Kernels span both nodes
-    auto producer = MakeMinimalDMKernel("producer", all_nodes);
-    auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.runtime_arguments_schema.num_runtime_varargs = 2;
@@ -456,14 +456,14 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     // consumer has no varargs (defaults)
 
     // Single DFB spanning all nodes
-    auto dfb = MakeMinimalDFB("dfb", all_nodes);
+    auto dfb = MakeMinimalDFB("dfb");
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"}, {"dfb"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -492,22 +492,22 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     ProgramSpec spec;
     spec.program_id = "multi_node_program";
 
-    auto producer = MakeMinimalDMKernel("producer", all_nodes);
-    auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.runtime_arguments_schema.num_runtime_varargs = 2;
     // consumer has no varargs (defaults)
 
     // Single DFB spanning all nodes
-    auto dfb = MakeMinimalDFB("dfb", all_nodes);
+    auto dfb = MakeMinimalDFB("dfb");
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"}, {"dfb"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -659,7 +659,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
 
     ProgramSpec spec;
     spec.program_id = "vararg_differing_counts";
-    auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
+    auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};
@@ -688,7 +688,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds)
 
     ProgramSpec spec;
     spec.program_id = "vararg_mixed_entry_types";
-    auto kernel = MakeMinimalDMKernel("dm_kernel", all_nodes);
+    auto kernel = MakeMinimalDMKernel("dm_kernel");
     // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
     // Node c has count 5 (declared via a NodeCoord entry).
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{ab, 3}, {node_c, 5}};
@@ -717,7 +717,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds
 
     ProgramSpec spec;
     spec.program_id = "vararg_scalar_with_sparse_override";
-    auto kernel = MakeMinimalDMKernel("dm_kernel", all_nodes);
+    auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.runtime_arguments_schema.num_runtime_varargs = 2;  // default for unlisted nodes
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
         NumVarargsPerNode{{node_c, 5}};  // node_c is the exception
@@ -749,7 +749,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) 
 
     ProgramSpec spec;
     spec.program_id = "vararg_zero_override";
-    auto kernel = MakeMinimalDMKernel("dm_kernel", both);
+    auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.runtime_arguments_schema.num_runtime_varargs = 3;
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
         NumVarargsPerNode{{node_b, 0}};  // node_b: no varargs despite scalar default
@@ -792,7 +792,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
 
     ProgramSpec spec;
     spec.program_id = "vararg_missing_node";
-    auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
+    auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.runtime_arguments_schema.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};

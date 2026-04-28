@@ -35,15 +35,12 @@ using WorkerSpecName = std::string;
 
 // WorkerSpec describes the configuration of a worker node
 struct WorkerSpec {
-    // Worker type identifier
     WorkerSpecName unique_id;
 
-    // Kernels, DFBs, and semaphores for this worker
+    // The kernels that run on this WorkerSpec's nodes.
     std::vector<KernelSpecName> kernels;
-    std::vector<DFBSpecName> dataflow_buffers;
-    std::vector<SemaphoreSpecName> semaphores;
 
-    // The set of nodes configured by this WorkerSpec
+    // The set of nodes configured by this WorkerSpec.
     std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
 };
 
@@ -53,15 +50,16 @@ struct ProgramSpec {
     // Program identifier (identifies a Program within a MeshWorkload)
     ProgramSpecName program_id;
 
-    // Kernels, DFBs, and semaphores for this Program
+    // Kernels, DFBs, and semaphores that make up the Program.
     std::vector<KernelSpec> kernels;
     std::vector<DataflowBufferSpec> dataflow_buffers;
+    std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
 
-    // Worker specifications (optional on Gen1, required on Gen2+)
-    // This info is redundant, but improves clarity and messaging.
-    // (Done to simplify porting from ProgramDescriptor.)
-    std::optional<std::vector<WorkerSpec>> workers = std::nullopt;
+    // Worker specifications. Required: a valid ProgramSpec has at least one WorkerSpec.
+    // Each kernel must be referenced by at least one WorkerSpec; the kernel's effective
+    // node set is the union of those WorkerSpecs' target_nodes.
+    std::vector<WorkerSpec> workers;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
