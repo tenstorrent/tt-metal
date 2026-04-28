@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -110,7 +110,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re
@@ -750,6 +750,12 @@ FIX_AM_FIRES=$(grep -cE 'FIX AM|skipping Phase 5b.*FIX AM|channels_not_ready_for
 FIX_AW_FIRES=$(grep -cE 'FIX AW|relay-broken non-MMIO.*running driver.*close_device.*background thread|close_device.*did not complete.*5s.*FIX AW' "$CLEAN" 2>/dev/null || echo 0)
 # FIX BA: STARTED-state non-MMIO devices added to relay_broken_non_mmio (FIX AM fired, relay_broken=false)
 FIX_BA_FIRES=$(grep -cE 'FIX BA|channels_not_ready_for_traffic.*relay not marked broken.*Adding to relay_broken_non_mmio|teardown: FIX BA' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AE: catch wait_for_non_mmio_flush() timeout in write_core/write_reg/noc_multicast_write + mark_relay_broken() for ~Cluster()
+# Pattern: "FIX AE: wait_for_non_mmio_flush(chip N) threw: ... Marking relay broken."
+FIX_AE_FLUSH_TIMEOUT=$(grep -cE 'FIX AE.*wait_for_non_mmio_flush.*threw|FIX AE.*Marking relay broken' "$CLEAN" 2>/dev/null || echo 0)
+# FIX AE also marks all remote chips relay-broken in ~Cluster() before close_device() — no specific log (silent path).
+# FIX NS: eliminate redundant topology discovery in initialize_base_objects (no runtime log — structural fix)
+# Regression evidence: 14+ min SIGALRM before any test, "unit_tests_ttnn" hangs without FIX AQ warning
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -867,7 +873,10 @@ if [ "${FIX_AM_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AM] Phase 5b skipped after FIX AL STARTED early-exit (${FIX_AM_FIRES} event(s)) — master chan still at STARTED after poll exits; subordinates stuck at REMOTE_HANDSHAKE_COMPLETE; Phase 5b is pointless. Sets fabric_channels_not_ready_for_traffic_=true. FIX BA should fire at teardown to clean up."
 fi
 if [ "${FIX_AW_FIRES:-0}" -gt 0 ]; then
-    echo "  => [FIX AW] ~Cluster destructor: driver_->close_device() running in background thread with 5s timeout (${FIX_AW_FIRES} event(s)) — relay-broken non-MMIO chips registered by FIX BA/teardown; wait_for_non_mmio_flush would hang indefinitely on stale UMD relay CMD queue entries."
+    echo "  => [FIX AW] ~Cluster destructor: driver_->close_device() running in background thread with 5s timeout (${FIX_AW_FIRES} event(s)) — relay-broken non-MMIO chips registered by FIX BA/teardown; wait_for_non_mmio_flush would hang indefinitely on stale UMD relay CMD queue entries. NOTE: FIX AW was superseded by FIX AE (commit 561f7abd505) which marks chips broken before close_device() — no thread detach needed."
+fi
+if [ "${FIX_AE_FLUSH_TIMEOUT:-0}" -gt 0 ]; then
+    echo "  => [FIX AE] wait_for_non_mmio_flush() timed out mid-session in write_core/write_reg/noc_multicast_write (${FIX_AE_FLUSH_TIMEOUT} event(s)) — relay died while a write was in progress. FIX AE caught the exception and called mark_relay_broken() so all subsequent flushes for that chip return instantly (0ms instead of 5s per call). Also: ~Cluster() marks all remote chips broken before close_device() to prevent UMD destructor/constructor race (supersedes FIX AW background-thread approach)."
 fi
 if [ "${FIX_BA_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX BA] teardown: STARTED-state non-MMIO device(s) added to relay_broken_non_mmio (${FIX_BA_FIRES} event(s)) — FIX AM set channels_not_ready_for_traffic=true but NOT fabric_relay_path_broken_. Without FIX BA: FIX AC + FIX AY skip these devices; STARTED ERISCs remain; next session stalls 5s/device in topology discovery. FIX BA forces FIX AC + FIX AY to clean them up."

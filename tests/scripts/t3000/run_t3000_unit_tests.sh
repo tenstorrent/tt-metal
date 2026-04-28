@@ -261,6 +261,19 @@ run_t3000_ttnn_tests() {
   # fail GAP-38 (wrong AllGather output or hang).
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
 
+  # GAP-39: FIX NS — Single topology discovery per open.
+  # Verifies that MetalEnvImpl::initialize_base_objects() does NOT trigger a redundant
+  # topology discovery before Cluster creation, which would fill relay queues to 4/4
+  # capacity on systems with stale FABRIC-mode ERISCs (14m40s hang observed in CI).
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py::test_gap39_fixns_single_topology_discovery ; record_test
+
+  # GAP-40: FIX AE — Catch flush timeouts in write_core/write_reg/noc_multicast_write
+  # and pre-mark remote chips relay-broken in ~Cluster() before close_device().
+  # Verifies: (1) no 5s-per-call cascade from dead-relay mid-session writes; and
+  # (2) no heap corruption from racing ~Cluster() + Cluster() UMD global state access
+  # (FIX AE supersedes FIX AW background-thread approach).
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap40_fixae_flush_timeout_catch.py::test_gap40_fixae_flush_timeout_catch ; record_test
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
