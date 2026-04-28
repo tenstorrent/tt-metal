@@ -426,3 +426,176 @@ def test_view_override_parent_layer_filter(tmp_path: Path):
     assert "0.k" in loose_keys
     assert "1.k" in loose_keys
     assert "3.k" in loose_keys
+
+
+def test_stacked_expert_alias_resolves_per_expert_keys(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    assert expert_key in state
+    assert torch.equal(state[expert_key], stacked_tensor[1])
+
+    sub = sub_state_dict(state, "model.layers.3.mlp.")
+    sub_expert_key = "experts.2.gate_proj.weight"
+    assert sub_expert_key in sub
+    assert torch.equal(sub[sub_expert_key], stacked_tensor[2])
+
+
+def test_stacked_expert_alias_contains_rejects_out_of_range_experts(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    missing_expert_key = "model.layers.3.mlp.experts.3.gate_proj.weight"
+    assert missing_expert_key not in state
+    with pytest.raises(KeyError):
+        _ = state[missing_expert_key]
+
+
+def test_stacked_expert_alias_cached_access_respects_num_layers_filter(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+
+    assert torch.equal(state[expert_key], stacked_tensor[1])
+    assert expert_key in state._cache
+
+    limited = state.view_with_prefix("", num_layers=2)
+
+    assert expert_key not in limited
+    with pytest.raises(KeyError):
+        _ = limited[expert_key]
+
+
+def test_lazy_state_dict_rejects_mixed_expert_checkpoint(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    tensors = {
+        "model.layers.3.mlp.experts_stacked.gate_proj.weight": torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4),
+        "model.layers.3.mlp.experts.0.gate_proj.weight": torch.ones((2, 4), dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(tensors, str(shard))
+    _write_index(model_dir, {key: shard.name for key in tensors})
+
+    with pytest.raises(ValueError, match="mixes legacy per-expert and stacked expert tensors"):
+        load_state_dict(model_dir, "")
+
+
+def test_stacked_expert_iteration_exposes_logical_aliases(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    sub = sub_state_dict(state, "model.layers.3.mlp.")
+
+    materialized = dict(sub.items())
+    stacked_view = sub_state_dict(state, "model.layers.3.mlp.experts_stacked.")
+
+    assert "experts_stacked.gate_proj.weight" not in materialized
+    assert "experts_stacked.gate_proj.weight" not in sub
+    with pytest.raises(KeyError):
+        _ = sub["experts_stacked.gate_proj.weight"]
+    assert "experts.0.gate_proj.weight" in materialized
+    assert "experts.1.gate_proj.weight" in materialized
+    assert "experts.2.gate_proj.weight" in materialized
+    assert torch.equal(materialized["experts.1.gate_proj.weight"], stacked_tensor[1])
+    assert torch.equal(stacked_view["gate_proj.weight"], stacked_tensor)
+
+
+def test_evict_keeps_explicitly_cached_stacked_tensor(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    stacked_view = sub_state_dict(state, "model.layers.3.mlp.experts_stacked.")
+
+    assert torch.equal(stacked_view["gate_proj.weight"], stacked_tensor)
+    assert torch.equal(state[expert_key], stacked_tensor[1])
+    assert stacked_key in state._cache
+    assert expert_key in state._cache
+
+    state.evict(expert_key)
+
+    assert stacked_key in state._cache
+    assert expert_key not in state._cache
+    assert torch.equal(stacked_view["gate_proj.weight"], stacked_tensor)
+
+
+def test_evict_alias_releases_unpinned_stacked_tensor(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+
+    assert torch.equal(state[expert_key], stacked_tensor[1])
+    assert expert_key in state._cache
+    assert stacked_key not in state._cache
+
+    state.evict(expert_key)
+
+    assert stacked_key not in state._cache
+    assert expert_key not in state._cache
+
+
+def test_stacked_only_subview_iterates_stacked_keys(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    stacked_view = sub_state_dict(state, "model.layers.3.mlp.experts_stacked.")
+
+    materialized = dict(stacked_view.items())
+
+    assert list(materialized.keys()) == ["gate_proj.weight"]
+    assert len(stacked_view) == 1
+    assert torch.equal(materialized["gate_proj.weight"], stacked_tensor)

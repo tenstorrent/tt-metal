@@ -13,7 +13,7 @@ from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
-    os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
+    os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 PERF_MARGIN = 0.08
@@ -185,7 +185,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         _demo_case(
-            max_prompts=24,
+            max_prompts=64,
             max_users_per_row=8,
             repeat_batches=1,
             max_new_tokens=129,
@@ -215,7 +215,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
-            max_prompts=56,
+            max_prompts=14,
             max_users_per_row=8,
             repeat_batches=20,
             max_new_tokens=129,
@@ -246,7 +246,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
         _demo_case(
-            max_prompts=512,
+            max_prompts=128,
             max_users_per_row=8,
             repeat_batches=1,
             max_new_tokens=129,
@@ -276,7 +276,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
-            max_prompts=56,
+            max_prompts=14,
             max_users_per_row=8,
             repeat_batches=20,
             max_new_tokens=129,

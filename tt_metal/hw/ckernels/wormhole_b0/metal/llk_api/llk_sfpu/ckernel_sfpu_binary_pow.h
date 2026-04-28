@@ -61,7 +61,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vInt exp = sfpi::exexp(base);
     v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
     v_endif;
-    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);
+    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
 
     // De-normalize to original range
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
@@ -102,8 +102,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, 0);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560e) + zif, 0);
+    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560e) + zif, sfpi::RoundMode::NearestEven);
 
     d2 = d1 * d2;
     zif = _float_to_int32_positive_(d2 * d3);
@@ -115,9 +115,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    sfpi::vInt pow_int =
-        sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
+    sfpi::vInt pow_int = sfpi::float_to_int16(
+        pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
+    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, sfpi::RoundMode::NearestEven);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN
     v_if((absbase == 0.f) && pow < 0.f) {
@@ -144,7 +144,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+        y = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven));
     }
 
     return y;
@@ -192,7 +192,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vInt exp_sign = sfpi::vInt(0) - sign_bit;    // 0 or 0xFFFFFFFF (arithmetic right shift equivalent)
     sfpi::vInt exp_abs = (exp ^ exp_sign) - exp_sign;  // Take two's complement if negative exponent
     // setsgn reads sign from bit 31, so use exp_sign directly (0 or 0xFFFFFFFF) not (exp_sign & 1)
-    sfpi::vFloat exp_f32 = sfpi::int32_to_float(sfpi::setsgn(exp_abs, exp_sign), 0);
+    sfpi::vFloat exp_f32 = sfpi::int32_to_float(sfpi::setsgn(exp_abs, exp_sign), sfpi::RoundMode::NearestEven);
 
     // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2)
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
@@ -218,9 +218,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        sfpi::vInt pow_int =
-            sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
-        sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
+        sfpi::vInt pow_int = sfpi::float_to_int16(
+            pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
+        sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, sfpi::RoundMode::NearestEven);
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive

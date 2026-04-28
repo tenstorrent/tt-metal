@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -24,10 +25,12 @@ void kernel_main() {
     const uint32_t tile_size = get_tile_size(cb_id_out0);
 
     const auto s1 = TensorAccessor(dst_args, dst_addr);
+    experimental::CircularBuffer cb_out0(cb_id_out0);
+    experimental::CircularBuffer cb_out1(cb_id_out1);
 
-    cb_reserve_back(cb_id_out1, 1);  // in this kernel we are not pushing anything into CBs, just using the space
+    cb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
 
-    uint32_t pad_buffer_l1_addr = get_write_ptr(cb_id_out1);
+    uint32_t pad_buffer_l1_addr = cb_out1.get_write_ptr();
 
     // Fill pad tile with pad value
     volatile tt_l1_ptr uint32_t* pad_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_buffer_l1_addr);
@@ -51,11 +54,11 @@ void kernel_main() {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             for (uint32_t yt = 0; yt < num_unpadded_Yt; yt++) {
                 for (uint32_t xt = 0; xt < num_unpadded_Xt; xt++) {
-                    cb_wait_front(cb_id_out0, 1);
-                    uint32_t src_buffer_l1_addr = get_read_ptr(cb_id_out0);
+                    cb_out0.wait_front(1);
+                    uint32_t src_buffer_l1_addr = cb_out0.get_read_ptr();
                     noc_async_write_tile(dst_tile_id, s1, src_buffer_l1_addr);
                     noc_async_write_barrier();
-                    cb_pop_front(cb_id_out0, 1);
+                    cb_out0.pop_front(1);
                     dst_tile_id++;
                 }
                 pad_tiles(num_padded_Xt);

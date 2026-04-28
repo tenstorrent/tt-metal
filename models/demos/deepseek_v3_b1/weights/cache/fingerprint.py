@@ -15,6 +15,7 @@ import json
 
 import ttnn
 from models.demos.deepseek_v3_b1.weights.cache.types import (
+    CompressedTensorTarget,
     Fingerprint,
     FusionGroupSpec,
     RegionSpec,
@@ -88,6 +89,18 @@ def canonical(fingerprint: Fingerprint) -> dict:
         }
     elif isinstance(target, FusionGroupSpec):
         target_dict = _canonical_fusion_group(target)
+    elif isinstance(target, CompressedTensorTarget):
+        target_dict = {
+            "kind": "compressed_tensor",
+            "name": target.name,
+            "K": target.K,
+            "N_padded": target.N_padded,
+            "num_banks": target.num_banks,
+            "bspm_variant": target.bspm_variant,
+            "bspm_budget": target.bspm_budget,
+            "assignment_hash": target.assignment_hash,
+            "transform_version": target.transform_version,
+        }
     else:
         raise TypeError(f"Unsupported target type: {type(target)}")
     return {

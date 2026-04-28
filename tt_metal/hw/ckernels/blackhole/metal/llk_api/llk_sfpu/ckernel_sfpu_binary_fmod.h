@@ -8,6 +8,8 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
 
@@ -98,7 +100,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
     }
 
     return result;

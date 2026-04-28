@@ -100,9 +100,10 @@ inline void tilize_in_reuse_split_reader(
     uint32_t in1_cb_addr = act_cb_start_address;
     uint32_t in2_cb_addr = act_cb_second_reader_start_address;
 
-    uint32_t out_cb_addr, out_cb_addr_second_reader;
-    PACK((out_cb_addr = get_local_cb_interface(out_cb_id).fifo_wr_ptr));
-    PACK((out_cb_addr_second_reader = out_cb_addr + tilized_cb_second_reader_offset));
+    uint32_t out_cb_addr, out_cb_addr_second_reader, out_cb_addr_init;
+    PACK((out_cb_addr_init = get_local_cb_interface(out_cb_id).fifo_wr_ptr));
+    PACK((out_cb_addr = out_cb_addr_init));
+    PACK((out_cb_addr_second_reader = out_cb_addr_init + tilized_cb_second_reader_offset));
 
     constexpr uint32_t min_num_subblocks =
         in1_num_subblocks > in2_num_subblocks ? in2_num_subblocks : in1_num_subblocks;
@@ -148,6 +149,11 @@ inline void tilize_in_reuse_split_reader(
         }
     }
 
+    // Restore fifo_wr_ptr to the reserved-region base so push_back advances from a
+    // known starting point. Without this, push_back's fifo_wr_ptr += num_words
+    // starts from whichever mid-region offset the last tilize_single_block left
+    // and trips the LLK bounds assert (see GH #42510).
+    PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr_init));
     out_cb.push_back(out_cb_tiles);
     fast_tilize_uninit(in2_cb_id, out_cb_id);
 }

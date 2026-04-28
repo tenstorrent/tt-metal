@@ -31,6 +31,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "layernorm_dataflow_utils.h"
 
@@ -41,8 +44,8 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t Wt = get_arg_val<uint32_t>(1);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
-    const uint32_t start_tile_row = get_arg_val<uint32_t>(3);   // starting tile-row index for this core
-    const uint32_t H_logical = get_arg_val<uint32_t>(4);        // total valid (non-padded) rows
+    const uint32_t start_tile_row = get_arg_val<uint32_t>(3);
+    const uint32_t H_logical = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
@@ -53,13 +56,11 @@ void kernel_main() {
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
 
-    // The output DRAM buffer is ROW_MAJOR with page_size = W * elem_size_bytes (one full row per page).
-    // W = Wt * TILE_W, computed from runtime args.
     const auto dst_a = TensorAccessor(dst_args, dst_addr);
 
-    // Row stride inside a pack_untilize_block<block_size, block_size> output block.
-    // Row r within a block starts at:  l1_base + r * block_row_stride_bytes
-    // (This is the standard row-major stride: block_size tiles wide x TILE_W elements per tile.)
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out_rm(cb_id_out_rm);
+
     constexpr uint32_t block_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t tile_width_bytes = TILE_W * elem_size_bytes;
 
@@ -77,7 +78,7 @@ void kernel_main() {
 
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::write_row_major_block_from_cb<decltype(dst_a), decltype(block), TILE_W, TILE_H>(
-                cb_id_out_rm, dst_a, abs_row_base, num_valid_rows, tile_width_bytes, block_row_stride_bytes, block);
+                noc, cb_out_rm, dst_a, abs_row_base, num_valid_rows, tile_width_bytes, block_row_stride_bytes, block);
         }
     }
 }

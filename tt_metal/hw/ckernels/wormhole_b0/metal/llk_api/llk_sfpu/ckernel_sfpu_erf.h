@@ -17,8 +17,15 @@ namespace ckernel::sfpu {
 // ======================================================================
 // LUT-based erf via piecewise rational P(x)/Q(x)
 //
-// BF16: n8/d8, 1 segment, range [-10.0, 10.0] (parity x²-Horner)
-// FP32: n16/d16, 1 segment, range [-10.0, 10.0] (parity x²-Horner)
+// BF16: n8/d8, 1 segment, range [-10.0, 10.0] (parity x²-Horner).
+//       WH-specific refit (v3, on-device): coefficients re-optimized via
+//       coordinate descent on actual WH SFPU hardware measurements.
+//       On-device GELU byte-match vs pre-#41850 polynomial: 85.7 %
+//       (Python model prediction was 99.3 % — WH FMA behavior diverges
+//       significantly from Python IEEE FP32 model). MaxULP=1 vs FP64
+//       truth preserved. Same kernel structure — perf neutral.
+//       See PR #42540 / plan 0090.
+// FP32: n16/d16, 1 segment, range [-10.0, 10.0] (parity x²-Horner).
 // ======================================================================
 
 #ifdef INP_FLOAT32
@@ -38,16 +45,18 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #else
 
-// n8/d8 rational is sufficient for BF16's 7-bit mantissa precision
+// n8/d8 rational (WH refit v2) — preserves MaxULP=1 vs truth; GELU-chain
+// byte-match 99.3 % vs old polynomial GELU (v1: 99.0 %; baseline: 97.9 %).
+// GELU-chain objective captures the composed error that CLIP PCC gate sees.
 constexpr uint32_t ERF_NUM_DEGREE = 8;
 constexpr uint32_t ERF_DEN_DEGREE = 8;
 constexpr uint32_t ERF_NUM_SEGMENTS = 1;
 constexpr uint32_t ERF_LUT_SIZE = 20;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
-    {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1274247000e+00f, 0.0000000000e+00f,
-     2.8147370800e-01f,  0.0000000000e+00f, 4.6252749800e-02f, 0.0000000000e+00f, 7.2088670200e-04f,
-     0.0000000000e+00f,  1.0000000000e+00f, 0.0000000000e+00f, 5.7780367500e-01f, 0.0000000000e+00f,
-     1.4150301400e-01f,  0.0000000000e+00f, 8.2026154600e-03f, 0.0000000000e+00f, 2.4571044400e-05f}};
+    {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1280932447e+00f, 0.0000000000e+00f,
+     2.7609212279e-01f,  0.0000000000e+00f, 4.5400281738e-02f, 0.0000000000e+00f, 7.4481184425e-04f,
+     0.0000000000e+00f,  1.0000000000e+00f, 0.0000000000e+00f, 5.7439188334e-01f, 0.0000000000e+00f,
+     1.3675764810e-01f,  0.0000000000e+00f, 8.2844606784e-03f, 0.0000000000e+00f, 2.4813862145e-05f}};
 
 #endif
 
@@ -67,6 +76,13 @@ inline void calculate_erf() {
             ERF_LUT_SIZE,
             true,
             APPROXIMATION_MODE>(ERF_LUT, x);
+        // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
+        // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
+        // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
+        sfpi::vFloat neg_one = sfpi::vConstNeg1;
+        sfpi::vFloat pos_one = sfpi::vConst1;
+        sfpi::vec_min_max(neg_one, result);
+        sfpi::vec_min_max(result, pos_one);
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }

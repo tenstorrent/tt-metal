@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
+#include "experimental/circular_buffer.h"
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
 // either the input or padding respectively
@@ -36,10 +37,12 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<7>();
 
     const auto s0 = TensorAccessor(dst_args, output_addr);
+    experimental::CircularBuffer cb_input(input_cb_id);
+    experimental::CircularBuffer cb_pad_val(pad_val_cb_id);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
-    cb_reserve_back(pad_val_cb_id, 1);
-    uint32_t l1_write_addr = get_write_ptr(pad_val_cb_id);
+    cb_pad_val.reserve_back(1);
+    uint32_t l1_write_addr = cb_pad_val.get_write_ptr();
     volatile tt_l1_ptr uint8_t* pad_val_page = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
     const volatile tt_l1_ptr uint8_t* pad_val = reinterpret_cast<const volatile tt_l1_ptr uint8_t*>(&pad_value);
     for (uint32_t i = 0; i < num_elements; i++) {
@@ -47,7 +50,7 @@ void kernel_main() {
             pad_val_page[i * element_size + b] = pad_val[b];
         }
     }
-    cb_push_back(pad_val_cb_id, 1);
+    cb_pad_val.push_back(1);
     // Our scratchpad cb is now a tile full of padding.
 
     bool within_input_region;
@@ -67,12 +70,12 @@ void kernel_main() {
         // Otherwise we simply write the padding tile we have in our circular buffer
         uint64_t dst_noc_addr = s0.get_noc_addr(output_page_offset);
         if (within_input_region) {
-            cb_wait_front(input_cb_id, 1);
-            uint32_t l1_read_addr = get_read_ptr(input_cb_id);
+            cb_input.wait_front(1);
+            uint32_t l1_read_addr = cb_input.get_read_ptr();
             noc_async_write(l1_read_addr, dst_noc_addr, page_size);
             noc_async_write_barrier();
             advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
-            cb_pop_front(input_cb_id, 1);
+            cb_input.pop_front(1);
         } else {
             noc_async_write(l1_write_addr, dst_noc_addr, page_size);
             noc_async_write_barrier();

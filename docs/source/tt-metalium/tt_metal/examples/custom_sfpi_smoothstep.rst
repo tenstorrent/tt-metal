@@ -195,7 +195,7 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     // High-level API function
     // Accepts `edge0`, `edge1` and `inv_delta` as parameters
     inline void my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-        MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
+        MATH(_llk_math_eltwise_unary_sfpu_params_(
             smoothstep_tile_face,
             idx_dst0,
             VectorMode::RC, // Apply on all 4 faces of the tile
