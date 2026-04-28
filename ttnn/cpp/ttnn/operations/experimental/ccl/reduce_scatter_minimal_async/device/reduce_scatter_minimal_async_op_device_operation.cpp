@@ -202,39 +202,26 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     const uint64_t slice_size = input_size_bytes / N;  // S/N bytes per device output
 
     // =========================================================================
-    // 1. FABRIC TRANSFER
+    // 1. FABRIC TRANSFER (algorithm-agnostic lower bound)
     //
-    // We model from the worst-case device's perspective: the one whose
-    // busiest incoming link carries the most data.
+    // RING topology — bisection argument:
+    //   Cut the ring into two halves of N/2 devices. Each device's output
+    //   chunk needs contributions from devices on both sides of the cut.
+    //   With optimal intermediate reduction, each direction carries
+    //   (N-1)×S/(2N) bytes through the bottleneck link.
+    //   Latency: N/2 hops (ring diameter — graph-theoretic minimum).
     //
-    // RING topology — half-ring algorithm with kickoff splitting:
-    //   For slice c_i (destined for device i), the kickoff device
-    //   (diametrically opposite, N/2 hops away) splits its contribution:
-    //   first half goes CW, second half goes CCW. Subsequent devices
-    //   along each path add their full contributions and forward.
-    //
-    //   Through any link in one direction, N/2 slices' pipelines pass:
-    //     - 1 slice contributes S/(2N) bytes (the kickoff's first hop)
-    //     - N/2-1 slices contribute S/N bytes each (full, after first hop)
-    //     Bottleneck = (N/2-1)×S/N + S/(2N) = (N-1)×S/(2N)
-    //     Latency = N/2 hops
-    //
-    //   This achieves the same per-link BW as the old bidirectional
-    //   full-ring algorithm ((N-1)×S/(2N)), but with half the latency
-    //   (N/2 hops instead of N-1). Best of both worlds.
-    //
-    // LINE topology — edge device bottleneck:
-    //   Edge device (D0 or DN-1) has one link, must receive all (N-1) partial
-    //   slices through it.
-    //     Bottleneck bytes = (N-1) × S/N
-    //     Latency = N-1 hops
+    // LINE topology — endpoint bottleneck:
+    //   The edge device (D0 or DN-1) has one link and must receive all
+    //   (N-1) partial results through it: (N-1) × S/N bytes.
+    //   Latency: N-1 hops (linear diameter).
     // =========================================================================
     double fabric_time_ns = 0.0;
     if (N <= 1) {
         fabric_time_ns = 0.0;
     } else if (args.topology == ttnn::ccl::Topology::Ring) {
-        // (N/2-1) full slices + 1 half slice = (N-1) * slice_size/2
-        const uint64_t bottleneck_bytes = (N - 1) * slice_size / 2;
+        // Bisection lower bound: (N-1) * slice_size / 2 per direction
+        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
         const uint32_t num_hops = N / 2;
         fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, num_hops);
     } else {
@@ -246,39 +233,15 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
 
     // =========================================================================
-    // 2. LOCAL DATA MOVEMENT (DRAM/L1 read and write)
+    // 2. LOCAL DATA MOVEMENT — first-principles minimum (algorithm-agnostic)
     //
-    // Derived from the per-device work schedule (ring example, device D4
-    // with N=8, slice = S/N):
+    // DRAM reads:  S bytes — each byte of the input tensor is read exactly
+    //   once (to contribute to a reduction or to be sent to a neighbor).
+    // DRAM writes: S/N bytes — only the final reduced output chunk.
+    //   Intermediate partial results flow network → L1 → reduce → network
+    //   without touching DRAM in the optimal case.
     //
-    //   fwd worker (CW):                      bwd worker (CCW):
-    //   Send ½ input_0                         Send ½ input_0
-    //   Send input_7 + ½ interm_7              Send input_1 + ½ interm_1
-    //   Send input_6 +   interm_6              Send input_2 +   interm_2
-    //   Send input_5 +   interm_5              Send input_3 +   interm_3
-    //   Store ½ input_4 + ½ interm_4           Store ½ input_4 + ½ interm_4
-    //
-    // Per direction (N/2+1 steps):
-    //   Input reads:  ½ + 1×(N/2-1) + ½ = N/2 slices = S/2
-    //   Interm reads: 0 + ½ + 1×(N/2-2) + ½ = (N/2-1) slices
-    //   (The kickoff step has no intermediate; first hop has ½ intermediate)
-    //
-    // Both directions combined (fwd + bwd operate in parallel):
-    //   Input reads:  S (full input tensor)
-    //   Interm reads: 2×(N/2-1) = (N-2) slices
-    //   Interm writes: (N-2) slices (fabric → intermediate, same as reads)
-    //   Output write: 1 slice (2 × ½ from fwd + bwd stores)
-    //
-    // Total DRAM read  = S + (N-2) × slice_size
-    // Total DRAM write = (N-2) × slice_size + slice_size = (N-1) × slice_size
-    //
-    // Worker parallelism:
-    //   Ring: fwd and bwd workers run in parallel on separate cores,
-    //     both sharing the DRAM interface. Effective workers for DRAM
-    //     and compute = 2 directions × num_workers_per_link × num_links.
-    //   Line: worst-case edge device has only 1 active direction.
-    //     Effective workers = 1 × num_workers_per_link × num_links.
-    //
+    // Hardware ceiling: all device compute cores can drive DRAM concurrently.
     // DRAM read and write can overlap (different NOC channels), so we
     // take max(read_bw, write_bw) rather than summing them.
     // =========================================================================
@@ -287,25 +250,26 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.buffer()->page_size();
     const uint32_t write_page_size = output_tensor.buffer()->page_size();
-    const uint32_t num_workers_per_link = 1;                                         // per link per dir
-    const uint32_t num_dirs = (args.topology == ttnn::ccl::Topology::Ring) ? 2 : 1;  // =1 for line since edge device
-    const uint32_t total_workers = num_workers_per_link * num_links * num_dirs;
+    const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
+    const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
+    const uint32_t num_cores = device_rows * device_cols;
 
-    const uint64_t total_read_bytes = input_size_bytes + (N - 2) * slice_size;
-    const uint32_t read_pages_per_worker = tt::div_up(total_read_bytes / read_page_size, total_workers);
+    const uint64_t total_read_bytes = input_size_bytes;  // S
+    const uint32_t read_pages_per_core = tt::div_up(total_read_bytes / read_page_size, num_cores);
 
-    const uint64_t total_write_bytes = (N - 1) * slice_size;
-    const uint32_t write_pages_per_worker = tt::div_up(total_write_bytes / write_page_size, total_workers);
+    const uint64_t total_write_bytes = slice_size;  // S/N
+    const uint32_t write_pages_per_core = tt::div_up(total_write_bytes / write_page_size, num_cores);
 
     auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
-        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_worker, arch, /*is_read=*/true);
+        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_core, arch, /*is_read=*/true);
     auto [write_bw_cycles, write_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
-        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_worker, arch, /*is_read=*/false);
+        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_core, arch, /*is_read=*/false);
 
     // =========================================================================
-    // 3. COMPUTE (element-wise reduction)
+    // 3. COMPUTE (element-wise reduction) — algorithm-agnostic
     //
-    // Each device performs (N-1) element-wise reductions (add_tiles).
+    // Each device performs (N-1) element-wise reductions (add_tiles),
+    // regardless of reduction order (sequential, tree, etc.).
     // Each reduction takes two S/N-byte inputs and produces one S/N-byte output.
     //
     // The bottleneck is the unpacker that feeds tiles from L1 circular
@@ -320,14 +284,13 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     //
     // Per reduction: unpack 2 inputs = 2 × S/N bytes through the unpacker.
     // Total: 2 × (N-1) × S/N bytes across all reductions.
-    // Distributed across total_workers worker cores.
     //
-    // compute_cycles_per_worker = 2×(N-1) × slice_size / total_workers / 80
+    // Bottleneck is the unpacker (80 B/cycle joint SrcA+SrcB limit).
+    // Distributed across num_cores (hardware ceiling).
     // =========================================================================
     constexpr uint32_t UNPACKER_BW_BYTES_PER_CYCLE = 80;
     const uint64_t total_unpack_bytes = 2ULL * (N - 1) * slice_size;
-    const int compute_cycles =
-        total_unpack_bytes / (static_cast<uint64_t>(total_workers) * UNPACKER_BW_BYTES_PER_CYCLE);
+    const int compute_cycles = total_unpack_bytes / (num_cores * UNPACKER_BW_BYTES_PER_CYCLE);
 
     // =========================================================================
     // 4. PIPELINED MODEL
@@ -335,13 +298,19 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     // All resources operate in parallel throughout the pipeline.
     // BW terms compete — the slowest resource determines the throughput:
     //   max(fabric, dram_read_bw, dram_write_bw, compute)
-    // Latencies are additive — they represent pipeline fill (first read)
-    // and drain (last write) that cannot overlap with steady-state.
+    //
+    // Latencies are additive — pipeline fill and drain stages that
+    // cannot overlap with steady-state:
+    //   fill:  read_latency (first DRAM read before pipeline starts)
+    //   drain: compute_latency (last chunk's reduction after all data arrived)
+    //        + write_latency (last DRAM write after last reduction completes)
     // =========================================================================
     const int local_bw_cycles = std::max(read_bw_cycles, write_bw_cycles);
-    const int pipeline_latency_cycles = read_latency_cycles + write_latency_cycles;
+    const int compute_latency_cycles =
+        static_cast<int>(2ULL * slice_size / (static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE));
+    const int pipeline_latency_cycles = read_latency_cycles + compute_latency_cycles + write_latency_cycles;
     const int ideal_dev_clock_cycles =
-        std::max(std::max(local_bw_cycles, fabric_cycles), compute_cycles) + pipeline_latency_cycles;
+        std::max({local_bw_cycles, fabric_cycles, compute_cycles}) + pipeline_latency_cycles;
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, output_tensors, ideal_dev_clock_cycles);
