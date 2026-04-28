@@ -1446,6 +1446,14 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                 if op_name == "ttnn.slice" and "starts" in args and "steps" not in args:
                     args["steps"] = [1] * len(args["starts"])
 
+            if "arguments" in config_dict:
+                args = config_dict["arguments"]
+                none_keys = [
+                    k for k, v in args.items() if v is None and not (isinstance(k, str) and k.startswith("arg"))
+                ]
+                for k in none_keys:
+                    del args[k]
+
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
             ops[op_name][config_id] = config_dict
