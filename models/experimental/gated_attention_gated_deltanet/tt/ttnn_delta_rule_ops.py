@@ -327,12 +327,26 @@ def _recurrent_read_query_program_config(device, K, V):
     )
 
 
+# def l2_norm_ttnn(x, dim=-1, eps=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG):
+#     print(f"l2_norm_ttnn: x.shape={x.shape}, dim={dim}, eps={eps}, memory_config={memory_config}")
+#     """L2 normalization along a given dimension."""
+#     x_sq = ttnn.multiply(x, x, memory_config=memory_config)
+#     norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=memory_config)
+#     inv_norm = ttnn.rsqrt(ttnn.add(norm_sq, eps, memory_config=memory_config), memory_config=memory_config)
+#     return ttnn.multiply(x, inv_norm, memory_config=memory_config)
+
+
 def l2_norm_ttnn(x, dim=-1, eps=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG):
-    """L2 normalization along a given dimension."""
-    x_sq = ttnn.multiply(x, x, memory_config=memory_config)
-    norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=memory_config)
-    inv_norm = ttnn.rsqrt(ttnn.add(norm_sq, eps, memory_config=memory_config), memory_config=memory_config)
-    return ttnn.multiply(x, inv_norm, memory_config=memory_config)
+    print(f"l2_norm_ttnn: x.shape={x.shape}, dim={dim}, eps={eps}, memory_config={memory_config}")
+    """L2 normalization along the last dimension (uses fused ttnn.rms_norm).
+
+    rms_norm(x, ε) = √K · x / √(sum(x²) + K·ε), so to recover
+    l2_norm(x, eps) = x / √(sum(x²) + eps) we pass ε = eps/K and divide by √K.
+    """
+    assert dim in (-1, len(x.shape) - 1), "l2_norm_ttnn now requires dim=-1 (rms_norm reduces last dim)"
+    K = x.shape[-1]
+    x_normed = ttnn.rms_norm(x, epsilon=eps / K, memory_config=memory_config)
+    return ttnn.multiply(x_normed, K**-0.5, memory_config=memory_config)
 
 
 def fused_decay_and_write_ttnn(
@@ -646,6 +660,167 @@ def recurrent_gated_delta_rule_ttnn(
     o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return o, h
+
+
+# def recurrent_gated_delta_rule_ttnn(
+#     q,
+#     k,
+#     v,
+#     beta,
+#     g,
+#     scale=None,
+#     initial_state=None,
+#     device=None,
+# ):
+#     """
+#     Token-by-token recurrent gated delta rule using TTNN ops.
+#     Used for decode (T=1).
+
+#     For each timestep t:
+#       1. Decay the state:  h = h * exp(g_t)
+#       2. Read from state:  v_read = sum_k(h * k_t)
+#       3. Compute delta:    delta = (v_t - v_read) * beta_t
+#       4. Write to state:   h = h + outer(k_t, delta)
+#       5. Query state:      o_t = h @ q_t
+
+#     Args:
+#         q: [B, T, H, K]
+#         k: [B, T, H, K]
+#         v: [B, T, H, V]
+#         beta: [B, T, H]
+#         g: [B, T, H]
+#         scale: float
+#         initial_state: [B, H, K, V]
+#         device: ttnn device
+
+#     Returns:
+#         output: [B, T, H, V]
+#         final_state: [B, H, K, V]
+#     """
+#     q = l2_norm_ttnn(q, dim=-1)
+#     k = l2_norm_ttnn(k, dim=-1)
+
+#     B = q.shape[0]
+#     T = q.shape[1]
+#     H = q.shape[2]
+#     K = q.shape[3]
+#     V = v.shape[3]
+
+#     if scale is None:
+#         scale = K**-0.5
+
+#     _L1 = ttnn.L1_MEMORY_CONFIG
+
+#     # [B, T, H, D] -> [B, H, T, D]. Only typecast if not already bfloat16, since
+#     # typecast is a full-tensor dispatch (~70us host) even when it's a no-op.
+#     def _tr4(x):
+#         t = ttnn.transpose(x, 1, 2, memory_config=_L1)
+#         if t.dtype != ttnn.bfloat16:
+#             t = ttnn.typecast(t, ttnn.bfloat16, memory_config=_L1)
+#         return t
+
+#     q = _tr4(q)
+#     k = _tr4(k)
+#     v = _tr4(v)
+#     beta = _tr4(beta)  # [B, H, T]
+#     g = _tr4(g)  # [B, H, T]
+
+#     q = ttnn.multiply(q, scale, memory_config=_L1)
+
+#     # Precompute exp(g) once and slice per timestep in the loop.
+#     g_exp = ttnn.exp(g, memory_config=_L1)
+
+#     if initial_state is not None:
+#         if initial_state.dtype != ttnn.bfloat16:
+#             h = ttnn.typecast(initial_state, ttnn.bfloat16, memory_config=_L1)
+#         else:
+#             h = initial_state
+#     else:
+#         h = ttnn.zeros(
+#             [B, H, K, V],
+#             device=device,
+#             dtype=ttnn.bfloat16,
+#             layout=ttnn.TILE_LAYOUT,
+#             memory_config=_L1,
+#         )
+
+#     # Pre-compute and cache program/config to avoid recreation in loop
+#     read_query_prog_cfg = None
+#     read_query_compute_cfg = None
+#     outer_product_prog_cfg = None
+#     if device is not None:
+#         try:
+#             read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
+#             outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
+#         except Exception:
+#             pass
+#         read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
+#             math_fidelity=ttnn.MathFidelity.HiFi2,
+#             math_approx_mode=False,
+#             fp32_dest_acc_en=True,
+#             packer_l1_acc=True,
+#         )
+
+#     # Single-timestep (decode) fast path: skip concat and the second transpose/typecast.
+#     if T == 1:
+#         q_t = q[:, :, 0]
+#         k_t = k[:, :, 0]
+#         v_t = v[:, :, 0]
+#         beta_t = beta[:, :, 0]
+#         decay_t = g_exp[:, :, 0]
+#         o_t, h = recurrent_delta_rule_step_ttnn(
+#             q_t,
+#             k_t,
+#             v_t,
+#             beta_t,
+#             decay_t,
+#             h,
+#             seq_len=T,
+#             device=device,
+#             read_query_prog_cfg=read_query_prog_cfg,
+#             read_query_compute_cfg=read_query_compute_cfg,
+#             outer_product_prog_cfg=outer_product_prog_cfg,
+#         )
+#         # o_t: [B, H, V] -> [B, 1, H, V] via reshape (one dispatch vs. concat+transpose+typecast).
+#         o = ttnn.reshape(o_t, [B, 1, H, V], memory_config=_L1)
+#         return o, h
+
+#     # Pre-allocate output list to avoid repeated allocations
+#     outputs_4d_list = []
+
+#     for i in range(T):
+#         # Tensor indexing creates views efficiently - the issue is subsequent reshapes
+#         # Keep indexing but optimize the operations that follow
+#         q_t = q[:, :, i]  # [B, H, K]
+#         k_t = k[:, :, i]  # [B, H, K]
+#         v_t = v[:, :, i]  # [B, H, V]
+#         beta_t = beta[:, :, i]  # [B, H]
+#         decay_t = g_exp[:, :, i]  # [B, H]
+
+#         o_t, h = recurrent_delta_rule_step_ttnn(
+#             q_t,
+#             k_t,
+#             v_t,
+#             beta_t,
+#             decay_t,
+#             h,
+#             seq_len=T,
+#             device=device,
+#             read_query_prog_cfg=read_query_prog_cfg,
+#             read_query_compute_cfg=read_query_compute_cfg,
+#             outer_product_prog_cfg=outer_product_prog_cfg,
+#         )
+#         # Optimize: reshape immediately and collect for concat
+#         o_4d = ttnn.reshape(o_t, [B, H, 1, V], memory_config=_L1)
+#         outputs_4d_list.append(o_4d)
+
+#     # Optimize: single concat operation instead of creating list then concat
+#     o = ttnn.concat(outputs_4d_list, dim=2, memory_config=_L1)
+#     o = ttnn.transpose(o, 1, 2, memory_config=_L1)
+#     if o.dtype != ttnn.bfloat16:
+#         o = ttnn.typecast(o, ttnn.bfloat16, memory_config=_L1)
+
+#     return o, h
 
 
 def chunk_gated_delta_rule_ttnn(

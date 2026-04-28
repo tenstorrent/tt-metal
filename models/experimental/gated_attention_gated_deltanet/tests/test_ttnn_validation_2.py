@@ -419,6 +419,7 @@ def test_gated_attention_ttnn():
 
 
 @pytest.mark.parametrize("seq_len", [1])
+# @pytest.mark.parametrize("seq_len", [16])
 def test_gated_deltanet_recurrent_ttnn(seq_len):
     """Compare TTNN GatedDeltaNet (recurrent mode) against torch golden."""
     try:
@@ -463,6 +464,7 @@ def test_gated_deltanet_recurrent_ttnn(seq_len):
                     ttnn_params[key] = ttnn.from_torch(
                         val,
                         dtype=ttnn.bfloat16,
+                        # memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
                 else:
                     ttnn_params[key] = ttnn.from_torch(
@@ -470,6 +472,7 @@ def test_gated_deltanet_recurrent_ttnn(seq_len):
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
                         device=device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
             else:
                 ttnn_params[key] = val
@@ -555,8 +558,8 @@ import pytest
     "seq_len, chunk_size, batch_size, num_heads, head_k_dim, head_v_dim",
     [
         # (1, 64, 2, 4, 128, 256),
-        (64, 64, 2, 4, 128, 256),
-        # (128, 64, 2, 4, 128, 256),
+        # (64, 64, 2, 4, 128, 256),
+        (128, 64, 2, 4, 128, 256),
         # (256, 64, 2, 4, 128, 256),
         # (1, 64, 1, 4, 128, 256),
         # (64, 64, 1, 4, 128, 256),
@@ -611,11 +614,21 @@ def test_fused_chunked_delta_rule_ttnn(seq_len, chunk_size, batch_size, num_head
     device = ttnn.open_device(device_id=0)
     try:
         # Convert inputs to TTNN format
-        q_ttnn = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        k_ttnn = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        v_ttnn = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        beta_ttnn = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        g_ttnn = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        q_ttnn = ttnn.from_torch(
+            q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        k_ttnn = ttnn.from_torch(
+            k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        v_ttnn = ttnn.from_torch(
+            v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        beta_ttnn = ttnn.from_torch(
+            beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        g_ttnn = ttnn.from_torch(
+            g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
 
         # Print TTNN kernels/operations
         print_kernels_operations(name_prefix="TTNN ", is_ttnn=True)

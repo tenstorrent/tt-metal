@@ -10,8 +10,8 @@ import ttnn
 
 from tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,
-    chunk_gated_delta_rule_ttnn,
 )
+from tt.fused_chunked_delta_rule_placeholder import fused_chunked_delta_rule_ttnn
 
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG):
@@ -260,7 +260,7 @@ def gated_deltanet_forward_ttnn(
 
     # 5. Gated delta rule (recurrent or chunked)
     if mode == "chunk":
-        o, new_state = chunk_gated_delta_rule_ttnn(
+        o, new_state = fused_chunked_delta_rule_ttnn(
             q=q,
             k=k,
             v=v,
@@ -269,9 +269,20 @@ def gated_deltanet_forward_ttnn(
             chunk_size=chunk_size,
             initial_state=recurrent_state,
             device=device,
-            mem_cfg_large_t=mem_cfg,
-            batch_l1_threshold=chunk_batch_l1_threshold,
         )
+
+        # # o, new_state = chunk_gated_delta_rule_ttnn(
+        #     q=q,
+        #     k=k,
+        #     v=v,
+        #     beta=beta,
+        #     g=g,
+        #     chunk_size=chunk_size,
+        #     initial_state=recurrent_state,
+        #     device=device,
+        #     mem_cfg_large_t=mem_cfg,
+        #     batch_l1_threshold=chunk_batch_l1_threshold,
+        # )
     else:
         o, new_state = recurrent_gated_delta_rule_ttnn(
             q=q,
