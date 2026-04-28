@@ -8,6 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "hc_sum_reduce_device_operation_types.hpp"

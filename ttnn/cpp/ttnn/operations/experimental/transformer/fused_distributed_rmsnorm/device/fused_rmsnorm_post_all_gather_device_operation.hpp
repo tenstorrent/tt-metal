@@ -8,6 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "fused_rmsnorm_post_all_gather_device_operation_types.hpp"

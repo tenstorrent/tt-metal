@@ -4,8 +4,8 @@
 #include "deepseek_grouped_gate_device_operation.hpp"
 
 #include <bit>
+#include <map>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -163,7 +163,7 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     add_cb(cb_gathered_sigmoid, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
 
     // Reader kernel compile time arguments
-    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+    std::map<std::string, uint32_t> reader_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
         {"cb_route_scale_scalar", cb_route_scale_scalar},
@@ -177,7 +177,7 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     tt::tt_metal::TensorAccessorArgs(bias.buffer()).append_to(reader_compile_time_args);
 
     // Compute kernel compile time arguments
-    std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+    std::map<std::string, uint32_t> compute_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
@@ -222,7 +222,7 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     std::vector<uint32_t> compute_compile_time_args = {};
 
     // Writer kernel compile time arguments
-    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+    std::map<std::string, uint32_t> writer_named_compile_time_args = {
         {"cb_out_weights", cb_out_weights},
         {"cb_out_indices", cb_out_indices},
         {"cb_expert_index_template", cb_expert_index_template},
