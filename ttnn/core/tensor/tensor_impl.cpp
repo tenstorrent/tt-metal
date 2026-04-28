@@ -302,14 +302,14 @@ std::string to_string_impl(const Tensor& tensor) {
 
     const auto& tensor_spec = cpu_tensor.tensor_spec();
     const auto strides = compute_logical_strides(shape);
-    const auto& coords = storage.coords;
+    const auto coords = storage.get_coords();
     auto coords_it = coords.begin();
     const std::vector<HostBuffer> buffers = get_host_buffers(cpu_tensor.host_storage());
     std::stringstream ss;
     for (size_t i = 0; i < buffers.size(); i++) {
         const distributed::MeshCoordinate coord = *coords_it++;
-        if (mesh_device->is_local(coord)) {
-            ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+        if (mesh_device.is_local(coord)) {
+            ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
             // Use decode_tensor_data to properly convert physical data to logical (removes padding)
             auto logical_data = decode_tensor_data<T>(buffers[i].view_as<T>(), tensor_spec);
             detail::to_string(ss, ttsl::make_const_span(logical_data), shape, strides, tensor.dtype(), tensor.layout());
