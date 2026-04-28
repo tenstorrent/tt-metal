@@ -945,6 +945,19 @@ class AttentionBlock:
         dkv_matmul_output_cb = matmul_output_cb  # Reuse matmul1 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_input_cb = rmsnorm2_input_cb  # Reuse rmsnorm2 input CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_output_cb = rmsnorm2_output_cb  # Reuse rmsnorm2 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
+        # Per-dkv-core RMSNorm (deferred from input core) writes here before dkv_matmul reads it.
+        # Reuses rmsnorm1 output CB ID since the input core no longer runs rmsnorm1 after the deferral
+        # (disjoint grids: input core vs dkv cores rows 8-9).
+        dkv_rmsnorm_output_cb = rmsnorm_output_cb
+        # CB-overlay views for the deferred-norm dkv path:
+        #   * dkv_rmsnorm_input_view_cb: alternate view of `matmul_input_cb`'s L1 region as
+        #     32x32 tiles (7 pages) so RMSNorm reads the mcast bytes in its native LLK layout.
+        #   * dkv_matmul_in0_view_cb: alternate view of `dkv_rmsnorm_output_cb`'s L1 region as
+        #     1x32 tiles (224 pages) so dkv_matmul reads the rmsnorm output in its native layout.
+        # Same L1 bytes, different CB front/back pointers. Manual cb_push/pop in the kernel
+        # keeps the views in sync.
+        dkv_rmsnorm_input_view_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
+        dkv_matmul_in0_view_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         krope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: krope_grid col 8, rows 8-9)
         create_q_heads_receiver_in_cb = cb_id_context.get_cb_id(
             data_format, TD_8x32
@@ -1117,7 +1130,7 @@ class AttentionBlock:
             ("mcast_data_sender_semaphore_addr", mcast_data_sender_semaphore_addr),
             ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
-            ("mcast_src_cb", rmsnorm_output_cb),
+            ("mcast_src_cb", input_cb),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_src_num_pages", mcast_src_num_pages),
             ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
@@ -1418,12 +1431,36 @@ class AttentionBlock:
         dkv_matmul_trisc_named_compile_time_args = [
             (
                 "dkv_matmul_in0",
-                matmul_input_cb,
-            ),  # Inputs are multicasted from the main branch, same input as first matmul
+                dkv_matmul_in0_view_cb,
+            ),  # 1x32 view of the rmsnorm output (overlaid on dkv_rmsnorm_output_cb's L1)
             ("dkv_matmul_in1", matmul_weights_cb_overlapped),
             ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
+        ]
+
+        # DKV pre-RMSNorm compute compile-time args (TRISC only; NCRISC/BRISC are no-ops for RMSNorm).
+        # Runs on each dkv_matmul core before dkv_matmul to normalize the raw mcast input locally.
+        # DoGamma=false (set in kernel) — gamma is folded into kv_a_proj.weight.
+        # Reads from the 32x32 view of the mcast destination, writes to the 32x32 dkv_rmsnorm_output_cb.
+        dkv_pre_rmsnorm_trisc_named_compile_time_args = [
+            ("dkv_pre_rmsnorm_input_cb", dkv_rmsnorm_input_view_cb),
+            ("dkv_pre_rmsnorm_output_cb", dkv_rmsnorm_output_cb),
+            ("dkv_pre_rmsnorm_num_tiles", num_tiles),
+        ]
+
+        # View-CB compile-time args used by the kernel-side manual cb_push/cb_pop bridges
+        # between the mcast destination CB and the rmsnorm input view, and between the rmsnorm
+        # output CB and the dkv_matmul input view. NCRISC needs these to issue the bridges.
+        # Adding to BOTH ncrisc and trisc bases so any RISC that needs to reference a CB id
+        # can resolve the named arg.
+        dkv_view_cb_named_compile_time_args = [
+            ("dkv_rmsnorm_input_view_cb", dkv_rmsnorm_input_view_cb),
+            ("dkv_rmsnorm_input_view_num_tiles", num_tiles),
+            ("dkv_rmsnorm_output_cb", dkv_rmsnorm_output_cb),
+            ("dkv_rmsnorm_output_num_tiles", num_tiles),
+            ("dkv_matmul_in0_view_cb", dkv_matmul_in0_view_cb),
+            ("dkv_matmul_in0_view_num_tiles", dkv_matmul_k_num_tiles),
         ]
 
         # KV Cache Branch: RMSNorm
@@ -2137,6 +2174,44 @@ class AttentionBlock:
             )
         ]
         # input_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
+
+        # CB-overlay views for the deferred-norm dkv path.
+        # Both views share L1 backing with existing CBs, but expose the same bytes through
+        # different page-size / tile-shape lenses on dkv_matmul_weights_core_grid. This lets
+        # the rmsnorm op work in 32x32-tile land while dkv_matmul keeps its native 1x32 layout.
+        # The kernel manually issues cb_push/cb_pop on the views to handshake between consumers.
+        dkv_rmsnorm_input_view_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            dkv_rmsnorm_input_view_cb,
+            ref_input_tensor,
+            address_offset=input_running_offset,  # same L1 region as matmul_input_cb
+            total_size=num_tiles * cb_page_size,
+            core_ranges=dkv_matmul_weights_core_grid,
+        )
+        dkv_rmsnorm_input_view_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=dkv_rmsnorm_input_view_cb,
+                data_format=data_format,
+                page_size=cb_page_size,  # 32x32 tile = 2048 B for bf16
+                tile=tile_descriptor,
+            )
+        ]
+
+        dkv_matmul_in0_view_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            dkv_matmul_in0_view_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core
+            - rmsnorm_output_cb_descriptor.total_size,  # same L1 region as rmsnorm_output_cb (which we already advanced past)
+            total_size=dkv_matmul_k_num_tiles * matmul_input_page_size,
+            core_ranges=dkv_matmul_weights_core_grid,
+        )
+        dkv_matmul_in0_view_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=dkv_matmul_in0_view_cb,
+                data_format=data_format,
+                page_size=matmul_input_page_size,  # 1x32 tile = 64 B for bf16
+                tile=matmul_input_tile_descriptor,
+            )
+        ]
 
         # CB: Matmul output buffer (single tile) — overlap with sdpa_out_interm L1 buffer
         # at offset 0 B. This CB is consumed before SDPA runs.
@@ -3159,6 +3234,7 @@ class AttentionBlock:
             + qrope_ncrisc_named_compile_time_args
             + create_q_heads_ncrisc_named_compile_time_args
             + dkv_matmul_ncrisc_named_compile_time_args
+            + dkv_view_cb_named_compile_time_args
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
             + dkv_gather_receiver_named_compile_time_args
@@ -3193,6 +3269,8 @@ class AttentionBlock:
             + qrope_trisc_named_compile_time_args
             + create_q_heads_trisc_named_compile_time_args
             + dkv_matmul_trisc_named_compile_time_args
+            + dkv_pre_rmsnorm_trisc_named_compile_time_args
+            + dkv_view_cb_named_compile_time_args
             + kv_rmsnorm_trisc_named_compile_time_args
             + krope_trisc_named_compile_time_args
             + kv_cache_trisc_named_compile_time_args
@@ -3373,6 +3451,8 @@ class AttentionBlock:
             fused_matmul_weights_cb_descriptor,
             matmul_output_cb_descriptor,
             matmul_input_cb_descriptor,
+            dkv_rmsnorm_input_view_cb_descriptor,
+            dkv_matmul_in0_view_cb_descriptor,
             rmsnorm2_input_cb_descriptor,
             gather_reduce_scratch_cb_descriptor,
             rmsnorm2_output_cb_descriptor,

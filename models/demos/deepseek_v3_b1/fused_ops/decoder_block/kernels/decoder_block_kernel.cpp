@@ -154,8 +154,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     constexpr uint32_t bcast_writer_common_rt_count = 5;
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+    using DkvPreRMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
     deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
@@ -166,8 +166,8 @@ void kernel_main() {
             0,
         }};
 
-    // RMSNorm reader runtime args
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
+    // DKV pre-RMSNorm reader runtime args (NCRISC is no-op for RMSNorm)
+    deepseek_b1_ops::RMSNorm::ReaderArgs dkv_pre_rmsnorm_args{};
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Mcast::DMArgs mcast_args{
@@ -708,18 +708,18 @@ void kernel_main() {
     constexpr uint32_t metadata_addr_common_rta_idx = 1;
 
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
+    using DkvPreRMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
         Core::is_input_core && Core::is_full_mcast_grid_core>;  // loopback = false
 
-    // RMSNorm writer args (BRISC is no-op)
-    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
-
     // RMSNorm2 writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
+
+    // DKV pre-RMSNorm writer args (BRISC is no-op)
+    deepseek_b1_ops::RMSNorm::WriterArgs dkv_pre_rmsnorm_args{};
 
     deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
         .sender =
@@ -1071,14 +1071,6 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_TRISC)
     // CTArgs type aliases (required for Op templates)
 
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
-        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
-        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
-        get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        0,  // gamma_cb unused (DoGamma=false)
-        get_named_compile_time_arg_val("rmsnorm_output_cb"),
-        false>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
@@ -1087,12 +1079,20 @@ void kernel_main() {
         0,  // gamma_cb unused (DoGamma=false)
         get_named_compile_time_arg_val("rmsnorm2_output_cb"),
         false>;
+    using DkvPreRMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("dkv_pre_rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("dkv_pre_rmsnorm_input_cb"),
+        0,  // gamma_cb unused (DoGamma=false; gamma is folded into kv_a_proj.weight)
+        get_named_compile_time_arg_val("dkv_pre_rmsnorm_output_cb"),
+        false>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
-    // RMSNorm compute runtime args
-    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-        get_common_arg_val<uint32_t>(0),  // epsilon
-        get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
+    // DKV pre-RMSNorm compute args (runs on each dkv_matmul core; reuses rmsnorm1 epsilon/scalar)
+    deepseek_b1_ops::RMSNorm::ComputeArgs dkv_pre_rmsnorm_args{
+        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(K), same as rmsnorm1)
         0,                                // gamma_addr unused (DoGamma=false)
     };
 
@@ -2296,18 +2296,31 @@ void kernel_main() {
 #endif
         }
         // ====================================================================
-        // Input core: RMSNorm + Mcast send
+        // Input core: Mcast send (raw broadcast input — RMSNorm is deferred to dkv cores
+        // so q_proj cores can start their matmul against folded weights immediately, and
+        // dkv cores normalize locally before their matmul; see DKV_PRE_RMSNORM below).
         // ====================================================================
-        {
-            DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
-            rmsnorm(rmsnorm_args);
-        }
-
         {
             DeviceZoneScopedN("MCAST");
             mcast(mcast_args);
         }
+
+#if defined(COMPILE_FOR_NCRISC)
+        // Bridge mcast destination → 32x32 rmsnorm-input view on dkv cores.
+        // cb_wait_front confirms mcast landed; cb_reserve+push surfaces the same L1 bytes
+        // under the 7-page 32x32 view CB so DkvPreRMSNorm can read them.
+        if constexpr (Core::is_dkv_matmul_core) {
+            constexpr uint32_t mcast_dst_cb_local = get_named_compile_time_arg_val("mcast_dst_cb");
+            constexpr uint32_t mcast_dst_num_pages_local = get_named_compile_time_arg_val("mcast_dst_num_pages");
+            constexpr uint32_t dkv_rmsnorm_input_view_cb = get_named_compile_time_arg_val("dkv_rmsnorm_input_view_cb");
+            constexpr uint32_t dkv_rmsnorm_input_view_num_tiles =
+                get_named_compile_time_arg_val("dkv_rmsnorm_input_view_num_tiles");
+            cb_wait_front(mcast_dst_cb_local, mcast_dst_num_pages_local);
+            cb_reserve_back(dkv_rmsnorm_input_view_cb, dkv_rmsnorm_input_view_num_tiles);
+            cb_push_back(dkv_rmsnorm_input_view_cb, dkv_rmsnorm_input_view_num_tiles);
+        }
+#endif
+
         if constexpr (Core::is_input_core) {
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
@@ -2438,6 +2451,43 @@ void kernel_main() {
             if (!skip_kv_cache_update) {
                 DeviceZoneScopedN("KV CACHE");
                 // ================================================================
+                // DKV pre-RMSNorm: each dkv_matmul core normalizes its mcast input
+                // locally (deferred from input core; mcast carries raw values).
+                // DoGamma=false — gamma is folded into kv_a_proj.weight via prepare.py.
+                // pop_input=true — consumes dkv_rmsnorm_input_view_cb after normalizing.
+                // ================================================================
+                {
+                    DeviceZoneScopedN("DKV_PRE_RMSNORM");
+                    deepseek_b1_ops::RMSNorm::Op<DkvPreRMSNormCTArgs, Core::is_dkv_matmul_core, true> dkv_pre_rmsnorm;
+                    dkv_pre_rmsnorm(dkv_pre_rmsnorm_args);
+                }
+
+#if defined(COMPILE_FOR_NCRISC)
+                // Bridge rmsnorm output → 1x32 dkv_matmul-input view on dkv cores.
+                // cb_wait_front confirms TRISC rmsnorm pushed; cb_reserve+push surfaces the
+                // same 14336 L1 bytes as 224 1x32 pages so dkv_matmul reads its native layout.
+                // Also pops underlying matmul_input_cb so the next iteration's mcast
+                // cb_reserve_back can succeed.
+                if constexpr (Core::is_dkv_matmul_core) {
+                    constexpr uint32_t dkv_rmsnorm_output_cb_for_wait =
+                        get_named_compile_time_arg_val("dkv_rmsnorm_output_cb");
+                    constexpr uint32_t dkv_rmsnorm_output_num_tiles_for_wait =
+                        get_named_compile_time_arg_val("dkv_rmsnorm_output_num_tiles");
+                    constexpr uint32_t dkv_matmul_in0_view_cb =
+                        get_named_compile_time_arg_val("dkv_matmul_in0_view_cb");
+                    constexpr uint32_t dkv_matmul_in0_view_num_tiles =
+                        get_named_compile_time_arg_val("dkv_matmul_in0_view_num_tiles");
+                    constexpr uint32_t mcast_dst_cb_local = get_named_compile_time_arg_val("mcast_dst_cb");
+                    constexpr uint32_t mcast_dst_num_pages_local =
+                        get_named_compile_time_arg_val("mcast_dst_num_pages");
+                    cb_wait_front(dkv_rmsnorm_output_cb_for_wait, dkv_rmsnorm_output_num_tiles_for_wait);
+                    cb_reserve_back(dkv_matmul_in0_view_cb, dkv_matmul_in0_view_num_tiles);
+                    cb_push_back(dkv_matmul_in0_view_cb, dkv_matmul_in0_view_num_tiles);
+                    cb_pop_front(mcast_dst_cb_local, mcast_dst_num_pages_local);
+                }
+#endif
+
+                // ================================================================
                 // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
                 // ================================================================
                 {
@@ -2446,6 +2496,19 @@ void kernel_main() {
                     deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
                     dkv_matmul(dkv_matmul_args);
                 }
+
+#if defined(COMPILE_FOR_NCRISC)
+                // dkv_matmul popped only dkv_matmul_in0_view_cb's pointer; also pop the
+                // underlying dkv_rmsnorm_output_cb so its front pointer stays in sync for
+                // the next iteration's rmsnorm push.
+                if constexpr (Core::is_dkv_matmul_core) {
+                    constexpr uint32_t dkv_rmsnorm_output_cb_local =
+                        get_named_compile_time_arg_val("dkv_rmsnorm_output_cb");
+                    constexpr uint32_t dkv_rmsnorm_output_num_tiles =
+                        get_named_compile_time_arg_val("dkv_rmsnorm_output_num_tiles");
+                    cb_pop_front(dkv_rmsnorm_output_cb_local, dkv_rmsnorm_output_num_tiles);
+                }
+#endif
 
                 // ================================================================
                 // Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)

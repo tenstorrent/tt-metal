@@ -887,6 +887,7 @@ def test_decoder(
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder_mlp(
     bh_2d_mesh_device,
@@ -905,6 +906,7 @@ def test_decoder_mlp(
     num_internal_iterations,
     slot_id,
     num_slots,
+    use_real_weights,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
@@ -914,6 +916,9 @@ def test_decoder_mlp(
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than available")
 
+    if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
+        pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real-weight tests")
+
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
@@ -922,6 +927,7 @@ def test_decoder_mlp(
         layer_idx=DENSE_LAYER_IDX,
         is_moe=False,
         seed=RoutedExpert.SEED,
+        random_weights=not use_real_weights,
     )
 
     logger.info("Preparing dense layer weights on device...")
