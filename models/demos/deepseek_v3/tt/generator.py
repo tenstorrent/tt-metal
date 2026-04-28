@@ -1901,18 +1901,20 @@ class DeepseekGenerator(WarmupForwardMixin):
             int(min_token_len),
             int(max_token_len),
         )
-        profiler.start("warmup_model")
+        
         if warmup_cache_key not in self._warmup_completed_configs:
             if self.signpost:
                 signpost(header="warmup_model")
+            profiler.start("warmup_model")
             self.warmup_model(min_token_len, max_token_len)
-            self._warmup_completed_configs.add(warmup_cache_key)
+            profiler.end("warmup_model")
             if self.signpost:
                 signpost(header="warmup_model")
+            
+            self._warmup_completed_configs.add(warmup_cache_key)
         else:
             # Keep profiler timing for "warmup_model" even when warmup is skipped.
             logger.info(f"Skipping warmup_model; warmup already completed for cache key={warmup_cache_key}.")
-        profiler.end("warmup_model")
 
         decode_steps_for_stats = 0
         decode_forward_passes = 0
