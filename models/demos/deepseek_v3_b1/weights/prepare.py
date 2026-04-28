@@ -1209,6 +1209,8 @@ def prepare_moe_routed_experts_compressed_tp8(
     mesh_shape: tuple[int, int],
     *,
     move_to_device: bool,
+    down_proj_subblock_k: int | None = None,
+    down_proj_subblock_n: int = 1,
 ) -> MoERoutedExpertWeights:
     """Upload MoE routed experts as uniform-bfp4_b CompressedTensor objects, TP8-sharded.
 
@@ -1217,14 +1219,20 @@ def prepare_moe_routed_experts_compressed_tp8(
     gate/up column-parallel (shard_dim=1), down row-parallel (shard_dim=0). The 4D torch layout
     ``(mesh_rows, mesh_cols, K_per_device, N_padded_per_device)`` pairs with
     ``MeshMapperConfig([PlacementShard(0), PlacementShard(1)])`` so each device receives its TP slice.
+
+    For gather-mode down_proj (cores_per_dram_bank>1, ``subblock_n>1``), pass
+    ``down_proj_subblock_n`` matching the kernel's subblock geometry so the DRAM tile layout
+    matches the kernel's per-iteration block read. Gate/up always use plain column-major
+    (``subblock_n=1``).
     """
     tile_w = 32
     assigner = CompressedTensorAssigner(metric="pcc", threshold=1.1, formats=["bfp4"], bfp0_mae_threshold=0.01)
 
+    # (proj_name, K, N, shard_dim, subblock_k, subblock_n)
     proj_specs = [
-        ("gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1),
-        ("up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1),
-        ("down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, 0),
+        ("gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, None, 1),
+        ("up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1, None, 1),
+        ("down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, 0, down_proj_subblock_k, down_proj_subblock_n),
     ]
 
     mesh_rows, mesh_cols = mesh_shape
@@ -1240,7 +1248,7 @@ def prepare_moe_routed_experts_compressed_tp8(
     )
 
     results: list[list[CompressedTensor]] = [[], [], []]
-    for proj_idx, (proj_name, K, N, shard_dim) in enumerate(proj_specs):
+    for proj_idx, (proj_name, K, N, shard_dim, sb_k, sb_n) in enumerate(proj_specs):
         if shard_dim == 1:
             K_per_device = K
             per_device_N = N // tp
@@ -1258,7 +1266,9 @@ def prepare_moe_routed_experts_compressed_tp8(
         keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
         for e, key in enumerate(keys):
             w = state_dict[key].T.contiguous()
-            stacked = moe_routed_expert_tp8_torch_for_cache(w, num_banks, mesh_shape, shard_dim=shard_dim)
+            stacked = moe_routed_expert_tp8_torch_for_cache(
+                w, num_banks, mesh_shape, shard_dim=shard_dim, subblock_k=sb_k, subblock_n=sb_n
+            )
             ct = CompressedTensor.from_torch(
                 stacked.float(),
                 assigner,
@@ -1294,6 +1304,8 @@ def prepare_routed_expert_weights(
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
     compressed_tp8: bool = False,
+    down_proj_subblock_k: int | None = None,
+    down_proj_subblock_n: int = 1,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
 
@@ -1350,6 +1362,8 @@ def prepare_routed_expert_weights(
                 num_banks=num_banks,
                 mesh_shape=mesh_shape,
                 move_to_device=move_to_device,
+                down_proj_subblock_k=down_proj_subblock_k,
+                down_proj_subblock_n=down_proj_subblock_n,
             )
 
         # --- Uniform bfloat4_b path (TensorCache-backed) ---

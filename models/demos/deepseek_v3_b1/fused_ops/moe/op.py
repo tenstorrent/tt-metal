@@ -1544,11 +1544,11 @@ class MoeRoutedExpertOp:
             down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=down_proj_weights_tensor,
-                num_subblocks_k=1,
                 # 16 streamer cores (2 per bank): each bank's two cores split N
                 # (per_core_n=14 halves to 7 per core), then sender NOC-writes
                 # its accum onto the primary so downstream sees the same per-bank
                 # N output as the 1-core layout — invisible to gate/up.
+                num_subblocks_k=1,
                 subblock_n=7,
                 cores_per_dram_bank=2,
                 gather_to_next=True,
@@ -2561,16 +2561,6 @@ class MoeRoutedExpertOp:
                 other_value=0,
             ),
             PerCoreCompileTimeDescriptor(
-                named_compile_time_arg="down_proj_bank_id",
-                core_values=ctx.bank_id_core_values,
-                other_value=0,
-            ),
-            PerCoreCompileTimeDescriptor(
-                named_compile_time_arg="down_proj_vc",
-                core_values=ctx.vc_core_values,
-                other_value=0,
-            ),
-            PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="down_proj_gather_sender_idx",
                 core_values=ctx.sender_idx_core_values,
                 other_value=0,
@@ -2613,6 +2603,21 @@ class MoeRoutedExpertOp:
                     PerCoreCompileTimeDescriptor(
                         named_compile_time_arg=f"{proj}_core_in_bank_idx",
                         core_values=pcv["core_in_bank_idx"],
+                        other_value=0,
+                    ),
+                    # bank_id / vc per-proj — for down_proj (cores_per_bank=2 in
+                    # gather mode) this is 16 entries; for gate/up (cores_per_bank=1)
+                    # it is 8 entries. Overrides the static ctx.bank_id_core_values
+                    # entries above which only had 8 entries (gate's primaries) and
+                    # caused down_proj's secondaries to fall back to other_value=0.
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=f"{proj}_bank_id",
+                        core_values=pcv["bank_id"],
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=f"{proj}_vc",
+                        core_values=pcv["vc"],
                         other_value=0,
                     ),
                     PerCoreCompileTimeDescriptor(

@@ -395,6 +395,9 @@ def create_routed_expert_tensors(
             num_routed_experts=num_experts,
             move_to_device=True,
             compressed_tp8=compressed_tp8,
+            # gather-mode down_proj: cores_per_dram_bank=2, subblock_n=7. DRAM tile
+            # layout must use the same subblock_n as the kernel reads.
+            down_proj_subblock_n=7,
         )
         gate_proj_expert_tensors = routed_weights.routed_gate_proj
         up_proj_expert_tensors = routed_weights.routed_up_proj

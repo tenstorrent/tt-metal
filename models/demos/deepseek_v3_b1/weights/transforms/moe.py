@@ -27,13 +27,21 @@ def _tp_factors(device) -> tuple[int, int]:
     return 2, 8
 
 
-def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> torch.Tensor:
-    """Reorder tiles within each DRAM bank shard from row-major to column-major.
+def shuffle_dram_tiles(
+    tensor: torch.Tensor,
+    tile_size: int,
+    num_banks: int,
+    subblock_k: int | None = None,
+    subblock_n: int = 1,
+) -> torch.Tensor:
+    """Reorder tiles within each DRAM bank shard for the streaming matmul kernel.
 
-    WIDTH_SHARDED DRAM layout stores tiles row-major, but the streaming
-    matmul kernel expects K tiles contiguous for each N column.  This
-    function transposes the tile order within each shard so that the
+    Default (``subblock_n=1``): row-major → column-major within each shard so the
     kernel can linearly read K tiles at a time.
+
+    With ``subblock_n>1``: tiles are grouped into ``[subblock_k, subblock_n]`` blocks,
+    row-major within each block (n inner), column-major at block level. This matches
+    the gather-mode kernel's per-iteration ``subblock_k×subblock_n`` block read.
     """
     orig_shape = tensor.shape
     K, N = orig_shape[-2], orig_shape[-1]
@@ -53,6 +61,11 @@ def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> 
     per_N_tiles = per_N // tile_size
     num_tiles_per_shard = K_tiles * per_N_tiles
 
+    if subblock_k is None:
+        subblock_k = K_tiles
+    assert K_tiles % subblock_k == 0, f"K_tiles ({K_tiles}) must be divisible by subblock_k ({subblock_k})"
+    assert per_N_tiles % subblock_n == 0, f"per_N_tiles ({per_N_tiles}) must be divisible by subblock_n ({subblock_n})"
+
     tensor = tensor.reshape(batch_size, K, num_banks, per_N)
     tensor = tensor.permute(0, 2, 1, 3).contiguous()
     shards = tensor.reshape(-1, K, per_N)
@@ -61,8 +74,19 @@ def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> 
     tiles = tiles.permute(0, 1, 3, 2, 4).contiguous()
     tiles = tiles.reshape(-1, num_tiles_per_shard, tile_size, tile_size)
 
+    num_n_groups = per_N_tiles // subblock_n
+    block_size = subblock_k * subblock_n
+
     i = torch.arange(num_tiles_per_shard, device=tensor.device)
-    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+    block_idx = i // block_size
+    pos_in_block = i % block_size
+    local_k = pos_in_block // subblock_n
+    local_n = pos_in_block % subblock_n
+    n_group = block_idx % num_n_groups
+    k_sub = block_idx // num_n_groups
+    global_k = k_sub * subblock_k + local_k
+    global_n = n_group * subblock_n + local_n
+    source_idx = global_k * per_N_tiles + global_n
     shuffled_tiles = tiles[:, source_idx, :, :]
 
     shuffled_tiles = shuffled_tiles.reshape(-1, K_tiles, per_N_tiles, tile_size, tile_size)
@@ -150,11 +174,17 @@ def moe_routed_expert_tp8_torch_for_cache(
     num_banks: int,
     mesh_shape: tuple[int, int],
     shard_dim: int,
+    subblock_k: int | None = None,
+    subblock_n: int = 1,
 ) -> torch.Tensor:
     """TP-shard one MoE routed expert projection across a 2D mesh.
 
     ``shard_dim=1``: column-parallel (gate/up) — split N across ``mesh_rows*mesh_cols`` devices.
     ``shard_dim=0``: row-parallel (down) — split K across ``mesh_rows*mesh_cols`` devices.
+
+    ``subblock_k`` / ``subblock_n``: tile-shuffle subblock geometry. Defaults to plain
+    column-major layout (``subblock_n=1``). Set ``subblock_n>1`` for gather-mode down_proj
+    so the DRAM tile layout matches the kernel's per-iteration ``subblock_k×subblock_n`` read.
 
     TP slice ``i`` goes to mesh position ``(i // mesh_cols, i % mesh_cols)`` (row-major).
     Each per-device slice is DRAM-bank-shuffled (like :func:`moe_routed_expert_torch_for_cache`),
@@ -178,7 +208,9 @@ def moe_routed_expert_tp8_torch_for_cache(
             if N_padded != per_device_N:
                 slc = torch.nn.functional.pad(slc, (0, N_padded - per_device_N))
             shuffled_slices.append(
-                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(K_per_device, N_padded)
+                shuffle_dram_tiles(
+                    slc.unsqueeze(0), tile_w, num_banks, subblock_k=subblock_k, subblock_n=subblock_n
+                ).reshape(K_per_device, N_padded)
             )
     elif shard_dim == 0:
         assert K % tp == 0, f"K={K} must be divisible by tp={tp} for row-parallel shard"
@@ -191,7 +223,9 @@ def moe_routed_expert_tp8_torch_for_cache(
             if N_padded != N:
                 slc = torch.nn.functional.pad(slc, (0, N_padded - N))
             shuffled_slices.append(
-                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(per_device_K, N_padded)
+                shuffle_dram_tiles(
+                    slc.unsqueeze(0), tile_w, num_banks, subblock_k=subblock_k, subblock_n=subblock_n
+                ).reshape(per_device_K, N_padded)
             )
     else:
         raise ValueError(f"shard_dim must be 0 or 1, got {shard_dim}")
