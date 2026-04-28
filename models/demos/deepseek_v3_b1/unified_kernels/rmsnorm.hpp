@@ -22,8 +22,10 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/experimental/pack_block.h"
+#include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -167,5 +169,188 @@ struct RMSNorm {
     };  // class Op
 
 };  // struct RMSNorm
+
+// ============================================================================
+// RMSInverse micro-op (front half of RMSNorm)
+//
+// Computes: output_cb = 1 / RMS(input) = rsqrt(mean(input^2) + epsilon)
+// Output is a single scalar tile per invocation. Unlike RMSNorm, the inverse
+// is NOT applied to the input and gamma is not consulted — only the inverse
+// RMS scalar is produced. Intended for paths that want to compute the RMS
+// statistic on the sender side and consume / forward it later.
+//
+// CB States:
+//   NCRISC (Reader): no-op
+//   BRISC (Writer):  no-op
+//   TRISC (Compute):
+//     - Waits: input_cb (num_tiles)
+//     - Reserves: output_cb (1 tile)
+//     - Pushes: output_cb (1 tile)
+//     - Pops: input_cb (num_tiles) if pop_input=true
+// ============================================================================
+struct RMSInverse {
+    // Reader CTArgs: none needed
+    struct ReaderCTArgs {};
+    // Writer CTArgs: none needed
+    struct WriterCTArgs {};
+
+    // Compute CTArgs: fp32_acc, num_tiles, rsqrt_fast_approx, input_cb, output_cb
+    template <bool FP32Acc, uint32_t NumTiles, bool RsqrtFastApprox, uint32_t InputCb, uint32_t OutputCb>
+    struct ComputeCTArgs {
+        static constexpr bool fp32_acc = FP32Acc;
+        static constexpr uint32_t num_tiles = NumTiles;
+        static constexpr bool rsqrt_fast_approx = RsqrtFastApprox;
+        static constexpr uint32_t input_cb = InputCb;
+        static constexpr uint32_t output_cb = OutputCb;
+    };
+
+    // Runtime args (Reader/Writer empty; Compute carries epsilon + scalar)
+    struct ReaderArgs {};
+    struct WriterArgs {};
+    struct ComputeArgs {
+        uint32_t epsilon;
+        float scalar;
+    };
+
+    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
+
+    template <typename CTArgs, bool IsActiveCore, bool pop_input>
+    class Op {
+    public:
+        void operator()(const RTArgs& args) {
+            if constexpr (IsActiveCore) {
+                impl(args);
+            }
+        }
+
+    private:
+        void impl([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_TRISC)
+            compute_rms_inverse(args);
+#endif
+        }
+
+#if defined(COMPILE_FOR_TRISC)
+        void compute_rms_inverse(const ComputeArgs& args) {
+            constexpr uint32_t num_tiles = CTArgs::num_tiles;
+            reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::input_cb);
+            pack_reconfig_data_format<true>(CTArgs::output_cb);
+            pack_block_contiguous_init(CTArgs::output_cb);
+
+            mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
+            add_rsqrt_tile_init();
+            cb_wait_front(CTArgs::input_cb, num_tiles);
+            tile_regs_acquire();
+            mul_reduce_scalar_tile<PoolType::SUM>(CTArgs::input_cb, CTArgs::input_cb, num_tiles, args.scalar);
+            mul_reduce_scalar_uninit();
+
+            add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, args.epsilon);
+
+            cb_reserve_back(CTArgs::output_cb, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block_contiguous(0, CTArgs::output_cb, 1);
+            cb_push_back(CTArgs::output_cb, 1);
+            tile_regs_release();
+
+            if constexpr (pop_input) {
+                cb_pop_front(CTArgs::input_cb, num_tiles);
+            }
+        }
+#endif
+    };  // class Op
+
+};  // struct RMSInverse
+
+// ============================================================================
+// RMSApply micro-op
+//
+// Computes: output_cb[i] = input_cb[i] * scalar_cb[0] (broadcast from [0,0])
+// for each tile i in [0, num_tiles).
+//
+// Pairs with RMSInverse: the sender produces 1/RMS via RMSInverse, mcasts the
+// scalar tile, and consumers run RMSApply to scale a downstream tensor by it.
+// Supports in-place use: pass the same CB id for input_cb and output_cb to
+// modify the input CB's tiles in place (the op pops the input tiles, then
+// reserves+packs+pushes the same number of tiles back to that CB).
+//
+// CB States:
+//   NCRISC (Reader): no-op
+//   BRISC (Writer):  no-op
+//   TRISC (Compute):
+//     - Waits: input_cb (num_tiles), scalar_cb (1)
+//     - Pops: input_cb (num_tiles)
+//     - Reserves: output_cb (num_tiles)
+//     - Pushes: output_cb (num_tiles)
+//     - Pops: scalar_cb (1) if pop_scalar=true
+// ============================================================================
+struct RMSApply {
+    // Reader CTArgs: none needed
+    struct ReaderCTArgs {};
+    // Writer CTArgs: none needed
+    struct WriterCTArgs {};
+
+    // Compute CTArgs: fp32_acc, num_tiles, input_cb, scalar_cb, output_cb
+    template <bool FP32Acc, uint32_t NumTiles, uint32_t InputCb, uint32_t ScalarCb, uint32_t OutputCb>
+    struct ComputeCTArgs {
+        static constexpr bool fp32_acc = FP32Acc;
+        static constexpr uint32_t num_tiles = NumTiles;
+        static constexpr uint32_t input_cb = InputCb;
+        static constexpr uint32_t scalar_cb = ScalarCb;
+        static constexpr uint32_t output_cb = OutputCb;
+    };
+
+    struct ReaderArgs {};
+    struct WriterArgs {};
+    struct ComputeArgs {};
+
+    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
+
+    template <typename CTArgs, bool IsActiveCore, bool pop_scalar>
+    class Op {
+    public:
+        void operator()(const RTArgs& args) {
+            if constexpr (IsActiveCore) {
+                impl(args);
+            }
+        }
+
+    private:
+        void impl([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_TRISC)
+            constexpr uint32_t num_tiles = CTArgs::num_tiles;
+
+            cb_wait_front(CTArgs::input_cb, num_tiles);
+            cb_wait_front(CTArgs::scalar_cb, 1);
+
+            reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::scalar_cb);
+            pack_reconfig_data_format<true>(CTArgs::output_cb);
+            deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::input_cb, CTArgs::scalar_cb);
+
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                deepseek_mul_tiles_bcast_scalar<CTArgs::fp32_acc>(CTArgs::input_cb, CTArgs::scalar_cb, i, 0, i);
+            }
+            tile_regs_commit();
+
+            // Pop input first so an in-place output_cb (input_cb == output_cb) can
+            // reserve back the same slots without blocking on a full CB.
+            cb_pop_front(CTArgs::input_cb, num_tiles);
+            cb_reserve_back(CTArgs::output_cb, num_tiles);
+            tile_regs_wait();
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                pack_tile(i, CTArgs::output_cb);
+            }
+            cb_push_back(CTArgs::output_cb, num_tiles);
+            tile_regs_release();
+
+            if constexpr (pop_scalar) {
+                cb_pop_front(CTArgs::scalar_cb, 1);
+            }
+#endif
+        }
+    };  // class Op
+
+};  // struct RMSApply
 
 }  // namespace deepseek_b1_ops

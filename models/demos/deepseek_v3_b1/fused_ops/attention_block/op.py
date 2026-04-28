@@ -194,7 +194,6 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
-        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) + risc_sync (1)= 28
         # Post-SDPA fused (10): gather2 noc0/noc1 (2) + mcast3 receiver (1) + gather3 noc0/noc1 (2)
         #                       + scatter_arrival (1) + sdpa fwd r1/r2 (2) + sdpa bwd r1/r2 (2)
         pipeline_num_semaphores = 28
@@ -761,6 +760,13 @@ class AttentionBlock:
         )
         semaphore_index += 1
 
+        # Receiver semaphore for the RMSInverse mcast (input core -> dkv matmul cores).
+        # Sender semaphore is reused from main mcast.
+        rms_inv_mcast_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
         # Only use noc0 semaphore since senders are on NOC_0 (default for NCRISC)
@@ -958,6 +964,12 @@ class AttentionBlock:
         # keeps the views in sync.
         dkv_rmsnorm_input_view_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
         dkv_matmul_in0_view_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Output CB for the front-half RMSNorm on the input core (RMSInverse).
+        # Holds a single 1x32 scalar tile = 1/RMS of the raw input. Not consumed yet.
+        raw_input_rms_inv_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Destination CB on dkv matmul cores receiving the 1/RMS scalar via mcast.
+        # Allocated on the full mcast grid for safe NoC mcast layout; only dkv cores read.
+        raw_input_rms_inv_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         krope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: krope_grid col 8, rows 8-9)
         create_q_heads_receiver_in_cb = cb_id_context.get_cb_id(
             data_format, TD_8x32
@@ -1357,6 +1369,12 @@ class AttentionBlock:
             ("rmsnorm_rsqrt_fast_approx", 0),
         ]
 
+        # Front-half RMSNorm (RMSInverse) on the input core: writes 1/RMS scalar.
+        # Reuses rmsnorm_input_cb / rmsnorm_num_tiles / rmsnorm_fp32_acc / rmsnorm_rsqrt_fast_approx.
+        raw_input_rms_inv_trisc_named_compile_time_args = [
+            ("raw_input_rms_inv_output_cb", raw_input_rms_inv_output_cb),
+        ]
+
         # RMSNorm2 compile-time args (for second RMSNorm on gathered data)
         # Uses separate CBs with exact sizes for testing
         rmsnorm2_ncrisc_named_compile_time_args = [
@@ -1429,38 +1447,12 @@ class AttentionBlock:
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
         ]
         dkv_matmul_trisc_named_compile_time_args = [
-            (
-                "dkv_matmul_in0",
-                dkv_matmul_in0_view_cb,
-            ),  # 1x32 view of the rmsnorm output (overlaid on dkv_rmsnorm_output_cb's L1)
+            # dkv_matmul reads the raw mcast input directly from matmul_input_cb (no rmsnorm)
+            ("dkv_matmul_in0", matmul_input_cb),
             ("dkv_matmul_in1", matmul_weights_cb_overlapped),
             ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
-        ]
-
-        # DKV pre-RMSNorm compute compile-time args (TRISC only; NCRISC/BRISC are no-ops for RMSNorm).
-        # Runs on each dkv_matmul core before dkv_matmul to normalize the raw mcast input locally.
-        # DoGamma=false (set in kernel) — gamma is folded into kv_a_proj.weight.
-        # Reads from the 32x32 view of the mcast destination, writes to the 32x32 dkv_rmsnorm_output_cb.
-        dkv_pre_rmsnorm_trisc_named_compile_time_args = [
-            ("dkv_pre_rmsnorm_input_cb", dkv_rmsnorm_input_view_cb),
-            ("dkv_pre_rmsnorm_output_cb", dkv_rmsnorm_output_cb),
-            ("dkv_pre_rmsnorm_num_tiles", num_tiles),
-        ]
-
-        # View-CB compile-time args used by the kernel-side manual cb_push/cb_pop bridges
-        # between the mcast destination CB and the rmsnorm input view, and between the rmsnorm
-        # output CB and the dkv_matmul input view. NCRISC needs these to issue the bridges.
-        # Adding to BOTH ncrisc and trisc bases so any RISC that needs to reference a CB id
-        # can resolve the named arg.
-        dkv_view_cb_named_compile_time_args = [
-            ("dkv_rmsnorm_input_view_cb", dkv_rmsnorm_input_view_cb),
-            ("dkv_rmsnorm_input_view_num_tiles", num_tiles),
-            ("dkv_rmsnorm_output_cb", dkv_rmsnorm_output_cb),
-            ("dkv_rmsnorm_output_num_tiles", num_tiles),
-            ("dkv_matmul_in0_view_cb", dkv_matmul_in0_view_cb),
-            ("dkv_matmul_in0_view_num_tiles", dkv_matmul_k_num_tiles),
         ]
 
         # KV Cache Branch: RMSNorm
@@ -2297,6 +2289,46 @@ class AttentionBlock:
         ]
         sdpa_kv_cache_running_offset_mcast_core += rmsnorm2_output_cb_descriptor.total_size  # +3072 B
 
+        # CB: Raw-input RMSInverse output (1 tile of 1x32 = 64 B for bf16).
+        # Input core only — produced by the front-half RMSNorm pass that runs right after
+        # the raw-input mcast and stored for downstream use; not consumed yet.
+        raw_input_rms_inv_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            raw_input_rms_inv_output_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=matmul_input_page_size,  # 1x32 tile = 64 B for bf16
+            core_ranges=rmsnorm_core_grid,
+        )
+        raw_input_rms_inv_output_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=raw_input_rms_inv_output_cb,
+                data_format=data_format,
+                page_size=matmul_input_page_size,
+                tile=matmul_input_tile_descriptor,
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += raw_input_rms_inv_output_cb_descriptor.total_size  # +64 B
+
+        # CB: Raw-input RMSInverse mcast destination (1 tile of 1x32 = 64 B for bf16).
+        # Allocated on full_device_grid so mcast NoC writes land on a reserved L1 region
+        # at every core in the mcast destination range; only dkv matmul cores actually read.
+        raw_input_rms_inv_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            raw_input_rms_inv_dst_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=matmul_input_page_size,  # 1x32 tile = 64 B for bf16
+            core_ranges=full_device_grid,
+        )
+        raw_input_rms_inv_dst_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=raw_input_rms_inv_dst_cb,
+                data_format=data_format,
+                page_size=matmul_input_page_size,
+                tile=matmul_input_tile_descriptor,
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += raw_input_rms_inv_dst_cb_descriptor.total_size  # +64 B
+
         # MM1 is followed by a gather then mcast before MM2, so it is guaranteed to not be using the L1 space anymore
         sdpa_out_interm_running_offset = 0
 
@@ -3114,6 +3146,34 @@ class AttentionBlock:
             ("mcast2_dst_num_pages", mcast2_dst_num_pages),
         ]
 
+        # ========================================================================
+        # RMSInverse mcast compile-time args (input core -> dkv matmul cores)
+        # Reuses main-mcast destination NoC range and sender semaphore. One scalar
+        # tile of 1x32 (= matmul_input_page_size bytes) per invocation.
+        # ========================================================================
+        rms_inv_mcast_data_size_bytes = matmul_input_page_size
+        rms_inv_mcast_src_num_pages = 1
+        rms_inv_mcast_dst_num_pages = 1
+        rms_inv_mcast_brisc_named_compile_time_args = [
+            ("rms_inv_mcast_data_receiver_semaphore_addr", rms_inv_mcast_data_receiver_semaphore_addr),
+            ("rms_inv_mcast_data_size_bytes", rms_inv_mcast_data_size_bytes),
+            ("rms_inv_mcast_src_num_pages", rms_inv_mcast_src_num_pages),
+            ("raw_input_rms_inv_output_cb", raw_input_rms_inv_output_cb),  # Source CB for sender
+            ("raw_input_rms_inv_dst_cb", raw_input_rms_inv_dst_cb),  # Destination CB (sender uses for write_ptr)
+        ]
+        rms_inv_mcast_ncrisc_named_compile_time_args = [
+            ("rms_inv_mcast_data_receiver_semaphore_addr", rms_inv_mcast_data_receiver_semaphore_addr),
+            ("rms_inv_mcast_dst_num_pages", rms_inv_mcast_dst_num_pages),
+            ("raw_input_rms_inv_dst_cb", raw_input_rms_inv_dst_cb),
+        ]
+
+        # K-ROPE RMSApply: TRISC needs the destination CB and the per-core num_tiles to
+        # multiply dkv_matmul's output (dkv_matmul_out_w tiles) by the mcasted 1/RMS scalar.
+        krope_rms_apply_trisc_named_compile_time_args = [
+            ("raw_input_rms_inv_dst_cb", raw_input_rms_inv_dst_cb),
+            ("krope_rms_apply_num_tiles", dkv_matmul_out_w),
+        ]
+
         k_addr = ref_kv_cache_tensor.buffer_address()
 
         # Setup MLA per core runtime args
@@ -3225,6 +3285,7 @@ class AttentionBlock:
             rmsnorm_reader_named_compile_time_args
             + mcast_metadata_receiver_named_compile_time_args
             + mcast_receiver_named_compile_time_args
+            + rms_inv_mcast_ncrisc_named_compile_time_args
             + matmul_ncrisc_named_compile_time_args
             + gather_reduce_sender_named_compile_time_args
             + rmsnorm2_ncrisc_named_compile_time_args
@@ -3234,7 +3295,6 @@ class AttentionBlock:
             + qrope_ncrisc_named_compile_time_args
             + create_q_heads_ncrisc_named_compile_time_args
             + dkv_matmul_ncrisc_named_compile_time_args
-            + dkv_view_cb_named_compile_time_args
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
             + dkv_gather_receiver_named_compile_time_args
@@ -3247,6 +3307,7 @@ class AttentionBlock:
         brisc_named_compile_time_args_base = (
             mcast_metadata_sender_named_compile_time_args
             + mcast_sender_named_compile_time_args
+            + rms_inv_mcast_brisc_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_reduce_receiver_named_compile_time_args
             + matmul2_brisc_named_compile_time_args
@@ -3261,6 +3322,7 @@ class AttentionBlock:
 
         trisc_named_compile_time_args_base = (
             rmsnorm_compute_named_compile_time_args
+            + raw_input_rms_inv_trisc_named_compile_time_args
             + matmul_trisc_named_compile_time_args
             + gather_reduce_trisc_named_compile_time_args
             + rmsnorm2_trisc_named_compile_time_args
@@ -3269,8 +3331,7 @@ class AttentionBlock:
             + qrope_trisc_named_compile_time_args
             + create_q_heads_trisc_named_compile_time_args
             + dkv_matmul_trisc_named_compile_time_args
-            + dkv_pre_rmsnorm_trisc_named_compile_time_args
-            + dkv_view_cb_named_compile_time_args
+            + krope_rms_apply_trisc_named_compile_time_args
             + kv_rmsnorm_trisc_named_compile_time_args
             + krope_trisc_named_compile_time_args
             + kv_cache_trisc_named_compile_time_args
@@ -3453,6 +3514,8 @@ class AttentionBlock:
             matmul_input_cb_descriptor,
             dkv_rmsnorm_input_view_cb_descriptor,
             dkv_matmul_in0_view_cb_descriptor,
+            raw_input_rms_inv_output_cb_descriptor,
+            raw_input_rms_inv_dst_cb_descriptor,
             rmsnorm2_input_cb_descriptor,
             gather_reduce_scratch_cb_descriptor,
             rmsnorm2_output_cb_descriptor,
