@@ -1,6 +1,42 @@
 # TurboQuant KV Cache Quantization
 
-## 🚨 Resume here (2026-04-27 evening) — perf bottleneck FIXED, output-quality bug remains
+## ✅ E2E QUALITY FIXED (2026-04-28 PM)
+
+Both root-cause bugs are now patched. End-to-end output at 32 layers:
+
+```
+Q: What is the capital of France?
+A: The capital of France is Paris.
+```
+
+**Fix 1 — V double-rotation in `update_cache`** (`turbo_quant/ttnn_integration.py`):
+When `rotation_absorbed=True`, V already comes pre-rotated from W_v (the
+absorbed-rotation state dict applies Π^T to W_v so V_output = V @ Π). The
+old `update_cache` then called `quantize(v_heads)` without `skip_rotation`,
+applying Π again → V was double-rotated (V @ Π²) before being stored.
+Performance mode already passed `skip_rotation=rotation_absorbed`; the fused-
+SDPA path was missing this. Symptom: 1-layer logits magnitude ~40 % too
+large (10.13 vs 7.25 baseline) before fix.
+
+**Fix 2 — softmax-denominator dilution correction** (`sdpa_tq_decode.cpp`):
+The fused kernel iterates a full 128-token chunk regardless of `cur_pos`.
+Standard SDPA decode masks score positions `> cur_pos` to NEG_INF so they
+contribute 0 to softmax. The TQ kernel did not — zero-K positions instead
+contribute `exp(-max * scale)` to the denominator each, diluting real
+attention weights. After matmul_reduce of the running sum, we now subtract
+`zero_count * exp(-max * scale)` from `prev_sum` before reciprocating. This
+is mathematically equivalent to NEG_INF masking because V[zero] = 0 already
+zeroes the numerator contribution.
+
+Validation:
+- `turbo_quant/test_partial_cache.py` (synthetic, GQA): cos > 0.9996 vs
+  masked reference at every cur_pos; ratio ~0.97-1.02.
+- `turbo_quant/test_paged_partial_cache.py` (e2e-mimicking, scatters via
+  paged_update_cache): cos = 0.997, ratio = 0.97.
+- 32-layer e2e: max=32.5 (matches baseline 33.5), top-1 = "The", coherent
+  multi-token output.
+
+## Earlier (2026-04-27 evening) — perf bottleneck
 
 **Headline:** the fused-SDPA kernel was iterating ALL 256 padded k_chunks
 (1024 max_blocks / Sk_chunk_t=4) regardless of `cur_pos`. For seq=128 only
