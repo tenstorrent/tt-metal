@@ -104,6 +104,7 @@ void deassert_trisc() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+volatile KernelBarrier g_kernel_barrier __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -213,6 +214,7 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_INITIALIZE_LOCK();
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        thread_sync_init();
 
         deassert_trisc();
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
