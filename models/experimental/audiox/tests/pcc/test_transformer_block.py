@@ -16,18 +16,19 @@ PCC_THRESHOLD = 0.99
 
 
 @pytest.mark.parametrize(
-    "batch, seq_q, seq_kv, dim, dim_heads, cross_attend",
+    "batch, seq_q, seq_kv, dim, dim_context, dim_heads, cross_attend",
     [
-        (1, 64, 128, 384, 64, True),  # smaller-than-AudioX dims for test speed
+        (1, 64, 128, 384, 384, 64, True),  # dim_context == dim (kv_heads == num_heads)
+        (1, 64, 128, 384, 192, 64, True),  # dim_context < dim (kv_heads < num_heads, AudioX case)
     ],
 )
-def test_transformer_block_pcc(device, batch, seq_q, seq_kv, dim, dim_heads, cross_attend):
+def test_transformer_block_pcc(device, batch, seq_q, seq_kv, dim, dim_context, dim_heads, cross_attend):
     torch.manual_seed(0)
 
     rot_dim = max(dim_heads // 2, 32)
-    block = TransformerBlock(dim, dim_heads=dim_heads, cross_attend=cross_attend, dim_context=dim).eval()
+    block = TransformerBlock(dim, dim_heads=dim_heads, cross_attend=cross_attend, dim_context=dim_context).eval()
     x = torch.randn(batch, seq_q, dim)
-    context = torch.randn(batch, seq_kv, dim) if cross_attend else None
+    context = torch.randn(batch, seq_kv, dim_context) if cross_attend else None
 
     rotary = RotaryEmbedding(rot_dim).eval()
     with torch.no_grad():

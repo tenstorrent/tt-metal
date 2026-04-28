@@ -28,8 +28,10 @@ def _self_attention(x, qkv_w, ow, num_heads, cos=None, sin=None):
     return ttnn.linear(out, ow)
 
 
-def _cross_attention(x, context, qw, kvw, ow, num_heads):
-    """Cross-attention with separate Q and fused KV projections."""
+def _cross_attention(x, context, qw, kvw, ow, num_heads, kv_heads):
+    """Cross-attention with separate Q and fused KV projections. When
+    kv_heads < num_heads (dim_context < dim), repeat-interleaves K/V so
+    SDPA sees matching head counts, mirroring the AudioX flash path."""
     q = ttnn.linear(x, qw)
     kv = ttnn.linear(context, kvw)
     k, v = ttnn.chunk(kv, 2, dim=-1)
@@ -39,8 +41,13 @@ def _cross_attention(x, context, qw, kvw, ow, num_heads):
     head_dim = dim // num_heads
 
     q = ttnn.transpose(ttnn.reshape(q, (batch, sq, num_heads, head_dim)), 1, 2)
-    k = ttnn.transpose(ttnn.reshape(k, (batch, sk, num_heads, head_dim)), 1, 2)
-    v = ttnn.transpose(ttnn.reshape(v, (batch, sk, num_heads, head_dim)), 1, 2)
+    k = ttnn.transpose(ttnn.reshape(k, (batch, sk, kv_heads, head_dim)), 1, 2)
+    v = ttnn.transpose(ttnn.reshape(v, (batch, sk, kv_heads, head_dim)), 1, 2)
+
+    if kv_heads != num_heads:
+        repeats = num_heads // kv_heads
+        k = ttnn.repeat_interleave(k, repeats, dim=1)
+        v = ttnn.repeat_interleave(v, repeats, dim=1)
 
     out = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
     out = ttnn.reshape(ttnn.transpose(out, 1, 2), (batch, sq, dim))
@@ -88,8 +95,7 @@ class TtTransformerBlock:
             self.cross_q_w = to_tt(linear_weight(sd["cross_attn.to_q.weight"]), mesh_device)
             self.cross_kv_w = to_tt(linear_weight(sd["cross_attn.to_kv.weight"]), mesh_device)
             self.cross_o_w = to_tt(linear_weight(sd["cross_attn.to_out.weight"]), mesh_device)
-            # AudioX always projects cond tokens to embed_dim, so dim_kv == dim and kv_heads == num_heads.
-            assert sd["cross_attn.to_kv.weight"].shape[1] == dim, "cross-attn dim_kv != dim is not supported"
+            self.cross_kv_heads = sd["cross_attn.to_kv.weight"].shape[1] // dim_heads
 
         self.ff_norm_w = to_tt(sd["ff_norm.gamma"], mesh_device)
         self.ff_norm_b = to_tt(sd["ff_norm.beta"], mesh_device)
@@ -116,7 +122,15 @@ class TtTransformerBlock:
             normed = ttnn.layer_norm(x, weight=self.cross_norm_w, bias=self.cross_norm_b)
             x = ttnn.add(
                 x,
-                _cross_attention(normed, context, self.cross_q_w, self.cross_kv_w, self.cross_o_w, self.num_heads),
+                _cross_attention(
+                    normed,
+                    context,
+                    self.cross_q_w,
+                    self.cross_kv_w,
+                    self.cross_o_w,
+                    self.num_heads,
+                    self.cross_kv_heads,
+                ),
             )
 
         normed = ttnn.layer_norm(x, weight=self.ff_norm_w, bias=self.ff_norm_b)
