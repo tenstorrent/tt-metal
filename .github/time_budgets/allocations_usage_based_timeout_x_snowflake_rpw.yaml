@@ -1,1 +1,179 @@
-IyBGcmFjdGlvbmFsIGFsbG9jYXRpb24gb2YgZWFjaCBTS1UgcG9vbCBwZXIgdGVhbSDigJQgaHlicmlkOiBZQU1MIHRpbWVvdXQgw5cgU25vd2ZsYWtlIHJ1bnMvd2Vlay4KIyBHZW5lcmF0ZWQgQXByaWwgMjAyNi4gUmV2aXNlZCB0byBjb3JyZWN0IHRlYW0gb3duZXJzaGlwIHVzaW5nIGFsbCBjdXJyZW50IHBpcGVsaW5lX3Jlb3JnIFlBTUxzLgojCiMgQ292ZXJhZ2U6IHBpcGVsaW5lX3Jlb3JnIGpvYnMgQU5EIGFsbCBsZWdhY3kgKGJ1Y2tldC0yKSB3b3JrZmxvd3MgdGhhdCBydW4gb24KIyBkZWRpY2F0ZWQgaGFyZHdhcmUuIENQVS1vbmx5IHJ1bm5lcnMgKHVidW50dS1sYXRlc3QgLyBsYXJnZS1zdGFibGUpIGFuZCByZWxlYXNlCiMgcGlwZWxpbmVzIChidWlsZC10ZXN0LXB1Ymxpc2gsIGluLXJlbGVhc2UpIGFyZSBleGNsdWRlZC4KIwojIOKUgOKUgOKUgCBXaHkgdGhpcyBtb2RlbCBleGlzdHMg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMKIyBUaGUgdjIgYWN0dWFscyBmaWxlcyB1c2UgU25vd2ZsYWtlIHdhbGwtY2xvY2sgdGltZSDigJQgYWNjdXJhdGUgYnV0IGl0IHJlZmxlY3RzCiMgaG93IGZhc3QgdGVzdHMgKmhhcHBlbmVkKiB0byBydW4sIG5vdCBob3cgYmFkIHRoaW5ncyBjYW4gZ2V0IGlmIHRoZXkgYWxsIGhpdAojIHRoZWlyIGNvbmZpZ3VyZWQgdGltZW91dHMuICBUaGUgbWFudWFsIHYxIGZpbGUgdXNlcyB0aW1lb3V0IMOXIG1hbnVhbCBycHcKIyBlc3RpbWF0ZXMgd2hpY2ggYXJlIGNvbnNlcnZhdGl2ZSBidXQgdGhlIHJwdyB2YWx1ZXMgd2VyZSBndWVzc2VzLgojCiMgVGhpcyBmaWxlIGNvbWJpbmVzOgojICAgY29zdCA9ICh5YW1sX3RpbWVvdXRfbWludXRlcyAvIDYwKSDDlyBzbm93Zmxha2VfcnVuc19wZXJfd2VlawojCiMgVGltZW91dCBpcyB0aGUgd29yc3QtY2FzZSBjZWlsaW5nIGZyb20gdGhlIFlBTUwgY29uZmlndXJhdGlvbjsgcnVucy93ZWVrIGlzCiMgdGhlIGFjdHVhbCBvYnNlcnZlZCBmcmVxdWVuY3kgZnJvbSBTbm93Zmxha2UgKGJvdGggbWFpbi1icmFuY2ggYW5kIFBSLWJyYW5jaAojIHJ1bnMgaW5jbHVkZWQpLiAgUmVzdWx0OiBhIGNvbnNlcnZhdGl2ZSB3b3JzdC1jYXNlIHByb2plY3Rpb24gYW5jaG9yZWQgdG8KIyByZWFsIHBpcGVsaW5lIGNhZGVuY2UuCiMKIyDilIDilIDilIAgU25vd2ZsYWtlIHJ1bnMvd2VlayBxdWVyeSDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKIwojICAgU0VMRUNUIFNQTElUX1BBUlQoai5OQU1FLCAnIC8gJywgMSkgICAgQVMgd29ya2Zsb3dfcHJlZml4LAojICAgICAgICAgIENPVU5UKERJU1RJTkNUIHAuQ0lDRF9QSVBFTElORV9JRCkgLyAyOC4wICogNyAgQVMgcnVuc19wZXJfd2VlawojICAgRlJPTSAgIFRUREFUQVNGLlNXX1RFU1QuQ0lDRF9KT0IgIGoKIyAgIEpPSU4gICBUVERBVEFTRi5TV19URVNULkNJQ0RfUElQRUxJTkUgcAojICAgICAgICAgIE9OIGouQ0lDRF9QSVBFTElORV9JRCA9IHAuQ0lDRF9QSVBFTElORV9JRAojICAgV0hFUkUgIHAuUFJPSkVDVCA9ICd0dC1tZXRhbCcKIyAgICAgQU5EICBwLlBJUEVMSU5FX1NUQVJUX1RTID49IERBVEVBREQoJ2RheScsIC0yOCwgQ1VSUkVOVF9USU1FU1RBTVAoKSkKIyAgICAgQU5EICBqLkpPQl9MQUJFTCBOT1QgTElLRSAnJWxhcmdlLXN0YWJsZSUnCiMgICAgIEFORCAgai5KT0JfTEFCRUwgTk9UIExJS0UgJyV1YnVudHUtbGF0ZXN0JScKIyAgIEdST1VQIEJZIDEKIyAgIEhBVklORyBydW5zX3Blcl93ZWVrID4gMQojICAgT1JERVIgQlkgcnVuc19wZXJfd2VlayBERVNDOwojCiMgVGhlIERJU1RJTkNUIENJQ0RfUElQRUxJTkVfSUQgY291bnQgZ2l2ZXMgcGlwZWxpbmUgaW52b2NhdGlvbnMgKG5vdCBpbmRpdmlkdWFsCiMgam9iIHJ1bnMpLCBzY2FsZWQgZnJvbSB0aGUgMjgtZGF5IHdpbmRvdyB0byBhIDctZGF5IHdlZWsuICBCb3RoIG1haW4tYnJhbmNoCiMgcG9zdC1jb21taXQgcGlwZWxpbmVzIGFuZCBQUi1icmFuY2ggcGlwZWxpbmVzIGFyZSBpbmNsdWRlZC4KIwojIOKUgOKUgOKUgCBwaXBlbGluZV9yZW9yZyBZQU1MIHBhcnNpbmcg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMKIyBGaWxlczogdGVzdHMvcGlwZWxpbmVfcmVvcmcvKi55YW1sIChhbGwgZmlsZXMgZmV0Y2hlZCBmcm9tIEdpdEh1YiBtYWluIGJyYW5jaCwKIyAgICAgICAgQXByaWwgMjAyNikuIFRlYW0gb3duZXJzaGlwIHJlYWQgZGlyZWN0bHkgZnJvbSBlYWNoIFlBTUwgZW50cnkncyBgdGVhbTpgCiMgICAgICAgIGZpZWxkIOKAlCBOT1QgYXNzdW1lZCBmcm9tIGhpc3RvcmljYWwgU25vd2ZsYWtlIGpvYiBhdHRyaWJ1dGlvbi4KIwojIEZvcm1hdCAobmV3IHNjaGVtYSk6CiMKIyAgIC0gbmFtZTogc29tZV90ZXN0CiMgICAgIHRlYW06IG1vZGVscwojICAgICBza3VzOgojICAgICAgIHdoX24zMDA6ICAgICB7dGltZW91dDogMTIwLCB0aWVyOiAxfQojICAgICAgIGJoX3AxNTBiX2NpdjI6IHt0aW1lb3V0OiA2MCwgdGllcjogMn0KIwojIEVhY2ggKHRlYW0sIHNrdV9uYW1lKSDihpIgcG9vbCBlbnRyeSBjb250cmlidXRlczoKIyAgIHRpbWVvdXRfbWludXRlcyAvIDYwIMOXIHJwdyh5YW1sX3N0ZW0sIHBvb2wpCiMKIyBTS1UgbmFtZSDihpIgaGFyZHdhcmUgcG9vbCBtYXBwaW5nOgojICAgd2hfbjE1MCosIHdoX24xNTAgICAgICAgICAgICAg4oaSIE4xNTAKIyAgIHdoX24zMDAqLCB3aF9uMzAwICAgICAgICAgICAgIOKGkiBOMzAwCiMgICB3aF9sbG1ib3gqLCB3aF90M2sqICAgICAgICAgICDihpIgTExNQk9YCiMgICB3aF9nYWxheHkqICAgICAgICAgICAgICAgICAgICDihpIgZ2FsYXh5CiMgICBiaF9wMTUwKiwgYmhfcDEwMCosIGJoX2xvdWRib3gsIGJoX2Rlc2tib3gsIGJoX3F1aWV0Ym94IChub24tMiksIGJoX2xsbWJveCwKIyAgIGJoX3NwMSwgYmhfc3A0ICAgICAgICAgICAgICAgIOKGkiBwMTUwYgojICAgYmhfcDMwMCosIGJoX3F1aWV0Ym94XzIgICAgICAg4oaSIHAzMDBiCiMgICBiaF9nYWxheHkqICAgICAgICAgICAgICAgICAgICDihpIgZXhjbHVkZWQgKG5vIFNub3dmbGFrZSBkYXRhIGZvciBiaF9nYWxheHkpCiMKIyBwaXBlbGluZV9yZW9yZyBydW5zL3dlZWsgKHlhbWxfc3RlbSDihpIgcG9vbCDihpIgYWN0dWFsIFNub3dmbGFrZSBycHcpOgojICAgbW9kZWxzX3VuaXRfdGVzdHMueWFtbCAgICAgICAgIE4xNTAg4oaSIDgwL3drICAgIE4zMDAg4oaSIDgxNy93ayAgTExNQk9YIOKGkiA1Ljc1L3drICBnYWxheHkg4oaSIDUuNS93ayAgIHAxNTBiIChubyBwMTUwYiBlbnRyeSBpbiB5YW1sKQojICAgbW9kZWxzX2UyZV90ZXN0cy55YW1sICAgICAgICAgIGFsbCBwb29scyDihpIgNy93awojICAgbW9kZWxzX3N3ZWVwX3Rlc3RzLnlhbWwgICAgICAgIHJwdyA9IDAgKG5ldyBmaWxlLCBub3QgeWV0IGluIFNub3dmbGFrZSkKIyAgIG1vZGVsc19kZXZpY2VfcGVyZl90ZXN0cy55YW1sICBycHcgPSAwIChuZXcgZmlsZSkKIyAgIHQza191bml0X3Rlc3RzLnlhbWwgICAgICAgICAgICBMTE1CT1gg4oaSIDE4OC41L3drCiMgICB0M2tfZTJlX3Rlc3RzLnlhbWwgICAgICAgICAgICAgTExNQk9YIOKGkiA1MS41L3drCiMgICB0M2tfaW50ZWdyYXRpb25fdGVzdHMueWFtbCAgICAgTExNQk9YIOKGkiA0MS41L3drCiMgICB0M2tfcGVyZl90ZXN0cy55YW1sICAgICAgICAgICAgTExNQk9YIOKGkiA0MS93awojICAgdDNrX2RlbW9fdGVzdHMueWFtbCAgICAgICAgICAgIExMTUJPWCDihpIgNDMuMjUvd2sKIyAgIGJsYWNraG9sZV9kZW1vX3Rlc3RzLnlhbWwgICAgICBwMTUwYiBwZXItc2t1OiAyMeKAkzI1L3drOyBwMzAwYiBwZXItc2t1OiAyMi4yNeKAkzI4LjI1L3drCiMgICBnYWxheHlfZGVtb190ZXN0cy55YW1sICAgICAgICAgZ2FsYXh5IOKGkiA1OC93awojICAgZ2FsYXh5X2UyZV90ZXN0cy55YW1sICAgICAgICAgIGdhbGF4eSDihpIgMjkuMjUvd2sKIyAgIGdhbGF4eV9oZWFsdGhfdGVzdHMueWFtbCAgICAgICBnYWxheHkg4oaSIDM5L3drCiMgICBnYWxheHlfaW50ZWdyYXRpb25fdGVzdHMueWFtbCAgZ2FsYXh5IOKGkiAxNy41L3drCiMgICBnYWxheHlfcGVyZl90ZXN0cy55YW1sICAgICAgICAgZ2FsYXh5IOKGkiAxMi4yNS93awojICAgZ2FsYXh5X3Nhbml0eV90ZXN0cy55YW1sICAgICAgIGdhbGF4eSDihpIgNDUuMjUvd2sKIyAgIHJ1bnRpbWVfdW5pdF90ZXN0cy55YW1sICAgICAgICBycHcgPSAwIChuZXcgZmlsZSkKIyAgIHJ1bnRpbWVfaW50ZWdyYXRpb25fdGVzdHMueWFtbCBycHcgPSAwIChuZXcgZmlsZSkKIyAgIHJ1bnRpbWVfcGVyZl90ZXN0cy55YW1sICAgICAgICBycHcgPSAwIChuZXcgZmlsZSkKIyAgIHJ1bnRpbWVfc2FuaXR5X3Rlc3RzLnlhbWwgICAgICBycHcgPSAwIChuZXcgZmlsZSkKIyAgIHR0bm4tdGVzdHMueWFtbCAgICAgICAgICAgICAgICBycHcgPSAwIChuZXcgZmlsZSkKIyAgIGRlbW9fc3BfbXVsdGlob3N0X3Rlc3RzLnlhbWwgICBycHcgPSAwIChuZXcgZmlsZSkKIwojIE5vdGUgb24gdDNrXyoueWFtbCB0ZWFtIG93bmVyc2hpcDogdGhlc2UgZmlsZXMgd2VyZSBoaXN0b3JpY2FsbHkgYXR0cmlidXRlZCB0bwojIHRoZSBgcnVudGltZWAgdGVhbSBpbiBTbm93Zmxha2Ugam9iIGRhdGEsIGJ1dCB0aGUgY3VycmVudCBZQU1MIGB0ZWFtOmAgZmllbGRzCiMgYXNzaWduIHRoZW0gdG8gbW9kZWxzLCBzY2FsZW91dCwgdHRubiwgYW5kIHNoaWVsZC4gVGhpcyBmaWxlIHVzZXMgdGhlIGN1cnJlbnQKIyBZQU1MIG93bmVyc2hpcCBhcyB0aGUgYXV0aG9yaXRhdGl2ZSBzb3VyY2UuCiMKIyDilIDilIDilIAgTGVnYWN5IGJ1Y2tldC0yIHRpbWVvdXQgZXN0aW1hdGVzIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAojCiMgTGVnYWN5IHdvcmtmbG93cyBoYXZlIG5vIHBpcGVsaW5lX3Jlb3JnIFlBTUw7IHRpbWVvdXQgdmFsdWVzIGNvbWUgZnJvbQojIHN0YXRpYyBhbmFseXNpcyBvZiB0aGVpciBpbXBsIGZpbGVzIGluIC5naXRodWIvd29ya2Zsb3dzLzoKIwojICAgZmQtbmlnaHRseSAocnVudGltZSB0ZWFtLCB+OTAgbWluL3J1biwgTjE1MCtOMzAwK3AxNTBiLCAxMDAuNzUvd2spCiMgICB0dG5uLXVuaXQtdGVzdHMgIE4zMDA6IDYwIG1pbiDDlyA4Mjgvd2sgICBwMTUwYjogMTIwIG1pbiDDlyAzNDcuMjUvd2sKIyAgIHR0bm4tc21va2UtdGVzdHMgTjE1MDogMzAgbWluIMOXIDExNDUuNS93awojICAgdHRubi1iYXNpYy10ZXN0cyBOMTUwOiA2MCBtaW4gw5cgNTg2LjI1L3drCiMgICBtZXRhbGl1bS1zbW9rZS10ZXN0cyBOMTUwOiAzMCBtaW4gw5cgMTAwMS41L3drIChydW50aW1lIHRlYW0pCiMgICB0cmlhZ2UtdGVzdHMgTjE1MDogMTUgbWluIMOXIDYxOC43NS93ayAgcDE1MGI6IDE1IG1pbiDDlyA0MzAuNS93ayAocnVudGltZSB0ZWFtKQojICAgbGxrLXRlc3Qtd29ybWhvbGUgTjE1MDogMTIwIG1pbiDDlyAzMTcuNzUvd2sKIyAgIGxsay10ZXN0LWJsYWNraG9sZSBwMTUwYjogMTIwIG1pbiDDlyAzMTcuNzUvd2sKIyAgIGJsYWNraG9sZS1tdWx0aS1jYXJkLWZhc3QgcDE1MGI6IDEwMCBtaW4gw5cgMzM4LjUvd2sgIHAzMDBiOiAxMDAgbWluIMOXIDMzOC41L3drCiMgICBibGFja2hvbGUtbXVsdGktY2FyZCBwMTUwYjogMzAwIG1pbiDDlyA4MC93ayAgICAgICAgICBwMzAwYjogMzAwIG1pbiDDlyA4NC93awojICAgdHQtbWV0YWwtbDItdGVzdHMgTjE1MCtOMzAwOiAxODAgbWluIMOXIDEyNy93ayAgcDE1MGI6IDE4MCBtaW4gw5cgMTI2Ljc1L3drCiMgICB0MzAwMC1hcGMtZmFzdC10ZXN0cyBOMzAwOiAyIG1pbiDDlyA4MDguNS93ayAocnVudGltZSB0ZWFtOyB2ZXJ5IHNob3J0KQojICAgc2luZ2xlLWNhcmQtZGVtby10ZXN0cyBOMTUwK04zMDA6IDYwIG1pbiDDlyA0OS43NS93ayAobW9kZWxzIHRlYW0pCiMgICBzaW5nbGUtY2FyZC10dG5uLW1vZGVscy1mcmVxdWVudCBOMzAwOiA2MCBtaW4gw5cgMzEuNS93ayAobW9kZWxzIHRlYW0pCiMgICB2bGxtLXRlc3RzIE4xNTArTjMwMCtwMTUwYjogNjAgbWluIMOXIDM1LjUvd2sgKG1vZGVscyB0ZWFtKQojICAgZ2FsYXh5LXVuaXQtdGVzdHMgZ2FsYXh5OiA2MCBtaW4gw5cgNDMuNzUvd2sgKHR0bm4gdGVhbSkKIyAgIGdhbGF4eS1tb2RlbC1wZXJmLXRlc3RzIGdhbGF4eTogNjAgbWluIMOXIDE4LjI1L3drIChtb2RlbHMgdGVhbSkKIyAgIEdhbGF4eS1EZWVwU2Vlay10ZXN0cyBnYWxheHk6IDYwIG1pbiDDlyA0NC41L3drIChzY2FsZW91dCB0ZWFtKQojICAgbXVsdGktaG9zdC1nbHgtMngrNHggZ2FsYXh5OiAxMjAgbWluIMOXIDgyLjUrMjUuNS93ayAoc2NhbGVvdXQgdGVhbSkKIyAgIG11bHRpLWhvc3QtdDNrIExMTUJPWDogMTIwIG1pbiDDlyA3My41L3drIChzY2FsZW91dCB0ZWFtKQojICAgbXVsdGktaG9zdC1iaC1sYi0yeCs0eCBwMTUwYjogMTIwIG1pbiDDlyA3Mys3Mi41L3drIChzY2FsZW91dCB0ZWFtKQojICAgdHRubi1zd2VlcHMgTjMwMDogNjAgbWluIMOXIDMyLjUvd2sgIExMTUJPWDogNjAgbWluIMOXIDMxL3drICBwMTUwYjogMzAgbWluIMOXIDMxLjI1L3drCiMKIyDilIDilIDilIAgRXhjbHVkZWQgd29ya2Zsb3dzIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAojCiMgICBidWlsZC1hcnRpZmFjdCwgYnVpbGQsIGNvZGUtYW5hbHlzaXMsIGNsYW5nLXRpZHktbGlnaHQsIGxsay1idWlsZC1xdWFzYXIKIyAgICAg4oaSIENQVS1vbmx5IChsYXJnZS1zdGFibGUgcnVubmVyLCBubyBhY2NlbGVyYXRvciBoYXJkd2FyZSkKIyAgIGJ1aWxkLXRlc3QtcHVibGlzaCAoaW4tcmVsZWFzZSBsYWJlbCkg4oaSIHJlbGVhc2UgcGlwZWxpbmUKIyAgIHRyaWdnZXItcG9zdC1jb21taXQg4oaSIEdIQSBvcmNoZXN0cmF0aW9uIG92ZXJoZWFkCiMgICB0ZXN0LXdoLTZ1LWltYWdlIOKGkiBpbmZyYSBzbW9rZSB0ZXN0CiMgICBiaF9nYWxheHkgU0tVIGVudHJpZXMgaW4gcGlwZWxpbmVfcmVvcmcg4oaSIGV4Y2x1ZGVkIChubyBTbm93Zmxha2UgZGF0YSkKIwojIOKUgOKUgOKUgCBGcmFjdGlvbnMg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgS2V5cyBtYXRjaCAuZ2l0aHViL3NrdV9jb25maWcueWFtbCBleGFjdGx5LiBBbGwgU0tVcyBpbiB0aGUgc2FtZSBoYXJkd2FyZSBwb29sCiMgc2hhcmUgdGhlIHNhbWUgdGVhbSBmcmFjdGlvbnMgKGNvc3QgZGF0YSB3YXMgYWdncmVnYXRlZCBhdCBwb29sIGxldmVsKS4KIyBWYWx1ZXMgc3VtIHRvIOKJpCAxLjAgcGVyIHBvb2wuIFJlbWFpbmRlciA9IHVudHJhY2tlZCBqb2JzIC8gaGVhZHJvb20uCiMgTmV3IHBpcGVsaW5lX3Jlb3JnIGZpbGVzIHdpdGggcnB3PTAgY29udHJpYnV0ZSAwIGgvd2sgdW50aWwgdGhleSBhcHBlYXIgaW4gU25vd2ZsYWtlLgoKIyDilIDilIAgV29ybWhvbGUgTjE1MCAoMywyMTQgaC93ayBwcm9qZWN0ZWQpIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAojIHJ1bnRpbWUgMSwxODggaC93ayDigJMgbWV0YWxpdW0tc21va2UgKDUwMSBoKSwgdHJpYWdlLXRlc3RzICgxNTUgaCksIHR0LW1ldGFsLWwyICgzODEgaCksIGZkLW5pZ2h0bHkgKDE1MSBoKQojIHR0bm4gICAgMSwxNTkgaC93ayDigJMgdHRubi1zbW9rZSAoNTczIGgpLCB0dG5uLWJhc2ljICg1ODYgaCkKIyBsbGsgICAgICAgNjM2IGgvd2sg4oCTIGxsay10ZXN0LXdvcm1ob2xlICg2MzUgaCkKIyBtb2RlbHMgICAgMjMyIGgvd2sg4oCTIG1vZGVscy11bml0LXRlc3RzICgxNDAgaCksIHNpbmdsZS1jYXJkLWRlbW8gKDUwIGgpLCB2bGxtLXRlc3RzICgzNiBoKQp3aF9uMTUwOgogIHJ1bnRpbWUgICAgIDogIDAuMzcKICB0dG5uICAgICAgICA6ICAwLjM2CiAgbGxrICAgICAgICAgOiAgMC4yMAogIG1vZGVscyAgICAgIDogIDAuMDcKd2hfbjE1MF9jaXYyOgogIHJ1bnRpbWUgICAgIDogIDAuMzcKICB0dG5uICAgICAgICA6ICAwLjM2CiAgbGxrICAgICAgICAgOiAgMC4yMAogIG1vZGVscyAgICAgIDogIDAuMDcKCiMg4pSA4pSAIFdvcm1ob2xlIE4zMDAgKDEsNjA1IGgvd2sgcHJvamVjdGVkKSDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKIyB0dG5uICAgIDg2MSBoL3drIOKAkyB0dG5uLXVuaXQtdGVzdHMgKDgyOCBoKSwgdHRubi1zd2VlcHMgKDMzIGgpCiMgcnVudGltZSA1NTkgaC93ayDigJMgdDMwMDAtYXBjLWZhc3QgKDI3IGgpLCB0dC1tZXRhbC1sMiAoMzgxIGgpLCBmZC1uaWdodGx5ICgxNTEgaCkKIyBtb2RlbHMgIDE4NSBoL3drIOKAkyBtb2RlbHMtdW5pdC10ZXN0cyAoNjggaCksIG1vZGVscy1lMmUgKDEgaCksIHNpbmdsZS1jYXJkLWRlbW8gKDUwIGgpLAojICAgICAgICAgICAgICAgICAgICBzaW5nbGUtY2FyZC10dG5uLW1vZGVscyAoMzIgaCksIHZsbG0tdGVzdHMgKDM2IGgpCndoX24zMDA6CiAgdHRubiAgICAgICAgOiAgMC41NAogIHJ1bnRpbWUgICAgIDogIDAuMzUKICBtb2RlbHMgICAgICA6ICAwLjExCndoX24zMDBfY2l2MjoKICB0dG5uICAgICAgICA6ICAwLjU0CiAgcnVudGltZSAgICAgOiAgMC4zNQogIG1vZGVscyAgICAgIDogIDAuMTEKd2hfbjMwMF9wZXJmOgogIHR0bm4gICAgICAgIDogIDAuNTQKICBydW50aW1lICAgICA6ICAwLjM1CiAgbW9kZWxzICAgICAgOiAgMC4xMQoKIyDilIDilIAgV29ybWhvbGUgTExNQk9YICgyLDE1OCBoL3drIHByb2plY3RlZCkg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgbW9kZWxzICAxLDM4MSBoL3drIOKAkyB0M2staW50ZWdyYXRpb24tdGVzdHMgKDI3OSBoKSwgdDNrLXVuaXQtdGVzdHMgKDMxNSBoKSwKIyAgICAgICAgICAgICAgICAgICAgICB0M2stZTJlLXRlc3RzICgxNjkgaCksIHQzay1wZXJmLXRlc3RzICg0NjkgaCksIHQzay1kZW1vLXRlc3RzICgxMDEgaCksCiMgICAgICAgICAgICAgICAgICAgICAgbW9kZWxzLXVuaXQvZTJlICgyIGgpCiMgc2NhbGVvdXQgIDUxNSBoL3drIOKAkyBtdWx0aS1ob3N0LXQzayAoMTQ3IGgpLCB0M2stdW5pdC10ZXN0cyBzY2FsZW91dCAoMTg4IGgpLAojICAgICAgICAgICAgICAgICAgICAgIHQzay1lMmUgc2NhbGVvdXQgKDE1OSBoKSwgdDNrLWludGVncmF0aW9uIHNjYWxlb3V0ICgyMSBoKQojIHR0bm4gICAgICAyMjMgaC93ayDigJMgdDNrLXVuaXQtdGVzdHMgdHRubiAoOTQgaCksIHQzay1lMmUgdHRubiAoNzcgaCksCiMgICAgICAgICAgICAgICAgICAgICAgdDNrLWludGVncmF0aW9uIHR0bm4gKDIxIGgpLCB0dG5uLXN3ZWVwcy1UM0sgKDMxIGgpCiMgc2hpZWxkICAgICAzOSBoL3drIOKAkyB0M2stZTJlLXRlc3RzIHNoaWVsZCAoMzkgaCkKd2hfbGxtYm94OgogIG1vZGVscyAgICAgIDogIDAuNjQKICBzY2FsZW91dCAgICA6ICAwLjI0CiAgdHRubiAgICAgICAgOiAgMC4xMAogIHNoaWVsZCAgICAgIDogIDAuMDIKd2hfbGxtYm94X2NpdjI6CiAgbW9kZWxzICAgICAgOiAgMC42NAogIHNjYWxlb3V0ICAgIDogIDAuMjQKICB0dG5uICAgICAgICA6ICAwLjEwCiAgc2hpZWxkICAgICAgOiAgMC4wMgp3aF9sbG1ib3hfcGVyZjoKICBtb2RlbHMgICAgICA6ICAwLjY0CiAgc2NhbGVvdXQgICAgOiAgMC4yNAogIHR0bm4gICAgICAgIDogIDAuMTAKICBzaGllbGQgICAgICA6ICAwLjAyCndoX2xsbWJveF9wZXJmX3JlbGVhc2U6CiAgbW9kZWxzICAgICAgOiAgMC42NAogIHNjYWxlb3V0ICAgIDogIDAuMjQKICB0dG5uICAgICAgICA6ICAwLjEwCiAgc2hpZWxkICAgICAgOiAgMC4wMgoKIyDilIDilIAgV29ybWhvbGUgR2FsYXh5ICg2OTAgaC93ayBwcm9qZWN0ZWQpIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAojIHNjYWxlb3V0IDMzNCBoL3drIOKAkyBtdWx0aS1ob3N0LWdseC0yeCAoMTY1IGgpLCBtdWx0aS1ob3N0LWdseC00eCAoNTEgaCksCiMgICAgICAgICAgICAgICAgICAgICBHYWxheHktRGVlcFNlZWstdGVzdHMgKDQ1IGgpLCBnYWxheHktaGVhbHRoICgxMCBoKSwKIyAgICAgICAgICAgICAgICAgICAgIGdhbGF4eS1lMmUgc2NhbGVvdXQgKDQ5IGgpLCBnYWxheHktc2FuaXR5IHNjYWxlb3V0ICgxNSBoKQojIG1vZGVscyAgIDE3OCBoL3drIOKAkyBnYWxheHktZGVtby10ZXN0cyAoMTExIGgpLCBnYWxheHktbW9kZWwtcGVyZiAoMTggaCksCiMgICAgICAgICAgICAgICAgICAgICBnYWxheHktcGVyZi10ZXN0cyAoMjcgaCksIGdhbGF4eS1zYW5pdHkgbW9kZWxzICg4IGgpLCBtb2RlbHMtZTJlICgyIGgpCiMgdHRubiAgICAgMTc3IGgvd2sg4oCTIGdhbGF4eS1pbnRlZ3JhdGlvbi10ZXN0cyAoOTkgaCksIGdhbGF4eS1lMmUgdHRubiAoMzQgaCksCiMgICAgICAgICAgICAgICAgICAgICBnYWxheHktdW5pdC10ZXN0cyAoNDQgaCkKd2hfZ2FsYXh5OgogIHNjYWxlb3V0ICAgIDogIDAuNDgKICBtb2RlbHMgICAgICA6ICAwLjI2CiAgdHRubiAgICAgICAgOiAgMC4yNgp3aF9nYWxheHlfcGVyZjoKICBzY2FsZW91dCAgICA6ICAwLjQ4CiAgbW9kZWxzICAgICAgOiAgMC4yNgogIHR0bm4gICAgICAgIDogIDAuMjYKd2hfZ2FsYXh5X3JlbGVhc2U6CiAgc2NhbGVvdXQgICAgOiAgMC40OAogIG1vZGVscyAgICAgIDogIDAuMjYKICB0dG5uICAgICAgICA6ICAwLjI2CndoX2dhbGF4eV9wZXJmX3JlbGVhc2U6CiAgc2NhbGVvdXQgICAgOiAgMC40OAogIG1vZGVscyAgICAgIDogIDAuMjYKICB0dG5uICAgICAgICA6ICAwLjI2CgojIOKUgOKUgCBCbGFja2hvbGUgUDE1MGIgZmFtaWx5IOKAlCBDSXYxICgzLDUxNSBoL3drIHByb2plY3RlZCkg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgcnVudGltZSAxLDYwMyBoL3drIOKAkyBibGFja2hvbGUtbXVsdGktY2FyZC1mYXN0ICg1NjUgaCksIGJsYWNraG9sZS1tdWx0aS1jYXJkICg0MDAgaCksCiMgICAgICAgICAgICAgICAgICAgICAgdHQtbWV0YWwtbDIgKDM4MCBoKSwgdHJpYWdlLXRlc3RzICgxMDggaCksIGZkLW5pZ2h0bHkgKDE1MSBoKQojIHR0bm4gICAgICA3MTAgaC93ayDigJMgdHRubi11bml0LXRlc3RzICg2OTQgaCksIHR0bm4tc3dlZXBzICgxNiBoKQojIGxsayAgICAgICA2MzYgaC93ayDigJMgbGxrLXRlc3QtYmxhY2tob2xlICg2MzUgaCkKIyBzY2FsZW91dCAgMjkxIGgvd2sg4oCTIG11bHRpLWhvc3QtYmgtbGItMnggKDE0NiBoKSwgbXVsdGktaG9zdC1iaC1sYi00eCAoMTQ1IGgpCiMgbW9kZWxzICAgIDI3NSBoL3drIOKAkyBibGFja2hvbGUtZGVtby10ZXN0cyAoMTg0IGgpLCB2bGxtLXRlc3RzICgzNiBoKSwgZmQtbmlnaHRseSAoNTAgaCkKYmhfcDEwMDoKICBydW50aW1lICAgICA6ICAwLjQ2CiAgdHRubiAgICAgICAgOiAgMC4yMAogIGxsayAgICAgICAgIDogIDAuMTgKICBzY2FsZW91dCAgICA6ICAwLjA4CiAgbW9kZWxzICAgICAgOiAgMC4wOApiaF9wMTAwX3BlcmY6CiAgcnVudGltZSAgICAgOiAgMC40NgogIHR0bm4gICAgICAgIDogIDAuMjAKICBsbGsgICAgICAgICA6ICAwLjE4CiAgc2NhbGVvdXQgICAgOiAgMC4wOAogIG1vZGVscyAgICAgIDogIDAuMDgKYmhfcDE1MDoKICBydW50aW1lICAgICA6ICAwLjQ2CiAgdHRubiAgICAgICAgOiAgMC4yMAogIGxsayAgICAgICAgIDogIDAuMTgKICBzY2FsZW91dCAgICA6ICAwLjA4CiAgbW9kZWxzICAgICAgOiAgMC4wOApiaF9wMTUwX3BlcmY6CiAgcnVudGltZSAgICAgOiAgMC40NgogIHR0bm4gICAgICAgIDogIDAuMjAKICBsbGsgICAgICAgICA6ICAwLjE4CiAgc2NhbGVvdXQgICAgOiAgMC4wOAogIG1vZGVscyAgICAgIDogIDAuMDgKYmhfbGxtYm94OgogIHJ1bnRpbWUgICAgIDogIDAuNDYKICB0dG5uICAgICAgICA6ICAwLjIwCiAgbGxrICAgICAgICAgOiAgMC4xOAogIHNjYWxlb3V0ICAgIDogIDAuMDgKICBtb2RlbHMgICAgICA6ICAwLjA4CmJoX2xvdWRib3g6CiAgcnVudGltZSAgICAgOiAgMC40NgogIHR0bm4gICAgICAgIDogIDAuMjAKICBsbGsgICAgICAgICA6ICAwLjE4CiAgc2NhbGVvdXQgICAgOiAgMC4wOAogIG1vZGVscyAgICAgIDogIDAuMDgKYmhfcXVpZXRib3g6CiAgcnVudGltZSAgICAgOiAgMC40NgogIHR0bm4gICAgICAgIDogIDAuMjAKICBsbGsgICAgICAgICA6ICAwLjE4CiAgc2NhbGVvdXQgICAgOiAgMC4wOAogIG1vZGVscyAgICAgIDogIDAuMDgKYmhfcXVpZXRib3hfcGVyZjoKICBydW50aW1lICAgICA6ICAwLjQ2CiAgdHRubiAgICAgICAgOiAgMC4yMAogIGxsayAgICAgICAgIDogIDAuMTgKICBzY2FsZW91dCAgICA6ICAwLjA4CiAgbW9kZWxzICAgICAgOiAgMC4wOApiaF9kZXNrYm94OgogIHJ1bnRpbWUgICAgIDogIDAuNDYKICB0dG5uICAgICAgICA6ICAwLjIwCiAgbGxrICAgICAgICAgOiAgMC4xOAogIHNjYWxlb3V0ICAgIDogIDAuMDgKICBtb2RlbHMgICAgICA6ICAwLjA4CmJoX3NwMToKICBydW50aW1lICAgICA6ICAwLjQ2CiAgdHRubiAgICAgICAgOiAgMC4yMAogIGxsayAgICAgICAgIDogIDAuMTgKICBzY2FsZW91dCAgICA6ICAwLjA4CiAgbW9kZWxzICAgICAgOiAgMC4wOApiaF9zcDQ6CiAgcnVudGltZSAgICAgOiAgMC40NgogIHR0bm4gICAgICAgIDogIDAuMjAKICBsbGsgICAgICAgICA6ICAwLjE4CiAgc2NhbGVvdXQgICAgOiAgMC4wOAogIG1vZGVscyAgICAgIDogIDAuMDgKCiMg4pSA4pSAIEJsYWNraG9sZSBQMTUwYiBmYW1pbHkg4oCUIENJdjIgKHNhbWUgZnJhY3Rpb25zIGFzIENJdjEpIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgApiaF9wMTAwYV9jaXYyX3Zpb21tdToKICBydW50aW1lICAgICA6ICAwLjQ2CiAgdHRubiAgICAgICAgOiAgMC4yMAogIGxsayAgICAgICAgIDogIDAuMTgKICBzY2FsZW91dCAgICA6ICAwLjA4CiAgbW9kZWxzICAgICAgOiAgMC4wOApiaF9wMTUwYl9jaXYyOgogIHJ1bnRpbWUgICAgIDogIDAuNDYKICB0dG5uICAgICAgICA6ICAwLjIwCiAgbGxrICAgICAgICAgOiAgMC4xOAogIHNjYWxlb3V0ICAgIDogIDAuMDgKICBtb2RlbHMgICAgICA6ICAwLjA4CmJoX3AxNTBiX2NpdjJfdmlvbW11OgogIHJ1bnRpbWUgICAgIDogIDAuNDYKICB0dG5uICAgICAgICA6ICAwLjIwCiAgbGxrICAgICAgICAgOiAgMC4xOAogIHNjYWxlb3V0ICAgIDogIDAuMDgKICBtb2RlbHMgICAgICA6ICAwLjA4CmJoX2xvdWRib3hfY2l2Ml92aW9tbXU6CiAgcnVudGltZSAgICAgOiAgMC40NgogIHR0bm4gICAgICAgIDogIDAuMjAKICBsbGsgICAgICAgICA6ICAwLjE4CiAgc2NhbGVvdXQgICAgOiAgMC4wOAogIG1vZGVscyAgICAgIDogIDAuMDgKCiMg4pSA4pSAIEJsYWNraG9sZSBQMzAwYiBmYW1pbHkgKDEsMTE2IGgvd2sgcHJvamVjdGVkKSDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKIyBydW50aW1lIDk4NCBoL3drIOKAkyBibGFja2hvbGUtbXVsdGktY2FyZC1mYXN0ICg1NjUgaCksIGJsYWNraG9sZS1tdWx0aS1jYXJkICg0MjAgaCkKIyBtb2RlbHMgIDEzMiBoL3drIOKAkyBibGFja2hvbGUtZGVtby10ZXN0cyAoYmhfcDMwMCArIGJoX3F1aWV0Ym94XzIgc2t1cykKYmhfcDMwMDoKICBydW50aW1lICAgICA6ICAwLjg4CiAgbW9kZWxzICAgICAgOiAgMC4xMgpiaF9wMzAwX3Zpb21tdToKICBydW50aW1lICAgICA6ICAwLjg4CiAgbW9kZWxzICAgICAgOiAgMC4xMgpiaF9xdWlldGJveF8yOgogIHJ1bnRpbWUgICAgIDogIDAuODgKICBtb2RlbHMgICAgICA6ICAwLjEyCgojIOKUgOKUgCBCbGFja2hvbGUgR2FsYXh5IChubyBTbm93Zmxha2UgZGF0YTsgZnJhY3Rpb25zIGZyb20gd2hfZ2FsYXh5KSDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKYmhfZ2FsYXh5OgogIHNjYWxlb3V0ICAgIDogIDAuNDgKICBtb2RlbHMgICAgICA6ICAwLjI2CiAgdHRubiAgICAgICAgOiAgMC4yNgpiaF9nYWxheHlfcGVyZjoKICBzY2FsZW91dCAgICA6ICAwLjQ4CiAgbW9kZWxzICAgICAgOiAgMC4yNgogIHR0bm4gICAgICAgIDogIDAuMjYKYmhfZ2FsYXh5X3JlbGVhc2U6CiAgc2NhbGVvdXQgICAgOiAgMC40OAogIG1vZGVscyAgICAgIDogIDAuMjYKICB0dG5uICAgICAgICA6ICAwLjI2CmJoX2dhbGF4eV9wZXJmX3JlbGVhc2U6CiAgc2NhbGVvdXQgICAgOiAgMC40OAogIG1vZGVscyAgICAgIDogIDAuMjYKICB0dG5uICAgICAgICA6ICAwLjI2Cg==
+# Fractional allocation of each SKU pool per team — hybrid: YAML timeout × Snowflake runs/week.
+# Generated April 2026. Revised to correct team ownership using all current pipeline_reorg YAMLs.
+#
+# Coverage: pipeline_reorg jobs AND all legacy (bucket-2) workflows that run on
+# dedicated hardware. CPU-only runners (ubuntu-latest / large-stable) and release
+# pipelines (build-test-publish, in-release) are excluded.
+#
+# ─── Why this model exists ───────────────────────────────────────────────────
+#
+# The v2 actuals files use Snowflake wall-clock time — accurate but it reflects
+# how fast tests *happened* to run, not how bad things can get if they all hit
+# their configured timeouts.  The manual v1 file uses timeout × manual rpw
+# estimates which are conservative but the rpw values were guesses.
+#
+# This file combines:
+#   cost = (yaml_timeout_minutes / 60) × snowflake_runs_per_week
+#
+# Timeout is the worst-case ceiling from the YAML configuration; runs/week is
+# the actual observed frequency from Snowflake (both main-branch and PR-branch
+# runs included).  Result: a conservative worst-case projection anchored to
+# real pipeline cadence.
+#
+# ─── Snowflake runs/week query ───────────────────────────────────────────────
+#
+#   SELECT SPLIT_PART(j.NAME, ' / ', 1)    AS workflow_prefix,
+#          COUNT(DISTINCT p.CICD_PIPELINE_ID) / 28.0 * 7  AS runs_per_week
+#   FROM   TTDATASF.SW_TEST.CICD_JOB  j
+#   JOIN   TTDATASF.SW_TEST.CICD_PIPELINE p
+#          ON j.CICD_PIPELINE_ID = p.CICD_PIPELINE_ID
+#   WHERE  p.PROJECT = 'tt-metal'
+#     AND  p.PIPELINE_START_TS >= DATEADD('day', -28, CURRENT_TIMESTAMP())
+#     AND  j.JOB_LABEL NOT LIKE '%large-stable%'
+#     AND  j.JOB_LABEL NOT LIKE '%ubuntu-latest%'
+#   GROUP BY 1
+#   HAVING runs_per_week > 1
+#   ORDER BY runs_per_week DESC;
+#
+# The DISTINCT CICD_PIPELINE_ID count gives pipeline invocations (not individual
+# job runs), scaled from the 28-day window to a 7-day week.  Both main-branch
+# post-commit pipelines and PR-branch pipelines are included.
+#
+# ─── pipeline_reorg YAML parsing ─────────────────────────────────────────────
+#
+# Files: tests/pipeline_reorg/*.yaml (all files fetched from GitHub main branch,
+#        April 2026). Team ownership read directly from each YAML entry's `team:`
+#        field — NOT assumed from historical Snowflake job attribution.
+#
+# Format (new schema):
+#
+#   - name: some_test
+#     team: models
+#     skus:
+#       wh_n300:     {timeout: 120, tier: 1}
+#       bh_p150b_civ2: {timeout: 60, tier: 2}
+#
+# Each (team, sku_name) → pool entry contributes:
+#   timeout_minutes / 60 × rpw(yaml_stem, pool)
+#
+# SKU name → hardware pool mapping:
+#   wh_n150*, wh_n150             → N150
+#   wh_n300*, wh_n300             → N300
+#   wh_llmbox*, wh_t3k*           → LLMBOX
+#   wh_galaxy*                    → galaxy
+#   bh_p150*, bh_p100*, bh_loudbox, bh_deskbox, bh_quietbox (non-2), bh_llmbox,
+#   bh_sp1, bh_sp4                → p150b
+#   bh_p300*, bh_quietbox_2       → p300b
+#   bh_galaxy*                    → excluded (no Snowflake data for bh_galaxy)
+#
+# pipeline_reorg runs/week (yaml_stem → pool → actual Snowflake rpw):
+#   models_unit_tests.yaml         N150 → 80/wk    N300 → 817/wk  LLMBOX → 5.75/wk  galaxy → 5.5/wk   p150b (no p150b entry in yaml)
+#   models_e2e_tests.yaml          all pools → 7/wk
+#   models_sweep_tests.yaml        rpw = 0 (new file, not yet in Snowflake)
+#   models_device_perf_tests.yaml  rpw = 0 (new file)
+#   t3k_unit_tests.yaml            LLMBOX → 188.5/wk
+#   t3k_e2e_tests.yaml             LLMBOX → 51.5/wk
+#   t3k_integration_tests.yaml     LLMBOX → 41.5/wk
+#   t3k_perf_tests.yaml            LLMBOX → 41/wk
+#   t3k_demo_tests.yaml            LLMBOX → 43.25/wk
+#   blackhole_demo_tests.yaml      p150b per-sku: 21–25/wk; p300b per-sku: 22.25–28.25/wk
+#   galaxy_demo_tests.yaml         galaxy → 58/wk
+#   galaxy_e2e_tests.yaml          galaxy → 29.25/wk
+#   galaxy_health_tests.yaml       galaxy → 39/wk
+#   galaxy_integration_tests.yaml  galaxy → 17.5/wk
+#   galaxy_perf_tests.yaml         galaxy → 12.25/wk
+#   galaxy_sanity_tests.yaml       galaxy → 45.25/wk
+#   runtime_unit_tests.yaml        rpw = 0 (new file)
+#   runtime_integration_tests.yaml rpw = 0 (new file)
+#   runtime_perf_tests.yaml        rpw = 0 (new file)
+#   runtime_sanity_tests.yaml      rpw = 0 (new file)
+#   ttnn-tests.yaml                rpw = 0 (new file)
+#   demo_sp_multihost_tests.yaml   rpw = 0 (new file)
+#
+# Note on t3k_*.yaml team ownership: these files were historically attributed to
+# the `runtime` team in Snowflake job data, but the current YAML `team:` fields
+# assign them to models, scaleout, ttnn, and shield. This file uses the current
+# YAML ownership as the authoritative source.
+#
+# ─── Legacy bucket-2 timeout estimates ───────────────────────────────────────
+#
+# Legacy workflows have no pipeline_reorg YAML; timeout values come from
+# static analysis of their impl files in .github/workflows/:
+#
+#   fd-nightly (runtime team, ~90 min/run, N150+N300+p150b, 100.75/wk)
+#   ttnn-unit-tests  N300: 60 min × 828/wk   p150b: 120 min × 347.25/wk
+#   ttnn-smoke-tests N150: 30 min × 1145.5/wk
+#   ttnn-basic-tests N150: 60 min × 586.25/wk
+#   metalium-smoke-tests N150: 30 min × 1001.5/wk (runtime team)
+#   triage-tests N150: 15 min × 618.75/wk  p150b: 15 min × 430.5/wk (runtime team)
+#   llk-test-wormhole N150: 120 min × 317.75/wk
+#   llk-test-blackhole p150b: 120 min × 317.75/wk
+#   blackhole-multi-card-fast p150b: 100 min × 338.5/wk  p300b: 100 min × 338.5/wk
+#   blackhole-multi-card p150b: 300 min × 80/wk          p300b: 300 min × 84/wk
+#   tt-metal-l2-tests N150+N300: 180 min × 127/wk  p150b: 180 min × 126.75/wk
+#   t3000-apc-fast-tests N300: 2 min × 808.5/wk (runtime team; very short)
+#   single-card-demo-tests N150+N300: 60 min × 49.75/wk (models team)
+#   single-card-ttnn-models-frequent N300: 60 min × 31.5/wk (models team)
+#   vllm-tests N150+N300+p150b: 60 min × 35.5/wk (models team)
+#   galaxy-unit-tests galaxy: 60 min × 43.75/wk (ttnn team)
+#   galaxy-model-perf-tests galaxy: 60 min × 18.25/wk (models team)
+#   Galaxy-DeepSeek-tests galaxy: 60 min × 44.5/wk (scaleout team)
+#   multi-host-glx-2x+4x galaxy: 120 min × 82.5+25.5/wk (scaleout team)
+#   multi-host-t3k LLMBOX: 120 min × 73.5/wk (scaleout team)
+#   multi-host-bh-lb-2x+4x p150b: 120 min × 73+72.5/wk (scaleout team)
+#   ttnn-sweeps N300: 60 min × 32.5/wk  LLMBOX: 60 min × 31/wk  p150b: 30 min × 31.25/wk
+#
+# ─── Excluded workflows ───────────────────────────────────────────────────────
+#
+#   build-artifact, build, code-analysis, clang-tidy-light, llk-build-quasar
+#     → CPU-only (large-stable runner, no accelerator hardware)
+#   build-test-publish (in-release label) → release pipeline
+#   trigger-post-commit → GHA orchestration overhead
+#   test-wh-6u-image → infra smoke test
+#   bh_galaxy SKU entries in pipeline_reorg → excluded (no Snowflake data)
+#
+# ─── Fractions ───────────────────────────────────────────────────────────────
+# Values sum to ≤ 1.0 per pool. Remainder = untracked jobs / headroom.
+# New pipeline_reorg files with rpw=0 contribute 0 h/wk until they appear in Snowflake.
+
+N150:  # 3,214 h/wk projected (timeout × Snowflake rpw)
+  runtime     :  0.37  # 1,188 h/wk – metalium-smoke (501 h), triage-tests (155 h), tt-metal-l2 (381 h), fd-nightly (151 h)
+  ttnn        :  0.36  # 1,159 h/wk – ttnn-smoke (573 h), ttnn-basic (586 h)
+  llk         :  0.20  #   636 h/wk – llk-test-wormhole (635 h)
+  models      :  0.07  #   232 h/wk – models-unit-tests (140 h), single-card-demo (50 h), vllm-tests (36 h)
+
+N300:  # 1,605 h/wk projected
+  ttnn        :  0.54  #   861 h/wk – ttnn-unit-tests (828 h), ttnn-sweeps (33 h)
+  runtime     :  0.35  #   559 h/wk – t3000-apc-fast (27 h), tt-metal-l2 (381 h), fd-nightly (151 h)
+  models      :  0.11  #   185 h/wk – models-unit-tests (68 h), models-e2e (1 h), single-card-demo (50 h),
+                        #               single-card-ttnn-models (32 h), vllm-tests (36 h)
+
+p150b:  # 3,515 h/wk projected
+  runtime     :  0.46  # 1,603 h/wk – blackhole-multi-card-fast (565 h), blackhole-multi-card (400 h),
+                        #               tt-metal-l2 (380 h), triage-tests (108 h), fd-nightly (151 h)
+  ttnn        :  0.20  #   710 h/wk – ttnn-unit-tests (694 h), ttnn-sweeps (16 h)
+  llk         :  0.18  #   636 h/wk – llk-test-blackhole (635 h)
+  scaleout    :  0.08  #   291 h/wk – multi-host-bh-lb-2x (146 h), multi-host-bh-lb-4x (145 h)
+  models      :  0.08  #   275 h/wk – blackhole-demo-tests (184 h), vllm-tests (36 h), fd-nightly (50 h; fd-nightly is runtime team; models p150b = reorg-based)
+
+p300b:  # 1,116 h/wk projected
+  runtime     :  0.88  #   984 h/wk – blackhole-multi-card-fast (565 h), blackhole-multi-card (420 h)
+  models      :  0.12  #   132 h/wk – blackhole-demo-tests (p300b skus: bh_p300 + bh_quietbox_2)
+
+LLMBOX:  # 2,158 h/wk projected
+  models      :  0.64  # 1,381 h/wk – t3k-integration-tests (279 h), t3k-unit-tests (315 h),
+                        #               t3k-e2e-tests (169 h), t3k-perf-tests (469 h), t3k-demo-tests (101 h),
+                        #               models-unit/e2e (2 h)
+  scaleout    :  0.24  #   515 h/wk – multi-host-t3k (147 h), ttnn-sweeps-LLMBOX (31 h; wait — scaleout: multi-host-t3k only),
+                        #               t3k-unit-tests scaleout (188 h), t3k-e2e scaleout (159 h), t3k-integration scaleout (21 h)
+  ttnn        :  0.10  #   223 h/wk – t3k-unit-tests ttnn (94 h), t3k-e2e ttnn (77 h), t3k-integration ttnn (21 h),
+                        #               ttnn-sweeps-T3K (31 h)
+  shield      :  0.02  #    39 h/wk – t3k-e2e-tests shield (39 h)
+
+galaxy:  # 690 h/wk projected
+  scaleout    :  0.48  #   334 h/wk – multi-host-glx-2x (165 h), multi-host-glx-4x (51 h),
+                        #               Galaxy-DeepSeek-tests (45 h), galaxy-health (10 h), galaxy-e2e scaleout (49 h), galaxy-sanity scaleout (15 h)
+  models      :  0.26  #   178 h/wk – galaxy-demo-tests (111 h), galaxy-model-perf (18 h),
+                        #               galaxy-perf-tests (27 h), galaxy-sanity models (8 h), models-e2e (2 h)
+  ttnn        :  0.26  #   177 h/wk – galaxy-integration-tests (99 h), galaxy-e2e ttnn (34 h),
+                        #               galaxy-unit-tests (44 h)
