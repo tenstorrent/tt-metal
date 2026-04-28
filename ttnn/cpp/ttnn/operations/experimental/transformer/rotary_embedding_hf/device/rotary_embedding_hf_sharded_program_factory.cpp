@@ -170,13 +170,14 @@ RotaryEmbeddingHfMultiCoreSharded::cached_program_t RotaryEmbeddingHfMultiCoreSh
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    RotaryEmbeddingHfMultiCoreSharded::shared_variables_t shared_variables;
-    shared_variables.cb_input = cb_input;
-    shared_variables.cb_cos = cb_cos;
-    shared_variables.cb_sin = cb_sin;
-    shared_variables.cb_output = cb_output;
-
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{
+        std::move(program),
+        RotaryEmbeddingHfMultiCoreSharded::shared_variables_t{
+            cb_input,
+            cb_cos,
+            cb_sin,
+            cb_output,
+        }};
 }
 
 void RotaryEmbeddingHfMultiCoreSharded::override_runtime_arguments(
