@@ -79,3 +79,14 @@ models:
     skip-arch:
       - "n150"
       - "n300"
+
+  - name: "Tiny Deepseek (Char) Shakespeare"
+    filename: "tiny_deepseek_char_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char.yaml"
+      - "--track_memory"
+    skip-arch:
+      - "n150"
+      - "n300"
+      - "p100"
