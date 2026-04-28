@@ -64,6 +64,102 @@ _STRIP_WHEN_NONE = frozenset(
     }
 )
 
+
+def _canonicalize_mesh_shape(mesh_shape):
+    """Convert [1, N] mesh shapes to the closest-to-square 2D factorization.
+
+    Some executions record the mesh as [1, 32] instead of [4, 8].  The sweep
+    always uses the actual 2D mesh shape, so we normalize here to match.
+    """
+    import math
+
+    if not isinstance(mesh_shape, (list, tuple)) or len(mesh_shape) != 2:
+        return mesh_shape
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    if rows != 1 and cols != 1:
+        return mesh_shape
+    total = rows * cols
+    if total <= 1:
+        return mesh_shape
+    for r in range(int(math.sqrt(total)), 0, -1):
+        if total % r == 0:
+            return [r, total // r]
+    return mesh_shape
+
+
+def _normalize_tensor_placement(arguments, mesh_shape):
+    """Normalize 1-D tensor placement strings to match 2-D mesh topology.
+
+    The master tracer may record a 1-D distribution_shape (e.g. ``[32]``)
+    while the sweep always produces 2-D (e.g. ``[4, 8]``) because the mesh
+    device is opened with ``MeshShape(rows, cols)``.  Converting the master
+    to 2-D here removes spurious validation diffs.
+    """
+    import ast as _ast
+
+    if not isinstance(mesh_shape, (list, tuple)) or len(mesh_shape) < 2:
+        return
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    total = rows * cols
+    target = [rows, cols]
+
+    for _arg_name, arg_val in arguments.items():
+        if not isinstance(arg_val, dict) or "tensor_placement" not in arg_val:
+            continue
+        tp = arg_val["tensor_placement"]
+
+        # --- distribution_shape: [N] -> [rows, cols] ---
+        ds_str = tp.get("distribution_shape", "")
+        if isinstance(ds_str, str):
+            try:
+                ds = _ast.literal_eval(ds_str)
+            except (ValueError, SyntaxError):
+                ds = None
+            if isinstance(ds, list) and len(ds) == 1 and ds[0] == total:
+                tp["distribution_shape"] = str(target)
+                # Pad placement to 2 entries so it matches the 2-D distribution
+                pl_str = tp.get("placement", "")
+                if isinstance(pl_str, str):
+                    try:
+                        pl = _ast.literal_eval(pl_str)
+                    except (ValueError, SyntaxError):
+                        pl = []
+                    if isinstance(pl, list) and len(pl) == 1:
+                        tp["placement"] = str(["PlacementReplicate"] + pl)
+            elif isinstance(ds, list) and len(ds) == 2:
+                if ds[0] * ds[1] == total and ds != target:
+                    tp["distribution_shape"] = str(target)
+
+        # --- mesh_device_shape: [1, N] or similar -> [rows, cols] ---
+        mds_str = tp.get("mesh_device_shape", "")
+        if isinstance(mds_str, str):
+            try:
+                mds = _ast.literal_eval(mds_str)
+            except (ValueError, SyntaxError):
+                mds = None
+            if isinstance(mds, list) and len(mds) == 2:
+                if mds[0] * mds[1] == total and mds != target:
+                    tp["mesh_device_shape"] = str(target)
+
+
+def _normalize_host_storage_on_mesh(arguments, mesh_shape):
+    """Convert HOST storage_type to DEVICE for mesh-placed tensors.
+
+    On a mesh device the sweep must create tensors on-device to carry mesh
+    topology, so HOST tensors become DEVICE.  Normalising the master avoids
+    a spurious storage_type diff.
+    """
+    if not isinstance(mesh_shape, (list, tuple)) or len(mesh_shape) < 2:
+        return
+    for _arg_name, arg_val in arguments.items():
+        if not isinstance(arg_val, dict):
+            continue
+        has_tp = "tensor_placement" in arg_val and arg_val["tensor_placement"]
+        st = arg_val.get("storage_type", "")
+        if has_tp and "HOST" in str(st):
+            arg_val["storage_type"] = "StorageType.DEVICE"
+
+
 # Default manifest path (relative to repo root)
 _DEFAULT_MANIFEST = "model_tracer/trace_selection_registry.yaml"
 
