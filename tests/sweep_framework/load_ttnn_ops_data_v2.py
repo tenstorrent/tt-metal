@@ -117,6 +117,24 @@ def _normalize_tensor_placement(arguments, mesh_shape):
                     tp["mesh_device_shape"] = str(target)
 
 
+def _normalize_host_storage_on_mesh(arguments, mesh_shape):
+    """Convert HOST storage_type to DEVICE for mesh-placed tensors.
+
+    On a mesh device the sweep must create tensors on-device to carry mesh
+    topology, so HOST tensors become DEVICE.  Normalising the master avoids
+    a spurious storage_type diff.
+    """
+    if not isinstance(mesh_shape, (list, tuple)) or len(mesh_shape) < 2:
+        return
+    for _arg_name, arg_val in arguments.items():
+        if not isinstance(arg_val, dict):
+            continue
+        has_tp = "tensor_placement" in arg_val and arg_val["tensor_placement"]
+        st = arg_val.get("storage_type", "")
+        if has_tp and "HOST" in str(st):
+            arg_val["storage_type"] = "StorageType.DEVICE"
+
+
 # Default manifest path (relative to repo root)
 _DEFAULT_MANIFEST = "model_tracer/trace_selection_registry.yaml"
 
@@ -1550,6 +1568,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
 
             if mesh_shape and "arguments" in config_dict:
                 _normalize_tensor_placement(config_dict["arguments"], mesh_shape)
+                _normalize_host_storage_on_mesh(config_dict["arguments"], mesh_shape)
 
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
