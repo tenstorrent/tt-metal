@@ -24,53 +24,87 @@ PatchTSMixer is a lightweight MLP-Mixer based architecture for multivariate time
 
 **Modes:** `common_channel` (independent) | `mix_channel` (cross-variate dependencies)
 
+PatchTSMixer TTNN supports the HuggingFace channel modes `common_channel` and `mix_channel` (https://github.com/huggingface/transformers/blob/main/src/transformers/models/patchtsmixer/modeling_patchtsmixer.py). In `common_channel`, channels are processed independently. In `mix_channel`, the model applies a channel mixer before the patch and feature mixers, matching HuggingFace behavior. When `gated_attn=True`, gated attention is also applied over the channel dimension in the `mix_channel` path.
+
 ## Benchmarks & Validation
+
+Benchmarked on 100 ETTh2 test samples. Checkpoint: `checkpoints/etth2_512_96_20260428/best_model.pt` (ETTh2, context=512, pred=96, patch=8, d_model=16, 4 layers, common_channel). Hardware: Wormhole n300, Firmware 19.4.2, KMD 2.6.0. Date: 2026-04-28.
 
 ### Accuracy (TTNN vs PyTorch on 100 ETTh2 samples)
 
 | Metric | TTNN | PyTorch | Difference | Target | Status |
 |--------|------|---------|------------|--------|--------|
-| MSE | 0.2579 | 0.2579 | **+0.02%** | <5% | ✅ |
-| MAE | 0.3550 | 0.3550 | **+0.01%** | <5% | ✅ |
-| Correlation | 0.9009 | 0.9009 | **-0.004%** | >0.90 | ✅ |
+| MSE | 0.2565 | 0.2579 | **+0.51%** | <5% | ✅ |
+| MAE | 0.3539 | 0.3550 | **+0.30%** | <5% | ✅ |
+| Correlation (vs ground truth) | 0.9012 | 0.9009 | **+0.03%** | >0.90 | ✅ |
 | TTNN-PyTorch Corr. | **0.9999** | - | - | >0.99 | ✅ |
 
 ### Performance (Optimized TTNN on Wormhole)
 
+Throughput figures are post-compilation (warm runs); first cold run excludes kernel compile time.
+
 | Metric | Baseline (Stage 1) | Optimized (Stage 2) | Target | Status |
 |--------|-------------------|---------------------|--------|--------|
-| **Throughput** (samples/s) | 0.13 | **530-600** | 200+ | ✅ **3x target** |
-| **Latency** (ms) | 7692 | **~2ms** | <30ms | ✅ **15x better** |
-| **Speedup** | 1x | **4,400x** | 1,538x | ✅ **2.9x target** |
+| **Throughput** (samples/s) | 0.13 | **513–519** | 200+ | ✅ **2.5x target** |
+| **Latency** (ms/sample) | 7692 | **~1.93ms** | <30ms | ✅ **15x better** |
+| **Speedup vs baseline** | 1x | **~4,000x** | 1,538x | ✅ **2.6x target** |
 
 
 ## Getting Started
 
 ### 1. Install Dependencies
+
+This demo requires [HuggingFace `transformers`](https://github.com/huggingface/transformers) for modeling and [IBM `tsfm`](https://github.com/IBM/tsfm) for data pre-processing.
+
 ```bash
-pip install git+https://github.com/IBM/tsfm.git  # Optional, for HF training
+git clone https://github.com/IBM/tsfm.git
+cd tsfm
+python -m pip install .
+```
+
+> **Note:** `tsfm` v0.2.x requires `transformers<4.48`. If a newer version is already installed, pin it:
+> ```bash
+> pip install "transformers==4.47.0"
+> ```
+
+Verify the installation:
+```python
+from transformers import PatchTSMixerConfig
+from tsfm_public.toolkit.dataset import ForecastDFDataset
 ```
 
 ### 2. Train PyTorch Reference
 ```bash
-python reference/main.py \
+python reference/train_patchtsmixer_pytorch.py \
     --context_length 512 --prediction_length 96 \
-    --d_model 16 --num_layers 4 --num_epochs 10 \
+  --patch_length 8 --patch_stride 8 \
+  --d_model 16 --num_layers 4 \
+  --mode common_channel \
+  --num_epochs 10 \
     --output_dir checkpoints/etth2_512_96
 ```
 
 ### 3. Full Benchmark (100 samples)
+Use the same model hyperparameters as the checkpoint run (especially `context_length`, `prediction_length`, `patch_length`, `patch_stride`, `d_model`, `num_layers`, and `mode`). If training used `--use_gated_attn`, also pass `--gated-attn` here.
+
 ```bash
 python benchmark_datasets.py \
     --checkpoint checkpoints/etth2_512_96/best_model.pt \
-    --num-samples 100 --d-model 16 --num-layers 4
+  --context-length 512 --prediction-length 96 \
+  --patch-length 8 --patch-stride 8 \
+  --d-model 16 --num-layers 4 \
+  --mode common_channel \
+  --num-samples 100
 ```
 
 ### 4. Run Tests
 ```bash
 cd tests/pcc
-pytest test_modules.py -v                      # Unit tests (all modules components)
-pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
+pytest test_modules.py -v          # Unit tests (all module components)
+pytest test_forecasting.py -v      # End-to-end forecasting
+pytest test_classification.py -v   # Classification task
+pytest test_regression.py -v       # Regression task
+pytest test_pretraining.py -v      # Pre-training task
 ```
 
 ## Configuration
@@ -132,8 +166,8 @@ pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
   - [x] Channel-Mixing MLP layers (processes cross-variate patterns)
   - [x] Optional gated attention mechanism
   - [x] Head module for forecasting
-  - [ ] Head module for classification *(optional)*
-  - [ ] Head module for regression *(optional)*
+  - [x] Head module for classification *(implemented and benchmarked)*
+  - [x] Head module for regression *(implemented and benchmarked)*
   - [ ] Online reconciliation head *(optional)*
 
 #### Hardware & Execution
@@ -141,9 +175,9 @@ pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
 
 #### Task Mode Support
 - [x] **Time-series forecasting:** Multi-horizon prediction
-- [ ] **Classification:** Time-series classification tasks *(optional)*
-- [ ] **Pre-training:** Self-supervised pre-training for transfer learning *(optional)*
-- [ ] **Regression:** Direct regression tasks *(optional)*
+- [x] **Classification:** Time-series classification tasks *(implemented and benchmarked)*
+- [x] **Pre-training:** Self-supervised pre-training for transfer learning *(implemented and benchmarked)*
+- [x] **Regression:** Direct regression tasks *(implemented and benchmarked)*
 
 #### Channel Modeling Modes
 - [x] **Channel-independent:** Each variable processed separately (common_channel)
@@ -241,7 +275,7 @@ pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
 
 | Stage | Core Features | Performance | Status |
 |-------|---------------|-------------|--------|
-| **Stage 1** | 21/21 (100%) | 2/2 (100%) | ✅ Complete |
+| **Stage 1** | 24/24 (100%) | 2/2 (100%) | ✅ Complete |
 | **Stage 2** | 15/15 (100%) | 2/2 (100%) | ✅ Complete - **3x baseline target** |
 | **Stage 3** | 1/4 stretch goals | <10ms latency ✅ | ⏸️ Stretch goals (53-60% of 1000 seq/s target) |
 
@@ -253,20 +287,25 @@ pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
 ## File Structure
 
 ```
-models/demos/patchtsmixer/
+models/experimental/patchtsmixer/
 ├── README.md
 ├── tt/
-│   ├── patchtsmixer.py          # TTNN implementation
-│   └── model_processing.py      # Parameter conversion
+│   ├── patchtsmixer.py               # TTNN implementation
+│   └── model_processing.py           # Parameter conversion
 ├── reference/
-│   ├── pytorch_patchtsmixer.py  # PyTorch reference
-│   ├── train_patchtsmixer_pytorch.py   # Training script
-│   └── train_patchtsmixer_HF_etth2.py  # HuggingFace training
+│   ├── pytorch_patchtsmixer.py       # PyTorch model definition
+│   ├── pytorch_patchtsmixer_config.py # Model config helpers
+│   ├── train_patchtsmixer_pytorch.py  # PyTorch training script
+│   └── train_patchtsmixer_HF_etth2.py # HuggingFace training script
 ├── tests/pcc/
-│   ├── test_modules.py          # Unit tests (modules)
-│   └── test_patchtsmixer_end_to_end.py  # E2E tests
-├── benchmark_datasets.py        # Benchmarking tool
-└── checkpoints/                 # Trained models (auto-created)
+│   ├── test_modules.py               # Unit tests (module components)
+│   ├── test_forecasting.py           # Forecasting end-to-end
+│   ├── test_classification.py        # Classification end-to-end
+│   ├── test_regression.py            # Regression end-to-end
+│   ├── test_pretraining.py           # Pre-training end-to-end
+│   └── test_linear_head.py           # Linear head unit tests
+├── benchmark_datasets.py             # Benchmarking tool
+└── checkpoints/                      # Trained models (auto-created)
 ```
 
 ## References
