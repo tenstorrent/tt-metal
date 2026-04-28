@@ -55,14 +55,14 @@ O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_S
 MERGED_TP4_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.tp4_merged_fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
     mlp_routed_dense_stacked_torch_for_cache,
+    moe_routed_expert_bspm_tp8_torch_for_cache,
     moe_routed_expert_torch_for_cache,
-    moe_routed_expert_tp8_torch_for_cache,
     preprocess_gate_up,
     shared_down_torch_for_cache,
     shuffle_dram_tiles,
@@ -139,31 +139,10 @@ def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: 
     if len(tensors) < 2:
         return
 
-    # CompressedTensor wraps a ttnn.Tensor in .data — unwrap for device check.
     first = tensors[0]
-    check_tensor = first.data if isinstance(first, CompressedTensor) else first
-    if not ttnn.is_tensor_storage_on_device(check_tensor):
-        return
-
     if isinstance(first, CompressedTensor):
-        # CompressedTensor path: stride is variable-size (packed bytes), not tile-formula.
-        # Deduce expected stride from the gap between first two experts.
-        addrs = [t.get_data_tensors()[0].buffer_address() for t in tensors]
-        stride = addrs[1] - addrs[0]
-        if stride <= 0:
-            raise AssertionError(
-                f"{name} expert DRAM addresses not strictly increasing: addrs={addrs}. "
-                "Experts may overlap or be placed out-of-order."
-            )
-        for i in range(len(tensors)):
-            expected = addrs[0] + i * stride
-            actual = addrs[i]
-            if actual != expected:
-                raise AssertionError(
-                    f"{name}[{i}] DRAM layout not contiguous for DRAMStreamingMatmul: "
-                    f"expected buffer_address {expected}, got {actual} (deduced stride {stride} bytes per expert). "
-                    "Allocate all experts of one projection in one batch before the next projection."
-                )
+        return
+    if not ttnn.is_tensor_storage_on_device(first):
         return
 
     stride = _moe_routed_expert_stride_bytes(first)
@@ -1213,7 +1192,7 @@ def prepare_moe_routed_experts_bspm(
     return routed
 
 
-def prepare_moe_routed_experts_compressed_tp8(
+def prepare_moe_routed_experts_bspm_tp8(
     device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
@@ -1221,28 +1200,34 @@ def prepare_moe_routed_experts_compressed_tp8(
     num_banks: int,
     mesh_shape: tuple[int, int],
     *,
+    bspm_path: Path | None = None,
     move_to_device: bool,
 ) -> MoERoutedExpertWeights:
-    """Upload MoE routed experts as uniform-bfp4_b CompressedTensor objects, TP8-sharded.
+    """Upload MoE routed experts as TP8-sharded CompressedTensor objects.
 
-    For Phase 1B of the hot/cold MoE integration. Each of 256 experts becomes a CompressedTensor
-    with every tile set to bfp4_b. The per-expert weight is TP8-sharded across the 2D mesh:
-    gate/up column-parallel (shard_dim=1), down row-parallel (shard_dim=0). The 4D torch layout
-    ``(mesh_rows, mesh_cols, K_per_device, N_padded_per_device)`` pairs with
-    ``MeshMapperConfig([PlacementShard(0), PlacementShard(1)])`` so each device receives its TP slice.
+    When ``bspm_path`` exists, its mixed-precision assignments are sliced into the
+    same TP8 layout as the weights.  Otherwise the helper uses a uniform BFP4
+    assignment, matching the previous compressed TP8 path.
     """
     tile_w = 32
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=1.1, formats=["bfp4"], bfp0_mae_threshold=0.01)
+    bspm_data = None
+    if bspm_path is not None:
+        bspm_path = Path(bspm_path)
+        if bspm_path.exists():
+            logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
+            bspm_data = load_bspm_for_layer(str(bspm_path))
+            logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
+        else:
+            logger.debug("BSPM not found for layer {}, using uniform bfloat4_b TP8", layer_idx)
 
     proj_specs = [
-        ("gate_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1),
-        ("up_proj", _ROUTED_GATE_UP_K, _ROUTED_GATE_UP_N, 1),
-        ("down_proj", _ROUTED_DOWN_K, _ROUTED_DOWN_N, 0),
+        ("gate_proj", 1),
+        ("up_proj", 1),
+        ("down_proj", 0),
     ]
 
     mesh_rows, mesh_cols = mesh_shape
     tp = mesh_rows * mesh_cols
-
     dram_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -1251,16 +1236,24 @@ def prepare_moe_routed_experts_compressed_tp8(
             )
         }
     )
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
 
     results: list[list[CompressedTensor]] = [[], [], []]
-    for proj_idx, (proj_name, K, N, shard_dim) in enumerate(proj_specs):
+    for proj_idx, (proj_name, shard_dim) in enumerate(proj_specs):
+        keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
+        sample_w = state_dict[keys[0]]
+        K, N = sample_w.shape[1], sample_w.shape[0]
         if shard_dim == 1:
+            if N % tp != 0:
+                raise ValueError(f"{proj_name} N={N} must be divisible by tp={tp}")
             K_per_device = K
             per_device_N = N // tp
             N_padded_per_device = ((per_device_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (
                 num_banks * tile_w
             )
         else:
+            if K % tp != 0:
+                raise ValueError(f"{proj_name} K={K} must be divisible by tp={tp}")
             K_per_device = K // tp
             N_padded_per_device = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
         per_core_N = N_padded_per_device // num_banks
@@ -1268,21 +1261,39 @@ def prepare_moe_routed_experts_compressed_tp8(
         shard_spec = ttnn.ShardSpec(dram_grid, [K_per_device, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
         mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
-        keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
+        if bspm_data is not None:
+            N_padded_for_bspm = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+            tiles_h = K // tile_w
+            tiles_w_count = N_padded_for_bspm // tile_w
+            if num_routed_experts > bspm_data["n_experts"]:
+                raise ValueError(f"Requested {num_routed_experts} experts, but BSPM only has {bspm_data['n_experts']}")
+            all_assignments = [
+                np.ascontiguousarray(bspm_data["codes"][e, proj_idx].reshape(tiles_w_count, tiles_h).T)
+                for e in range(num_routed_experts)
+            ]
+        else:
+            all_assignments = [None] * num_routed_experts
+
         for e, key in enumerate(keys):
             w = state_dict[key].T.contiguous()
-            stacked = moe_routed_expert_tp8_torch_for_cache(w, num_banks, mesh_shape, shard_dim=shard_dim)
-            ct = CompressedTensor.from_torch(
+            stacked, assignment = moe_routed_expert_bspm_tp8_torch_for_cache(
+                w,
+                all_assignments[e],
+                num_banks,
+                mesh_shape,
+                shard_dim=shard_dim,
+            )
+            ct = CompressedTensor.from_bspm(
                 stacked.float(),
-                assigner,
+                assignment,
                 device=device if move_to_device else None,
                 memory_config=mem_config,
-                per_core_allocation=False,
-                mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+                mesh_mapper_config=mesh_mapper_config,
             )
             results[proj_idx].append(ct)
             if (e + 1) % 32 == 0:
-                logger.info("  {}: uploaded {}/{} experts (compressed TP8)", proj_name, e + 1, num_routed_experts)
+                mode = "BSPM TP8" if bspm_data is not None else "compressed TP8"
+                logger.info("  {}: uploaded {}/{} experts ({})", proj_name, e + 1, num_routed_experts, mode)
 
     routed = MoERoutedExpertWeights(
         routed_gate_proj=results[0],
@@ -1323,8 +1334,7 @@ def prepare_routed_expert_weights(
     num_banks = device.dram_grid_size().x
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     if is_moe:
-        # --- BSPM path (TensorCache-backed via CompressedTensorTarget) ---
-        bspm_data = None
+        bspm_path = None
         if bspm_dir is not None:
             bspm_path = (
                 Path(bspm_dir)
@@ -1334,12 +1344,28 @@ def prepare_routed_expert_weights(
             )
             if bspm_path.exists():
                 logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
-                bspm_data = load_bspm_for_layer(str(bspm_path))
-                logger.info("  BSPM mixed-precision compression for {} experts", bspm_data["n_experts"])
             else:
-                logger.debug("BSPM not found for layer {}, using uniform bfloat4_b", layer_idx)
+                logger.debug("BSPM not found for layer {}, using fallback routed weights", layer_idx)
+                bspm_path = None
 
-        if bspm_data is not None:
+        # --- BSPM-or-uniform CompressedTensor TP8 path ---
+        if compressed_tp8:
+            return prepare_moe_routed_experts_bspm_tp8(
+                device=device,
+                state_dict=state_dict,
+                layer_idx=layer_idx,
+                num_routed_experts=num_routed_experts,
+                num_banks=num_banks,
+                mesh_shape=mesh_shape,
+                bspm_path=bspm_path,
+                move_to_device=move_to_device,
+            )
+
+        # --- Legacy BSPM path (full expert, non-TP8) ---
+        if bspm_path is not None:
+            logger.info("Loading BSPM for layer {}: {}", layer_idx, bspm_path)
+            bspm_data = load_bspm_for_layer(str(bspm_path))
+            logger.info("  BSPM mixed-precision compression for {} experts", bspm_data["n_experts"])
             return prepare_moe_routed_experts_bspm(
                 device=device,
                 state_dict=state_dict,
@@ -1351,18 +1377,6 @@ def prepare_routed_expert_weights(
                 cache_config=cache_config,
                 bspm_variant=bspm_variant,
                 bspm_budget=bspm_budget,
-            )
-
-        # --- Uniform bfloat4_b CompressedTensor TP8 path (Phase 1B) ---
-        if compressed_tp8:
-            return prepare_moe_routed_experts_compressed_tp8(
-                device=device,
-                state_dict=state_dict,
-                layer_idx=layer_idx,
-                num_routed_experts=num_routed_experts,
-                num_banks=num_banks,
-                mesh_shape=mesh_shape,
-                move_to_device=move_to_device,
             )
 
         # --- Uniform bfloat4_b path (TensorCache-backed) ---

@@ -11,6 +11,7 @@ Tests decoder fused operation with full pipeline:
 """
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -38,6 +39,14 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
 )
 
 MTP_LAYER_IDX = 61
+
+
+def _optional_bspm_dir():
+    """Return model-specific BSPM directory when BSPM_DIR/BSPM_RESULTS_DIR is configured."""
+    raw = os.getenv("BSPM_DIR") or os.getenv("BSPM_RESULTS_DIR")
+    if not raw or not raw.strip():
+        return None
+    return Path(raw.strip()) / "deepseek-r1-0528"
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -406,6 +415,7 @@ def test_decoder(
         num_routed_experts=effective_num_routed_experts,
         move_to_device=True,
         compressed_tp8=True,
+        bspm_dir=_optional_bspm_dir(),
     )
 
     logger.info("Creating decoder block tensors...")

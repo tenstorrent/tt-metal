@@ -200,6 +200,98 @@ def moe_routed_expert_tp8_torch_for_cache(
     return stacked.contiguous()
 
 
+def moe_routed_expert_bspm_tp8_torch_for_cache(
+    w: torch.Tensor,
+    assignment: np.ndarray | None,
+    num_banks: int,
+    mesh_shape: tuple[int, int],
+    shard_dim: int,
+) -> tuple[torch.Tensor, np.ndarray]:
+    """TP-shard a routed expert and matching BSPM assignment across a 2D mesh.
+
+    When ``assignment`` is None, a uniform BFP4 assignment is generated. Returned
+    tensors are already DRAM-bank shuffled per TP slice, and the assignment is
+    laid out to match ``CompressedTensor``'s folded view of the stacked tensor.
+    """
+    tile_w = 32
+    mesh_rows, mesh_cols = mesh_shape
+    tp = mesh_rows * mesh_cols
+    K, N = w.shape
+    if K % tile_w != 0 or N % tile_w != 0:
+        raise ValueError(f"Routed expert weight shape {(K, N)} must be tile-aligned")
+
+    if assignment is None:
+        assignment = np.ones((K // tile_w, N // tile_w), dtype=np.int8)
+    else:
+        assignment = np.asarray(assignment, dtype=np.int8)
+        if assignment.shape[0] != K // tile_w:
+            raise ValueError(f"BSPM assignment rows {assignment.shape[0]} do not match K tiles {K // tile_w}")
+        if assignment.shape[1] < N // tile_w:
+            raise ValueError(f"BSPM assignment cols {assignment.shape[1]} do not cover N tiles {N // tile_w}")
+
+    def _pad_assignment_cols(a: np.ndarray, target_cols: int) -> np.ndarray:
+        if a.shape[1] == target_cols:
+            return np.ascontiguousarray(a)
+        if a.shape[1] > target_cols:
+            return np.ascontiguousarray(a[:, :target_cols])
+        return np.pad(a, ((0, 0), (0, target_cols - a.shape[1])), constant_values=3).astype(np.int8)
+
+    shuffled_slices = []
+    shuffled_assignments = []
+    if shard_dim == 1:
+        assert N % tp == 0, f"N={N} must be divisible by tp={tp} for column-parallel shard"
+        per_device_N = N // tp
+        K_per_device = K
+        N_padded = ((per_device_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        assignment_cols = N_padded // tile_w
+        for tp_idx in range(tp):
+            col_start = tp_idx * per_device_N
+            col_end = col_start + per_device_N
+            slc = w[:, col_start:col_end].contiguous()
+            if N_padded != per_device_N:
+                slc = torch.nn.functional.pad(slc, (0, N_padded - per_device_N))
+            shuffled_slices.append(
+                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(K_per_device, N_padded)
+            )
+
+            tile_col_start = col_start // tile_w
+            tile_col_end = col_end // tile_w
+            assignment_slice = assignment[:, tile_col_start:tile_col_end]
+            assignment_slice = _pad_assignment_cols(assignment_slice, assignment_cols)
+            shuffled_assignments.append(shuffle_dram_assignment(assignment_slice, num_banks))
+    elif shard_dim == 0:
+        assert K % tp == 0, f"K={K} must be divisible by tp={tp} for row-parallel shard"
+        per_device_K = K // tp
+        K_per_device = per_device_K
+        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        assignment_cols = N_padded // tile_w
+        assignment_padded = _pad_assignment_cols(assignment, assignment_cols)
+        for tp_idx in range(tp):
+            row_start = tp_idx * per_device_K
+            row_end = row_start + per_device_K
+            slc = w[row_start:row_end, :].contiguous()
+            if N_padded != N:
+                slc = torch.nn.functional.pad(slc, (0, N_padded - N))
+            shuffled_slices.append(
+                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(K_per_device, N_padded)
+            )
+
+            tile_row_start = row_start // tile_w
+            tile_row_end = row_end // tile_w
+            assignment_slice = assignment_padded[tile_row_start:tile_row_end, :]
+            shuffled_assignments.append(shuffle_dram_assignment(assignment_slice, num_banks))
+    else:
+        raise ValueError(f"shard_dim must be 0 or 1, got {shard_dim}")
+
+    stacked = torch.stack(shuffled_slices).reshape(mesh_rows, mesh_cols, K_per_device, N_padded)
+    stacked_assignment = (
+        np.stack(shuffled_assignments)
+        .reshape(mesh_rows, mesh_cols, K_per_device // tile_w, N_padded // tile_w)
+        .reshape(mesh_rows * mesh_cols * (K_per_device // tile_w), N_padded // tile_w)
+    )
+    return stacked.contiguous(), np.ascontiguousarray(stacked_assignment)
+
+
 def mlp_routed_dense_stacked_torch_for_cache(
     experts: torch.Tensor, num_banks: int, mesh_shape: tuple[int, int]
 ) -> torch.Tensor:

@@ -18,7 +18,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.cache import BspmVariant, CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     NUM_ROUTED_EXPERTS,
@@ -218,6 +218,9 @@ class CacheWeightProvider:
         hf_model_id: str | None = None,
         hf_revision: str = "local",
         schema_version: int = 1,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
@@ -228,6 +231,9 @@ class CacheWeightProvider:
         self._schema_version = schema_version
         self._hf_model_id = hf_model_id or model_path.name
         self._hf_revision = hf_revision
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
         context = CacheContext(
@@ -260,15 +266,22 @@ class CacheWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        host_weights = prepare_moe_layer_weights(
+        use_bspm = self._bspm_dir is not None
+        weights = prepare_moe_layer_weights(
             device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
-            move_to_device=False,
+            move_to_device=use_bspm,
             cache_config=self._cache_config(device),
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=use_bspm,
         )
-        return self._upload_prepared_weights(device, host_weights)
+        if use_bspm:
+            return weights
+        return self._upload_prepared_weights(device, weights)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         host_weights = prepare_dense_layer_weights(
@@ -302,6 +315,17 @@ class CacheWeightProvider:
 class SyntheticWeightProvider:
     """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
 
+    def __init__(
+        self,
+        *,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
+    ) -> None:
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
+
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         emb_w = torch.zeros(
             (LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE), dtype=torch.bfloat16
@@ -333,8 +357,17 @@ class SyntheticWeightProvider:
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        use_bspm = self._bspm_dir is not None
         return prepare_moe_layer_weights(
-            device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, move_to_device=True
+            device,
+            sd,
+            layer_id,
+            num_routed_experts=NUM_ROUTED_EXPERTS,
+            move_to_device=True,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=use_bspm,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
@@ -353,11 +386,21 @@ class SyntheticWeightProvider:
 class StateDictWeightProvider:
     """Load real HF safetensors via LazyStateDict and prepare weights at runtime (no tensorbin cache)."""
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        bspm_dir: Path | None = None,
+        bspm_variant: BspmVariant | str = BspmVariant.B,
+        bspm_budget: float = 3.5,
+    ) -> None:
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
         self._state_dict = LazyStateDict(model_path)
+        self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
+        self._bspm_variant = BspmVariant(bspm_variant)
+        self._bspm_budget = bspm_budget
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         return prepare_embedding_weights(self._state_dict, device, move_to_device=True)
@@ -372,6 +415,10 @@ class StateDictWeightProvider:
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
             move_to_device=True,
+            bspm_dir=self._bspm_dir,
+            bspm_variant=self._bspm_variant,
+            bspm_budget=self._bspm_budget,
+            compressed_tp8=self._bspm_dir is not None,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:

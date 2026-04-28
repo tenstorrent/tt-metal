@@ -273,6 +273,7 @@ class CompressedTensor:
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
         min_shard_bytes: int = 0,
+        mesh_mapper_config=None,
     ) -> CompressedTensor:
         """Create CompressedTensor from a pre-computed BSPM assignment.
 
@@ -286,6 +287,7 @@ class CompressedTensor:
             assignment_memory_config=assignment_memory_config,
             tile_hw=tile_hw,
             min_shard_bytes=min_shard_bytes,
+            mesh_mapper_config=mesh_mapper_config,
         )
 
     def to_torch(self) -> torch.Tensor:
