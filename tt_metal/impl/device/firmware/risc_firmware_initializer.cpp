@@ -485,6 +485,15 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         // subsequent non-MMIO devices.  We do NOT insert into relay_broken_non_mmio here
         // to avoid inadvertently suppressing Step 5's MMIO ETH reset (which guards on
         // relay_broken_non_mmio.empty()).
+        //
+        // FIX AZ+ (#42429 follow-up): extend the l1_barrier skip to MMIO devices as well.
+        // On some runners (e.g. t3k-05) device 4 is classified as MMIO by mmio_chip_ids()
+        // even though configure_fabric logged mmio=false for it.  When assert_cores times
+        // out for such a device, calling l1_barrier unconditionally causes a second 5s
+        // timeout.  Skipping l1_barrier whenever assert_cores throws — regardless of
+        // MMIO/non-MMIO classification — eliminates this wasted time.  The
+        // relay_dead_detected_step3 flag (and relay_broken_non_mmio skip logic) is
+        // intentionally kept non-MMIO-only, as it drives relay-path reasoning for Step 4/5.
         bool relay_dead_detected_step3 = false;
         for (tt::ChipId device_id : all_devices) {
             const bool is_non_mmio = !mmio_ids_set.count(device_id);
@@ -495,11 +504,11 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     device_id);
                 continue;
             }
-            // FIX AZ: track whether assert_cores threw for this non-MMIO device.
-            // If it did, the relay is dead — skip l1_barrier (which routes through the
-            // same relay and would also hang for 5s), and set relay_dead_detected_step3
-            // so all subsequent non-MMIO devices are skipped.
-            bool assert_cores_threw_non_mmio = false;
+            // FIX AZ/AZ+: track whether assert_cores threw for this device (any device,
+            // MMIO or non-MMIO).  If it did, skip l1_barrier to avoid a secondary timeout.
+            // Additionally, for non-MMIO devices set relay_dead_detected_step3 so all
+            // subsequent non-MMIO devices (which share the MMIO relay path) are skipped.
+            bool assert_cores_threw = false;
             try {
                 assert_cores(device_id);
             } catch (const std::exception& e) {
@@ -508,27 +517,39 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     "teardown: assert_cores failed for device {} (likely dead ERISC relay): {}",
                     device_id,
                     e.what());
+                assert_cores_threw = true;
                 if (is_non_mmio) {
-                    assert_cores_threw_non_mmio = true;
                     relay_dead_detected_step3 = true;
                     log_warning(
                         tt::LogAlways,
                         "teardown: FIX AZ — assert_cores threw for non-MMIO device {}; "
                         "skipping l1_barrier and all subsequent non-MMIO devices",
                         device_id);
+                } else {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AZ+ — assert_cores threw for MMIO device {}; "
+                        "skipping l1_barrier to avoid secondary timeout",
+                        device_id);
                 }
             } catch (...) {
+                assert_cores_threw = true;
                 if (is_non_mmio) {
-                    assert_cores_threw_non_mmio = true;
                     relay_dead_detected_step3 = true;
                     log_warning(
                         tt::LogAlways,
                         "teardown: FIX AZ — assert_cores threw (unknown exception) for non-MMIO device {}; "
                         "skipping l1_barrier and all subsequent non-MMIO devices",
                         device_id);
+                } else {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AZ+ — assert_cores threw (unknown exception) for MMIO device {}; "
+                        "skipping l1_barrier to avoid secondary timeout",
+                        device_id);
                 }
             }
-            if (assert_cores_threw_non_mmio) {
+            if (assert_cores_threw) {
                 continue;
             }
             try {
