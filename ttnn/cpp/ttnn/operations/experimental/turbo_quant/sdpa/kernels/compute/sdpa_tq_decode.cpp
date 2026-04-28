@@ -31,10 +31,11 @@
 #include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/bcast.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "api/debug/dprint.h"
 
 // Include existing SDPA compute building blocks (matmul_blocks, softmax helpers, etc.)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
@@ -530,14 +531,16 @@ void kernel_main() {
                     mm_init(cb_q_in, cb_k_in, cb_out);
                 }
 
+                // Limit k_chunks to those that actually contain valid (filled) data.
+                // Mirrors reader_tq_decode.cpp's bound — must agree to avoid CB deadlock.
+                // Hoisted out of TQ_CHUNK_LOOP scope so the post-loop softmax-denom
+                // correction (below) can use cur_pos_nb and valid_k_chunks.
+                const uint32_t cur_pos_nb = read_tile_value(cb_cur_pos, 0, nb);
+                const uint32_t valid_k_chunks_raw = (cur_pos_nb + k_chunk_size_tokens) / k_chunk_size_tokens;
+                const uint32_t valid_k_chunks = valid_k_chunks_raw < k_num_chunks ? valid_k_chunks_raw : k_num_chunks;
+
                 {
                     DeviceZoneScopedN("TQ_CHUNK_LOOP");
-                    // Limit k_chunks to those that actually contain valid (filled) data.
-                    // Mirrors reader_tq_decode.cpp's bound — must agree to avoid CB deadlock.
-                    const uint32_t cur_pos_nb = read_tile_value(cb_cur_pos, 0, nb);
-                    const uint32_t valid_k_chunks_raw = (cur_pos_nb + k_chunk_size_tokens) / k_chunk_size_tokens;
-                    const uint32_t valid_k_chunks =
-                        valid_k_chunks_raw < k_num_chunks ? valid_k_chunks_raw : k_num_chunks;
                     for (uint32_t k_chunk = 0; k_chunk < valid_k_chunks; ++k_chunk) {
                         DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
                         // ── Step 1: Dequantize K chunk → cb_k_in (transposed layout) ──
@@ -656,6 +659,75 @@ void kernel_main() {
                 {
                     DeviceZoneScopedN("TQ_FINAL_NORMALIZE");
                     matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+
+                    // ── Softmax-denominator correction for unfilled K positions ──
+                    // The chunk loop iterates fixed k_chunk_size_tokens (=128) positions
+                    // per chunk, but only (cur_pos+1) positions have real data; the rest
+                    // have K=0 (cache zero-init). Each zero K position contributes
+                    // exp((0 - max) * scale) = exp(-max * scale) to the softmax denominator,
+                    // diluting real attention weights to ~30% of correct.
+                    //
+                    // V[zero] = 0 contributes nothing to the numerator (mm2_prev_out), so
+                    // direction is correct, but magnitude is wrong. LayerNorm partially
+                    // compensates per-layer, but the bias compounds across 32 layers and
+                    // produces garbage tokens at e2e (root-cause-finding 2026-04-28).
+                    //
+                    // Fix: subtract zero_count * exp(-max * scale) from prev_sum so the
+                    // denominator only accounts for real positions.
+                    const uint32_t total_iterated = valid_k_chunks * k_chunk_size_tokens;
+                    const uint32_t real_count = cur_pos_nb + 1;
+                    if (total_iterated > real_count) {
+                        const uint32_t zero_count = total_iterated - real_count;
+                        union {
+                            uint32_t u;
+                            float f;
+                        } zc_conv;
+                        zc_conv.f = (float)zero_count;
+                        // Negative scale (flip sign bit of FP32 bit pattern) for exp(-max*scale).
+                        constexpr uint32_t neg_scale_fp32 = scale_fp32 ^ 0x80000000u;
+
+                        // Compute correction = zero_count * exp(-prev_max * scale) into cb_exp_max_diff.
+                        cb_wait_front(alias_prev_max, Sq_chunk_t);
+                        cb_reserve_back(cb_exp_max_diff, Sq_chunk_t);
+                        for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+                            tile_regs_acquire();
+                            copy_tile_to_dst_init_short(alias_prev_max);
+                            copy_tile(alias_prev_max, i, 0);
+                            // exp(prev_max * (-scale)) = exp(-max * scale)
+                            exp_tile_init<true, neg_scale_fp32, InputClamping::None>();
+                            exp_tile<true, false, InputClamping::None>(0);
+                            // Multiply by zero_count (scalar) using fill+mul_binary.
+                            fill_tile_init();
+                            fill_tile(1, zc_conv.f);
+                            mul_binary_tile_init();
+                            mul_binary_tile(0, 1, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_exp_max_diff);
+                            pack_tile(0, cb_exp_max_diff);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_exp_max_diff, Sq_chunk_t);
+
+                        // Subtract correction from alias_prev_sum (in-place).
+                        sub_tiles_init(alias_prev_sum, cb_exp_max_diff);
+                        cb_wait_front(cb_exp_max_diff, Sq_chunk_t);
+                        cb_wait_front(alias_prev_sum, Sq_chunk_t);
+                        for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+                            tile_regs_acquire();
+                            sub_tiles(alias_prev_sum, cb_exp_max_diff, i, i, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(alias_prev_sum);
+                            pack_tile(0, alias_prev_sum);
+                            tile_regs_release();
+                        }
+                        cb_pop_front(alias_prev_sum, Sq_chunk_t);
+                        cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
+                        cb_reserve_back(alias_prev_sum, Sq_chunk_t);
+                        cb_push_back(alias_prev_sum, Sq_chunk_t);
+                    }
+
                     recip_block_inplace(alias_prev_sum, Sq_chunk_t);
                     pack_reconfig_data_format(cb_out);
                     mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
