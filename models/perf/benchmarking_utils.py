@@ -173,6 +173,8 @@ class BenchmarkData:
                 device_info = {"device_name": device_name}
 
             # Standardize model name - convert lowercase and replace whitespace and underscores with hyphens
+            # strip org name if present (e.g. meta-llama/Llama-3.1-70B -> Llama-3.1-70B)
+            ml_model_name = ml_model_name.rstrip("/").split("/", 1)[-1]
             ml_model_name = re.sub(r"[\s_]+", "-", ml_model_name.lower())
 
             partial_benchmark_run = PartialBenchmarkRun(
