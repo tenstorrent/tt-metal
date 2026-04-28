@@ -210,7 +210,7 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
 
         // Run random workloads to stress the dispatch path and dirty compute state.
         auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-            num_programs, mesh_device_->compute_with_storage_grid_size(), cycle);
+            num_programs, mesh_device_->compute_with_storage_grid_size(), 0);
         for (uint32_t i = 0; i < num_programs; i++) {
             auto random_workload = std::make_shared<MeshWorkload>();
             random_workload->add_program(
