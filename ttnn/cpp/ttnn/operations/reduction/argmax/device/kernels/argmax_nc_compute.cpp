@@ -1,27 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Register-based argmax along a non-HW (N or C) dim for TILE-layout inputs.
-//
-// For each output tile, the reader pushes `num_reduce_tiles` value tiles into
-// cb_in0 (fp32 / bf16 input values) and a matching number of fp32 index tiles
-// into cb_in1 (tile k is filled with the scalar (float)k).
-//
-// The compute kernel tracks, in DST registers only (no intermediate spill to
-// L1), two running accumulators per output tile:
-//   slot 0: max_val (fp32)
-//   slot 1: argmax (fp32, stored as float but always holding an integer value)
-// and uses two scratch slots (2,3) to load new input / mask per step.
-//
-// The argmax update is done arithmetically to avoid the SFPU `where`
-// ternary op; for a boolean mask m in {0.0f, 1.0f}:
-//
-//   argmax += m * (new_idx - argmax)
-//
-// which selects `new_idx` when the new value is strictly greater than the
-// running max, and keeps `argmax` otherwise. At the end of the reduction
-// `argmax` is typecast from fp32 to uint32 before packing.
 
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -32,6 +11,28 @@
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
+/**
+ * Register-based argmax along a non-HW (N or C) dim for TILE-layout inputs.
+ *
+ * For each output tile, the reader pushes `num_reduce_tiles` value tiles into
+ * cb_in0 (fp32 / bf16 input values) and a matching number of fp32 index tiles
+ * into cb_in1 (tile k is filled with the scalar (float)k).
+ *
+ * The compute kernel tracks, in DST registers only (no intermediate spill to
+ * L1), two running accumulators per output tile:
+ *   slot 0: max_val (fp32)
+ *   slot 1: argmax (fp32, stored as float but always holding an integer value)
+ * and uses two scratch slots (2,3) to load new input / mask per step.
+ *
+ * The argmax update is done arithmetically to avoid the SFPU `where`
+ * ternary op; for a boolean mask m in {0.0f, 1.0f}:
+ *
+ *   argmax += m * (new_idx - argmax)
+ *
+ * which selects `new_idx` when the new value is strictly greater than the
+ * running max, and keeps `argmax` otherwise. At the end of the reduction
+ * `argmax` is typecast from fp32 to uint32 before packing.
+ */
 void kernel_main() {
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_reduce_tiles = get_compile_time_arg_val(1);
@@ -42,8 +43,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // Slot layout inside DST (32-bit mode):
-    //   slot 0: max_val       (fp32)
-    //   slot 1: argmax        (fp32 holding float(index))
+    //   slot 0: max_val       (holding max value)
+    //   slot 1: argmax        (holding float(index))
     //   slot 2: new_val / new_idx (scratch)
     //   slot 3: mask / delta      (scratch)
     constexpr uint32_t dst_max = 0;

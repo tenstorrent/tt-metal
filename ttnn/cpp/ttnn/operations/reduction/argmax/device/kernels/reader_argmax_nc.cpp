@@ -2,16 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader kernel for register-based argmax over a non-HW dim (NC-style).
-//
-// For each output tile this kernel produces on its assigned core, it pushes
-// N = num_reduce_tiles data tiles into cb_in0 (input values) and N index
-// tiles into cb_in1 (each tile k entirely filled with the fp32 value (float)k).
-// The compute kernel consumes one pair at a time and tracks argmax in fp32
-// DST slots, performing a final Float32 -> UInt32 typecast before packing.
-
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+
+/**
+ * Reader kernel for register-based argmax over a non-HW dim (NC-style).
+ *
+ * For each output tile this kernel produces on its assigned core, it pushes
+ * N = num_reduce_tiles data tiles into cb_in0 (input values) and N index
+ * tiles into cb_in1 (each tile k entirely filled with the fp32 value (float)k).
+ * The compute kernel consumes one pair at a time and tracks argmax in fp32
+ * DST slots, performing a final Float32 -> UInt32 typecast before packing.
+ */
 
 namespace {
 

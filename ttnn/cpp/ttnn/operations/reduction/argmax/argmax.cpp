@@ -49,8 +49,7 @@ bool should_row_major_h_via_tile(
 // Returns true if we should dispatch the reduction to the register-based NC
 // path (compute-kernel + DST accumulation). The NC path supports reducing
 // along any non-HW dim (i.e., dim < rank - 2) and assumes BFLOAT16 / FLOAT32
-// values. The caller is responsible for converting the TILE UINT32 output
-// back to the user-visible ROW_MAJOR UINT32 contract.
+// values.
 bool should_use_nc_path(const Tensor& input, const std::optional<int>& dim, const MemoryConfig& output_memory_config) {
     if (!dim.has_value()) {
         return false;

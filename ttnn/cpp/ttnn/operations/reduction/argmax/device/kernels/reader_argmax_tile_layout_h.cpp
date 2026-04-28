@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Argmax over the H (height) dimension for TILE layout, without transposing the input.
-// For each (outer, global_w) position, scan all H tiles and rows; index is 0..logical_height-1.
-
 #include "argmax_tile_h_col.hpp"
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
 
 #include <stdint.h>
+
+/**
+ * Argmax over the H (height) dimension for TILE layout, without transposing the input.
+ * For each (outer, global_w) position, scan all H tiles and rows; index is 0..logical_height-1.
+ */
 
 void kernel_main() {
     constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
