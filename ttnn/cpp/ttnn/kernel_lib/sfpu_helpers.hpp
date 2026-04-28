@@ -69,8 +69,11 @@
  * into a chain, then executed by a pipeline that manages DEST registers, CB synchronization,
  * and data format reconfiguration.
  *
- * PREREQUISITE: Call init_sfpu(icb, ocb) at the start of your kernel before using
- * the pipeline functions.
+ * PREREQUISITE: Call compute_kernel_hw_startup(icb, ocb) exactly once at the start
+ * of your kernel before using the pipeline functions. Do NOT re-call it later
+ * (and never inside a loop) — re-running mid-kernel can race the compute pipeline
+ * and produce undefined behavior. The pipeline functions install their own per-op
+ * short inits internally (e.g. copy_tile_to_dst_init_short, *_tile_init).
  *
  * ## Core Concepts
  *
@@ -99,7 +102,7 @@
  *   #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
  *   using namespace compute_kernel_lib;
  *
- *   init_sfpu(cb_in, cb_out);
+ *   compute_kernel_hw_startup(cb_in, cb_out);
  *
  *   // 1. Single unary op — exp on all tiles (most common pattern)
  *   sfpu_op<cb_in>(cb_out, num_tiles, Exp<>{});

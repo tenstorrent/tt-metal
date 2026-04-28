@@ -13,8 +13,10 @@
  * element-wise binary operations with automatic broadcast, DEST register management,
  * circular buffer synchronization, and data format reconfiguration.
  *
- * PREREQUISITE: Call binary_op_init_common(icb_a, icb_b, ocb) at the start of your
- * kernel before using these functions.
+ * PREREQUISITE: Call compute_kernel_hw_startup(icb_a, icb_b, ocb) exactly once at
+ * the start of your kernel before using these functions. Do NOT re-call it later
+ * (and never inside a loop) — re-running mid-kernel can race the compute pipeline
+ * and produce undefined behavior.
  *
  * ## Broadcast Dimension Reference
  *
@@ -45,7 +47,7 @@
  *   #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
  *   using namespace compute_kernel_lib;
  *
- *   binary_op_init_common(cb_a, cb_b, cb_out);
+ *   compute_kernel_hw_startup(cb_a, cb_b, cb_out);
  *
  *   // 1. Basic element-wise add (most common — streaming, one tile at a time)
  *   add(cb_a, cb_b, cb_out, BinaryInputBlockShape::of(Ht, Wt));
