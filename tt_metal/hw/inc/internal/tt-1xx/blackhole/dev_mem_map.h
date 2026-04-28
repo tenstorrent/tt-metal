@@ -109,10 +109,8 @@
 
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
-// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small.
-// NOTE: realtime_profiler_msg_t is NOT included here; it lives in a dispatch-core-local L1
-// region carved by DispatchMemMap via CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG.
-#define MEM_MAILBOX_SIZE 12928
+// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
+#define MEM_MAILBOX_SIZE 12912
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
