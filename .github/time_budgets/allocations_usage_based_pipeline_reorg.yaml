@@ -1,0 +1,64 @@
+# Fractional allocation of each SKU pool per team — usage-based, pipeline_reorg only.
+# Generated from Snowflake TTDATASF.SW_TEST.CICD_JOB, 28-day window (Apr 2026).
+#
+# Coverage: ONLY jobs corresponding to tests/pipeline_reorg/*.yaml test suites.
+# Legacy (bucket-2) workflows — fd-nightly, ttnn-unit-tests, tt-metal-l2-tests,
+# blackhole nightly debug run, metalium-*, cpp-unit-tests, fast-dispatch-unit-tests,
+# ttsim-*, llk-test-*, etc. — are excluded.
+#
+# See allocations_usage_based_v2.yaml for the version that includes bucket-2 as well.
+#
+# ─── Methodology ─────────────────────────────────────────────────────────────
+#
+# Data source: same Snowflake query as v2 (28-day actual execution time scaled to
+# weekly hours). Rows are filtered to only include workflow_prefix values that
+# correspond to pipeline_reorg test YAMLs in tests/pipeline_reorg/:
+#
+#   galaxy-demo-tests, galaxy-model-perf-tests, galaxy-perf-tests,
+#   galaxy-sanity-test, galaxy-unit-tests, galaxy-e2e-tests,
+#   models-unit-tests (all variants), models-e2e-tests, models-perf,
+#   t3000-unit-tests, t3000-e2e-tests, t3000-integration-tests,
+#   t3000-perf-tests, t3000-demo-tests, t3000-apc-fast-tests,
+#   vllm-tests (all SKU variants),
+#   Galaxy-DeepSeek-tests,
+#   multi-host-glx-2x, multi-host-glx-4x, multi-host-bh-lb-2x,
+#   blackhole-multi-card-unit-tests (all chassis variants),
+#   blackhole-multi-card-fast-unit-tests (all chassis variants),
+#   blackhole-demo-tests (all chassis variants),
+#   single-card-demo-tests, single-card-ttnn-models-frequent
+#
+# Team attribution uses the `team:` field from the corresponding pipeline_reorg YAML:
+#   models:   galaxy-demo/model-perf, models-unit/e2e, vllm-tests, single-card-*,
+#             t3000-demo-tests, blackhole-demo-tests
+#   ttnn:     galaxy-perf/e2e/unit/sanity-tests
+#   runtime:  t3000-unit/e2e/integration/perf, blackhole-multi-card-*
+#   scaleout: multi-host-*, Galaxy-DeepSeek-tests
+#
+# SKU mapping is identical to v2 (see that file for full label → pool table).
+#
+# ─── Fractions ───────────────────────────────────────────────────────────────
+
+N150:  # 378 h/wk total measured (pipeline_reorg only)
+  models      :  1.00  # 378 h/wk (100%) – single-card-ttnn-models N150, single-card-demo N150
+
+N300:  # 5,227 h/wk total measured (pipeline_reorg only)
+  models      :  0.95  # 4,965 h/wk (95%) – single-card-ttnn-models N300 (3,836 h), single-card-demo N300 (795 h), models-unit-tests N300 (230 h), vllm-tests N300 (65 h)
+  runtime     :  0.05  # 262 h/wk   (5%) – t3000-apc-fast-tests (N300 cards in LLMBox chassis)
+
+p150b:  # 1,139 h/wk total measured (pipeline_reorg only)
+  models      :  0.22  # 249 h/wk (22%) – models-unit-tests P150, blackhole-demo-tests (all chassis), single-card-ttnn-models P150b
+  runtime     :  0.74  # 839 h/wk (74%) – blackhole-multi-card-{fast-,}unit-tests (BH-LLMBox/LoudBox/DeskBox)
+  scaleout    :  0.04  # 50 h/wk   (4%) – multi-host-bh-lb-2x
+
+p300b:  # 440 h/wk total measured (pipeline_reorg only)
+  models      :  0.15  # 64 h/wk  (15%) – blackhole-demo-tests (QuietBox 2)
+  runtime     :  0.85  # 376 h/wk (85%) – blackhole-multi-card-{fast-,}unit-tests (QB2/P300-viommu)
+
+LLMBOX:  # 1,403 h/wk total measured (pipeline_reorg only)
+  models      :  0.17  # 245 h/wk (17%) – t3000-demo-tests (213 h), vllm-tests t3000 (31 h)
+  runtime     :  0.83  # 1,158 h/wk (83%) – t3000-unit (696 h), t3000-e2e (201 h), t3000-integration (147 h), t3000-perf (114 h)
+
+galaxy:  # 2,632 h/wk total measured (pipeline_reorg only)
+  models      :  0.67  # 1,766 h/wk (67%) – galaxy-demo-tests (912 h), galaxy-model-perf (344 h), models-e2e/unit-tests galaxy (269 h), vllm-tests galaxy (241 h)
+  ttnn        :  0.19  # 488 h/wk  (19%) – galaxy-perf-tests (243 h), galaxy-sanity (135 h), galaxy-unit (63 h), galaxy-e2e (47 h)
+  scaleout    :  0.14  # 378 h/wk  (14%) – multi-host-glx-2x (196 h), multi-host-glx-4x (92 h), Galaxy-DeepSeek-tests (90 h)
