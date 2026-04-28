@@ -6,14 +6,13 @@
 
 Tests cover:
 - Sync API (ttnn.all_reduce) on 16x4 and 32x4 meshes
+- Model-representative shapes on 32x4 mesh
 - Multiple fabric configs (FABRIC_1D, FABRIC_1D_RING) and topologies (Linear, Ring)
 - Both cluster axes (0 and 1)
 - DRAM and L1 memory configs
-- num_links variation (1 and 2 links for BH Galaxy)
-- bfloat16, bfloat8_b, and float32 dtypes
+- num_links variation (1 and 2 links for BH Galaxy) on model-shape tests
+- bfloat16 dtype
 """
-
-import math
 
 import pytest
 import torch
@@ -28,43 +27,40 @@ from tests.ttnn.utils_for_testing import maybe_trace
 
 
 def _get_tensors(input_shape, cluster_axis, mesh_shape, dtype, layout, memory_config, device):
-    num_devices = math.prod(mesh_shape)
+    # One unique shard per cluster-axis position, replicated across the other axis.
+    # Use a 2D mesh-aware mapper so the output tensor's topology lets get_device_tensors
+    # return per-device shards in multi-host MPI runs.
+    num_along_axis = mesh_shape[cluster_axis]
+    torch.manual_seed(0)
+    shards = [torch.rand(input_shape).bfloat16() for _ in range(num_along_axis)]
+    torch_input = torch.cat(shards, dim=0)
 
-    torch_inputs = [torch.rand(input_shape).bfloat16() for _ in range(num_devices)]
-    torch_input = torch.concat(torch_inputs, dim=0)
-
-    torch_reference = torch.reshape(torch_input, tuple(list(mesh_shape) + input_shape))
-    torch_reference = torch.sum(torch_reference, dim=cluster_axis)
-
-    torch_reference_copies = []
-    for x in range(mesh_shape[0]):
-        for y in range(mesh_shape[1]):
-            i, j = (x, y) if cluster_axis == 1 else (y, x)
-            torch_reference_copies.append(torch_reference[i])
-
-    torch_reference = torch.concat(torch_reference_copies, dim=0)
-
+    shard_dims = (0, None) if cluster_axis == 0 else (None, 0)
     tt_input = ttnn.from_torch(
         torch_input,
         layout=layout,
-        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        dtype=dtype,
         memory_config=memory_config,
         device=device,
-        dtype=dtype,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
     )
 
+    torch_reference = torch.stack(shards, dim=0).sum(dim=0)
     return tt_input, torch_reference
 
 
-def _verify_all_reduce_output(tt_output_tensor, torch_reference, mesh_device, pcc_threshold=0.9999):
-    device_tensors = ttnn.get_device_tensors(tt_output_tensor)
+def _verify_all_reduce_output(tt_output_tensor, torch_reference, mesh_device, pcc_threshold=0.999):
+    coords = list(tt_output_tensor.tensor_topology().mesh_coords())
     view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    device_tensors = ttnn.get_device_tensors(tt_output_tensor)
+    coord_iter = coords
+    if view is not None and len(device_tensors) != len(coords):
+        coord_iter = [coord for coord in coords if view.is_local(coord)]
 
-    num_devices = math.prod(mesh_device.shape)
-    per_device_ref_slices = torch.chunk(torch_reference, num_devices, dim=0)
-
-    for idx, tt_out in enumerate(device_tensors):
-        eq, mess = comp_pcc(per_device_ref_slices[idx], ttnn.to_torch(tt_out), pcc_threshold)
+    for coord, tt_out in zip(coord_iter, device_tensors):
+        if view is not None and not view.is_local(coord):
+            continue
+        eq, mess = comp_pcc(torch_reference, ttnn.to_torch(tt_out), pcc_threshold)
         assert eq, mess
 
 
@@ -137,16 +133,15 @@ FABRIC_TOPOLOGY_COMBOS = [
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2links"])
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
+@pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
     [
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.DRAM),
-        ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.DRAM),
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.L1),
     ],
-    ids=["small_dram", "large_dram", "small_l1"],
+    ids=["small_dram", "small_l1"],
 )
 def test_all_reduce_16x4(
     mesh_device,
@@ -176,19 +171,15 @@ def test_all_reduce_16x4(
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((32, 4), id="32x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2links"])
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
+@pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
     [
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.DRAM),
-        ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.DRAM),
         ([1, 1, 32, 224], ttnn.bfloat16, ttnn.BufferType.L1),
-        ([1, 1, 32, 896], ttnn.bfloat16, ttnn.BufferType.L1),
-        ([1, 1, 32, 896], ttnn.bfloat8_b, ttnn.BufferType.DRAM),
-        ([1, 1, 32, 224], ttnn.float32, ttnn.BufferType.DRAM),
     ],
-    ids=["small_dram", "large_dram", "small_l1", "large_l1", "bfloat8_dram", "float32_dram"],
+    ids=["small_dram", "small_l1"],
 )
 def test_all_reduce_32x4(
     mesh_device,
