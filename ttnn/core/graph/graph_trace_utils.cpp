@@ -265,16 +265,6 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
     return output;
 }
 
-namespace detail {
-// This function computes the worst-case memory allocation per core for a given total size, page size, and number of
-// cores.
-size_t worst_case_per_core_allocation(size_t total_size, size_t page_size, size_t num_of_cores) {
-    size_t pages = std::ceil(float(total_size) / page_size);
-    size_t pages_per_core = std::ceil(float(pages) / num_of_cores);
-    return pages_per_core * page_size;
-}
-}  // namespace detail
-
 uint32_t extract_l1_output_buffer_allocation_size_per_core(const Tensor& output_tensor) {
     tt::tt_metal::Buffer* buffer = output_tensor.buffer();
     if (buffer->is_dram()) {
