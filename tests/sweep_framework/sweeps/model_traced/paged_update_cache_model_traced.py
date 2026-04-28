@@ -195,7 +195,8 @@ def run(
                 dtype_c,
                 ttnn.ROW_MAJOR_LAYOUT,
                 mem_config_c,
-                kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
+                (update_idxs_tensor_kwargs or {}).get("tensor_placement")
+                or kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -235,7 +236,8 @@ def run(
                     dtype_d,
                     ttnn.ROW_MAJOR_LAYOUT,
                     mem_config_d,
-                    kwargs.get("input_d_tensor_placement", input_a_tensor_placement),
+                    (page_table_kwargs or {}).get("tensor_placement")
+                    or kwargs.get("input_d_tensor_placement", input_a_tensor_placement),
                 )
             else:
                 input_tensor_d = ttnn.from_torch(

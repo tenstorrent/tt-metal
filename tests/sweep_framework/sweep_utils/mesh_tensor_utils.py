@@ -182,6 +182,18 @@ def _restore_topology(
     config's distribution_shape and placement info.
     """
     import re
+    import math as _math
+
+    # Canonicalize [1, N] mesh shapes to the actual 2D factorization.
+    # Some tensor_placement records have mesh_device_shape [1, 32] instead
+    # of [4, 8]; this ensures the topology always uses the canonical shape.
+    if len(mesh_shape_tuple) == 2 and (mesh_shape_tuple[0] == 1 or mesh_shape_tuple[1] == 1):
+        _total = mesh_shape_tuple[0] * mesh_shape_tuple[1]
+        if _total > 1:
+            for _r in range(int(_math.sqrt(_total)), 0, -1):
+                if _total % _r == 0:
+                    mesh_shape_tuple = (_r, _total // _r)
+                    break
 
     ndim = len(dist_parsed)
 
