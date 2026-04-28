@@ -67,7 +67,7 @@ class MoeSem:
     DOWN_PROJ_MCAST_RECEIVER = 11
     REDUCE_WORKER_FABRIC_BASE = 12  # 12, 13, 14, 15 per worker slot
     REDUCE_SYNC = 16
-    REDUCE_SYNC = 17
+    POST_PIPELINE_STAGE_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
     NUM_SEMAPHORES = 19
 
@@ -1991,6 +1991,18 @@ class MoeRoutedExpertOp:
                 named_compile_time_arg="pipeline_stage_sync_run_stalling_logic_on_brisc",
                 core_range=ttnn.CoreRangeSet([]),  # Set per-device
                 value=0,  # Set per-device
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="execute_post_pipeline_stage_sync_on_ncrisc",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="execute_post_pipeline_stage_sync_on_brisc",
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device
+                value=1,
                 other_value=0,
             ),
         ]
@@ -4137,23 +4149,6 @@ class MoeOp:
             ]
         )
 
-        # Reduce-to-sender sync CT args (reduce fabric cores → sender core NCRISC)
-        sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
-        reduce_sync_sem_addr = self.sem_addrs[MoeSem.REDUCE_SYNC]
-        self.ncrisc_args.extend(
-            [
-                ("reduce_sync_sem_addr", reduce_sync_sem_addr),
-                ("reduce_sync_num_fabric_cores", num_reduce_fabric_cores),
-            ]
-        )
-        self.brisc_args.extend(
-            [
-                ("reduce_sync_sem_addr", reduce_sync_sem_addr),
-                ("reduce_sync_noc_x", sender_core_physical.x),
-                ("reduce_sync_noc_y", sender_core_physical.y),
-            ]
-        )
-
         # Fabric semaphore addresses (worker→fabric signaling on fabric cores)
         # Global semaphores at indices REDUCE_WORKER_FABRIC_BASE + 0..3
         reduce_worker_fabric_sem_addrs = [
@@ -4303,6 +4298,34 @@ class MoeOp:
                     named_compile_time_arg="pipeline_stage_sync_run_stalling_logic_on_brisc",
                     core_range=stalling_core,
                     value=pipeline_stage_sync_run_stalling_logic_on_brisc,
+                    other_value=0,
+                )
+
+        # Post PipelineStageSync (ensure fabric connections are closed before starting bcast)
+        bcast_sender_core_physical = mesh_device.worker_core_from_logical_core(ctx.routed_ctx.sender_core)
+        post_pipeline_stage_sync_sem_addr = self.sem_addrs[MoeSem.POST_PIPELINE_STAGE_SYNC]
+
+        post_pipeline_stage_sync_args = [
+            ("post_pipeline_stage_sync_sem_addr", post_pipeline_stage_sync_sem_addr),
+            ("post_pipeline_stage_sync_target_core_noc_x", bcast_sender_core_physical.x),
+            ("post_pipeline_stage_sync_target_core_noc_y", bcast_sender_core_physical.y),
+        ]
+        self.ncrisc_args.extend(post_pipeline_stage_sync_args)
+        self.brisc_args.extend(post_pipeline_stage_sync_args)
+
+        for i, desc in enumerate(self.device_unified_core_descs):
+            if desc.named_compile_time_arg == "execute_post_pipeline_stage_sync_on_ncrisc":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="execute_post_pipeline_stage_sync_on_ncrisc",
+                    core_range=signalling_core,
+                    value=run_signalling_kernel_on_ncrisc,
+                    other_value=0,
+                )
+            elif desc.named_compile_time_arg == "execute_post_pipeline_stage_sync_on_brisc":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="execute_post_pipeline_stage_sync_on_brisc",
+                    core_range=signalling_core,
+                    value=(not run_signalling_kernel_on_ncrisc),
                     other_value=0,
                 )
 
