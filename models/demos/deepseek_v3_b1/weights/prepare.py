@@ -62,18 +62,20 @@ from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import (
     build_gate_mm_tp4_spec,
-    build_merged_main_tp4_spec,
+    build_merged_attention_block_tp4_spec,
     pack_o_proj_weights_tp4_shuffled,
 )
 
 # On a 4x2 mesh the attention block's weights are packed as two independent
 # per-core fusion artefacts (see tp4_attention.py):
-#   * MERGED_TP4_MAIN_SPEC: the whole attention block *except* gate_mm --
-#     o_proj (TP4-shuffled) + RMSNorm gammas + q_a + q_b + kv_a, packed
-#     across the ~115-core union of their per-tensor core sets.
+#   * MERGED_TP4_ATTENTION_BLOCK_SPEC: the whole attention block *except*
+#     gate_mm -- o_proj (TP4-shuffled) + RMSNorm gammas + q_a + q_b +
+#     kv_a, packed across the ~115-core union of their per-tensor core
+#     sets.
 #   * MERGED_TP4_GATE_SPEC: gate_mm alone, on its narrow 8-core slab. Kept
-#     out of the main spec so the 8-core allocation doesn't wait on a
-#     lockstep reservation across the 115-core main buffer.
+#     out of the attention-block spec so the 8-core allocation doesn't
+#     wait on a lockstep reservation across the 115-core attention-block
+#     buffer.
 #
 # TODO(refactor): end goal is one source spec per tensor, with FusionGroupSpecs
 # just assembling those per-tensor specs -- this removes the coarse bundles
@@ -81,7 +83,7 @@ from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import (
 # the cross-spec ``_named`` / ``_region`` helpers in ``tp4_attention.py``, and
 # makes it easy to re-bundle tensors into different fusion artefacts without
 # touching the underlying spec objects.
-MERGED_TP4_MAIN_SPEC = build_merged_main_tp4_spec()
+MERGED_TP4_ATTENTION_BLOCK_SPEC = build_merged_attention_block_tp4_spec()
 MERGED_TP4_GATE_SPEC = build_gate_mm_tp4_spec()
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
@@ -858,13 +860,14 @@ def prepare_attention_weights(
     kv_b2_proj = kv_views["kv_b2_proj"]
 
     # -- mla_tp == 2: merged layout, two independent per-core fusion artefacts --
-    # Main artefact (o_proj + norms + q_ab + kv_a) and standalone gate_mm live
-    # in separate FusionGroupSpecs so the narrow gate_mm slab isn't forced to
-    # participate in the main buffer's 115-core lockstep reservation.
+    # The attention-block artefact (o_proj + norms + q_ab + kv_a) and the
+    # standalone gate_mm live in separate FusionGroupSpecs so the narrow
+    # gate_mm slab isn't forced to participate in the attention-block
+    # buffer's 115-core lockstep reservation.
     if mla_tp == 2:
         q_ab_keys = (q_a_key, q_b_key, kv_a_key)
 
-        def _preprocess_merged_main(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        def _preprocess_merged_attention_block(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             o_proj = t[o_proj_key].T.contiguous()
             o_proj = pack_o_proj_weights_tp4_shuffled(o_proj)
             q_a = t[q_a_key].T.contiguous()
@@ -880,20 +883,20 @@ def prepare_attention_weights(
                 **q_ab_kv_a,
             }
 
-        main_src = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
-        main_fp = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=main_src),
-            target=MERGED_TP4_MAIN_SPEC,
+        attention_block_src = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
+        attention_block_fp = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=attention_block_src),
+            target=MERGED_TP4_ATTENTION_BLOCK_SPEC,
         )
-        main_views = cache_config.cache.get_or_create(
-            main_fp,
+        attention_block_views = cache_config.cache.get_or_create(
+            attention_block_fp,
             device,
             move_to_device=move_to_device,
-            preprocess=_preprocess_merged_main,
-            raw_tensors=lambda: {k: state_dict[k] for k in main_src},
+            preprocess=_preprocess_merged_attention_block,
+            raw_tensors=lambda: {k: state_dict[k] for k in attention_block_src},
         )
-        if not isinstance(main_views, dict):
-            raise TypeError("expected dict[str, OverlappedTensor] for merged main cache entry")
+        if not isinstance(attention_block_views, dict):
+            raise TypeError("expected dict[str, OverlappedTensor] for merged attention-block cache entry")
 
         if is_moe:
             gate_key = _key(layer_idx, "mlp.gate.weight")
@@ -937,22 +940,22 @@ def prepare_attention_weights(
                 time.perf_counter() - t0,
             )
             return AttentionWeights(
-                q_a_proj=main_views["q_a_proj"],
-                q_b_proj=main_views["q_b_proj"],
-                kv_a_proj=main_views["kv_a_proj"],
-                o_proj=main_views["o_proj"],
+                q_a_proj=attention_block_views["q_a_proj"],
+                q_b_proj=attention_block_views["q_b_proj"],
+                kv_a_proj=attention_block_views["kv_a_proj"],
+                o_proj=attention_block_views["o_proj"],
                 gate_mm=gate_views["gate_mm"],
-                attn_norm=main_views["attn_norm"],
-                q_norm=main_views["q_norm"],
-                kv_norm=main_views["kv_norm"],
-                ffn_norm=main_views["ffn_norm"],
+                attn_norm=attention_block_views["attn_norm"],
+                q_norm=attention_block_views["q_norm"],
+                kv_norm=attention_block_views["kv_norm"],
+                ffn_norm=attention_block_views["ffn_norm"],
                 kv_b1_proj=kv_b1_proj,
                 kv_b2_proj=kv_b2_proj,
                 gate_bias=gate_bias_tt,
             )
 
         # Dense merged path: no gate_mm at all.
-        merged_views = main_views
+        merged_views = attention_block_views
 
         logger.debug(
             "Attention fusion groups (dense, merged) for layer {} in {:.3f}s",

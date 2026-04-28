@@ -8,17 +8,18 @@ This module owns the **TP4-sharded attention weight layout** for the
 DeepSeek decoder on a 4x2 mesh.  It is expressed as *two independent
 per-core fusion artefacts* (not one multi-buffer group):
 
-* :func:`build_merged_main_tp4_spec` — the main merged attention buffer:
-  ``o_proj`` (TP4-shuffled) + RMSNorm gammas + ``q_a`` + ``q_b`` +
-  ``kv_a``, packed across the ~115-core union of their per-tensor core
-  sets (``per_core=True``).
+* :func:`build_merged_attention_block_tp4_spec` — the merged
+  attention-block buffer: ``o_proj`` (TP4-shuffled) + RMSNorm gammas +
+  ``q_a`` + ``q_b`` + ``kv_a``, packed across the ~115-core union of
+  their per-tensor core sets (``per_core=True``).
 * :func:`build_gate_mm_tp4_spec` — ``gate_mm`` (the MoE router gate) on
   its narrow 8-core slab (``per_core=True``).  Technically not an
   attention weight, but it shares the same TP4 sharding/mesh layout as
   the attention block and runs right after it in the decoder dataflow,
   so its packer/layout naturally belongs next to the attention ones.
-  Kept out of the main spec so its 8-core allocation doesn't wait on a
-  lockstep reservation across the 115-core main buffer.
+  Kept out of the attention-block spec so its 8-core allocation doesn't
+  wait on a lockstep reservation across the 115-core attention-block
+  buffer.
 
 Two specs (not one multi-buffer group) let the cache keep a single-blob
 schema, invalidate the two artefacts independently, and still benefit
@@ -85,7 +86,7 @@ def _region(*lane: tuple[str, OverlappedTensorSpec]) -> RegionSpec:
     return RegionSpec(core_range_set=named[0].core_range_set, subtensors=named)
 
 
-def build_merged_main_tp4_spec(
+def build_merged_attention_block_tp4_spec(
     *,
     name: str = "o_proj_tp4_norms_q_ab_kv_a",
     o_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
@@ -93,7 +94,11 @@ def build_merged_main_tp4_spec(
     kv_a_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
     transform_version: int = 0,
 ) -> FusionGroupSpec:
-    """Main TP4-merged decoder spec: o_proj + norms + q_ab + kv_a, per-core.
+    """TP4-merged attention-block spec: o_proj + norms + q_ab + kv_a, per-core.
+
+    Bundles every attention-block weight that participates in the wide
+    115-core lockstep allocation; ``gate_mm`` (the MoE router) is shipped
+    separately by :func:`build_gate_mm_tp4_spec`.
 
     Defaults match upstream's BFP4 attention flip (#41931): every MLA
     matmul weight (``q_a_proj``, ``q_b_proj``, ``kv_a_proj``, ``o_proj``,
@@ -142,7 +147,8 @@ def build_gate_mm_tp4_spec(
     """Standalone per-core fusion spec for ``gate_mm``.
 
     Shipping ``gate_mm`` as its own artefact means the narrow 8-core slab
-    can be allocated independently of the much wider 115-core main buffer.
+    can be allocated independently of the much wider 115-core
+    attention-block buffer.
     """
     o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
     gate_mm = o_cfg.gate_mm if gate_mm_dtype is None else replace(o_cfg.gate_mm, dtype=gate_mm_dtype)

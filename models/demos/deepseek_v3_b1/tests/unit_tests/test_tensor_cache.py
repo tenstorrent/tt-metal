@@ -728,13 +728,12 @@ class TestFusionGroupPerCore:
         spec = FusionGroupSpec(name="legacy", regions=(region,))
         assert spec.per_core is False
 
-    def test_canonical_omits_per_core_when_false(self):
-        """Default-per_core specs must not include 'per_core' in canonical form so legacy hashes stay stable."""
+    def test_canonical_includes_per_core_when_false(self):
         region = self._single_region("w0")
         spec = FusionGroupSpec(name="legacy", regions=(region,))
         fp = _make_fingerprint(target=spec)
         c = canonical(fp)
-        assert "per_core" not in c["target"]
+        assert c["target"]["per_core"] is False
 
     def test_canonical_includes_per_core_when_true(self):
         region = self._single_region("w0")
