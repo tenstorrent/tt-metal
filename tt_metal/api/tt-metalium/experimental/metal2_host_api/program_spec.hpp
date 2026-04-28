@@ -33,10 +33,10 @@ using WorkUnitSpecName = std::string;
 // ProgramSpec & WorkUnitSpec
 //------------------------------------------------
 
-// A WorkUnitSpec names a unit of execution: a set of kernels that run together on a
-// shared set of compute worker nodes. It is the sole source of placement for kernels;
-// DFB placement is derived from kernel bindings, and semaphores carry their own
-// program-scope target_nodes.
+// A WorkUnitSpec describes a unit of execution:
+// A set of kernels that run together on a shared set of nodes.
+// It is the sole source of kernel placement — each listed kernel is instantiated
+// once per node in target_nodes.
 struct WorkUnitSpec {
     WorkUnitSpecName unique_id;
 
@@ -47,21 +47,23 @@ struct WorkUnitSpec {
     std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
 };
 
-// ProgramSpec describes the immutable properties of a Program
-//   (analogous to a function's signature and body)
+// A ProgramSpec describes the immutable properties of a Program:
+// its kernels, DFBs, semaphores, and where they run.
+// Analogous to a function's signature and body — declared once, executed many times.
+// (Each time with a new ProgramRunParams configuring the mutable execution parameters.)
 struct ProgramSpec {
     // Program identifier (identifies a Program within a MeshWorkload)
     ProgramSpecName program_id;
 
-    // Kernels, DFBs, and semaphores that make up the Program.
+    // Kernels, DFBs (local + remote), and semaphores that make up the Program
     std::vector<KernelSpec> kernels;
     std::vector<DataflowBufferSpec> dataflow_buffers;
     std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
 
-    // WorkUnit specifications. Required: a valid ProgramSpec has at least one WorkUnitSpec.
-    // Each kernel must be referenced by at least one WorkUnitSpec; the kernel's effective
-    // node set is the union of those WorkUnitSpecs' target_nodes.
+    // WorkUnit specifications:
+    // A valid ProgramSpec has at least one WorkUnitSpec.
+    // Each kernel must be referenced by at least one WorkUnitSpec.
     std::vector<WorkUnitSpec> work_units;
 };
 

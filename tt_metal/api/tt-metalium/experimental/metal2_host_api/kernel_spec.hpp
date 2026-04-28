@@ -63,6 +63,21 @@ struct DataMovementConfiguration {
 // Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
+// A KernelSpec describes a compute or data movement kernel:
+//  - The kernel's source code
+//  - Compiler options for generating the kernel binary
+//  - Resource bindings, giving the kernel access to DFBs, semaphores, etc.
+//  - Kernel argument schema (for runtime arguments, specified when the Program is enqueued)
+//  - Kernel argument bindings (for compile-time constant arguments)
+//  - The configuration of any hardware resources controlled by the kernel
+//
+// Invariant: A KernelSpec maps 1:1 with a kernel binary within the Program.
+//
+// Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
+// instance runs on each node where the kernel is placed, with its own runtime arguments.
+//
+// Placement: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+//
 struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     // Basic kernel info
