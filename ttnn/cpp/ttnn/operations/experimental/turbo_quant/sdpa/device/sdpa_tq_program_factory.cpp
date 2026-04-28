@@ -396,18 +396,42 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
-    // ── Runtime args: distribute batch × heads across cores ──
+    // ── Runtime args: distribute (batch × heads) tuples across cores ──
+    // Tier 2A Phase 2.2b: each tuple gets `cores_per_head` consecutive cores.
+    // With cores_per_head == 1, this is identical to the legacy mapping
+    // (group_id == i, core_idx_in_group == 0). Phase 2.3+ will activate K > 1
+    // and add the cross-core reduce; for now the cores_per_head runtime arg
+    // sent to the kernel is forced to 1, so multi-core-per-tuple groups still
+    // process the full chunk range on the worker (idx 0) and the other cores
+    // receive empty work ranges.
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        uint32_t batch_start = (i / nh_parallel_factor) * batch_per_core;
+        const uint32_t group_id = i / cores_per_head;
+        const uint32_t core_idx_in_group = i % cores_per_head;
+
+        uint32_t batch_start = (group_id / nh_parallel_factor) * batch_per_core;
         uint32_t batch_end = std::min(batch_start + batch_per_core, B);
-        uint32_t head_start = (i % nh_parallel_factor) * nh_per_core;
+        uint32_t head_start = (group_id % nh_parallel_factor) * nh_per_core;
         uint32_t head_end = std::min(head_start + nh_per_core, NQH);
 
         // Clamp: cores beyond active_cores get empty ranges
         batch_start = std::min(batch_start, B);
         head_start = std::min(head_start, NQH);
+
+        // Until the cross-core reduce is wired up (Phase 2.3-2.5), only the
+        // worker at idx 0 of each group does any work; the remaining workers
+        // get an empty (batch, head) range so their kernels exit early.
+        if (core_idx_in_group != 0) {
+            batch_end = batch_start;
+            head_end = head_start;
+        }
+
+        // Runtime cores_per_head sent to the compute kernel — forced to 1
+        // until the reduce phase lands so the chunk-loop bounds remain
+        // [0, valid_k_chunks).
+        const uint32_t kernel_core_idx_in_group = 0;
+        const uint32_t kernel_cores_per_head = 1;
 
         SetRuntimeArgs(
             program,
@@ -435,18 +459,16 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             compute_kernel,
             core,
             {
-                i,            // [0]  core_id
-                batch_start,  // [1]
-                batch_end,    // [2]
-                head_start,   // [3]
-                head_end,     // [4]
-                (uint32_t)0,  // [5]  local_q_start
-                (uint32_t)1,  // [6]  local_q_end
-                // Tier 2A Phase 2.1 — chunk-slice routing repurposes the previously-unused
-                // slots [7] / [8]. Currently disabled: every core gets the full range.
-                (uint32_t)0,  // [7]  core_idx_in_group  (was: num_phases, unused)
-                (uint32_t)1,  // [8]  cores_per_head     (was: use_chunk_start_idx_tensor, unused)
-                (uint32_t)0,  // [9]  chunked_q_chunk_offset
+                i,                         // [0]  core_id
+                batch_start,               // [1]
+                batch_end,                 // [2]
+                head_start,                // [3]
+                head_end,                  // [4]
+                (uint32_t)0,               // [5]  local_q_start
+                (uint32_t)1,               // [6]  local_q_end
+                kernel_core_idx_in_group,  // [7]  Tier 2A: chunk-slice routing (forced 0 until reduce lands)
+                kernel_cores_per_head,     // [8]  Tier 2A: chunk-slice routing (forced 1 until reduce lands)
+                (uint32_t)0,               // [9]  chunked_q_chunk_offset
             });
 
         SetRuntimeArgs(
