@@ -14,6 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/matmul/device/config/matmul_auto_tuner.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -357,13 +358,29 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const uint32_t max_dynamic_chunk_size = dst_size;
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
 
+    // Subblock selection: auto_tune::determine_largest_subblock with
+    // subblock_w_eq_per_core_n_required=true and prefer_fast_path=false (legacy table
+    // order) reproduces the previous hand-rolled greedy ("largest w fitting per_core_N
+    // and dst_size, then grow h only when w == per_core_N") byte-for-byte.
+    namespace auto_tune = ttnn::operations::matmul::auto_tune;
+    const auto sdpa_subblock = [&](uint32_t per_core_M, uint32_t per_core_N) {
+        return auto_tune::determine_largest_subblock({
+            .per_core_M = per_core_M,
+            .per_core_N = per_core_N,
+            .compute_kernel_config = compute_kernel_config,
+            .subblock_w_eq_per_core_n_required = true,
+            .prefer_fast_path = false,
+        });
+    };
+
     // Matmul block/subblock configuration for QK
     const uint32_t qk_in0_block_w = DHt;
     const uint32_t qk_num_blocks = 1;
     uint32_t qk_out_subblock_w = 0, qk_out_subblock_h = 0, qk_in0_num_subblocks = 0, qk_in1_num_subblocks = 0;
     if (Sk_chunk_t > 0) {
-        qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-        qk_out_subblock_h = (qk_out_subblock_w == Sk_chunk_t) ? std::min(PNHt, dst_size / qk_out_subblock_w) : 1;
+        const auto qk_choice = sdpa_subblock(PNHt, Sk_chunk_t);
+        qk_out_subblock_h = qk_choice.out_subblock_h;
+        qk_out_subblock_w = qk_choice.out_subblock_w;
         qk_in0_num_subblocks = PNHt / qk_out_subblock_h;
         qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     }
@@ -371,9 +388,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
     uint32_t out_num_blocks = Sk_chunk_t > 0 ? 1 : 0;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
-    const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == vDHt) ? std::min(PNHt, dst_size / out_out_subblock_w) : 1;
+    const auto out_choice = sdpa_subblock(PNHt, vDHt);
+    const uint32_t out_out_subblock_h = out_choice.out_subblock_h;
+    const uint32_t out_out_subblock_w = out_choice.out_subblock_w;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
