@@ -202,7 +202,20 @@ reuse one triplet sequentially (simpler).
 - New test `test_2A_cores_per_head.py` confirms K=1, 2, 4 produce
   bit-identical output (max|diff| = 0) on a populated paged cache.
 
-**Phase 2.3 — cross-core split + partial state (NEXT, ~3-5 days)**
+**Phase 2.3 step 1 — partial-state CBs + semaphore (✅ DONE — commit e74354b)**
+- Allocated six BF16 CBs (c_18..c_23) — three for worker pack, three for
+  reducer remote-pull. ~12 KB per core.
+- Allocated one program-wide reducer semaphore via `tt_metal::CreateSemaphore`.
+- Wired semaphore_id into compute kernel runtime arg slot [9].
+
+**Phase 2.3 step 2a — compute kernel reads new args (✅ DONE — commit a4a4c7d)**
+- Kernel now reads `reducer_semaphore_id` from arg [9].
+- Derives `is_reducer = (core_idx_in_group_arg == 0)`.
+- Declares constexpr CB indices for cb_partial_max/sum/out and
+  cb_remote_max/sum/out. All [[maybe_unused]] for now.
+- K=1, 2, 4 still bit-identical.
+
+**Phase 2.3 step 2b — worker pack-and-exit (NEXT)**
 
 Concrete steps:
 
@@ -264,6 +277,55 @@ Concrete steps:
 - Then K=4, K=8, K=14 (T3K full grid).
 - Once stable: re-run `bench_seqlen_sweep.py` on T3K with K=14 and
   measure the per-call latency gain at long context.
+
+### Pickup checklist for next session
+
+Resume at Phase 2.3 step 2b. The next concrete edits are:
+
+1. **Program factory: stop forcing empty (batch, head) range for idx > 0**
+   - Currently `if (core_idx_in_group != 0) { batch_end = batch_start;
+     head_end = head_start; }`. Remove this so all workers in a group
+     share the same (batch, head) tuple.
+   - Stop forcing `kernel_cores_per_head = 1`; pass actual `cores_per_head`.
+2. **Compute kernel: insert worker branch at end of (nb, nq) iteration**
+   ```cpp
+   if (!is_reducer) {
+       matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+       // Copy alias_prev_max → cb_partial_max via tile_regs path
+       // Copy alias_prev_sum → cb_partial_sum
+       // Copy alias_mm2_prev_out → cb_partial_out
+       cb_pop_front(alias_prev_max, Sq_chunk_t);
+       cb_pop_front(cb_q_in, q_chunk_tiles);
+       continue;  // skip the recip + normalize + dilution-correction
+   }
+   ```
+3. **Writer kernel: add worker NoC-send path**
+   - For each worker (idx > 0): `cb_wait_front(cb_partial_*)`,
+     `noc_async_write` each tile to reducer's L1 at the matching
+     cb_remote_* address, `noc_semaphore_inc` reducer.
+   - Reducer NoC physical (x, y) passed as new runtime args.
+4. **Reducer compute path**
+   - After own chunk loop + matmul_reduce, before recip:
+     `cb_wait_front(cb_remote_*)` for each peer (driven by sema-incremented
+     by writer), then perform online-softmax merge:
+     ```
+     new_max = max(prev_max, w_max)
+     alpha   = exp((prev_max - new_max) * scale)
+     beta    = exp((w_max - new_max) * scale)
+     prev_sum = alpha * prev_sum + beta * w_sum
+     prev_out = alpha * prev_out + beta * w_out
+     prev_max = new_max
+     ```
+     Then apply the existing dilution correction with the *global*
+     `valid_k_chunks` and finalize as today.
+5. **Validate**: `test_2A_cores_per_head.py` at K=2, then K=4, K=14.
+   Then `bench_seqlen_sweep.py` to capture the speedup at long
+   context.
+
+Files to touch:
+- `sdpa_tq_program_factory.cpp` (steps 1, 3a — add reducer NoC coords runtime args)
+- `kernels/compute/sdpa_tq_decode.cpp` (step 2, 4)
+- `kernels/dataflow/writer_tq_decode.cpp` (step 3)
 - Tried promoting `core_idx_in_group` and `cores_per_head_runtime` from
   `constexpr (0, 1)` to runtime args [10] and [11]. Program factory set
   them to (0, 1) per-core — no logical change.
