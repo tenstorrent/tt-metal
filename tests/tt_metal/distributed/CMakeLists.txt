@@ -38,6 +38,8 @@ target_sources(
         test_gap29_cluster_teardown_hang_relay_broken.cpp
         test_gap31_fixay_deferred_nonmmio_reset.cpp
         test_gap32_fixaz_l1barrier_skip_no_prior_fabric.cpp
+        test_gap41_fixnt_ethcoord_preserved_aq_skip.cpp
+        test_gap42_fixnu_mmio_ethcoord_before_relay_guard.cpp
         test_dispatch_context.cpp
         utils.cpp
 )

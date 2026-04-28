@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -110,7 +110,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re
@@ -756,6 +756,14 @@ FIX_AE_FLUSH_TIMEOUT=$(grep -cE 'FIX AE.*wait_for_non_mmio_flush.*threw|FIX AE.*
 # FIX AE also marks all remote chips relay-broken in ~Cluster() before close_device() — no specific log (silent path).
 # FIX NS: eliminate redundant topology discovery in initialize_base_objects (no runtime log — structural fix)
 # Regression evidence: 14+ min SIGALRM before any test, "unit_tests_ttnn" hangs without FIX AQ warning
+# FIX NT: preserve EthCoord for FIX-AQ-skipped remote chips in chip_locations
+# Log: "FIX AQ: Failed to init remote device ... Skipping" (FIX AQ fires; NT adds EthCoord silently)
+# Regression evidence: TT_FATAL "Physical chip id not found for eth coord" @ tt_cluster.cpp:575
+FIX_NT_CRASH=$(grep -cE 'Physical chip id not found for eth coord|TT_FATAL.*chip id not found.*eth' "$CLEAN" 2>/dev/null || echo 0)
+# FIX NU: capture MMIO EthCoord (via PCIe NODE_INFO) before FIX W heartbeat guard
+# Log: "FIX NU: Captured EthCoord for MMIO device ASIC ID" (debug-level only, may not appear in CI)
+# Regression evidence: same TT_FATAL as FIX NT but MMIO chip missing; FIX W skipped ALL ETH channels
+FIX_NU_COORD=$(grep -cE 'FIX NU: Captured EthCoord|Captured EthCoord.*MMIO.*before relay' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -877,6 +885,18 @@ if [ "${FIX_AW_FIRES:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_AE_FLUSH_TIMEOUT:-0}" -gt 0 ]; then
     echo "  => [FIX AE] wait_for_non_mmio_flush() timed out mid-session in write_core/write_reg/noc_multicast_write (${FIX_AE_FLUSH_TIMEOUT} event(s)) — relay died while a write was in progress. FIX AE caught the exception and called mark_relay_broken() so all subsequent flushes for that chip return instantly (0ms instead of 5s per call). Also: ~Cluster() marks all remote chips broken before close_device() to prevent UMD destructor/constructor race (supersedes FIX AW background-thread approach)."
+fi
+if [ "${FIX_NT_CRASH:-0}" -gt 0 ]; then
+    echo "  => [FIX NT REGRESSION] 'Physical chip id not found for eth coord' TT_FATAL detected (${FIX_NT_CRASH} occurrence(s))."
+    echo "     Root cause: FIX AQ skipped a remote chip during topology discovery but its EthCoord was NOT"
+    echo "     preserved in chip_locations (FIX NT missing/reverted). Code that called get_physical_chip_id_"
+    echo "     from_eth_coord() for the skipped chip's coord found no entry → TT_FATAL → SIGABRT."
+    echo "     Fix: UMD topology_discovery.cpp FIX NT — after FIX AQ 'continue', emplace EthCoord in eth_coords."
+    echo "     CI refs: run 25077304186 (FIX NT), run 25079761804 (FIX NU — same crash, different root cause)."
+fi
+if [ "${FIX_NU_COORD:-0}" -gt 0 ]; then
+    echo "  => [FIX NU] MMIO EthCoord captured before relay-safety guards (${FIX_NU_COORD} event(s)) — FIX W heartbeat guard"
+    echo "     fired for some MMIO ETH channels but get_local_eth_coord() PCIe read ran first → MMIO chip in chip_locations."
 fi
 if [ "${FIX_BA_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX BA] teardown: STARTED-state non-MMIO device(s) added to relay_broken_non_mmio (${FIX_BA_FIRES} event(s)) — FIX AM set channels_not_ready_for_traffic=true but NOT fabric_relay_path_broken_. Without FIX BA: FIX AC + FIX AY skip these devices; STARTED ERISCs remain; next session stalls 5s/device in topology discovery. FIX BA forces FIX AC + FIX AY to clean them up."
