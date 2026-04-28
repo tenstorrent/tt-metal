@@ -594,26 +594,13 @@ class Attention(LightweightModule):
             ttnn.deallocate(k_for_attn)
             ttnn.deallocate(v_for_attn)
 
-        # GQA expansion: replicate each KV head num_kv_groups times (interleaved).
-        # k_f32 [b, num_kv_heads, k_seq, d] → [b, num_heads, k_seq, d]
-        # Each group gets a fresh ttnn.slice to avoid duplicate-reference concat deadlock.
+        # GQA expansion: replicate each KV head num_kv_groups times.
+        # k_f32 [b, num_kv_heads, k_seq, d] -> [b, num_heads, k_seq, d]
+        # Use repeat_interleave instead of slice+clone+concat to reduce decode-time
+        # small-op overhead and host orchestration cost.
         if self.num_kv_groups > 1:
-            k_parts = []
-            v_parts = []
-            for i in range(self.num_kv_heads):
-                k_h = ttnn.slice(k_f32, [0, i, 0, 0], [batch_size, i + 1, k_seq, self.head_dim])
-                v_h = ttnn.slice(v_f32, [0, i, 0, 0], [batch_size, i + 1, k_seq, self.head_dim])
-                for g in range(self.num_kv_groups):
-                    if g < self.num_kv_groups - 1:
-                        k_parts.append(ttnn.clone(k_h, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-                        v_parts.append(ttnn.clone(v_h, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-                    else:
-                        k_parts.append(k_h)
-                        v_parts.append(v_h)
-            k_exp = ttnn.concat(k_parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            v_exp = ttnn.concat(v_parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for h in k_parts + v_parts:
-                ttnn.deallocate(h)
+            k_exp = ttnn.repeat_interleave(k_f32, self.num_kv_groups, dim=1)
+            v_exp = ttnn.repeat_interleave(v_f32, self.num_kv_groups, dim=1)
             ttnn.deallocate(k_f32)
             ttnn.deallocate(v_f32)
         else:
