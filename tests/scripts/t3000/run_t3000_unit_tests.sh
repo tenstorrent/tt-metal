@@ -240,6 +240,11 @@ run_t3000_ttnn_tests() {
   #   Phase 5 polls for 10s per MMIO device = 20s overhead per cycle (2 MMIO devices on T3K).
   #   Caught AsyncExecutionWorksCQ0 timeout in CI run 25054499947.
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap35_fixat_fixas_mmio_phase5_skip.py ; record_test
+  # GAP-36: FIX AV — device_relay_dead per-device early-exit in FIX AY loop when relay is
+  #   dead after FIX AC PCIe-reset. Without FIX AV: 4 ETH cores × 2 non-MMIO devices × 5s
+  #   timeout = 40s teardown → CI SIGALRM. With FIX AV: 1 throw × 2 devices × 5s = 10s.
+  #   Root CI failure: run 25060970918 (job 73417098227).
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap36_fixav_relay_dead_per_device_skip.py::test_gap36_fixav_relay_dead_per_device_skip ; record_test
 
   # Record the end time
   end_time=$(date +%s)
