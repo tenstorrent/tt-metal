@@ -32,13 +32,11 @@ constexpr uint32_t last_chunk_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t total_rows = get_compile_time_arg_val(5);  // D*B*S
 constexpr uint32_t k = get_compile_time_arg_val(6);
 constexpr uint32_t e_local = get_compile_time_arg_val(7);
-constexpr uint32_t t_cap = get_compile_time_arg_val(8);
-constexpr uint32_t num_total_cores = get_compile_time_arg_val(9);
-constexpr uint32_t tile_rows_per_core_per_expert = get_compile_time_arg_val(10);
-constexpr uint32_t brisc_done_sem_id = get_compile_time_arg_val(11);
-constexpr uint32_t brisc_release_sem_id = get_compile_time_arg_val(12);
+constexpr uint32_t num_total_cores = get_compile_time_arg_val(8);
+constexpr uint32_t brisc_done_sem_id = get_compile_time_arg_val(9);
+constexpr uint32_t brisc_release_sem_id = get_compile_time_arg_val(10);
 
-constexpr auto ungrouped_args = TensorAccessorArgs<13>();
+constexpr auto ungrouped_args = TensorAccessorArgs<11>();
 constexpr auto plan_args = TensorAccessorArgs<ungrouped_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
 constexpr auto counts_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();

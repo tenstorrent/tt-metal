@@ -25,7 +25,7 @@ namespace ttml::metal {
 // Output:
 //   ungrouped: [D, B, S, H]  ROW_MAJOR bf16 — dense per-token MoE output (per-device).
 //
-// Algorithm (see tt-train/docs/moe_ungroup_plan.md):
+// Algorithm:
 //   - Outer loop over experts e in 0..E_local. Within one expert, the input
 //     rows [offsets[e], offsets[e]+counts[e]) target pairwise distinct output
 //     tokens (a token's top-K contains e at most once), so cores can scatter

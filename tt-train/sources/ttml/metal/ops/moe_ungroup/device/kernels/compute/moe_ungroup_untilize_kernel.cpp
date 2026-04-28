@@ -24,20 +24,13 @@
 void kernel_main() {
     constexpr uint32_t cb_id_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
-    constexpr uint32_t total_tile_rows = get_compile_time_arg_val(2);
-    constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
-    constexpr uint32_t e_local = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_id_w = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_id_existing_rm = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_id_existing_tile = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_id_combined = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_id_scaled = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(11);
-
-    (void)total_tile_rows;
-    (void)num_chunks;
-    (void)e_local;
+    constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_w = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_existing_rm = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_id_existing_tile = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_id_combined = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_id_scaled = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(8);
 
     binary_op_init_common(cb_id_src, cb_id_w, cb_id_scaled);
 

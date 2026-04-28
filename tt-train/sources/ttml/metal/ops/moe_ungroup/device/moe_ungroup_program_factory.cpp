@@ -63,7 +63,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     const uint32_t e_local = attrs.e_local;
     const uint32_t k = attrs.k;
     const uint32_t total_rows = attrs.d * attrs.b * attrs.s;
-    const uint32_t t_cap = attrs.t_cap;
 
     const uint32_t num_chunks = pick_num_chunks(h);
     const uint32_t Wt = h / tt::constants::TILE_WIDTH;
@@ -84,17 +83,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     tt::tt_metal::CoreRangeSet worker_group_2{};
     uint32_t num_workers = compute_grid.x * compute_grid.y;
     uint32_t num_total_cores = num_workers;
-
-    // Worst-case per-expert tile-row count = t_cap/TILE_H (when one expert
-    // holds the full T_active under fully_skewed routing). Divide by E_local
-    // would be wrong: fully_skewed concentrates everything in one expert,
-    // exceeding the balanced per-expert size by E_local×. Inactive iterations
-    // under this larger bound are cheap (NOC-DMA zero-fill via fill_zeros_async).
-    uint32_t max_slice_tile_rows = t_cap / tt::constants::TILE_HEIGHT;
-    uint32_t tile_rows_per_core_per_expert = (max_slice_tile_rows + num_total_cores - 1U) / num_total_cores;
-    if (tile_rows_per_core_per_expert == 0U) {
-        tile_rows_per_core_per_expert = 1U;
-    }
 
     // -------------------------------------------------------------------------
     // Circular buffers
@@ -236,29 +224,23 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // Reader CT args
     // -------------------------------------------------------------------------
     std::vector<uint32_t> reader_ct_args = {
-        h,                              // 0
-        num_chunks,                     // 1
-        hidden_chunk_bytes,             // 2
-        tiles_per_chunk,                // 3
-        last_chunk_bytes,               // 4
-        total_rows,                     // 5
-        k,                              // 6
-        e_local,                        // 7
-        t_cap,                          // 8
-        num_total_cores,                // 9
-        tile_rows_per_core_per_expert,  // 10
-        lead_virt.x,                    // 11
-        lead_virt.y,                    // 12
-        up_sem_id,                      // 13
-        down_sem_id,                    // 14
-        brisc_done_sem_id,              // 15
-        brisc_release_sem_id,           // 16
-        mcast_sx,                       // 17
-        mcast_sy,                       // 18
-        mcast_ex,                       // 19
-        mcast_ey,                       // 20
-        mcast_num_dests_incl_self,      // 21
-        kCbCtrl,                        // 22
+        h,                          // 0
+        num_chunks,                 // 1
+        tiles_per_chunk,            // 2
+        e_local,                    // 3
+        num_total_cores,            // 4
+        lead_virt.x,                // 5
+        lead_virt.y,                // 6
+        up_sem_id,                  // 7
+        down_sem_id,                // 8
+        brisc_done_sem_id,          // 9
+        brisc_release_sem_id,       // 10
+        mcast_sx,                   // 11
+        mcast_sy,                   // 12
+        mcast_ex,                   // 13
+        mcast_ey,                   // 14
+        mcast_num_dests_incl_self,  // 15
+        kCbCtrl,                    // 16
     };
     tt::tt_metal::TensorAccessorArgs(expert_out_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(reader_ct_args);
@@ -273,19 +255,17 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // Writer CT args
     // -------------------------------------------------------------------------
     std::vector<uint32_t> writer_ct_args = {
-        h,                              // 0
-        num_chunks,                     // 1
-        hidden_chunk_bytes,             // 2
-        tiles_per_chunk,                // 3
-        last_chunk_bytes,               // 4
-        total_rows,                     // 5
-        k,                              // 6
-        e_local,                        // 7
-        t_cap,                          // 8
-        num_total_cores,                // 9
-        tile_rows_per_core_per_expert,  // 10
-        brisc_done_sem_id,              // 11
-        brisc_release_sem_id,           // 12
+        h,                     // 0
+        num_chunks,            // 1
+        hidden_chunk_bytes,    // 2
+        tiles_per_chunk,       // 3
+        last_chunk_bytes,      // 4
+        total_rows,            // 5
+        k,                     // 6
+        e_local,               // 7
+        num_total_cores,       // 8
+        brisc_done_sem_id,     // 9
+        brisc_release_sem_id,  // 10
     };
     tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);
@@ -309,18 +289,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     [[maybe_unused]] auto compute_g1 = create_compute_kernel(
         program,
         worker_group_1,
-        {kCbSrc0,
-         kCbOut,
-         tile_rows_per_core_per_expert,
-         tiles_per_chunk,
-         num_chunks,
-         e_local,
-         kCbW,
-         kCbExistingRm,
-         kCbExistingTile,
-         kCbCombined,
-         kCbScaled,
-         kCbCtrl},
+        {kCbSrc0, kCbOut, tiles_per_chunk, kCbW, kCbExistingRm, kCbExistingTile, kCbCombined, kCbScaled, kCbCtrl},
         {},
         kComputeKernelPath,
         false);
@@ -328,18 +297,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         [[maybe_unused]] auto compute_g2 = create_compute_kernel(
             program,
             worker_group_2,
-            {kCbSrc0,
-             kCbOut,
-             tile_rows_per_core_per_expert,
-             tiles_per_chunk,
-             num_chunks,
-             e_local,
-             kCbW,
-             kCbExistingRm,
-             kCbExistingTile,
-             kCbCombined,
-             kCbScaled,
-             kCbZero},
+            {kCbSrc0, kCbOut, tiles_per_chunk, kCbW, kCbExistingRm, kCbExistingTile, kCbCombined, kCbScaled, kCbCtrl},
             {},
             kComputeKernelPath,
             false);
