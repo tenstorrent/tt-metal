@@ -23,8 +23,7 @@ namespace compute_kernel_lib {
 template <
     bool transpose,
     bool packer_l1_acc,
-    bool pack_last_to_interm,
-    bool pack_relu,
+    LastBlockTarget last_block_target,
     OutputLayout layout,
     matmul_config::InitMode init_mode,
     bool retain_in0,
@@ -42,6 +41,12 @@ ALWI void matmul_block(
     uint32_t in1_per_core_w,
     uint32_t out_row_width) {
 
+    // Decode the LastBlockTarget enum into the legacy bool pair the body branches on.
+    // The (Interm + Relu) combination is unrepresentable, so the previous static_assert
+    // on the bool pair is now structural.
+    constexpr bool pack_last_to_interm = (last_block_target == LastBlockTarget::Interm);
+    constexpr bool pack_relu = (last_block_target == LastBlockTarget::OutWithRelu);
+
     // Cache integer IDs for legacy LLK calls. buf_id() resolves to
     // get_cb_id() on CircularBuffer or get_id() on DataflowBuffer.
     const uint32_t in0_cb_id = buf_id(in0_buf);
@@ -57,15 +62,6 @@ ALWI void matmul_block(
     const uint32_t block_w = shape.in0_block_w;
     const uint32_t num_k_blocks = shape.num_k_blocks;
     const uint32_t batch = shape.batch;
-
-    // pack_relu only takes effect when the last K-block packs to out_buf — its config
-    // is keyed off pack_target_id below. Combining it with pack_last_to_interm would
-    // silently drop the relu, so make it a build error instead and force the caller
-    // to express RELU in the post-interm phase (bias add / untilize) when going
-    // through interm.
-    static_assert(
-        !(pack_relu && pack_last_to_interm),
-        "pack_relu requires pack_last_to_interm=false; apply RELU as a post-process when packing to interm");
 
     // Init dispatch: helper owns mm_block_init / mm_block_init_short. Caller does
     // compute_kernel_hw_startup once at boot; everything else is internal.

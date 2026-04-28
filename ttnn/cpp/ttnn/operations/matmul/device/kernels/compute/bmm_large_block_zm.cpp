@@ -38,8 +38,7 @@ void kernel_main() {
         compute_kernel_lib::matmul_block<
             /*transpose=*/false,
             /*packer_l1_acc=*/false,
-            /*pack_last_to_interm=*/false,
-            /*pack_relu=*/false,
+            compute_kernel_lib::LastBlockTarget::Out,
             output_layout>(
             in0_buf,
             in1_buf,

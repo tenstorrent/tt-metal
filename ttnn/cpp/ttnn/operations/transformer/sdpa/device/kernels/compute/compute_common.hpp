@@ -1249,8 +1249,7 @@ ALWI void matmul_blocks(
     compute_kernel_lib::matmul_block<
         transpose,
         /*packer_l1_acc=*/false,
-        /*pack_last_to_interm=*/false,
-        /*pack_relu=*/false,
+        compute_kernel_lib::LastBlockTarget::Out,
         compute_kernel_lib::OutputLayout::RowMajor,
         compute_kernel_lib::matmul_config::InitMode::None,
         /*retain_in0=*/true,

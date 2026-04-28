@@ -29,6 +29,20 @@ namespace compute_kernel_lib {
  */
 enum class OutputLayout { SubblockMajor, RowMajor };
 
+/**
+ * Where the last K-block packs and what post-op it gets, picked at compile time.
+ *
+ * Out          (default) Last block packs to out_buf with no relu.
+ * OutWithRelu  Last block packs to out_buf with PACK_RELU enabled.
+ * Interm       Last block packs to interm_buf for a downstream phase (bias add /
+ *              untilize) to consume. RELU on this path lives in the downstream
+ *              phase, not the matmul.
+ *
+ * Replaces the previous (pack_last_to_interm, pack_relu) bool pair: the impossible
+ * combination (Interm + Relu) is unrepresentable.
+ */
+enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm };
+
 namespace matmul_config {
 
 /**
@@ -138,10 +152,9 @@ struct NoPreKBlock {
  *
  *   transpose         If true, transpose B tiles before multiplication (default: false).
  *   packer_l1_acc     Enable packer L1 accumulation instead of software spill/reload.
- *   pack_last_to_interm  If true, last K-block packs to interm_cb instead of out_cb.
- *                     Use when a post-processing phase (bias add, untilize) reads
- *                     from interm_cb.
- *   pack_relu         Enable PACK_RELU on the last K-block when !pack_last_to_interm.
+ *   last_block_target LastBlockTarget: Out (default), OutWithRelu, or Interm.
+ *                     See LastBlockTarget docstring for the three valid pack/RELU
+ *                     combinations.
  *   layout            OutputLayout: SubblockMajor (default) or RowMajor (see above).
  *   init_mode         matmul_config::InitMode: Full (default), Short, or None.
  *                     Controls whether the helper itself calls mm_block_init / _short.
@@ -199,9 +212,9 @@ struct NoPreKBlock {
  *
  * @example
  *   // Row-major output + packer-L1 accumulation across K, no fused bias.
- *   // Template order: transpose, packer_l1_acc, pack_last_to_interm, pack_relu, layout.
+ *   // Template order: transpose, packer_l1_acc, last_block_target, layout.
  *   // Buf is deduced from the buffer-object arguments.
- *   matmul_block<false, true, false, false, OutputLayout::RowMajor>(
+ *   matmul_block<false, true, LastBlockTarget::Out, OutputLayout::RowMajor>(
  *       in0_buf, in1_buf, out_buf, interm_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
@@ -212,9 +225,9 @@ struct NoPreKBlock {
  *   // The SDPA-side wrapper does its own [mm_block_init_short, reconfig_data_format]
  *   // pair externally (for ordering parity with matmul_reduce_inplace.inl and
  *   // OptionalMaskPostCompute), so the helper is invoked with init_mode=None.
- *   // Template slot order: transpose, packer_l1_acc, pack_last_to_interm, pack_relu,
- *   // layout, init_mode, retain_in0, PostComputeFn.
- *   matmul_block<transpose, false, false, false, OutputLayout::RowMajor,
+ *   // Template slot order: transpose, packer_l1_acc, last_block_target, layout,
+ *   // init_mode, retain_in0, PostComputeFn.
+ *   matmul_block<transpose, false, LastBlockTarget::Out, OutputLayout::RowMajor,
  *                matmul_config::InitMode::None, true,
  *                OptionalMaskPostCompute>(
  *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
@@ -227,7 +240,7 @@ struct NoPreKBlock {
  *   // FUSE_BIAS path: last K-block packs to interm_buf so add_bias_bcast_rows reads it.
  *   // DRAM-sharded passes explicit in1_per_core_w (shard width) and
  *   // out_row_width (padded pack width).
- *   matmul_block<in1_transpose_tile, l1_acc, true, false,
+ *   matmul_block<in1_transpose_tile, l1_acc, LastBlockTarget::Interm,
  *                output_layout, matmul_config::InitMode::Full, false,
  *                PostFn, PreFn>(
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
@@ -241,8 +254,7 @@ struct NoPreKBlock {
 template <
     bool transpose = false,
     bool packer_l1_acc = false,
-    bool pack_last_to_interm = false,
-    bool pack_relu = false,
+    LastBlockTarget last_block_target = LastBlockTarget::Out,
     OutputLayout layout = OutputLayout::SubblockMajor,
     matmul_config::InitMode init_mode = matmul_config::InitMode::Full,
     bool retain_in0 = false,

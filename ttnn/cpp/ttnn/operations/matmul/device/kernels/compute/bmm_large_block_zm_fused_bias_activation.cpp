@@ -134,17 +134,6 @@ void kernel_main() {
         false;
 #endif
 
-    // PACK_RELU only applies when the last K-block packs to out_buf: bias and untilize
-    // both consume from interm, so RELU has to live in those post-interm phases instead.
-    // matmul_block static_asserts pack_relu && pack_last_to_interm — keep this in sync
-    // by gating do_relu against both FUSE_BIAS and untilize_out.
-    constexpr bool do_relu =
-#if defined(PACK_RELU) && !defined(FUSE_BIAS)
-        !untilize_out;
-#else
-        false;
-#endif
-
     // ROW_MAJOR_OUTPUT: factory opts in to absolute-offset packing; writers read row-major.
     constexpr OutputLayout output_layout =
 #ifdef ROW_MAJOR_OUTPUT
@@ -153,14 +142,21 @@ void kernel_main() {
         OutputLayout::SubblockMajor;
 #endif
 
-    // matmul_block packs its last K-block to interm when a downstream phase (bias, untilize)
-    // consumes from interm.
-    constexpr bool pack_last_to_interm =
-#ifdef FUSE_BIAS
-        true;
+    // Last-block pack target: Interm when a downstream phase (bias add, untilize) consumes
+    // from interm; OutWithRelu when PACK_RELU applies directly to the matmul output (no
+    // downstream phase to host RELU); else plain Out. The enum makes the impossible
+    // (Interm + Relu) combination unrepresentable.
+#if defined(FUSE_BIAS)
+    constexpr LastBlockTarget last_block_target = LastBlockTarget::Interm;
+#elif defined(PACK_RELU)
+    constexpr LastBlockTarget last_block_target = untilize_out ? LastBlockTarget::Interm : LastBlockTarget::OutWithRelu;
 #else
-        untilize_out;
+            constexpr LastBlockTarget last_block_target = untilize_out ? LastBlockTarget::Interm : LastBlockTarget::Out;
 #endif
+
+    // Some downstream code still keys off pack_last_to_interm to decide post-bias type
+    // selection; derive it from the enum for that local use only.
+    constexpr bool pack_last_to_interm = (last_block_target == LastBlockTarget::Interm);
 
     // ── Callback type aliases ───────────────────────────────────────────
     using XposeFn =
@@ -234,8 +230,7 @@ void kernel_main() {
                     matmul_block<
                         in1_transpose_tile,
                         l1_acc,
-                        pack_last_to_interm,
-                        do_relu,
+                        last_block_target,
                         output_layout,
                         matmul_config::InitMode::Full,
                         /*retain_in0=*/false,
@@ -254,8 +249,7 @@ void kernel_main() {
                     matmul_block<
                         in1_transpose_tile,
                         l1_acc,
-                        pack_last_to_interm,
-                        do_relu,
+                        last_block_target,
                         output_layout,
                         matmul_config::InitMode::Full,
                         /*retain_in0=*/false,
