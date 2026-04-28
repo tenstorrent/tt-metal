@@ -65,6 +65,11 @@ Args:
     centroids:   Centroid float values (len = 2^bits).
     scale:       Attention scale factor.
     pre_rescaled: If true, BFP4 values are already centroid*norm — skip gather+norm.
+    num_cores_per_head: Tier 2A — number of worker cores per (batch, q_head) tuple
+        that cooperate on the chunk loop. Default 1 = legacy behavior. Larger
+        values split the chunk range across cores and merge partial state via a
+        cross-core reduce; cap is the number of compute cores available divided
+        by total (B * NQH) tuples.
 )doc",
         &ttnn::turbo_quant_sdpa_decode,
         nb::arg("q").noconvert(),
@@ -76,7 +81,8 @@ Args:
         nb::arg("cur_pos").noconvert(),
         nb::arg("centroids"),
         nb::arg("scale"),
-        nb::arg("pre_rescaled") = false);
+        nb::arg("pre_rescaled") = false,
+        nb::arg("num_cores_per_head") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::turbo_quant

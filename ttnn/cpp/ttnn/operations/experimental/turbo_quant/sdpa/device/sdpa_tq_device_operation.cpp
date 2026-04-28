@@ -73,10 +73,11 @@ Tensor turbo_quant_sdpa_decode(
     const Tensor& cur_pos,
     const std::vector<float>& centroids,
     float scale,
-    bool pre_rescaled) {
+    bool pre_rescaled,
+    uint32_t num_cores_per_head) {
     using Op = ttnn::operations::experimental::turbo_quant::SDPATQDeviceOperation;
     return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{scale, centroids, pre_rescaled, ttnn::MemoryConfig{}},
+        Op::operation_attributes_t{scale, centroids, pre_rescaled, ttnn::MemoryConfig{}, num_cores_per_head},
         Op::tensor_args_t{q, k_indices, k_norms, v_indices, v_norms, page_table, cur_pos});
 }
 

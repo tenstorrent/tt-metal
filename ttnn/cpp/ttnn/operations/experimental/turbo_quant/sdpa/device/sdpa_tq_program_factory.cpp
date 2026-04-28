@@ -94,6 +94,13 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
     uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
 
+    // Tier 2A: clamp the requested num_cores_per_head to what the grid permits.
+    // K = 1 means legacy single-core behavior (no chunk-loop parallelism).
+    // Used in Phase 2.2+ to assign K consecutive cores to each (B, NQH) tuple.
+    const uint32_t max_cores_per_head = total_work > 0 ? (num_cores / total_work) : 1;
+    const uint32_t cores_per_head = std::min(std::max(attrs.num_cores_per_head, (uint32_t)1), max_cores_per_head);
+    (void)cores_per_head;  // Phase 2.2+ wires this into per-core args; for now K=1 is enforced.
+
     // ── Circular Buffers ──
     // Standard SDPA CBs
     CreateCircularBuffer(

@@ -24,9 +24,20 @@ Tensor turbo_quant_sdpa_decode(
     const Tensor& cur_pos,
     const std::vector<float>& centroids,
     float scale,
-    bool pre_rescaled) {
+    bool pre_rescaled,
+    uint32_t num_cores_per_head) {
     return ::ttnn::prim::turbo_quant_sdpa_decode(
-        q, k_indices, k_norms, v_indices, v_norms, page_table, cur_pos, centroids, scale, pre_rescaled);
+        q,
+        k_indices,
+        k_norms,
+        v_indices,
+        v_norms,
+        page_table,
+        cur_pos,
+        centroids,
+        scale,
+        pre_rescaled,
+        num_cores_per_head);
 }
 
 }  // namespace ttnn

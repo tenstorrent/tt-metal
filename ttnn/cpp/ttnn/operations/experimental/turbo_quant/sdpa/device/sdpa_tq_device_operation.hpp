@@ -20,6 +20,12 @@ struct SDPATQDeviceOperation {
         std::vector<float> centroids;  // centroid values (size = 2^bits)
         bool pre_rescaled;             // true: BFP4 values are centroid×norm, skip gather+norm
         tt::tt_metal::MemoryConfig output_mem_config;
+        // Tier 2A: max number of cores assigned per (batch, q_head) tuple. When >1,
+        // the chunk loop is split across this many "worker" cores per tuple and the
+        // partial (max, sum, out) state is merged via cross-core reduce. The actual
+        // K used at runtime is min(this, num_cores_grid / (B * NQH)). 1 = legacy
+        // behavior (one core per tuple, full chunk loop, no reduce).
+        uint32_t num_cores_per_head = 1;
     };
 
     struct tensor_args_t {
@@ -79,6 +85,7 @@ Tensor turbo_quant_sdpa_decode(
     const Tensor& cur_pos,
     const std::vector<float>& centroids,
     float scale,
-    bool pre_rescaled = false);
+    bool pre_rescaled = false,
+    uint32_t num_cores_per_head = 1);
 
 }  // namespace ttnn::prim

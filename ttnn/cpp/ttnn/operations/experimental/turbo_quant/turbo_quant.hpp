@@ -29,6 +29,7 @@ Tensor turbo_quant_sdpa_decode(
     const Tensor& cur_pos,
     const std::vector<float>& centroids,
     float scale,
-    bool pre_rescaled = false);
+    bool pre_rescaled = false,
+    uint32_t num_cores_per_head = 1);
 
 }  // namespace ttnn
