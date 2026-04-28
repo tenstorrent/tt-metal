@@ -110,7 +110,34 @@
       echo "=== Recovery attempt $attempt of $MAX_RETRIES ==="
 
       echo "--- Resetting cards with tt-smi ---"
-      mpirun --pernode --tag-output tt-smi -glx_reset
+      if ! mpirun --pernode --tag-output bash -lc '
+        for tt_smi in /usr/local/bin/tt-smi /home/user/.local/bin/tt-smi "$(command -v tt-smi 2>/dev/null)" "$HOME/.local/bin/tt-smi"; do
+          if [ -n "$tt_smi" ] && [ -x "$tt_smi" ]; then
+            echo "Using tt-smi at $tt_smi on $(hostname)"
+            # exec replaces this remote shell, so mpirun sees tt-smi's exit code.
+            exec "$tt_smi" -glx_reset
+          fi
+        done
+
+        for search_root in /usr/local /home/user/ /usr /opt; do
+          tt_smi=$(find "$search_root" -maxdepth 5 -type f -name tt-smi -perm /111 -print -quit 2>/dev/null || true)
+          if [ -n "$tt_smi" ]; then
+            echo "Using tt-smi at $tt_smi on $(hostname)"
+            # exec replaces this remote shell, so mpirun sees tt-smi's exit code.
+            exec "$tt_smi" -glx_reset
+          fi
+        done
+
+        echo "ERROR: tt-smi not found on $(hostname); PATH=$PATH"
+        exit 127
+      '; then
+        echo "WARNING: tt-smi reset failed on attempt $attempt"
+        if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+          echo "Sleeping 30s before retry..."
+          sleep 30
+        fi
+        continue
+      fi
 
       echo "--- Running cluster validation ---"
       if mpirun --pernode --tag-output \
