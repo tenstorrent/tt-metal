@@ -187,6 +187,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_set(zero_init_sem_ptr, 1);
+    DPRINT << "Combine reader[" << linearized_mesh_coord
+           << "]: zero-init signalled; waiting on writers (expected=" << num_cores << ")" << ENDL();
 
     // Wait for ALL writers (all cores) to complete init exchange.
     // Each writer signals all readers' barrier sems via noc_semaphore_inc,
@@ -194,6 +196,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* barrier_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_barrier_address);
     noc_semaphore_wait(barrier_sem_ptr, num_cores);
+    DPRINT << "Combine reader[" << linearized_mesh_coord << "]: writer barrier satisfied" << ENDL();
     noc_semaphore_set(barrier_sem_ptr, 0);
 
     // Read expert token counts

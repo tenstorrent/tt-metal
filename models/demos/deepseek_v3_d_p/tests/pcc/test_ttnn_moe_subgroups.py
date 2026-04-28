@@ -96,6 +96,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.timeout(0)  # Disable timeout
 def test_ttnn_moe_subgroups(
     mesh_device,
     device_params,

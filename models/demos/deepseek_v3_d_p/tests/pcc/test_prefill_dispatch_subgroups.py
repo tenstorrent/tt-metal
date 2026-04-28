@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PoC test for MoE prefill dispatch using subgroups on an 8x1 Blackhole LoudBox mesh.
+PoC test for MoE prefill dispatch using subgroups on a Blackhole LoudBox mesh.
 
-Partitions the 8-chip mesh into two 4x1 dispatch subgroups. The dispatch op must see
-only the 4 chips of its own subgroup — no fabric communication, no shared semaphores,
-and no expert routing should cross the subgroup boundary.
+Two parametrizations exercise the same invariant — fabric traffic must stay inside a
+dispatch subgroup — across a 1D and a 2D mesh:
 
-Correctness strategy:
-- Build an 8-chip input by tiling a 4-chip torch input twice along the device axis,
-  so each subgroup receives an identical copy.
-- Run a torch reference dispatch once over the 4-chip input.
-- Assert that the TTNN output on chips 0..3 matches the torch reference, AND that the
-  output on chips 4..7 independently matches the same torch reference.
+- 8x1 linear: two 4x1 subgroups (rows 0..3 / 4..7).
+- 4x2 mesh:   two 2x2 subgroups (rows 0..1 / 2..3, both columns inside each).
+
+Correctness strategy is identical for both shapes: build a per-subgroup torch reference
+on `dispatch_group_size * num_dispatch_groups` chips, tile it `num_dispatch_subgroups`
+times along the row axis so every subgroup receives an identical pattern, run the
+TTNN dispatch, then assert each subgroup's slice matches the torch reference.
 """
 
 import pytest
@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
+    extract_mesh_config,
     get_ep_mesh_composer,
     get_gate_outputs,
     get_max_payload_size,
@@ -58,6 +59,19 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_disp
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
             id="subgroups-2x4-linear-1link",
         ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            1,
+            ttnn.Topology.Linear,
+            2,
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="subgroups-2x2x2-mesh-4x2-1link",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -75,27 +89,29 @@ def test_ttnn_dispatch_subgroups(
 ):
     torch.manual_seed(42)
 
+    n_sp_devices, n_tp_devices = mesh_device.shape
     num_devices = mesh_device.get_num_devices()
-    assert num_devices == dispatch_group_size * num_dispatch_subgroups, (
-        f"mesh has {num_devices} devices but subgroups say "
-        f"{dispatch_group_size} x {num_dispatch_subgroups} = {dispatch_group_size * num_dispatch_subgroups}"
+    assert n_sp_devices == dispatch_group_size * num_dispatch_subgroups, (
+        f"mesh row axis ({n_sp_devices}) must equal "
+        f"dispatch_group_size ({dispatch_group_size}) * num_dispatch_subgroups ({num_dispatch_subgroups})"
     )
-    num_dispatch_groups = 1  # 1D mesh: a single dispatch group per subgroup (no EP axis)
+    mesh_config = extract_mesh_config(mesh_device)
+    num_dispatch_groups = mesh_config.num_dispatch_groups
     sp_axis = 0
+    # Experts are spread across the full subgroup (dispatch_group_size rows × num_dispatch_groups cols).
+    subgroup_num_devices = dispatch_group_size * num_dispatch_groups
 
     logger.info(
         f"Subgroups test: mesh_shape={mesh_device.shape} num_devices={num_devices} "
-        f"num_dispatch_subgroups={num_dispatch_subgroups} dispatch_group_size={dispatch_group_size}"
+        f"num_dispatch_subgroups={num_dispatch_subgroups} dispatch_group_size={dispatch_group_size} "
+        f"num_dispatch_groups={num_dispatch_groups} subgroup_num_devices={subgroup_num_devices}"
     )
 
-    # We pass num_devices_for_constants == dispatch_group_size because the op's kernel sees
-    # exactly `dispatch_group_size` chips within its subgroup — experts_per_chip is computed
-    # against that local size.
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip,
         num_routed_experts,
         num_experts_per_tok,
-        dispatch_group_size,
+        subgroup_num_devices,
         dispatch_group_size,
         capacity_factor,
     )

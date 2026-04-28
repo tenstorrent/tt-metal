@@ -136,6 +136,31 @@ SubgroupGatherHistogramsProgramFactory::create_at(
     const auto [neighbors, directions] = ccl::common::get_neighbors_in_range(
         subgroup_range, mesh_coordinate, operation_attributes.topology, operation_attributes.cluster_axis);
 
+    {
+        std::string neighbors_str = "{";
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            if (i > 0) {
+                neighbors_str += ", ";
+            }
+            neighbors_str += fmt::format("{}", neighbors[i]);
+        }
+        neighbors_str += "}";
+        log_info(
+            tt::LogOp,
+            "subgroup_gather_histograms get_neighbors_in_range: coord={} subgroup=[{}, {}] axis={} topology={} "
+            "neighbors={} directions=[E={}, W={}, N={}, S={}]",
+            mesh_coordinate,
+            subgroup_range.start_coord(),
+            subgroup_range.end_coord(),
+            operation_attributes.cluster_axis,
+            operation_attributes.topology,
+            neighbors_str,
+            directions[0],
+            directions[1],
+            directions[2],
+            directions[3]);
+    }
+
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : subgroup_range) {
         auto id = mesh_device->get_fabric_node_id(coord);

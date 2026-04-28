@@ -85,6 +85,38 @@ CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh
     const auto subgroups =
         ccl::common::split_into_subgroups(tensor_coords, subgroup_axis, operation_attributes.num_dispatch_subgroups);
 
+    {
+        std::string ranges_str = "{";
+        for (size_t i = 0; i < tensor_coords.ranges().size(); ++i) {
+            if (i > 0) {
+                ranges_str += ", ";
+            }
+            ranges_str +=
+                fmt::format("[{}, {}]", tensor_coords.ranges()[i].start_coord(), tensor_coords.ranges()[i].end_coord());
+        }
+        ranges_str += "}";
+
+        std::string subgroups_str = "{";
+        for (size_t i = 0; i < subgroups.size(); ++i) {
+            if (i > 0) {
+                subgroups_str += ", ";
+            }
+            subgroups_str += fmt::format("[{}, {}]", subgroups[i].start_coord(), subgroups[i].end_coord());
+        }
+        subgroups_str += "}";
+
+        log_info(
+            tt::LogOp,
+            "combine create_mesh_workload: mesh_shape={} num_dispatch_subgroups={} subgroup_axis={} "
+            "tensor_coords.num_ranges={} tensor_coords={} subgroups={}",
+            mesh_device->shape(),
+            operation_attributes.num_dispatch_subgroups,
+            subgroup_axis,
+            tensor_coords.ranges().size(),
+            ranges_str,
+            subgroups_str);
+    }
+
     for (const auto& subgroup_range : subgroups) {
         // Each subgroup owns its own pair of init/exit barrier semaphores so a subgroup's
         // barrier handshake never spans sibling-subgroup cores.
@@ -93,6 +125,13 @@ CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh
         auto exit_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
             mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
         tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+
+        log_info(
+            tt::LogOp,
+            "combine create_mesh_workload: subgroup=[{}, {}] init_barrier_sem.address=0x{:x}",
+            subgroup_range.start_coord(),
+            subgroup_range.end_coord(),
+            (uint32_t)init_barrier_semaphore.address());
 
         for (const auto& coord : subgroup_range) {
             auto cached_program = create_at(
@@ -149,6 +188,20 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
+    log_info(
+        tt::LogOp,
+        "combine create_at: coord={} subgroup=[{}, {}] subgroup_num_rows={} subgroup_num_cols={} "
+        "subgroup_num_devices={} linearized_subgroup_coord={} src_mesh_id={} src_chip_id={}",
+        mesh_coordinate,
+        subgroup_range.start_coord(),
+        subgroup_range.end_coord(),
+        mesh_rows,
+        mesh_cols,
+        mesh_rows * mesh_cols,
+        linearized_mesh_coord,
+        src_mesh_id,
+        src_chip_id);
+
     log_debug(
         tt::LogOp,
         "Creating prefill combine program for mesh coordinate: ({}, {}) with mesh id: {} "
@@ -170,6 +223,31 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     const auto [neighbors, directions] =
         ccl::common::get_neighbors_in_range(subgroup_range, mesh_coordinate, topology, operation_attributes.axis);
+
+    {
+        std::string neighbors_str = "{";
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            if (i > 0) {
+                neighbors_str += ", ";
+            }
+            neighbors_str += fmt::format("{}", neighbors[i]);
+        }
+        neighbors_str += "}";
+        log_info(
+            tt::LogOp,
+            "combine get_neighbors_in_range: coord={} subgroup=[{}, {}] axis={} topology={} neighbors={} "
+            "directions=[E={}, W={}, N={}, S={}]",
+            mesh_coordinate,
+            subgroup_range.start_coord(),
+            subgroup_range.end_coord(),
+            operation_attributes.axis.has_value() ? std::to_string(operation_attributes.axis.value()) : "none",
+            topology,
+            neighbors_str,
+            directions[0],
+            directions[1],
+            directions[2],
+            directions[3]);
+    }
 
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
@@ -399,6 +477,13 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
+    log_info(
+        tt::LogOp,
+        "combine fabric world view for coord={}: dest_chip_id={} dest_mesh_id={} directions={}",
+        mesh_coordinate,
+        ccl::common::stringify(dest_chip_id),
+        ccl::common::stringify(dest_mesh_id),
+        ccl::common::stringify(directions));
 
     // Compile-time args shared by reader and writer
     std::vector<uint32_t> compile_time_args = {
@@ -992,13 +1077,11 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                     continue;
                 }
 
-                log_debug(
+                log_info(
                     tt::LogOp,
-                    "Combine connection: ({}, {}) -> ({}, {}) core {} link {} experts [{}, {})",
-                    mesh_coordinate[0],
-                    mesh_coordinate[1],
-                    neighbor_coordinate[0],
-                    neighbor_coordinate[1],
+                    "combine fabric link: src={} dst={} sender_core={} link={} experts=[{}, {})",
+                    mesh_coordinate,
+                    neighbor_coordinate,
                     sender_core,
                     core_link,
                     expert_start,

@@ -268,6 +268,14 @@ std::vector<ttnn::distributed::MeshCoordinateRange> split_into_subgroups(
 
     std::vector<ttnn::distributed::MeshCoordinateRange> subgroups;
     subgroups.reserve(num_subgroups);
+    log_info(
+        tt::LogOp,
+        "split_into_subgroups: full_range=[{}, {}] axis={} num_subgroups={} subgroup_span={}",
+        full_range.start_coord(),
+        full_range.end_coord(),
+        axis,
+        num_subgroups,
+        subgroup_span);
     for (uint32_t i = 0; i < num_subgroups; ++i) {
         tt::stl::SmallVector<uint32_t> start_vals(
             full_range.start_coord().coords().begin(), full_range.start_coord().coords().end());
@@ -276,6 +284,24 @@ std::vector<ttnn::distributed::MeshCoordinateRange> split_into_subgroups(
         start_vals[axis] = full_range.start_coord()[axis] + i * subgroup_span;
         end_vals[axis] = start_vals[axis] + subgroup_span - 1;
         subgroups.emplace_back(ttnn::MeshCoordinate(start_vals), ttnn::MeshCoordinate(end_vals));
+
+        std::string coords_str = "{";
+        bool first = true;
+        for (const auto& coord : subgroups.back()) {
+            if (!first) {
+                coords_str += ", ";
+            }
+            coords_str += fmt::format("{}", coord);
+            first = false;
+        }
+        coords_str += "}";
+        log_info(
+            tt::LogOp,
+            "  subgroup[{}]: range=[{}, {}] devices={}",
+            i,
+            subgroups.back().start_coord(),
+            subgroups.back().end_coord(),
+            coords_str);
     }
     return subgroups;
 }

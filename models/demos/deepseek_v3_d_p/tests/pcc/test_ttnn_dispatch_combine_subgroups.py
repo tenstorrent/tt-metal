@@ -3,18 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PoC test: end-to-end TTNN dispatch -> TTNN combine on an 8x1 Blackhole LoudBox with
-two 4-chip dispatch subgroups.
+PoC test: end-to-end TTNN dispatch -> TTNN combine on a Blackhole LoudBox under
+subgroup partitioning, on both 1D and 2D meshes:
+
+- 8x1 linear: two 4x1 subgroups (rows 0..3 / 4..7).
+- 4x2 mesh:   two 2x2 subgroups (rows 0..1 / 2..3, both columns inside each).
 
 Unlike test_ttnn_moe_subgroups.py, this test does NOT go through TtMoe's gate path.
 The offsets and token counts are pre-computed in torch with subgroup-local semantics
-(via get_gate_outputs on the 4-chip input, tiled across subgroups). This isolates the
-TTNN dispatch <-> TTNN combine pipeline from the gate's offset_cumsum op, which runs
-on cluster_axis=0 and currently crosses subgroup boundaries.
-
-If this test passes, it confirms that offset_cumsum is the blocker for the full
-TtMoe.forward path; the fix is to add num_dispatch_subgroups to offset_cumsum using
-the same pattern applied to dispatch and combine in Step 1.
+(via get_gate_outputs on the per-subgroup input, tiled across subgroups). This
+isolates the TTNN dispatch <-> TTNN combine pipeline from the gate's offset_cumsum
+op.
 """
 
 import pytest
@@ -28,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
+    extract_mesh_config,
     get_ep_mesh_composer,
     get_gate_outputs,
     get_max_payload_size,
@@ -60,9 +60,23 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_comb
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
             id="subgroups-2x4-linear-1link",
         ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            1,
+            ttnn.Topology.Linear,
+            2,
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="subgroups-2x2x2-mesh-4x2-1link",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.timeout(0)  # Disable timeout
 def test_ttnn_dispatch_combine_subgroups(
     mesh_device,
     seq_len_per_chip,
@@ -77,21 +91,28 @@ def test_ttnn_dispatch_combine_subgroups(
 ):
     torch.manual_seed(42)
 
+    n_sp_devices, n_tp_devices = mesh_device.shape
     num_devices = mesh_device.get_num_devices()
-    assert num_devices == dispatch_group_size * num_dispatch_subgroups
-    num_dispatch_groups = 1
+    assert n_sp_devices == dispatch_group_size * num_dispatch_subgroups, (
+        f"mesh row axis ({n_sp_devices}) must equal "
+        f"dispatch_group_size ({dispatch_group_size}) * num_dispatch_subgroups ({num_dispatch_subgroups})"
+    )
+    mesh_config = extract_mesh_config(mesh_device)
+    num_dispatch_groups = mesh_config.num_dispatch_groups
     sp_axis = 0
+    subgroup_num_devices = dispatch_group_size * num_dispatch_groups
 
     logger.info(
         f"TTNN dispatch -> combine subgroups test: mesh={mesh_device.shape} "
-        f"num_dispatch_subgroups={num_dispatch_subgroups} dispatch_group_size={dispatch_group_size}"
+        f"num_dispatch_subgroups={num_dispatch_subgroups} dispatch_group_size={dispatch_group_size} "
+        f"num_dispatch_groups={num_dispatch_groups} subgroup_num_devices={subgroup_num_devices}"
     )
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip,
         num_routed_experts,
         num_experts_per_tok,
-        dispatch_group_size,
+        subgroup_num_devices,
         dispatch_group_size,
         capacity_factor,
     )

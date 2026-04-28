@@ -148,6 +148,8 @@ void kernel_main() {
 
     // Init semaphore exchange
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+    DPRINT << "Dispatch writer[" << linearized_mesh_coord << "]: init send begin (dispatch_devices=" << dispatch_devices
+           << " expected=" << (dispatch_devices - 1) << ")" << ENDL();
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -156,9 +158,12 @@ void kernel_main() {
         mesh_cols,
         axis,
         num_devices>(fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+    DPRINT << "Dispatch writer[" << linearized_mesh_coord << "]: init send done; waiting" << ENDL();
 
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
     noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+    DPRINT << "Dispatch writer[" << linearized_mesh_coord << "]: init wait satisfied (val=" << *init_sem_ptr << ")"
+           << ENDL();
     noc_semaphore_set(init_sem_ptr, 0);
 
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
@@ -253,6 +258,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
         noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
+        DPRINT << "Dispatch writer[" << linearized_mesh_coord << "]: exit wait satisfied" << ENDL();
         noc_semaphore_set(exit_sem_ptr, 0);
     }
 
@@ -267,5 +273,6 @@ void kernel_main() {
     noc_async_full_barrier();
 
     close_direction_connections(directions, fabric_connections);
+    DPRINT << "Dispatch writer[" << linearized_mesh_coord << "]: exiting" << ENDL();
 #endif
 }

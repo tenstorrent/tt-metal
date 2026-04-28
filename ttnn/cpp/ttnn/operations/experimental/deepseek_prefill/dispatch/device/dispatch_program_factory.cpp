@@ -916,6 +916,20 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         linearized_mesh_coord = local_row * subgroup_num_cols + local_col;
     }
 
+    log_info(
+        tt::LogOp,
+        "dispatch create_at: coord={} subgroup=[{}, {}] subgroup_num_rows={} subgroup_num_cols={} "
+        "subgroup_num_devices={} linearized_subgroup_coord={} src_mesh_id={} src_chip_id={}",
+        mesh_coordinate,
+        subgroup_range.start_coord(),
+        subgroup_range.end_coord(),
+        subgroup_num_rows,
+        subgroup_num_cols,
+        subgroup_num_devices,
+        linearized_mesh_coord,
+        src_mesh_id,
+        src_chip_id);
+
     log_debug(
         tt::LogOp,
         "\nCreating all to all dispatch program for mesh coordinate: ({}, {}) with mesh id: {} "
@@ -1038,6 +1052,31 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
     const auto [neighbors, directions] =
         ccl::common::get_neighbors_in_range(subgroup_range, mesh_coordinate, topology, operation_attributes.axis);
 
+    {
+        std::string neighbors_str = "{";
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            if (i > 0) {
+                neighbors_str += ", ";
+            }
+            neighbors_str += fmt::format("{}", neighbors[i]);
+        }
+        neighbors_str += "}";
+        log_info(
+            tt::LogOp,
+            "dispatch get_neighbors_in_range: coord={} subgroup=[{}, {}] axis={} topology={} neighbors={} "
+            "directions=[E={}, W={}, N={}, S={}]",
+            mesh_coordinate,
+            subgroup_range.start_coord(),
+            subgroup_range.end_coord(),
+            operation_attributes.axis.has_value() ? std::to_string(operation_attributes.axis.value()) : "none",
+            topology,
+            neighbors_str,
+            directions[0],
+            directions[1],
+            directions[2],
+            directions[3]);
+    }
+
     // c_8: packet header CB for fabric sends (writer-only)
     if (operation_attributes.num_links > 0) {
         constexpr uint32_t num_packet_headers = 2;  // unicast + metadata
@@ -1065,9 +1104,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
-    log_debug(tt::LogOp, "dest_chip_id: {}", ccl::common::stringify(dest_chip_id));
-    log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
-    log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
+    log_info(
+        tt::LogOp,
+        "dispatch fabric world view for coord={}: dest_chip_id={} dest_mesh_id={} directions={}",
+        mesh_coordinate,
+        ccl::common::stringify(dest_chip_id),
+        ccl::common::stringify(dest_mesh_id),
+        ccl::common::stringify(directions));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     log_debug(
@@ -1225,13 +1268,11 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
                     continue;
                 }
 
-                log_debug(
+                log_info(
                     tt::LogOp,
-                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} link {}",
-                    mesh_coordinate[0],
-                    mesh_coordinate[1],
-                    neighbor_coordinate[0],
-                    neighbor_coordinate[1],
+                    "dispatch fabric link: src={} dst={} sender_core={} link={}",
+                    mesh_coordinate,
+                    neighbor_coordinate,
                     sender_core,
                     core_link);
                 tt::tt_fabric::append_fabric_connection_rt_args(
