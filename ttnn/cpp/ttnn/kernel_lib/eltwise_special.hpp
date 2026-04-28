@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_unary/i1.h"
 #include "api/compute/eltwise_unary/lgamma.h"
 #include "api/compute/eltwise_unary/digamma.h"
+#include "api/compute/logsigmoid.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
@@ -66,6 +67,20 @@ template <Dst Slot = Dst::D0>
 struct Digamma : UnaryOp<Digamma<Slot>, Slot> {
     ALWI void init() const { digamma_tile_init(); }
     ALWI void call(uint32_t d) const { digamma_tile(d); }
+};
+
+/**
+ * Logsigmoid — fused 3-DEST binary op (lessons §9):
+ *   In0 holds x, In1 holds exp(-x). The LLK does
+ *   `-log(1 + exp(-x))` numerically stable, writing the result to Out.
+ *
+ * Caller is responsible for filling In1 with `exp(-x)` (i.e. via
+ * Neg + Exp on the chain element preceding this one).
+ */
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const { logsigmoid_tile_init(); }
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c) const { logsigmoid_tile(a, b, c); }
 };
 
 }  // namespace compute_kernel_lib::eltwise
