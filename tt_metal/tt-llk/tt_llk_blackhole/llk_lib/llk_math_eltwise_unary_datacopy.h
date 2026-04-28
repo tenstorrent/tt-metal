@@ -424,9 +424,16 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
-inline void _llk_math_eltwise_unary_datacopy_uninit_()
+template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool tilize = false, bool unpack_to_dest = false>
+inline void _llk_math_eltwise_unary_datacopy_uninit_(const std::uint32_t dst_format = 255)
 {
+    if constexpr (tilize)
+    {
+        if ((dst_format == static_cast<std::uint32_t>(DataFormat::UInt32)) || (dst_format == static_cast<std::uint32_t>(DataFormat::Int32)))
+        {
+            _llk_math_dbg_feature_enable_();
+        }
+    }
     // clear debug feature disable
     if constexpr (src_b_bcast_type != BroadcastType::NONE && unpack_to_dest)
     {

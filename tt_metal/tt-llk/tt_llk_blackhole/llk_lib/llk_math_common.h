@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
@@ -15,6 +16,10 @@ using namespace ckernel::math;
 
 inline void _llk_math_dbg_feature_disable_()
 {
+    tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+    }; // Wait for packer to finish
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                              // workaround for bug tenstorrent/budabackend#1372
 }
@@ -22,6 +27,9 @@ inline void _llk_math_dbg_feature_disable_()
 inline void _llk_math_dbg_feature_enable_()
 {
     tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+    }; // Wait for packer to finish
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
                                                        // workaround for bug tenstorrent/budabackend#1372
 }
@@ -57,6 +65,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     if (int8_math_enabled || uint16_with_fp32_dest)
     {
         _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
     }
 }
 
@@ -161,6 +173,22 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
                                           (srca_data_format == ckernel::to_underlying(DataFormat::Int32));
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
     }
+
+    std::uint32_t int8_math_enabled =
+        (masked_data_format(srca_data_format) == ckernel::to_underlying(DataFormat::Int8)) || (srca_data_format == ckernel::to_underlying(DataFormat::Int32));
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+
+    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && ((srca_data_format == ckernel::to_underlying(DataFormat::UInt16)));
+
+    if (int8_math_enabled || uint16_with_fp32_dest)
+    {
+        _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
+    }
 }
 
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
@@ -173,6 +201,22 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
         std::uint32_t int8_math_enabled = (masked_data_format(srcb_data_format) == ckernel::to_underlying(DataFormat::Int8)) ||
                                           (srcb_data_format == ckernel::to_underlying(DataFormat::Int32));
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+    }
+
+    std::uint32_t int8_math_enabled =
+        (masked_data_format(srcb_data_format) == ckernel::to_underlying(DataFormat::Int8)) || (srcb_data_format == ckernel::to_underlying(DataFormat::Int32));
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+
+    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && ((srcb_data_format == ckernel::to_underlying(DataFormat::UInt16)));
+
+    if (int8_math_enabled || uint16_with_fp32_dest)
+    {
+        _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
     }
 }
 
@@ -188,6 +232,28 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
                                           (srca_data_format == ckernel::to_underlying(DataFormat::Int32)) ||
                                           (srcb_data_format == ckernel::to_underlying(DataFormat::Int32));
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+    }
+
+    std::uint32_t int8_math_enabled = (masked_data_format(srca_data_format) == ckernel::to_underlying(DataFormat::Int8)) ||
+                                      (masked_data_format(srcb_data_format) == ckernel::to_underlying(DataFormat::Int8)) ||
+                                      (srca_data_format == ckernel::to_underlying(DataFormat::Int32)) ||
+                                      (srcb_data_format == ckernel::to_underlying(DataFormat::Int32));
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+
+    // Workaround for HW bugs:
+    // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
+    // budabackend#1948: fp32 dest and movd2a/b with UInt16 srcA/B
+    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && ((srca_data_format == ckernel::to_underlying(DataFormat::UInt16)) ||
+                                                         (srcb_data_format == ckernel::to_underlying(DataFormat::UInt16)));
+
+    if (int8_math_enabled || uint16_with_fp32_dest)
+    {
+        _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
     }
 }
 

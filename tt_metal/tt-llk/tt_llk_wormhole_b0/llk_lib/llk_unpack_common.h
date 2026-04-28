@@ -173,6 +173,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 // TODO NC: Remove as a part of tt-metal#36411
 inline void _llk_unpack_dbg_feature_disable_()
 {
+    tensix_sync();
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                              // workaround for bug tenstorrent/budabackend#1372
 }

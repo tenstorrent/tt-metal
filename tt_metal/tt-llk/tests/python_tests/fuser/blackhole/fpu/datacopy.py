@@ -114,4 +114,5 @@ class DatacopyFpu(Fpu):
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
-        return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, {unpack_to_dest}>();\n"
+        tilize_en = operation.bh_tilize.cpp_enum_value
+        return f"_llk_math_eltwise_unary_datacopy_uninit_<{broadcast_type}, {tilize_en}, {unpack_to_dest}>({config.sentinel.math_format});\n"

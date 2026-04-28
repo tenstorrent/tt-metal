@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
@@ -15,6 +16,7 @@ using namespace ckernel::math;
 
 inline void _llk_math_dbg_feature_disable_()
 {
+    tensix_sync();
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                              // workaround for bug tenstorrent/budabackend#1372
 }
