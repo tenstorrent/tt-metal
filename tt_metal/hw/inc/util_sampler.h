@@ -280,4 +280,23 @@ inline void maybe_tick_with_kernel_id() {
     s->head = head + 1;
 }
 
+// Phase 2.1.c.ii: TRISC1/LLK first-fire-only producer. Called from
+// _llk_math_dest_section_done_ to catch persistent matmul kernels that
+// hold the dest buffer open across many tiles and never invoke
+// _llk_math_wait_for_dest_available_. Only fires when next_due_wall_l == 0
+// (Hook A resets it on every kernel start). After the first fire on any
+// math hook for the current kernel, the deadline becomes non-zero and
+// this function early-returns — so the cost on kernels that DO call
+// wait_for_dest_available_ (most of them) is one volatile-read per
+// dest_section_done call. Without this gate, doubling the sample
+// source doubles the per-chip ring producer rate, overflows the host
+// drain budget, and reduces attribution coverage instead of raising it.
+inline void maybe_tick_with_kernel_id_first_only() {
+    auto* s = ring();
+    if (s->next_due_wall_l != 0u) {
+        return;  // already fired at least once for this kernel
+    }
+    maybe_tick_with_kernel_id();
+}
+
 }  // namespace ttnvtop_sampler

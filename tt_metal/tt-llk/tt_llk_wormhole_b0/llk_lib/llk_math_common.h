@@ -85,6 +85,18 @@ inline void _llk_math_wait_for_dest_available_()
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_dest_section_done_()
 {
+    // ttnvtop Phase 2.1.c.ii: dest-section-done hook with first-fire-only
+    // gate. Persistent matmul kernels hold the dest buffer open across
+    // many tiles and never invoke _llk_math_wait_for_dest_available_, so
+    // Hook B in that function never fires for them. This call captures
+    // them at their first dest section completion. The first-fire-only
+    // gate (next_due_wall_l == 0 check) means non-persistent kernels —
+    // which already fired Hook B from wait_for_dest_available_ — pay
+    // only one volatile L1 read per dest_section_done; they don't
+    // double-sample the ring. Empirically: unconditional firing here
+    // dropped attribution from 55% to 48% by overflowing the host drain;
+    // first-fire-only avoids that.
+    ttnvtop_sampler::maybe_tick_with_kernel_id_first_only();
     set_math_semaphores();
     if constexpr (Dst == DstSync::SyncHalf)
     {
