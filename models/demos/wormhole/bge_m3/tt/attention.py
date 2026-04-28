@@ -250,6 +250,21 @@ class BgeM3Attention(LightweightModule):
 
         cfg = self.config
         core_grid = bge_m3_matmul_core_grid(cfg.mesh_device, seq_len, batch_size)
+        qkv_compute_kernel_cfg = bge_m3_attention_qkv_compute_kernel_config(
+            cfg.mesh_device,
+            max_seq_len=int(seq_len),
+            max_batch_size=int(batch_size),
+        )
+        output_compute_kernel_cfg = bge_m3_attention_output_compute_kernel_config(
+            cfg.mesh_device,
+            max_seq_len=int(seq_len),
+            max_batch_size=int(batch_size),
+        )
+        score_compute_kernel_cfg = bge_m3_sdpa_compute_kernel_config(
+            cfg.mesh_device,
+            max_seq_len=int(seq_len),
+            max_batch_size=int(batch_size),
+        )
 
         max_qkv = max_qkv_mm_chunk_seq_len(cfg.mesh_device)
         if seq_len > max_qkv:
@@ -268,7 +283,7 @@ class BgeM3Attention(LightweightModule):
             dtype=cfg.qkv_dtype,
             bias=self.bqkv,
             program_config=cfg.qkv_prg_config,
-            compute_kernel_config=cfg.qkv_compute_kernel_cfg,
+            compute_kernel_config=qkv_compute_kernel_cfg,
             core_grid=core_grid,
         )
         if seq_len > max_qkv:
@@ -330,7 +345,7 @@ class BgeM3Attention(LightweightModule):
             attn_mask=sdpa_mask,
             scale=cfg.attention_scale,
             program_config=sdpa_program_config,
-            compute_kernel_config=cfg.score_compute_kernel_cfg,
+            compute_kernel_config=score_compute_kernel_cfg,
             memory_config=cfg.score_memcfg,
         )
         ttnn.deallocate(q)
@@ -354,7 +369,7 @@ class BgeM3Attention(LightweightModule):
             dtype=cfg.output_dtype,
             bias=self.wo_bias,
             program_config=cfg.output_prg_config,
-            compute_kernel_config=cfg.output_compute_kernel_cfg,
+            compute_kernel_config=output_compute_kernel_cfg,
             core_grid=core_grid,
         )
         ttnn.deallocate(context)

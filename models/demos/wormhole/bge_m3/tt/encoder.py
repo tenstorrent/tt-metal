@@ -104,6 +104,8 @@ def _attention_score_dtype(
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
     if max_seq_len == 512 and max_batch == 1:
         return dtype
+    if max_seq_len == 512 and max_batch == 32:
+        return dtype
     return ttnn.bfloat16
 
 

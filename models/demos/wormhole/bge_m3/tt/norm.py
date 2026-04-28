@@ -97,9 +97,15 @@ class LayerNorm1D(LightweightModule):
         x = _load_input_device_tensor(x, cfg)
         assert self.weight is not None and self.bias is not None, "weights must be loaded before forward"
 
-        max_b = cfg.max_batch_size if cfg.max_batch_size is not None else 1
-        out_mem = cfg.output_memcfg or bge_m3_linear_activation_memory_config(cfg.max_seq_len, max_b)
-        sharded_ln = _b1s512_layernorm_sharded_config(cfg.max_seq_len, max_b)
+        runtime_batch = int(x.shape[0])
+        runtime_seq = int(x.shape[2])
+        out_mem = cfg.output_memcfg or bge_m3_linear_activation_memory_config(runtime_seq, runtime_batch)
+        sharded_ln = _b1s512_layernorm_sharded_config(runtime_seq, runtime_batch)
+        compute_kernel_config = bge_m3_layernorm_compute_kernel_config(
+            cfg.mesh_device,
+            max_seq_len=runtime_seq,
+            max_batch_size=runtime_batch,
+        )
         program_config = None
         memory_config = out_mem
         if sharded_ln is not None:
@@ -117,7 +123,7 @@ class LayerNorm1D(LightweightModule):
             residual_input_tensor=residual_input_tensor,
             program_config=program_config,  # None to pc
             memory_config=memory_config,
-            compute_kernel_config=cfg.compute_kernel_config,
+            compute_kernel_config=compute_kernel_config,
         )
         if sharded_ln is not None and out_mem != memory_config:
             output = ttnn.to_memory_config(output, memory_config=out_mem)

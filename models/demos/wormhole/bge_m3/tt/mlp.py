@@ -110,19 +110,37 @@ class BgeM3MLP(LightweightModule):
         self.load_device_weights()
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
         batch_size, _, seq_len, _ = hidden_states.shape
-        core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, int(seq_len), int(batch_size))
-        wi_core_grid = None if self.config.wi_prg_config is not None else core_grid
-        wi_activation = None if self.config.wi_prg_config is not None else "gelu"
-
-        # GELU stays fused into Wi, either through the default activation arg or the explicit B1/S512 program config.
+        runtime_batch = int(batch_size)
+        runtime_seq = int(seq_len)
+        core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, runtime_seq, runtime_batch)
+        wi_prg_config = self.config.wi_prg_config or _runtime_mlp_wi_program_config(
+            self.config.mesh_device,
+            runtime_seq,
+            runtime_batch,
+            hidden_size=self.config.hidden_size,
+            intermediate_size=self.config.intermediate_size,
+        )
+        wi_core_grid = None if wi_prg_config is not None else core_grid
+        wi_activation = None if wi_prg_config is not None else "gelu"
+        wi_compute_kernel_cfg = bge_m3_mlp_wi_compute_kernel_config(
+            self.config.mesh_device,
+            max_seq_len=runtime_seq,
+            max_batch_size=runtime_batch,
+        )
+        wo_compute_kernel_cfg = bge_m3_mlp_wo_compute_kernel_config(
+            self.config.mesh_device,
+            max_seq_len=runtime_seq,
+            max_batch_size=runtime_batch,
+        )
+        # GELU stays fused into Wi, either through the default activation arg or an explicit S512 program config.
         activated = ttnn.linear(
             hidden_states,
             self.wi_weight,
             memory_config=self.config.wi_memcfg,
             dtype=self.config.wi_dtype,
             bias=self.wi_bias,
-            program_config=self.config.wi_prg_config,
-            compute_kernel_config=self.config.wi_compute_kernel_cfg,
+            program_config=wi_prg_config,
+            compute_kernel_config=wi_compute_kernel_cfg,
             activation=wi_activation,
             core_grid=wi_core_grid,
         )
@@ -134,7 +152,7 @@ class BgeM3MLP(LightweightModule):
             dtype=self.config.wo_dtype,
             bias=self.wo_bias,
             program_config=self.config.wo_prg_config,
-            compute_kernel_config=self.config.wo_compute_kernel_cfg,
+            compute_kernel_config=wo_compute_kernel_cfg,
             core_grid=core_grid,
         )
         ttnn.deallocate(activated)
@@ -199,15 +217,6 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         to_set["wo_compute_kernel_cfg"] = bge_m3_mlp_wo_compute_kernel_config(
             mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
         )
-    if config.wi_prg_config is None:
-        to_set["wi_prg_config"] = _b1s512_mlp_wi_program_config(
-            mesh_device,
-            max_seq,
-            max_batch,
-            hidden_size=config.hidden_size,
-            intermediate_size=config.intermediate_size,
-        )
-
     wi_dtype = to_set.get("wi_dtype", config.wi_dtype)
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)
     weight_dram = bge_m3_weight_dram_memory_config()
@@ -250,7 +259,7 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     return replace(config, **to_set)
 
 
-def _b1s512_mlp_wi_program_config(
+def _runtime_mlp_wi_program_config(
     mesh_device,
     max_seq_len: int | None,
     max_batch_size: int | None,
@@ -259,14 +268,39 @@ def _b1s512_mlp_wi_program_config(
     intermediate_size: int,
 ) -> object | None:
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len != 512 or max_batch != 1:
+    if max_seq_len != 512:
         return None
+
+    if max_batch == 32:
+        return _b32s512_mlp_wi_program_config(
+            mesh_device,
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+        )
+    if max_batch != 1:
+        return None
+
+    return _b1s512_mlp_wi_program_config(
+        mesh_device,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+    )
+
+
+def _b1s512_mlp_wi_program_config(
+    mesh_device,
+    *,
+    hidden_size: int,
+    intermediate_size: int,
+) -> object:
+    max_seq_len = 512
+    max_batch = 1
 
     core_grid = bge_m3_matmul_core_grid(mesh_device, max_seq_len, max_batch)
     hidden_tiles = hidden_size // 32
     intermediate_tiles = intermediate_size // 32
-    seq_tiles = max_seq_len // 32
-    per_core_m = (seq_tiles + core_grid.y - 1) // core_grid.y
+    m_tiles = max_seq_len // 32
+    per_core_m = (m_tiles + core_grid.y - 1) // core_grid.y
     per_core_n = (intermediate_tiles + core_grid.x - 1) // core_grid.x
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -278,6 +312,60 @@ def _b1s512_mlp_wi_program_config(
         per_core_N=per_core_n,
         transpose_mcast=False,
         fused_activation=(ttnn.UnaryOpType.GELU, True),
+    )
+
+
+def _b32s512_mlp_wi_program_config(
+    mesh_device,
+    *,
+    hidden_size: int,
+    intermediate_size: int,
+) -> object | None:
+    return _b32s512_sequence_mlp_program_config(
+        mesh_device,
+        input_size=hidden_size,
+        output_size=intermediate_size,
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
+    )
+
+
+def _b32s512_sequence_mlp_program_config(
+    mesh_device,
+    *,
+    input_size: int,
+    output_size: int,
+    in0_block_w: int,
+    out_subblock_h: int,
+    out_subblock_w: int,
+    fused_activation,
+) -> object | None:
+    max_seq_len = 512
+    tile_size = 32
+    grid_x = 11
+    grid_y = 10
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if device_grid.x < grid_x or device_grid.y < grid_y:
+        return None
+
+    input_tiles = input_size // tile_size
+    output_tiles = output_size // tile_size
+    seq_tiles = max_seq_len // tile_size
+    per_core_m = (seq_tiles + grid_y - 1) // grid_y
+    per_core_n = (output_tiles + grid_x - 1) // grid_x
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=min(in0_block_w, input_tiles),
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
     )
 
 
