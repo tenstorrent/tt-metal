@@ -261,7 +261,7 @@ TEST_F(EthCoordPreservedOnAqSkipFixture, EthCoordPreservedInChipLocationsAfterFi
             if (n_found < n_expected) {
                 // Log mismatch but also proceed to the crash-prone lookups so the
                 // parent can detect SIGABRT vs. clean exit.
-                tt::log_warning(
+                log_warning(
                     tt::LogTest,
                     "GAP-41 TESTEE: chip_locations has {} entries, expected >= {}. "
                     "FIX NT may be missing or FIX AQ did not fire.",
@@ -273,7 +273,7 @@ TEST_F(EthCoordPreservedOnAqSkipFixture, EthCoordPreservedInChipLocationsAfterFi
             // recorded.  Without FIX NT, this crashes for skipped chips.
             int n = shm->num_chips.load();
             for (int i = 0; i < n; ++i) {
-                ::tt::umd::EthCoord coord{
+                ::tt::EthCoord coord{
                     shm->eth_cluster_id[i],
                     shm->eth_x[i],
                     shm->eth_y[i],

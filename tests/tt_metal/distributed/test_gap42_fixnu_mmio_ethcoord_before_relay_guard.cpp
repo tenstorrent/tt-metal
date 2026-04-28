@@ -268,7 +268,7 @@ TEST_F(MmioEthCoordBeforeRelayGuardFixture, MmioEthCoordInChipLocationsAfterFabr
             // whose ALL ETH channels were in FABRIC mode (FIX W skipped them all).
             int n = shm->num_mmio_chips.load();
             for (int i = 0; i < n; ++i) {
-                ::tt::umd::EthCoord coord{
+                ::tt::EthCoord coord{
                     shm->mmio_cluster_id[i],
                     shm->mmio_x[i],
                     shm->mmio_y[i],
