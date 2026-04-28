@@ -96,6 +96,57 @@ with `cur_pos` (~0.48 ms / 128 tokens per layer). T3K does not help — each
 device runs the full chunk loop on its local head shard. BFP8 stays
 sub-millisecond up to 128K. At long context this gap dominates e2e.
 
+## Performance optimization plan & status (2026-04-28 PM)
+
+### Where we are vs. BFP8 baseline (T3K traced, 42-tok prompt)
+
+| Mode | T3K ms/tok | vs BFP8 | KV memory |
+|---|---:|---:|---:|
+| Baseline BFP8 | 13.9 | 1.00× | 1.00× |
+| **TQ Pre-Rescaled BFP8 (Tier 1C)** | **18.8** | **1.35×** | 1.00× |
+| TQ Full Dequant (post-cascade fix) | 26.9 | 1.94× | 0.75× |
+| TQ Full Dequant (pre-cascade fix) | 32.7 | 2.35× | 0.75× |
+
+### Plan tiers (all keep TQ rotation + accuracy; differ on memory vs latency)
+
+**Tier 1 — eliminate dequant cost**
+- 1A: Fused dequant-into-matmul (custom LLK reading BFP4+norms inline). ~1-2 wk. Keeps 0.75× memory, eliminates ~60% of per-chunk cost.
+- 1B: BFP8 indices with codebook values directly. Loses BFP4 advantage (1.0× memory).
+- **1C: Pre-rescaled BFP8 cache + standard SDPA. ✅ DONE. 1.35× of baseline, 1.0× memory.**
+
+**Tier 2 — parallelise the chunk loop**
+- 2A: Cross-core chunk distribution + ring-reduce online softmax. ~2 wk. Keeps 0.75× memory. **Linear speedup with cores per (B, NQH) tuple — biggest long-context lever.**
+- 2B: Pack multiple Q-heads onto fewer cores. Marginal.
+
+**Tier 3 — incremental per-chunk trims**
+- 3A: Hoist cascade `*_init` calls outside per-tile loop. ½ day. 5-10% off cascade.
+- 3B: Drop the BFP4→BF16 typecast pre-pass (run cascade ops on BFP4-input directly). 1-2 days.
+- 3C: Skip BFP8-norms typecast (LLK fix). Defer.
+
+**Tier 4 — algorithmic**
+- 4A: Sliding-window hybrid (recent tokens BFP8, old tokens TQ). ~1-2 wk. Changes memory profile.
+- 4B: TopK / sparse attention. Research.
+
+### Decision matrix — which option keeps memory + most perf?
+
+For preserving the 0.75× memory advantage of TQ FD:
+
+| Option | At 32K, 32 layers | Effort | Risk |
+|---|---|---|---|
+| Today | 70 ms/call (TQ FD) | — | — |
+| 1A | ~25 ms/call (-65%) | 1-2 wk LLK | high (custom matmul) |
+| **2A** | **~9 ms/call (-87%)** | **~2 wk** | **medium (known pattern)** |
+| 1A + 2A | ~3 ms/call (-96%) | 3-4 wk | combined |
+
+**Going with 2A first** — it dominates at long context (which is the actual blocker), follows the existing `sdpa_flash_decode` cross-core template, and compounds with 1A later if needed.
+
+### Recommended execution order
+
+1. **2A — cross-core chunk distribution** ← starting now.
+2. 3A + 3B (½-1 day each, cheap follow-ups)
+3. 1A only if 2A doesn't close the gap enough at 128K.
+4. 4A only as a fallback for extreme context (>128K).
+
 ## Centroid-gather cascade optimization (2026-04-28 PM)
 
 The TQ chunk-loop bottleneck was the per-tile centroid-gather telescoping
