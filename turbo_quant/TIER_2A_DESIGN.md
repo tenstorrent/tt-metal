@@ -180,7 +180,90 @@ reuse one triplet sequentially (simpler).
 - Lazy-correction guard updated to `k_chunk > k_chunk_start_for_core`.
 - Validated: cos=0.9969 (unchanged), T3K e2e 26.9 ms/tok (unchanged).
 
-**Phase 2.1 — runtime arg plumbing (⚠️ ATTEMPTED, REVERTED)**
+**Phase 2.1 — runtime arg plumbing (✅ DONE — commit 9d2fece)**
+- Compute kernel reads `core_idx_in_group_arg` / `cores_per_head_arg`
+  from runtime arg slots [7] / [8] (repurposed unused slots, not appended).
+- Program factory sends (0, 1) per core — same behaviour as before.
+- Root cause of earlier wedge: forgot to `./build_metal.sh` after editing
+  the program factory. Reused-slot strategy plus rebuild discipline
+  unblocked it.
+
+**Phase 2.2a — `num_cores_per_head` attribute end-to-end (✅ DONE — commit d062460)**
+- Added `num_cores_per_head` to `operation_attributes_t` (default 1).
+- Threaded through nanobind / cpp wrapper / launch / program factory.
+- Program factory clamps to `num_cores / (B * NQH)`.
+
+**Phase 2.2b — K cores per (B, NQH) tuple (✅ DONE — commit ecc83d4)**
+- Per-core runtime-args loop: `group_id = i / cores_per_head`,
+  `core_idx_in_group = i % cores_per_head`.
+- Cores at idx > 0 within a group get an empty (batch, head) range so
+  their kernel main exits early. Runtime `cores_per_head_arg` sent to
+  the compute kernel is forced to 1 until the reduce phase lands.
+- New test `test_2A_cores_per_head.py` confirms K=1, 2, 4 produce
+  bit-identical output (max|diff| = 0) on a populated paged cache.
+
+**Phase 2.3 — cross-core split + partial state (NEXT, ~3-5 days)**
+
+Concrete steps:
+
+1. **Program factory — semaphores + partial-state CBs**
+   - One `tt_metal::CreateSemaphore(program, all_cores, 0)` per program.
+     Returns the semaphore's L1 address; pass to all cores.
+   - Three new BF16 CBs per core for partial state:
+     - `cb_partial_max` (Sq_chunk_t tiles)
+     - `cb_partial_sum` (Sq_chunk_t tiles)
+     - `cb_partial_out` (Sq_chunk_t * vDHt tiles)
+     These are local-only on workers (data sits in L1); the reducer reads
+     remote copies via NoC into matching local CBs (`cb_remote_*`).
+   - Add per-core runtime args at slots [10..]:
+     - `is_reducer` (1 if core_idx_in_group == 0)
+     - `num_workers` (cores_per_head, set to actual K not the forced 1)
+     - For reducer: NoC physical (x, y) of the K-1 worker peers.
+
+2. **Compute kernel — worker / reducer split**
+   - Worker (idx > 0): after the existing chunk loop, instead of
+     `recip_block_inplace + mul_block_bcast_cols → cb_out`, copy the
+     final (alias_prev_max, alias_prev_sum, alias_mm2_prev_out) into
+     cb_partial_max/sum/out. Then `noc_semaphore_inc(reducer_addr, 1)`
+     and exit.
+   - Reducer (idx == 0): after its own chunk loop completes,
+     `noc_semaphore_wait(local_sem_addr, num_workers - 1)`. Loop over
+     workers 1..K-1: `noc_async_read` their cb_partial_* tiles into
+     local cb_remote_*; perform the standard online-softmax merge:
+     ```
+     new_max  = max(prev_max, w_max)
+     alpha    = exp((prev_max - new_max) * scale)
+     beta     = exp((w_max - new_max) * scale)
+     new_sum  = alpha * prev_sum + beta * w_sum
+     new_out  = alpha * prev_out + beta * w_out
+     ```
+     After all merges: `out = new_out / new_sum` and pack to cb_out.
+
+3. **Writer kernel — gate on is_reducer**
+   - Currently the writer iterates `[batch_start, batch_end) ×
+     [head_start, head_end)`. With idx > 0 cores already getting empty
+     ranges, the writer for them is a no-op — no change needed unless
+     we want to assert/log it.
+
+4. **Program factory — flip the kernel `cores_per_head_arg`**
+   - Currently forced to 1. Once 1+2 are working, send the real
+     `cores_per_head` so the chunk-loop bounds split. Verify K=1 still
+     correct, then K=2.
+
+5. **L1 budget check**
+   - Three new CBs × (1 + 1 + 4 = 6) tiles × 2 bytes/elem × 1024
+     elems/tile ≈ 12 KB per core. Reducer needs another set for
+     remote-pull → 24 KB total. L1 is 1.5 MB so plenty of headroom.
+
+**Validation strategy**
+- After each step: `test_2A_cores_per_head.py` at K=1 must pass
+  (identical output).
+- After step 4: `test_2A_cores_per_head.py` at K=2 must pass with cos
+  > 0.999 vs K=1 (bit-identity is unrealistic with the merged path's
+  re-ordered ops).
+- Then K=4, K=8, K=14 (T3K full grid).
+- Once stable: re-run `bench_seqlen_sweep.py` on T3K with K=14 and
+  measure the per-call latency gain at long context.
 - Tried promoting `core_idx_in_group` and `cores_per_head_runtime` from
   `constexpr (0, 1)` to runtime args [10] and [11]. Program factory set
   them to (0, 1) per-core — no logical change.
