@@ -1946,6 +1946,14 @@ def prepare_compressed_sram_slots(
     """
     assert (assigner is None) != (assignment_provider is None), "Provide exactly one of assigner or assignment_provider"
     assert l1_top_addr > boundary_addr, f"l1_top_addr ({l1_top_addr}) must be > boundary_addr ({boundary_addr})"
+    # Per-core L1 CompressedTensors cannot be host-staged; they must be
+    # allocated directly on device.  Catch this early to surface a clear
+    # error instead of a NoneType crash deep inside CompressedTensor.from_torch.
+    assert move_to_device, (
+        "prepare_compressed_sram_slots requires move_to_device=True; SRAM hot expert slots are "
+        "per-core L1 tensors and have no host-stage path. The DRAM weight path's "
+        "move_to_device=False does not apply here."
+    )
     grids = core_grids
     requested_experts = list(initial_expert_indices)
     logger.info(
@@ -2826,7 +2834,13 @@ def prepare_moe_layer_weights(
             initial_expert_indices=sram_expert_indices,
             core_grids=sram_core_grids,
             assigner=sram_assigner,
-            move_to_device=move_to_device,
+            # SRAM slots are per-core L1 CompressedTensors and must be
+            # allocated directly on device; there is no host-stage path
+            # (two_phase_upload carries them through unchanged via the
+            # SramCompressedExpertSlots passthrough marker).  This is
+            # independent of `move_to_device`, which controls the DRAM
+            # weight path.
+            move_to_device=True,
             boundary_addr=boundary_addr,
             initial_lowest_addr=attn_lowest_addr,
             l1_top_addr=l1_top_addr,
