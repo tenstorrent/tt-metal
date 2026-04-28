@@ -2933,10 +2933,25 @@ class ModelArgs:
                 self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
             )
         else:
+            try:
+                from transformers.utils import is_offline_mode as _transformers_offline
+            except ImportError:
+                _transformers_offline = lambda: False
+
+            config_source = self.hf_pretrained_path
+            local_files_only = os.getenv("CI") == "true" or _transformers_offline()
+            if self.model_name in self.LOCAL_HF_PARAMS and local_files_only:
+                bundled = Path(__file__).resolve().parents[3] / self.LOCAL_HF_PARAMS[self.model_name]
+                if bundled.joinpath("config.json").is_file() and not (
+                    os.path.isdir(config_source) and os.path.isfile(os.path.join(config_source, "config.json"))
+                ):
+                    config_source = str(bundled)
+                    logger.info(f"CI: loading HF config from bundled model_params: {config_source}")
+
             self.hf_config = AutoConfig.from_pretrained(
-                self.hf_pretrained_path,
+                config_source,
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true",
+                local_files_only=local_files_only,
             )
 
         config = self.hf_config.to_dict()
