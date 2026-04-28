@@ -12,6 +12,7 @@ from helpers.llk_params import (
     ApproximationMode,
     BroadcastType,
     ClearFP32DstAcc,
+    DataFormat,
     DestSync,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
@@ -291,6 +292,16 @@ class FpuMathSchema(BaseModel):
             and src_a.dimensions[1] != src_b.dimensions[0]
         ):
             raise ValueError("Matmul: incompatible dimensions for src_a and src_b")
+
+        if (
+            src_a.data_format == DataFormat.Int32
+            and self.unpack_to_dest != UnpackToDest.Yes
+        ):
+            raise ValueError(
+                f"src_a format {src_a.data_format} requires unpack_to_dest: Yes. "
+                f"SrcA/SrcB registers are 19-bit wide and cannot hold 32-bit integers; "
+                f"they must be unpacked directly to DEST."
+            )
 
         if self.operation.is_eltwise():
             fpu = EltwiseFpu(self.operation.to_math_operation())
