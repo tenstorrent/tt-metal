@@ -477,14 +477,29 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         // MMIO ERISCs are running fabric firmware (stuck handshake state), every
         // non-MMIO relay read/write will timeout for 5s.  We can't reach any non-MMIO
         // device, not just the ones explicitly in relay_broken_non_mmio.
+        //
+        // FIX AZ (#42429): relay may be dead even when relay_broken_non_mmio was empty
+        // after Steps 1/2 (e.g. RiscFirmwareInitializer teardown runs without a prior
+        // FabricFirmwareInitializer session).  Use a local flag so that once assert_cores
+        // throws for any non-MMIO device we know the relay path is dead and skip all
+        // subsequent non-MMIO devices.  We do NOT insert into relay_broken_non_mmio here
+        // to avoid inadvertently suppressing Step 5's MMIO ETH reset (which guards on
+        // relay_broken_non_mmio.empty()).
+        bool relay_dead_detected_step3 = false;
         for (tt::ChipId device_id : all_devices) {
-            if (!mmio_ids_set.count(device_id) && !relay_broken_non_mmio.empty()) {
+            const bool is_non_mmio = !mmio_ids_set.count(device_id);
+            if (is_non_mmio && (!relay_broken_non_mmio.empty() || relay_dead_detected_step3)) {
                 log_info(
                     tt::LogAlways,
-                    "teardown: FIX AC — relay broken; skipping assert_cores/l1_barrier for non-MMIO device {}",
+                    "teardown: FIX AC/AZ — relay broken; skipping assert_cores/l1_barrier for non-MMIO device {}",
                     device_id);
                 continue;
             }
+            // FIX AZ: track whether assert_cores threw for this non-MMIO device.
+            // If it did, the relay is dead — skip l1_barrier (which routes through the
+            // same relay and would also hang for 5s), and set relay_dead_detected_step3
+            // so all subsequent non-MMIO devices are skipped.
+            bool assert_cores_threw_non_mmio = false;
             try {
                 assert_cores(device_id);
             } catch (const std::exception& e) {
@@ -493,7 +508,28 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     "teardown: assert_cores failed for device {} (likely dead ERISC relay): {}",
                     device_id,
                     e.what());
+                if (is_non_mmio) {
+                    assert_cores_threw_non_mmio = true;
+                    relay_dead_detected_step3 = true;
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AZ — assert_cores threw for non-MMIO device {}; "
+                        "skipping l1_barrier and all subsequent non-MMIO devices",
+                        device_id);
+                }
             } catch (...) {
+                if (is_non_mmio) {
+                    assert_cores_threw_non_mmio = true;
+                    relay_dead_detected_step3 = true;
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AZ — assert_cores threw (unknown exception) for non-MMIO device {}; "
+                        "skipping l1_barrier and all subsequent non-MMIO devices",
+                        device_id);
+                }
+            }
+            if (assert_cores_threw_non_mmio) {
+                continue;
             }
             try {
                 cluster_.l1_barrier(device_id);
@@ -513,7 +549,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         // firmware are cleaned up by terminate_stale_erisc_routers on next init.
         // Wrapping in try/catch: wait_for_non_mmio_flush() can throw UmdException
         // which does not inherit from std::exception.
-        if (get_control_plane_ && relay_broken_non_mmio.empty()) {
+        // FIX AZ: also skip when relay_dead_detected_step3 (dead relay found mid Step 3).
+        const bool any_relay_broken = !relay_broken_non_mmio.empty() || relay_dead_detected_step3;
+        if (get_control_plane_ && !any_relay_broken) {
             try {
                 cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
             } catch (const std::exception& e) {
@@ -527,10 +565,10 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     "teardown: set_internal_routing_info_for_ethernet_cores failed with unknown exception type "
                     "(likely UmdException<RuntimeError> from dead ERISC relay on remote chip)");
             }
-        } else if (!relay_broken_non_mmio.empty()) {
+        } else if (any_relay_broken) {
             log_warning(
                 tt::LogAlways,
-                "teardown: FIX AC — skipping set_internal_routing_info_for_ethernet_cores (relay broken; "
+                "teardown: FIX AC/AZ — skipping set_internal_routing_info_for_ethernet_cores (relay broken; "
                 "would timeout per non-MMIO device). Non-MMIO ERISCs handled by terminate_stale_erisc_routers "
                 "on next init.");
         }
