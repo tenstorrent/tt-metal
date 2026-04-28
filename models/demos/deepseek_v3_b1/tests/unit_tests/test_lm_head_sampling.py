@@ -13,7 +13,6 @@ Output stays width-sharded across matmul cores.
 
 In single-device mode (skip_ccl=True): CCL is skipped and the input is used directly.
 """
-
 import os
 import re
 import statistics
@@ -4495,31 +4494,38 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
         stages_metadata=stages_metadata,
         pipeline_config=pipeline_config,
     )
-    pipeline.setup_and_run()
+    try:
+        pipeline.setup_and_run()
 
-    if pipeline.my_mesh_id == 0:
-        for iteration in range(iterations):
-            logger.info(f"Writing token for iteration {iteration}")
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = iteration
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            pipeline.write_token(token_tensor)
-            pipeline.read_output(output_tensor)
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            expected_idx = torch_expected_indices[iteration]
-            logger.info(f"Iteration {iteration} output token: {got}, expected: {expected_idx}")
-            assert torch.equal(
-                got, expected_idx
-            ), f"PipelineBlock 4-stage token mismatch. expected={int(expected_idx.item())}, got={int(got.item())}"
+        if pipeline.my_mesh_id == 0:
+            for iteration in range(iterations):
+                logger.info(f"Writing token for iteration {iteration}")
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token[0, 0] = iteration
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                pipeline.write_token(token_tensor)
+                pipeline.read_output(output_tensor)
+                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+                expected_idx = torch_expected_indices[iteration]
+                logger.info(f"Iteration {iteration} output token: {got}, expected: {expected_idx}")
+                assert torch.equal(
+                    got, expected_idx
+                ), f"PipelineBlock 4-stage token mismatch. expected={int(expected_idx.item())}, got={int(got.item())}"
 
-    logger.info(f"Barrier for P{pipeline.my_mesh_id}")
-    pipeline.barrier()
-    logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
+        logger.info(f"Barrier for P{pipeline.my_mesh_id}")
+        pipeline.barrier()
+        logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
+    finally:
+        logger.info(f"Terminating P{pipeline.my_mesh_id}")
+        pipeline.terminate()
+        logger.info(f"Terminated P{pipeline.my_mesh_id}")
+
+    logger.info("TEST COMPLETE!")
 
 
 @pytest.mark.parametrize("use_fp32", [True])
@@ -4709,59 +4715,61 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
         pipeline_config=pipeline_config,
     )
     pipeline.setup_and_run()
-
-    if pipeline.my_mesh_id == 0:
-        got_tokens = []
-        for iteration in range(iterations):
-            in_tok = int(input_token_ids[iteration].item())
-            logger.info(f"Writing token for iteration {iteration} (in_tok={in_tok})")
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = in_tok
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            pipeline.write_token(token_tensor)
-            pipeline.read_output(output_tensor)
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            got_tokens.append(got)
-        got_all = torch.stack(got_tokens, dim=0)
-        got_flat = got_all.squeeze(-1).squeeze(-1)
-        logger.info(f"Random input token ids (in_tok per iter): {input_token_ids.tolist()}")
-        logger.info(f"All output tokens (real weights): {got_flat.tolist()}")
-        logger.info(f"Reference top-{topk} per iteration (first row): {ref_topk[0].tolist()}")
-        mismatches = []
-        for i in range(iterations):
-            in_tok = int(input_token_ids[i].item())
-            g = int(got_flat[i].item())
-            top_ids = [int(x) for x in ref_topk[i].tolist()]
-            if g not in top_ids:
-                mismatches.append((i, in_tok, g, top_ids))
-        results_table = _format_real_weights_topk_results_table(
-            hf_state_dict,
-            input_token_ids,
-            got_flat,
-            ref_topk,
-            topk=topk,
-        )
-        logger.info(results_table)
-        if mismatches:
-            report = _format_real_weights_topk_mismatch_report(
+    try:
+        if pipeline.my_mesh_id == 0:
+            got_tokens = []
+            for iteration in range(iterations):
+                in_tok = int(input_token_ids[iteration].item())
+                logger.info(f"Writing token for iteration {iteration} (in_tok={in_tok})")
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token[0, 0] = in_tok
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                pipeline.write_token(token_tensor)
+                pipeline.read_output(output_tensor)
+                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+                got_tokens.append(got)
+            got_all = torch.stack(got_tokens, dim=0)
+            got_flat = got_all.squeeze(-1).squeeze(-1)
+            logger.info(f"Random input token ids (in_tok per iter): {input_token_ids.tolist()}")
+            logger.info(f"All output tokens (real weights): {got_flat.tolist()}")
+            logger.info(f"Reference top-{topk} per iteration (first row): {ref_topk[0].tolist()}")
+            mismatches = []
+            for i in range(iterations):
+                in_tok = int(input_token_ids[i].item())
+                g = int(got_flat[i].item())
+                top_ids = [int(x) for x in ref_topk[i].tolist()]
+                if g not in top_ids:
+                    mismatches.append((i, in_tok, g, top_ids))
+            results_table = _format_real_weights_topk_results_table(
                 hf_state_dict,
-                mismatches,
+                input_token_ids,
+                got_flat,
+                ref_topk,
                 topk=topk,
-                total_iters=iterations,
             )
-            logger.error(report)
-            pytest.fail(
-                f"PipelineBlock (real weights): {len(mismatches)} output(s) not in HF functional top-{topk}.\n{report}"
-            )
+            logger.info(results_table)
+            if mismatches:
+                report = _format_real_weights_topk_mismatch_report(
+                    hf_state_dict,
+                    mismatches,
+                    topk=topk,
+                    total_iters=iterations,
+                )
+                logger.error(report)
+                pytest.fail(
+                    f"PipelineBlock (real weights): {len(mismatches)} output(s) not in HF functional top-{topk}.\n{report}"
+                )
 
-    logger.info(f"Barrier for P{pipeline.my_mesh_id} (real weights)")
-    pipeline.barrier()
-    logger.info(f"Barrier completed for P{pipeline.my_mesh_id} (real weights)")
+        logger.info(f"Barrier for P{pipeline.my_mesh_id} (real weights)")
+        pipeline.barrier()
+        logger.info(f"Barrier completed for P{pipeline.my_mesh_id} (real weights)")
+    finally:
+        pipeline.terminate()
 
 
 @pytest.mark.skipif(
@@ -4811,31 +4819,33 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         pipeline_config=pipeline_config,
     )
     pipeline.setup_and_run()
+    try:
+        if pipeline.my_mesh_id == 0:
+            for iteration in range(iterations):
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token[0, 0] = iteration
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                logger.info(f"Writing token for iteration {iteration}")
+                pipeline.write_token(token_tensor)
+                logger.info(f"Reading output for iteration {iteration}")
+                pipeline.read_output(output_tensor)
+                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+                expected_idx = torch_expected_indices[iteration]
+                logger.info(f"Iteration {iteration} output token: {got}, expected: {expected_idx}")
+                assert torch.equal(
+                    got, expected_idx
+                ), f"Pod 16-stage token mismatch at iter {iteration}. expected={int(expected_idx.item())}, got={int(got.item())}"
 
-    if pipeline.my_mesh_id == 0:
-        for iteration in range(iterations):
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = iteration
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            logger.info(f"Writing token for iteration {iteration}")
-            pipeline.write_token(token_tensor)
-            logger.info(f"Reading output for iteration {iteration}")
-            pipeline.read_output(output_tensor)
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            expected_idx = torch_expected_indices[iteration]
-            logger.info(f"Iteration {iteration} output token: {got}, expected: {expected_idx}")
-            assert torch.equal(
-                got, expected_idx
-            ), f"Pod 16-stage token mismatch at iter {iteration}. expected={int(expected_idx.item())}, got={int(got.item())}"
-
-    logger.info(f"Barrier for stage {pipeline.my_mesh_id + 1}")
-    pipeline.barrier()
-    logger.info(f"Barrier completed for stage {pipeline.my_mesh_id + 1}")
+        logger.info(f"Barrier for stage {pipeline.my_mesh_id + 1}")
+        pipeline.barrier()
+        logger.info(f"Barrier completed for stage {pipeline.my_mesh_id + 1}")
+    finally:
+        pipeline.terminate()
 
 
 @pytest.mark.parametrize("use_fp32", [True])
@@ -4875,20 +4885,20 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
 
     iterations = 50
     run_golden = False
-    run_on = "pod"  # "pod" or "glx"
 
-    if run_on == "pod":
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs == 4:
         config = create_single_pod_combined_spec_decode_pipeline_configuration(
             SyntheticWeightProvider(),
             fp32_dest_acc_en=use_fp32,
         )
-    elif run_on == "glx":
+    elif num_procs == 16:
         config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
             SyntheticWeightProvider(),
             fp32_dest_acc_en=use_fp32,
         )
     else:
-        raise ValueError(f"Invalid run_on value: {run_on}")
+        raise ValueError(f"Test does not support {num_procs} distributed processes")
 
     print(f"[TEST] config created, building pipeline", flush=True)
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
@@ -4904,74 +4914,71 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     pos_id = 0
     slot_id = 23
 
-    try:
-        pipeline.setup_and_run()
-        logger.debug(f"[TEST P{pid}] setup_and_run complete")
+    pipeline.setup_and_run()
+    logger.debug(f"[TEST P{pid}] setup_and_run complete")
 
-        token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
+    token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
-        if pipeline.my_mesh_id == 0:
+    if pipeline.my_mesh_id == 0:
+        if run_golden:
+            logger.debug(f"[TEST] computing golden...")
+            golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
+            logger.debug(f"[TEST] golden computed, creating config")
+        else:
+            logger.debug(f"[TEST] skipping golden computation")
+
+        tok0_id = 0
+        tok0_type = 0
+        tok0_pos = 0
+        tok1_id = 0
+        tok1_type = 0
+        tok1_pos = 0
+
+        for iteration in range(iterations):
+            logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token[0, 6] = slot_id
+            torch_token[0, 7] = iteration
+            torch_token[0, 8] = iteration
+            torch_token[0, 9] = iteration
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            output_tensor = ttnn.from_torch(
+                torch.zeros(1, token_meta_words, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            pipeline.write_token(token_tensor)
+            logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
+            pipeline.read_output(output_tensor)
+            logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
+            raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
+
+            tok0_id = raw[0].item()
+            tok0_type = raw[1].item()
+            tok0_pos = raw[2].item()
+            tok1_id = raw[3].item()
+            tok1_type = raw[4].item()
+            tok1_pos = raw[5].item()
+
             if run_golden:
-                logger.debug(f"[TEST] computing golden...")
-                golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
-                logger.debug(f"[TEST] golden computed, creating config")
+                expected_base, expected_spec = golden[iteration]
             else:
-                logger.debug(f"[TEST] skipping golden computation")
+                expected_base = None
+                expected_spec = None
 
-            tok0_id = 0
-            tok0_type = 0
-            tok0_pos = 0
-            tok1_id = 0
-            tok1_type = 0
-            tok1_pos = 0
+            type_name = {0: "BASE", 1: "SPEC"}
+            logger.debug(
+                f"[TEST P{pid}] iter {iteration} "
+                f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
+                f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
+                f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
+                f"golden base token={expected_base} golden spec token={expected_spec}",
+            )
 
-            for iteration in range(iterations):
-                logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 6] = slot_id
-                torch_token[0, 7] = iteration
-                torch_token[0, 8] = iteration
-                torch_token[0, 9] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, token_meta_words, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                pipeline.write_token(token_tensor)
-                logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
-                pipeline.read_output(output_tensor)
-                logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
-                raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
-
-                tok0_id = raw[0].item()
-                tok0_type = raw[1].item()
-                tok0_pos = raw[2].item()
-                tok1_id = raw[3].item()
-                tok1_type = raw[4].item()
-                tok1_pos = raw[5].item()
-
-                if run_golden:
-                    expected_base, expected_spec = golden[iteration]
-                else:
-                    expected_base = None
-                    expected_spec = None
-
-                type_name = {0: "BASE", 1: "SPEC"}
-                logger.debug(
-                    f"[TEST P{pid}] iter {iteration} "
-                    f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
-                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
-                    f"golden base token={expected_base} golden spec token={expected_spec}",
-                )
-
-        logger.debug(f"[TEST P{pid}] all iterations done, barrier")
-        pipeline.barrier()
-        logger.debug(f"[TEST P{pid}] barrier done, terminate")
-        pipeline.terminate()
-        logger.debug(f"[TEST P{pid}] terminate done, final barrier")
-        pipeline.barrier()
-        logger.debug(f"[TEST P{pid}] final barrier done")
-    finally:
-        pass
+    logger.debug(f"[TEST P{pid}] all iterations done, barrier")
+    pipeline.barrier()
+    logger.debug(f"[TEST P{pid}] barrier done, terminate")
+    pipeline.terminate()
+    logger.debug(f"[TEST P{pid}] terminate done, final barrier")
+    pipeline.barrier()
+    logger.debug(f"[TEST P{pid}] final barrier done")
