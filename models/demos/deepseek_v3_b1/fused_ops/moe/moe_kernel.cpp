@@ -59,6 +59,7 @@
 #include "../../unified_kernels/residual_add.hpp"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../unified_kernels/reduce_to_one_b1.hpp"
+#include "../../../unified_kernels/pipeline_stage_sync.hpp"
 #endif
 #ifdef ENABLE_BCAST
 #include "../../unified_kernels/broadcast.hpp"
@@ -249,6 +250,21 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 1),
                 get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
             };
+
+            // PipelineStageSync
+            using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::ReaderCTArgs<
+                get_named_compile_time_arg_val("pipeline_stage_sync_run_stalling_logic_on_ncrisc"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_run_signalling_logic_on_ncrisc"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_is_intermediate_signaller"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_is_signalling_to_intermediate_signaller"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_signalling_core_noc_x_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_signalling_core_noc_y_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_x_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_y_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_semaphore_l1_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_rt_arg_base")>;
+
+            deepseek_b1_ops::PipelineStageSync::ReaderArgs pipeline_stage_sync_rt_args = {};
 #endif
         } routed;
 
@@ -574,6 +590,21 @@ void kernel_main() {
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
+
+            // PipelineStageSync
+            using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::WriterCTArgs<
+                get_named_compile_time_arg_val("pipeline_stage_sync_run_stalling_logic_on_brisc"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_run_signalling_logic_on_brisc"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_is_intermediate_signaller"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_is_signalling_to_intermediate_signaller"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_signalling_core_noc_x_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_signalling_core_noc_y_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_x_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_stalling_core_noc_y_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_semaphore_l1_addr"),
+                get_named_compile_time_arg_val("pipeline_stage_sync_rt_arg_base")>;
+
+            deepseek_b1_ops::PipelineStageSync::WriterArgs pipeline_stage_sync_rt_args = {};
 #endif
         } routed;
 
@@ -955,18 +986,6 @@ void kernel_main() {
     uint32_t iteration = 0;
 
     auto moe_body = [&]() {
-#if defined(COMPILE_FOR_BRISC) && defined(ENABLE_BCAST)
-        // TODO: (GR) remove
-        if constexpr (persistent_mode != 0) {
-            constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
-            if constexpr (is_bcast_sender && Core::is_sender_core) {
-                auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
-                noc_semaphore_wait(next_iter_sem, 1);
-                noc_semaphore_set(next_iter_sem, 0);
-            }
-        }
-#endif
-
 #if defined(RECONFIG_MOE_CBS)
         {
             constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
@@ -1346,29 +1365,64 @@ void kernel_main() {
             deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
             reduce_op(moe.routed.reduce_rt_args);
         }
+
+        {
+            DeviceZoneScopedN("PIPELINE_STAGE_SYNC");
+            deepseek_b1_ops::PipelineStageSync::Op<Moe::Routed::PipelineStageSyncCTArgs> pipeline_stage_sync_op;
+            pipeline_stage_sync_op(moe.routed.pipeline_stage_sync_rt_args);
+        }
+
+        // PipelineStageSync fabric cores signal sender core that fabric sends are done
+#if defined(COMPILE_FOR_NCRISC)
+        constexpr uint32_t execute_post_pipeline_stage_sync_on_ncrisc =
+            get_named_compile_time_arg_val("execute_post_pipeline_stage_sync_on_ncrisc");
+        if constexpr (execute_post_pipeline_stage_sync_on_ncrisc == 1) {
+            constexpr uint32_t post_pipeline_stage_sync_sem_addr =
+                get_named_compile_time_arg_val("post_pipeline_stage_sync_sem_addr");
+            constexpr uint32_t post_pipeline_stage_sync_target_core_noc_x =
+                get_named_compile_time_arg_val("post_pipeline_stage_sync_target_core_noc_x");
+            constexpr uint32_t post_pipeline_stage_sync_target_core_noc_y =
+                get_named_compile_time_arg_val("post_pipeline_stage_sync_target_core_noc_y");
+
+            uint64_t post_pipeline_stage_sync_noc_addr = get_noc_addr(
+                post_pipeline_stage_sync_target_core_noc_x,
+                post_pipeline_stage_sync_target_core_noc_y,
+                post_pipeline_stage_sync_sem_addr);
+            noc_semaphore_inc(post_pipeline_stage_sync_noc_addr, 1);
+        }
+
+#elif defined(COMPILE_FOR_BRISC)
+        constexpr uint32_t execute_post_pipeline_stage_sync_on_brisc =
+            get_named_compile_time_arg_val("execute_post_pipeline_stage_sync_on_brisc");
+        if constexpr (execute_post_pipeline_stage_sync_on_brisc == 1) {
+            constexpr uint32_t post_pipeline_stage_sync_sem_addr =
+                get_named_compile_time_arg_val("post_pipeline_stage_sync_sem_addr");
+            constexpr uint32_t post_pipeline_stage_sync_target_core_noc_x =
+                get_named_compile_time_arg_val("post_pipeline_stage_sync_target_core_noc_x");
+            constexpr uint32_t post_pipeline_stage_sync_target_core_noc_y =
+                get_named_compile_time_arg_val("post_pipeline_stage_sync_target_core_noc_y");
+
+            uint64_t post_pipeline_stage_sync_noc_addr = get_noc_addr(
+                post_pipeline_stage_sync_target_core_noc_x,
+                post_pipeline_stage_sync_target_core_noc_y,
+                post_pipeline_stage_sync_sem_addr);
+            noc_semaphore_inc(post_pipeline_stage_sync_noc_addr, 1);
+        }
 #endif
 
-        // Reduce fabric cores signal sender core that fabric sends are done.
-        // Sender core NCRISC waits before starting next iteration.
-#ifdef ENABLE_REDUCE_TO_ONE
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::is_reduce_fabric_core) {
-            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
-            constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("reduce_sync_noc_x");
-            constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("reduce_sync_noc_y");
-            uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
-            noc_semaphore_inc(sync_sem_noc_addr, 1);
-        }
-#elif defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {
-            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
-            constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
-            volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
-            noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
-            noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
+            constexpr uint32_t post_pipeline_stage_sync_sem_addr =
+                get_named_compile_time_arg_val("post_pipeline_stage_sync_sem_addr");
+
+            volatile tt_l1_ptr uint32_t* post_pipeline_stage_sync_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_pipeline_stage_sync_sem_addr);
+            noc_semaphore_wait(post_pipeline_stage_sync_sem_ptr, 1);
+            noc_semaphore_set(post_pipeline_stage_sync_sem_ptr, 0);  // reset for next iteration
         }
 #endif
-#endif
+
+#endif  // ENABLED_REDUCE_TO_ONE
     };
 
     while (true) {
