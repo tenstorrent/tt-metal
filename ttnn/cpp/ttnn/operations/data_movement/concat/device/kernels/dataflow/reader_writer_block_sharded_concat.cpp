@@ -1,24 +1,26 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "experimental/circular_buffer.h"
 
-// Generic block-sharded concat kernel.
-// Processes a list of transfer descriptors, each describing a cross-core or local
-// NOC read from a source shard into the output shard.
+// Dual-RISC block-sharded concat kernel.
+// Used as both reader (BRISC/NOC0) and writer (NCRISC/NOC1) with the host
+// splitting transfer descriptors between the two to double NOC bandwidth.
 //
+// num_transfers is a runtime arg so reader and writer can have different counts.
 // Each transfer copies a rectangular region: num_rows rows of copy_size bytes,
 // with independent source and destination strides.
 
 void kernel_main() {
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t num_transfers = get_compile_time_arg_val(1);
 
     experimental::CircularBuffer output_cb(output_cb_id);
     uint32_t dst_base = output_cb.get_write_ptr();
+
     uint32_t arg_idx = 0;
+    uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
 
     for (uint32_t t = 0; t < num_transfers; t++) {
         uint32_t src_noc_x = get_arg_val<uint32_t>(arg_idx++);

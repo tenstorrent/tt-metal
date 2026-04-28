@@ -228,48 +228,56 @@ ConcatBlockShardedProgramFactory::cached_program_t ConcatBlockShardedProgramFact
     }
     TT_FATAL(max_num_transfers > 0, "No transfers computed for block-sharded concat");
 
-    // Pass 2: create kernel and set per-core runtime args
-    const std::vector<uint32_t> compile_time_args = {cb_dst_id, max_num_transfers};
+    // Pass 2: create kernels and split transfers between reader and writer RISCs.
+    // Both RISCs run the same kernel but with different subsets of transfers,
+    // doubling effective NOC bandwidth (reader uses NOC0, writer uses NOC1).
+    const std::vector<uint32_t> compile_time_args = {cb_dst_id};
 
-    KernelHandle kernel_id = CreateKernel(
+    KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
-        "reader_block_sharded_concat.cpp",
+        "reader_writer_block_sharded_concat.cpp",
         all_cores,
         ReaderDataMovementConfig(compile_time_args));
+
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+        "reader_writer_block_sharded_concat.cpp",
+        all_cores,
+        WriterDataMovementConfig(compile_time_args));
+
+    auto build_runtime_args = [](const std::vector<TransferDesc>& descs, uint32_t start, uint32_t count) {
+        std::vector<uint32_t> args;
+        args.reserve(1 + count * 8);
+        args.push_back(count);
+        for (uint32_t i = start; i < start + count; i++) {
+            const auto& td = descs[i];
+            args.push_back(td.src_physical_core.x);
+            args.push_back(td.src_physical_core.y);
+            args.push_back(td.src_l1_addr);
+            args.push_back(td.src_stride);
+            args.push_back(td.dst_offset);
+            args.push_back(td.dst_stride);
+            args.push_back(td.copy_size);
+            args.push_back(td.num_rows);
+        }
+        return args;
+    };
 
     for (uint32_t gy = 0; gy < grid_rows; gy++) {
         for (uint32_t gx = 0; gx < grid_cols; gx++) {
             const auto& transfers = all_transfers[gy * grid_cols + gx];
+            const uint32_t total = static_cast<uint32_t>(transfers.size());
+            const uint32_t reader_count = (total + 1) / 2;  // ceil(total / 2)
+            const uint32_t writer_count = total - reader_count;
 
-            std::vector<uint32_t> runtime_args;
-            runtime_args.reserve(max_num_transfers * 8);
-
-            for (const auto& td : transfers) {
-                runtime_args.push_back(td.src_physical_core.x);
-                runtime_args.push_back(td.src_physical_core.y);
-                runtime_args.push_back(td.src_l1_addr);
-                runtime_args.push_back(td.src_stride);
-                runtime_args.push_back(td.dst_offset);
-                runtime_args.push_back(td.dst_stride);
-                runtime_args.push_back(td.copy_size);
-                runtime_args.push_back(td.num_rows);
-            }
-
-            // Pad with zero-length transfers if this core has fewer
-            for (uint32_t pad = transfers.size(); pad < max_num_transfers; pad++) {
-                runtime_args.push_back(0);
-                runtime_args.push_back(0);
-                runtime_args.push_back(0);
-                runtime_args.push_back(0);
-                runtime_args.push_back(0);
-                runtime_args.push_back(0);
-                runtime_args.push_back(0);
-                runtime_args.push_back(0);  // num_rows = 0 → no-op in kernel
-            }
+            auto reader_args = build_runtime_args(transfers, 0, reader_count);
+            auto writer_args = build_runtime_args(transfers, reader_count, writer_count);
 
             CoreCoord logical_core(start_x + gx, start_y + gy);
-            SetRuntimeArgs(program, kernel_id, logical_core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, logical_core, reader_args);
+            SetRuntimeArgs(program, writer_kernel_id, logical_core, writer_args);
         }
     }
 
