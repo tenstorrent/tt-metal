@@ -17,6 +17,19 @@ import ttnn
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
 from models.demos.qwen3_tts.tt.rope import compute_rope_frequencies, get_transformation_mat
 
+try:
+    from tracy import signpost as _tracy_signpost
+except Exception:
+
+    def _tracy_signpost(header: str = "") -> None:  # type: ignore[no-redef]
+        return None
+
+
+# Number of warmup iterations to fully populate the program cache before the
+# profiler starts counting. Must be >= 2 to make sure both first-call program
+# compile + program-cache hit paths are hit before any profiled iteration.
+_WARMUP_ITERS = 5
+
 
 def load_model_weights():
     """Load model weights from HuggingFace."""
@@ -126,7 +139,8 @@ def profile_layer_decode(device, layer, num_iterations=10):
     ttnn.synchronize_device(device)
 
     # Profile
-    print(f"  Running {num_iterations} iterations...")
+    print(f"  Running {num_iterations} iterations (profiled)...")
+    _tracy_signpost("decode_profile_start")
     start = time.perf_counter()
     for _ in range(num_iterations):
         output, _ = layer.forward(
@@ -140,6 +154,7 @@ def profile_layer_decode(device, layer, num_iterations=10):
 
     ttnn.synchronize_device(device)
     elapsed = time.perf_counter() - start
+    _tracy_signpost("decode_profile_stop")
 
     print(f"  Total time: {elapsed*1000:.2f} ms")
     print(f"  Per iteration: {elapsed*1000/num_iterations:.2f} ms")
@@ -207,7 +222,8 @@ def profile_layer_prefill(device, layer, seq_len=32, num_iterations=5):
     ttnn.synchronize_device(device)
 
     # Profile
-    print(f"  Running {num_iterations} iterations...")
+    print(f"  Running {num_iterations} iterations (profiled)...")
+    _tracy_signpost("prefill_profile_start")
     start = time.perf_counter()
     for _ in range(num_iterations):
         output, _ = layer.forward(
@@ -221,6 +237,7 @@ def profile_layer_prefill(device, layer, seq_len=32, num_iterations=5):
 
     ttnn.synchronize_device(device)
     elapsed = time.perf_counter() - start
+    _tracy_signpost("prefill_profile_stop")
 
     print(f"  Total time: {elapsed*1000:.2f} ms")
     print(f"  Per iteration: {elapsed*1000/num_iterations:.2f} ms")
