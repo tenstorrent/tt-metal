@@ -11,10 +11,10 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "name_suffix,batch_size,resolution,expected_perf,test_selector,op_support_count",
     [
-        ["b1_640", 1, 640, 236.95, "test_yolov8s_640", 6000],
-        ["b2_640", 2, 640, 232.37, "dp_batch2 and n300_1x2", 6000],
-        ["b4_640", 4, 640, 230, "dp_batch4 and wh_1x4", 6000],
-        ["b8_640", 8, 640, 230, "dp_batch8 and t3k_1x8", 6000],
+        ["b1_640", 1, 640, 250, "test_yolov8s_640", 6000],
+        ["b2_640", 2, 640, 250, "dp_batch2 and n300_1x2", 6000],
+        ["b4_640", 4, 640, 250, "dp_batch4 and wh_1x4", 6000],
+        ["b8_640", 8, 640, 250, "dp_batch8 and t3k_1x8", 6000],
     ],
     ids=["b1_640", "b2_640", "b4_640", "b8_640"],
 )
