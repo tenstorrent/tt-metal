@@ -6,55 +6,33 @@
 // Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/tanh_derivative.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
-    constexpr auto cb_grad_out = tt::CBIndex::c_0;
-    constexpr auto cb_input = tt::CBIndex::c_1;
-    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_grad_out = tt::CBIndex::c_0;
+    constexpr uint32_t cb_input = tt::CBIndex::c_1;
+    constexpr uint32_t cb_grad_in = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer exp_cb_grad_out(cb_grad_out);
-    experimental::CircularBuffer exp_cb_input(cb_input);
-    experimental::CircularBuffer exp_cb_grad_in(cb_grad_in);
+    using namespace compute_kernel_lib::eltwise;
 
     unary_op_init_common(cb_grad_out, cb_grad_in);
-    tanh_derivative_tile_init<false>();
-    mul_binary_tile_init();
+
+    // Block-at-a-time access via WaitUpfrontPopAtEnd: each invocation of
+    // eltwise_pipeline waits per_core_block_size tiles on both inputs once,
+    // copy_tile(CB, cb_tile_idx_, slot) walks them per iteration, and the
+    // bulk pop fires after the per-tile loop.
+    auto chain = eltwise_chain(
+        CopyTile<cb_grad_out, Dst::D0, CopyTilePolicy::WaitUpfrontPopAtEnd>{},
+        CopyTile<cb_input, Dst::D1, CopyTilePolicy::WaitUpfrontPopAtEnd>{},
+        TanhDerivative<Approx::Exact, Dst::D1>{},
+        SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        exp_cb_grad_in.reserve_back(per_core_block_size);
-        exp_cb_grad_out.wait_front(per_core_block_size);
-        exp_cb_input.wait_front(per_core_block_size);
-
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_acquire();
-
-            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
-            copy_tile(cb_input, i, 1);       // dest[1] = input
-            tanh_derivative_tile<false>(1);  // dest[1] = sech²(input)
-            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * sech²(input)
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            pack_tile(0, cb_grad_in);
-
-            tile_regs_release();
-        }
-
-        exp_cb_grad_out.pop_front(per_core_block_size);
-        exp_cb_input.pop_front(per_core_block_size);
-        exp_cb_grad_in.push_back(per_core_block_size);
+        eltwise_pipeline<EltwiseOutputPolicy::Bulk, EltwiseDataFormatReconfig::NONE>(
+            chain, cb_grad_in, per_core_block_size);
     }
 }

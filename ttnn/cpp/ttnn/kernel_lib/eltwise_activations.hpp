@@ -7,6 +7,7 @@
 #include "api/compute/eltwise_unary/activations.h"
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/relu.h"
+#include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_unary/elu.h"
 #include "api/compute/eltwise_unary/selu.h"
 #include "api/compute/eltwise_unary/clamp.h"
@@ -40,10 +41,24 @@ struct Tanh : UnaryOp<Tanh<A, Slot>, Slot> {
     ALWI void call(uint32_t d) const { tanh_tile<static_cast<bool>(A)>(d); }
 };
 
+/// sech²(x) = 1 - tanh²(x), numerically stable. Used in tanh backward.
+template <Approx A = Approx::Exact, Dst Slot = Dst::D0>
+struct TanhDerivative : UnaryOp<TanhDerivative<A, Slot>, Slot> {
+    ALWI void init() const { tanh_derivative_tile_init<static_cast<bool>(A)>(); }
+    ALWI void call(uint32_t d) const { tanh_derivative_tile<static_cast<bool>(A)>(d); }
+};
+
 template <Approx A = Approx::Fast, Dst Slot = Dst::D0>
 struct Gelu : UnaryOp<Gelu<A, Slot>, Slot> {
     ALWI void init() const { gelu_tile_init<static_cast<bool>(A)>(); }
     ALWI void call(uint32_t d) const { gelu_tile<static_cast<bool>(A)>(d); }
+};
+
+/// GELU derivative — Sollya minimax polynomial. Used in gelu backward.
+template <Approx A = Approx::Exact, Dst Slot = Dst::D0>
+struct GeluDerivative : UnaryOp<GeluDerivative<A, Slot>, Slot> {
+    ALWI void init() const { gelu_derivative_tile_init<static_cast<bool>(A)>(); }
+    ALWI void call(uint32_t d) const { gelu_derivative_tile<static_cast<bool>(A)>(d); }
 };
 
 template <Dst Slot = Dst::D0>
