@@ -17,6 +17,27 @@ from tsfm_public.toolkit.time_series_preprocessor import TimeSeriesPreprocessor
 from tsfm_public.toolkit.util import select_by_index
 
 
+def resolve_output_dir(output_dir_arg: str) -> str:
+    """Resolve output dir under a safe base directory to avoid path traversal."""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+    candidate = output_dir_arg.strip()
+    if not candidate:
+        raise ValueError("--output_dir must be a non-empty path")
+
+    # Relative paths are anchored to the PatchTSMixer demo directory.
+    resolved = os.path.abspath(candidate if os.path.isabs(candidate) else os.path.join(base_dir, candidate))
+
+    # Ensure final path stays under the safelisted base directory.
+    if os.path.commonpath([resolved, base_dir]) != base_dir:
+        raise ValueError(
+            f"Refusing output path outside allowed base directory: {resolved}. " f"Allowed base: {base_dir}"
+        )
+
+    os.makedirs(resolved, exist_ok=True)
+    return resolved
+
+
 def build_etth2_datasets(
     context_length: int,
     prediction_length: int,
@@ -160,9 +181,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default="simple_patchtsmixer_etth2")
     args = parser.parse_args()
 
-    output_dir = os.path.realpath(args.output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-    args.output_dir = output_dir
+    args.output_dir = resolve_output_dir(args.output_dir)
 
     print("=== Config ===")
     print(args)
