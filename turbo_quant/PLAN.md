@@ -53,37 +53,58 @@ even with paged + GQA + pre-rotated Q + 1024-block padding + cap=1.
 But somewhere between the unit test setup and eval_e2e.py's setup,
 something diverges.
 
-Bisect candidates ruled out (this session):
+Bisect candidates ruled out (in two debug sessions):
 - trace mode (`--no-trace` also fails)
-- BFP4 quantization of integer indices 0–7 (lossless verified)
-- `paged_update_cache` write path (test_e2e_writes.py passes)
-- GQA grouping (test_e2e_writes.py with NQH=32/NKH=8 passes)
-- pre-rotated Q (test_e2e_writes.py with `Q × Π` passes)
-- partial-fill softmax dilution (test_padded_cache.py with cap=1 passes
+- BFP4 quantization of integer indices 0–7 (lossless verified by
+  `test_bfp4_roundtrip.py`)
+- `paged_update_cache` write path (`test_e2e_writes.py` passes)
+- GQA grouping (`test_e2e_writes.py` with NQH=32/NKH=8 passes)
+- pre-rotated Q (`test_e2e_writes.py` with `Q × Π` passes)
+- partial-fill softmax dilution (`test_padded_cache.py` with cap=1 passes
   cos > 0.99 even with 1020 blocks of zero-K padding)
 - centroid-list mismatch host vs kernel (both use `get_codebook(...).centroids`)
 - rotation seed mismatch (eval_e2e uses seed=42, TTNNTurboQuantSetup
   default is also seed=42)
+- **kernel reads correct `cur_pos`** (DPRINT in e2e shows 0,1,2,…,44)
+- **kernel reads correct Q** (DPRINT shows real BF16 floats like
+  `0.2461 -0.7031 0.2197 -0.9258`, not integer-looking quantized values)
+- **kernel reads correct K_idx in paged cache** (DPRINT confirms at
+  cur_pos=N, rows 0..N have real data and persist across steps; row 0
+  written at step 0 stays the same through step 41)
+- **kernel reads correct K_norms** (DPRINT shows distinct per-position
+  values 11.6250, 1.1328, 15.3125, 0.7617, 20.1250, 15.5000, 14.4375,
+  13.7500 — varied as expected, persist across steps)
+- **kernel reads correct V_idx and V_norms** (DPRINT shows valid
+  integer-valued V_idx 0..7 and reasonable V_norms 0.04–0.43)
+- post-SDPA permute axis ordering (`(2, 1, 0, 3)` to match std SDPA
+  shape broke sharding; `(2, 0, 1, 3)` matches what downstream expects)
 
-Bisect candidates still open:
-- multi-layer interaction at >1L (1L baseline is also garbage — needs
-  a "multi-layer-but-not-sensitive-to-attention-quality" comparison
-  point, which the partial-layer model itself doesn't provide)
-- mesh device replication semantics with batch=1 (eval_e2e opens 8
-  devices via FABRIC_1D even for single-batch; tests use
-  `ttnn.open_device(device_id=0)` which is single device)
-- something in `pre_rotate_query`'s memory config / sharding (DRAM
-  interleaved matmul output) interacting badly with the kernel
-- order-of-operations between paged_update_cache and the next op in
-  the trace (e.g. is there a missing barrier?)
-- a subtle cur_pos read race in trace mode where the kernel reads
-  cur_pos from a CB but the value may not yet be written by an
-  upstream op in the same trace
+**Conclusion:** every kernel input I can verify in isolation is correct.
+The kernel computes `cos > 0.99` against torch reference for the exact
+same data shapes the e2e uses. Yet 32-layer e2e produces garbage tokens
+(`OOOOak`) reproducibly. The bug is somewhere in the interaction
+between the kernel and the rest of the model — possibly:
 
-Next debug step (when resuming): add `DPRINT_MATH(cur_pos_nb)` inside
-the compute kernel and run e2e with DPRINT enabled to verify cur_pos
-values match the expected step number. Profiler/DPRINT cannot coexist,
-so this requires backing out the DeviceZoneScopedN annotations first.
+- Per-layer kernel invocation interacts with model state (residual
+  stream, layer norms, MLPs) in a way one-shot unit tests can't catch.
+- The output of fused SDPA has correct values but wrong tile/sharded
+  layout that downstream ops (`nlp_concat_heads_decode`,
+  `to_memory_config`) silently misinterpret.
+- Some compounding precision / per-layer drift across 32 layers that
+  exceeds what 0.99 cos suggests.
+
+**Diagnostic infra added (commit pending):** `api/debug/dprint.h`
+include in compute kernel for future DPRINT debug. To use, set
+`TT_METAL_DPRINT_CORES='(1,1)'` and uncomment the relevant DPRINT
+statements (the V-side DPRINTs hung trace capture last attempt — may
+need to wrap with proper push/pop semantics or use sub_core_grids).
+
+**Next debug step (when resuming):** dump the actual SDPA OUTPUT tile
+(`cb_out` final values) for layer 0 step 0 and compare against a
+torch-computed reference using the same K/V/Q values dumped in
+parallel. If they match, the bug is downstream of SDPA. If they
+diverge, the bug is in the kernel's softmax + matmul math under some
+condition the unit tests miss.
 
 ### Bottleneck diagnosis trail (for posterity)
 

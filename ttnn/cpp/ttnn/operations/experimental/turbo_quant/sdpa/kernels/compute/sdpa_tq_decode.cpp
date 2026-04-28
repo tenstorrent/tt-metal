@@ -34,6 +34,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/bcast.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/dprint.h"
 
 // Include existing SDPA compute building blocks (matmul_blocks, softmax helpers, etc.)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
