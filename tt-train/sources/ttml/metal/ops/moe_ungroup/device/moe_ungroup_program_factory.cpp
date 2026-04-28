@@ -171,7 +171,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     uint32_t md_aligned = round_up(k * sizeof(uint16_t));
     scratch_bytes += round_up(32U * md_aligned);     // md_buf
     scratch_bytes += round_up(32U * md_aligned);     // sc_buf (same row stride as md)
-    scratch_bytes += round_up(32U * sizeof(float));  // w_buf
+    scratch_bytes += round_up(32U * sizeof(uint16_t));  // w_buf (bf16, copied from sc_buf)
     // stage_buf: 32 contiguous slots of hidden_chunk_bytes — required by the
     // OPT 1 barrier-coalesced writer. Worst-case size: 32 * 128KB / 32 = 128KB
     // (chunk size is capped at kTargetChunkBytes).

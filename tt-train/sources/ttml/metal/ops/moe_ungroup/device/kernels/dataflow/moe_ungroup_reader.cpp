@@ -19,6 +19,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/moe_ungroup_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 constexpr uint32_t cb_src0 = tt::CBIndex::c_0;
@@ -106,26 +107,23 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_zero, 1U);
 
-    // Walk offsets ONCE to compute this core's active step count per expert
-    // (same math as the per-expert loop below) and publish the total block
-    // count (steps × num_chunks) to compute via cb_ctrl. Compute, reader,
-    // writer all then iterate exactly that many blocks — no zero padding.
+    // Walk offsets ONCE to compute this core's per-expert work bounds and
+    // publish the total block count (steps × num_chunks) to compute via
+    // cb_ctrl. We cache:
+    //   tr_start_per_expert[e] = (offsets_l1[e] / TILE_H) + my_start_in_e
+    //   my_real_count_per_expert[e] = my_end_in_e - my_start_in_e
+    // so the per-expert loop below can derive tr_global directly from the
+    // cached start without redoing the expert_total_tr / my_count_e math.
+    uint32_t tr_start_per_expert[64];       // upper bound on E_local
     uint32_t my_real_count_per_expert[64];  // upper bound on E_local
     uint32_t my_total_active_steps = 0U;
     for (uint32_t e = 0; e < e_local; ++e) {
+        uint32_t expert_start_tr = offsets_l1[e] / TILE_H;
         uint32_t expert_total_tr = (offsets_l1[e + 1U] - offsets_l1[e]) / TILE_H;
-        uint32_t my_count_e = (expert_total_tr + num_total_cores - 1U) / num_total_cores;
-        uint32_t my_start = my_core_idx * my_count_e;
-        uint32_t my_end = my_start + my_count_e;
-        if (my_end > expert_total_tr) {
-            my_end = expert_total_tr;
-        }
-        if (my_start > expert_total_tr) {
-            my_start = expert_total_tr;
-        }
-        uint32_t rc = my_end - my_start;
-        my_real_count_per_expert[e] = rc;
-        my_total_active_steps += rc;
+        auto slice = ttml::metal::moe_ungroup::slice_for_core(expert_total_tr, num_total_cores, my_core_idx);
+        tr_start_per_expert[e] = expert_start_tr + slice.start;
+        my_real_count_per_expert[e] = slice.count;
+        my_total_active_steps += slice.count;
     }
     cb_reserve_back(cb_id_ctrl, 1U);
     volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_ctrl));
@@ -142,19 +140,13 @@ void kernel_main() {
         // stuck waiting on brisc_release, NCRISC blocks on cb_reserve_back.
         handshake_then_barrier_then_release(my_core_idx);
 
-        uint32_t expert_start_tr = offsets_l1[e] / TILE_H;
-        uint32_t expert_total_tr = (offsets_l1[e + 1U] - offsets_l1[e]) / TILE_H;
-        uint32_t my_count_e = (expert_total_tr + num_total_cores - 1U) / num_total_cores;
-        uint32_t my_start_in_e = my_core_idx * my_count_e;
-        if (my_start_in_e > expert_total_tr) {
-            my_start_in_e = expert_total_tr;
-        }
+        uint32_t tr_start = tr_start_per_expert[e];
         uint32_t my_real_count = my_real_count_per_expert[e];
 
         // Only iterate active steps now — writer/compute use the same per-core
         // count via cb_ctrl, so there's no need to pad with zero-fill.
         for (uint32_t step = 0; step < my_real_count; ++step) {
-            uint32_t tr_global = expert_start_tr + my_start_in_e + step;
+            uint32_t tr_global = tr_start + step;
 
             for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
                 cb_reserve_back(cb_src0, tiles_per_chunk);

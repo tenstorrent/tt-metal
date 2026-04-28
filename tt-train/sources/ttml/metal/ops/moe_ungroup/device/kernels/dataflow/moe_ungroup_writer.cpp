@@ -17,6 +17,7 @@
 // accumulator across experts to remove the K-1 intermediate bf16 round-trips.
 
 #include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/moe_ungroup_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 constexpr uint32_t cb_out0 = tt::CBIndex::c_2;
@@ -71,27 +72,6 @@ inline void brisc_signal_done_wait_release() {
     *brisc_release = 0U;
 }
 
-// bf16 → fp32: shift the 16-bit value into the high bits of a 32-bit float.
-inline float bf16_to_fp32(uint16_t v) {
-    uint32_t u = static_cast<uint32_t>(v) << 16U;
-    float f;
-    __builtin_memcpy(&f, &u, sizeof(float));
-    return f;
-}
-
-// fp32 → bf16 with round-to-nearest-even (standard IEEE-754 bf16 conversion).
-inline uint16_t fp32_to_bf16(float f) {
-    uint32_t u;
-    __builtin_memcpy(&u, &f, sizeof(uint32_t));
-    // NaN: preserve as a quiet bf16 NaN (avoid producing +/-inf via rounding).
-    if (((u >> 23U) & 0xFFU) == 0xFFU && (u & 0x7FFFFFU) != 0U) {
-        return static_cast<uint16_t>((u >> 16U) | 0x40U);
-    }
-    uint32_t lsb = (u >> 16U) & 1U;
-    uint32_t bias = 0x7FFFU + lsb;
-    return static_cast<uint16_t>((u + bias) >> 16U);
-}
-
 void kernel_main() {
     const uint32_t ungrouped_addr = get_arg_val<uint32_t>(0);
     const uint32_t plan_addr = get_arg_val<uint32_t>(1);
@@ -119,7 +99,7 @@ void kernel_main() {
     //   [plan_buf    (32*4 bytes)]
     //   [md_buf      (32*K*2 bytes per row, batched as needed)]
     //   [sc_buf      (32*K*2 bytes)]
-    //   [w_buf       (32*4 bytes — fp32 weights)]
+    //   [w_buf       (32*2 bytes — bf16 weights, copied straight from sc_buf)]
     //   [rmw_buf     (max(hidden_chunk_bytes) bytes per row staging)]
     // ---------------------------------------------------------------
     cb_reserve_back(cb_scratch, 1U);
@@ -154,8 +134,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* sc_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sc_buf_addr);
 
     uint32_t w_buf_addr = scratch + off;
-    off += (32U * sizeof(float) + 31U) & ~31U;
-    volatile tt_l1_ptr float* w_buf = reinterpret_cast<volatile tt_l1_ptr float*>(w_buf_addr);
+    off += (32U * sizeof(uint16_t) + 31U) & ~31U;
+    volatile tt_l1_ptr uint16_t* w_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_buf_addr);
 
     // OPT 1: 32 contiguous slots of hidden_chunk_bytes each — one per row of
     // the tile. Lets us issue all 32 row reads/writes async and barrier once.
@@ -171,16 +151,8 @@ void kernel_main() {
     // expert and += from the rest.
     fill_zeros_async(zero_buf_addr, h * 2U);
     noc_async_read_barrier();
-    uint32_t rows_per_core = (total_rows + num_total_cores - 1U) / num_total_cores;
-    uint32_t my_zero_start = my_core_idx * rows_per_core;
-    uint32_t my_zero_end = my_zero_start + rows_per_core;
-    if (my_zero_end > total_rows) {
-        my_zero_end = total_rows;
-    }
-    if (my_zero_start > total_rows) {
-        my_zero_start = total_rows;
-    }
-    for (uint32_t row = my_zero_start; row < my_zero_end; ++row) {
+    auto zero_slice = ttml::metal::moe_ungroup::slice_for_core(total_rows, num_total_cores, my_core_idx);
+    for (uint32_t row = zero_slice.start; row < zero_slice.start + zero_slice.count; ++row) {
         uint64_t dst_noc = get_noc_addr(row, ungrouped_addrgen);
         noc_async_write(zero_buf_addr, dst_noc, h * 2U);
     }
@@ -200,20 +172,10 @@ void kernel_main() {
     // ---------------------------------------------------------------
     for (uint32_t e = 0; e < e_local; ++e) {
         uint32_t expert_start_tr = offsets_buf[e] / TILE_H;
-        uint32_t expert_end_tr = offsets_buf[e + 1U] / TILE_H;
-        uint32_t expert_total_tr = expert_end_tr - expert_start_tr;
-        uint32_t active_end_row = offsets_buf[e] + counts_buf[e];  // first row past last real entry
-
-        uint32_t my_count_e = (expert_total_tr + num_total_cores - 1U) / num_total_cores;
-        uint32_t my_start_in_e = my_core_idx * my_count_e;
-        uint32_t my_end_in_e = my_start_in_e + my_count_e;
-        if (my_end_in_e > expert_total_tr) {
-            my_end_in_e = expert_total_tr;
-        }
-        if (my_start_in_e > expert_total_tr) {
-            my_start_in_e = expert_total_tr;
-        }
-        uint32_t my_real_count = my_end_in_e - my_start_in_e;
+        uint32_t expert_total_tr = (offsets_buf[e + 1U] - offsets_buf[e]) / TILE_H;
+        auto slice = ttml::metal::moe_ungroup::slice_for_core(expert_total_tr, num_total_cores, my_core_idx);
+        uint32_t my_start_in_e = slice.start;
+        uint32_t my_real_count = slice.count;
 
         uint32_t leid_e = leids_buf[e];
 
@@ -248,7 +210,7 @@ void kernel_main() {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_idx = tr_global * TILE_H + r;
                     if (flat == SENTINEL) {
-                        w_buf[r] = 0.0f;
+                        w_buf[r] = 0U;
                         is_first[r] = false;
                         continue;
                     }
@@ -264,11 +226,11 @@ void kernel_main() {
                         }
                     }
                     if (!found) {
-                        w_buf[r] = 0.0f;
+                        w_buf[r] = 0U;
                         is_first[r] = false;
                         continue;
                     }
-                    w_buf[r] = bf16_to_fp32(sc_buf[sc_off + k_slot]);
+                    w_buf[r] = sc_buf[sc_off + k_slot];
                     // First-local check: is this the first leid index `e` whose
                     // value appears in metadata[flat, :K]? Scan other metadata
                     // entries for any earlier local expert (leids[0..e-1]).
@@ -310,7 +272,7 @@ void kernel_main() {
                         uint32_t face_base = face * 256U;
                         for (uint32_t in_r = 0; in_r < 16U; ++in_r) {
                             uint32_t r = face_r_offset + in_r;
-                            uint16_t w_bf = fp32_to_bf16(w_buf[r]);
+                            uint16_t w_bf = w_buf[r];
                             uint32_t row_off = face_base + in_r * 16U;
                             for (uint32_t in_c = 0; in_c < 16U; ++in_c) {
                                 w_tile[row_off + in_c] = w_bf;
