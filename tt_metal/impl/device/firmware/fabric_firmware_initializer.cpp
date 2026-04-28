@@ -396,8 +396,46 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     }
 
     // Terminate fabric routers via master router on each device
+    //
+    // FIX AU (#42429): Skip WriteToDeviceL1 + l1_barrier for non-MMIO devices whose relay
+    // path is already known broken (fabric_relay_path_broken_=true).
+    //
+    // Root cause of prior bug: when quiesce_and_restart_fabric_workers sets
+    // fabric_relay_path_broken_=true for a non-MMIO device (because Phase 2.5 relay reads
+    // timed out), the relay ERISC is still running fabric firmware at
+    // REMOTE_HANDSHAKE_COMPLETE.  WriteToDeviceL1 for a non-MMIO device goes through the
+    // UMD ETH relay (write_core → wait_for_non_mmio_flush), which blocks for 5 s and then
+    // throws a UmdException.  That exception propagates out of teardown(), is swallowed by
+    // the ScopedDevices destructor, and leaves the entire force-reset second pass (below)
+    // unreachable.  Non-MMIO ERISCs are never reset.  When RiscFirmwareInitializer::teardown
+    // (FIX AC) then PCIe-resets the MMIO ERISCs, the non-MMIO ERISCs are still running
+    // fabric firmware — their ETH link training blocks the rebooting MMIO ERISCs, which
+    // write ROM postcode 0x49705180 to edm_status_address (0x18070).  The next session's
+    // terminate_stale_erisc_routers sees this on ALL channels and falls back to degraded
+    // mode, causing the 61 s CI timeout cascade.
+    //
+    // Fix: relay-broken non-MMIO devices skip the TERMINATE write and l1_barrier here.
+    // Their channels are still collected into `pending` below (get_active_fabric_eth_channels
+    // reads from in-memory control-plane state, not device L1), poll reads will throw and
+    // keep them in pending, and after the global deadline they are force-reset via
+    // assert_risc_reset_at_core + deassert_risc_reset_at_core — completing the cleanup that
+    // was previously unreachable.
     for (auto* dev : devices_) {
         if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+            continue;
+        }
+
+        // Skip relay-dependent writes for non-MMIO devices with a broken relay path.
+        // These channels will be force-reset in the second pass below after the poll deadline.
+        const bool is_non_mmio = cluster_.get_associated_mmio_device(dev->id()) != dev->id();
+        if (is_non_mmio && dev->is_fabric_relay_path_broken()) {
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: Device {} (non-MMIO) relay path broken "
+                "(fabric_relay_path_broken_=true) — skipping TERMINATE write and l1_barrier to prevent "
+                "5 s UMD relay hang and exception that would abort the force-reset second pass. "
+                "Active channels will be force-reset after the poll deadline. (FIX AU #42429)",
+                dev->id());
             continue;
         }
 
@@ -455,17 +493,34 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             CoreCoord eth_logical_core;
         };
         std::vector<PendingChannel> pending;
+        // FIX AU (#42429): Channels belonging to relay-broken non-MMIO devices are excluded
+        // from `pending` to prevent ReadFromDeviceL1 (which uses the UMD ETH relay) from
+        // throwing an uncaught UmdException that escapes the poll loop.  UmdException does
+        // not inherit from std::exception, so the existing catch(const std::exception&) would
+        // not catch it — the exception would propagate out of teardown(), abort the entire
+        // force-reset second pass, and leave non-MMIO ERISCs running fabric firmware.
+        // These channels are collected into relay_broken_force_reset and appended to `pending`
+        // after the poll loop completes, so they still receive the assert+deassert force-reset.
+        std::vector<PendingChannel> relay_broken_force_reset;
         for (auto* dev : devices_) {
             if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
                 continue;
             }
             const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
             const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+            const bool is_non_mmio = cluster_.get_associated_mmio_device(dev->id()) != dev->id();
             for (const auto& [eth_chan_id, direction] : active_channels) {
-                pending.push_back(
-                    {dev,
-                     eth_chan_id,
-                     cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL)});
+                PendingChannel ch{
+                    dev,
+                    eth_chan_id,
+                    cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL)};
+                if (is_non_mmio && dev->is_fabric_relay_path_broken()) {
+                    // Skip relay-broken channels from the poll loop; queue for direct force-reset.
+                    relay_broken_force_reset.push_back(ch);
+                    relay_dead_devices.insert(dev->id());
+                } else {
+                    pending.push_back(ch);
+                }
             }
         }
 
@@ -509,6 +564,20 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             }
         }
 
+        // FIX AU (#42429): Append relay-broken non-MMIO channels that were excluded from the
+        // poll loop.  They are added here — after the poll — so that the force-reset second
+        // pass below handles them just like deadline-expired channels (assert + deassert).
+        // relay_dead_devices was already populated during pending collection above, so
+        // l1_barrier will be skipped for these devices after the force-reset loop.
+        if (!relay_broken_force_reset.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: {} channel(s) on relay-broken non-MMIO device(s) "
+                "bypassed the poll loop — appending to force-reset list. (FIX AU #42429)",
+                relay_broken_force_reset.size());
+            pending.insert(pending.end(), relay_broken_force_reset.begin(), relay_broken_force_reset.end());
+        }
+
         // Log which channels missed the deadline — critical for diagnosing partial teardown.
         if (!pending.empty()) {
             std::string missed_list;
@@ -548,6 +617,19 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     ch.eth_chan_id,
                     read_ex.what());
                 // FIX AJ: relay path is dead — mark device so l1_barrier is skipped below.
+                if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
+                    relay_dead_devices.insert(ch.dev->id());
+                }
+            } catch (...) {
+                // UmdException does not inherit from std::exception; catch it here so it
+                // cannot abort the force-reset loop.  (FIX AU #42429)
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: diagnostic ReadFromDeviceL1 threw "
+                    "non-std exception on Device {} chan={} (likely UMD relay timeout) — "
+                    "using sentinel status, proceeding with reset",
+                    ch.dev->id(),
+                    ch.eth_chan_id);
                 if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
                     relay_dead_devices.insert(ch.dev->id());
                 }

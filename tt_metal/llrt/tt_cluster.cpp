@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <future>
 #include <optional>
+#include <thread>
 #include <tt_stl/fmt.hpp>
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
@@ -504,24 +506,66 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     }
 }
 
+void Cluster::mark_relay_broken_for_close(const std::unordered_set<ChipId>& chips) {
+    relay_broken_chips_for_close_.insert(chips.begin(), chips.end());
+}
+
 Cluster::~Cluster() {
     log_info(tt::LogDevice, "Closing user mode device drivers");
-    // FIX J: driver_->close_device() can throw UmdException (e.g. ETH relay timeout during
-    // RemoteChip::close_device()).  Destructors are implicitly noexcept, so an uncaught
-    // exception here calls std::terminate() -> SIGABRT.  Catch and log instead.
-    // See: https://github.com/tenstorrent/tt-metal/issues/42429
-    try {
-        this->driver_->close_device();
-    } catch (const std::exception& e) {
+
+    // FIX AW: After RiscFirmwareInitializer::teardown() (FIX AC) PCIe-resets MMIO ETH
+    // cores, the UMD host-side relay CMD queue for non-MMIO devices retains stale
+    // prefetch_q_in_flight entries.  driver_->close_device() calls
+    // wait_for_non_mmio_flush() which spins forever waiting for those entries to
+    // drain — they never will because the ERISC was already reset.
+    //
+    // Fix: if any non-MMIO relay-broken chips were registered (via
+    // mark_relay_broken_for_close), run close_device() in a detached thread with a
+    // 5s timeout.  On timeout, we skip the join and let the thread be killed at
+    // process exit.  driver_ ownership is transferred into the thread so the
+    // Cluster destructor can return immediately; no use-after-free is possible.
+    if (!relay_broken_chips_for_close_.empty()) {
         log_warning(
             tt::LogDevice,
-            "~Cluster: driver_->close_device() threw: {}. Device may be left in unclean state and may need reset.",
-            e.what());
-    } catch (...) {
-        log_warning(
-            tt::LogDevice,
-            "~Cluster: driver_->close_device() threw non-std exception. Device may be left in unclean state and may "
-            "need reset.");
+            "FIX AW: {} relay-broken non-MMIO chip(s) — running driver_->close_device() "
+            "in background thread (5s timeout) to avoid wait_for_non_mmio_flush() hang.",
+            relay_broken_chips_for_close_.size());
+        auto driver_moved = std::move(this->driver_);
+        std::promise<void> done;
+        auto fut = done.get_future();
+        auto* raw_promise = new std::promise<void>(std::move(done));
+        std::thread([d = std::move(driver_moved), p = raw_promise]() mutable {
+            try {
+                d->close_device();
+            } catch (...) {
+            }
+            p->set_value();
+            delete p;
+        }).detach();
+        if (fut.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            log_warning(
+                tt::LogDevice,
+                "FIX AW: driver_->close_device() did not complete in 5s — "
+                "skipping. UMD relay CMD queue stale after FIX AC MMIO ERISC PCIe reset.");
+        }
+    } else {
+        // FIX J: driver_->close_device() can throw UmdException (e.g. ETH relay timeout during
+        // RemoteChip::close_device()).  Destructors are implicitly noexcept, so an uncaught
+        // exception here calls std::terminate() -> SIGABRT.  Catch and log instead.
+        // See: https://github.com/tenstorrent/tt-metal/issues/42429
+        try {
+            this->driver_->close_device();
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogDevice,
+                "~Cluster: driver_->close_device() threw: {}. Device may be left in unclean state and may need reset.",
+                e.what());
+        } catch (...) {
+            log_warning(
+                tt::LogDevice,
+                "~Cluster: driver_->close_device() threw non-std exception. Device may be left in unclean state and "
+                "may need reset.");
+        }
     }
 
     this->sdesc_per_chip_.clear();

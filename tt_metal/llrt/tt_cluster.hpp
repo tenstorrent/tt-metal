@@ -397,6 +397,12 @@ public:
         return this->device_eth_routing_info_.at(chip_id);
     }
 
+    // FIX AW: Register non-MMIO chips whose UMD relay CMD queue may have stale
+    // in-flight entries after RiscFirmwareInitializer::teardown() PCIe-resets
+    // the MMIO ETH cores (FIX AC).  ~Cluster uses this set to guard
+    // driver_->close_device() against indefinite wait_for_non_mmio_flush() hangs.
+    void mark_relay_broken_for_close(const std::unordered_set<ChipId>& chips);
+
 private:
     void detect_arch_and_target();
     void generate_cluster_descriptor();
@@ -430,6 +436,11 @@ private:
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;
+
+    // FIX AW: non-MMIO chips whose UMD relay CMD queue has stale in-flight entries
+    // after FIX AC PCIe-resets the MMIO ETH cores.  Set by RiscFirmwareInitializer
+    // teardown; consumed by ~Cluster to skip/time-out wait_for_non_mmio_flush.
+    std::unordered_set<ChipId> relay_broken_chips_for_close_;
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
