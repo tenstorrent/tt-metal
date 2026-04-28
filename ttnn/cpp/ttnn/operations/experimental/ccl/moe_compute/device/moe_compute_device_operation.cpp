@@ -45,8 +45,8 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     // dm0 silently reads from wrong expert boundaries after the first expert.
     if (args.has_bias) {
         constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
-        constexpr uint32_t w0w1_txn = moe_ring::W0_W1_TILES_PER_TXN * tile_h;  // bytes per transaction row
-        constexpr uint32_t w2_txn = moe_ring::W2_TILES_PER_TXN * tile_h;
+        constexpr uint32_t w0w1_txn = moe_ring::W0_W1_BLOCK_TILES_H * tile_h;  // bytes per transaction row
+        constexpr uint32_t w2_txn = moe_ring::W2_TILES_PER_A2A_ITER_H * tile_h;
 
         const auto& w0_w1_shape = tensor_args.matmul_w0_w1_tensor.tensor_spec().logical_shape();
         const uint32_t w0_w1_k = w0_w1_shape[-2];
@@ -284,12 +284,12 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
-    // Determine num_data_parallel_cores based on hidden size
+    // Determine num_data_parallel_cores based on hidden size. Bias does not matter for these values
     uint32_t num_data_parallel_cores;
     if (hidden_size == 7168) {
-        num_data_parallel_cores = moe_ring::DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM;
+        num_data_parallel_cores = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::OUTPUT_WIDTH_SHARD_DIM;
     } else if (hidden_size == 2880) {
-        num_data_parallel_cores = moe_ring::GptRingConfig::OUTPUT_WIDTH_SHARD_DIM;
+        num_data_parallel_cores = moe_ring::GptRingConfig</*HasBias=*/false>::OUTPUT_WIDTH_SHARD_DIM;
     } else {
         TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
     }
@@ -319,7 +319,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .output_height_shard_dim = output_height_shard_dim,
             .has_bias = has_bias,
             .combine_params = combine_params,
-            .activation_type = activation_type.value_or(::detail::MoEActivationFunction::SILU)},
+            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
