@@ -182,18 +182,6 @@ def _restore_topology(
     config's distribution_shape and placement info.
     """
     import re
-    import math as _math
-
-    # Canonicalize [1, N] mesh shapes to the actual 2D factorization.
-    # Some tensor_placement records have mesh_device_shape [1, 32] instead
-    # of [4, 8]; this ensures the topology always uses the canonical shape.
-    if len(mesh_shape_tuple) == 2 and (mesh_shape_tuple[0] == 1 or mesh_shape_tuple[1] == 1):
-        _total = mesh_shape_tuple[0] * mesh_shape_tuple[1]
-        if _total > 1:
-            for _r in range(int(_math.sqrt(_total)), 0, -1):
-                if _total % _r == 0:
-                    mesh_shape_tuple = (_r, _total // _r)
-                    break
 
     ndim = len(dist_parsed)
 
@@ -214,10 +202,8 @@ def _restore_topology(
         rows, cols = dist_parsed[0], dist_parsed[1]
         mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
     elif ndim == 1:
-        # 1D distribution — e.g. [32].  Always expand to the actual 2D mesh
-        # shape (e.g. (4, 8)) so that the tracer records the canonical
-        # [rows, cols] distribution, matching the normalized master.
-        dist_shape = ttnn.MeshShape(*mesh_shape_tuple)
+        # 1D distribution — e.g. [32].  Keep as 1D to match the master trace.
+        dist_shape = ttnn.MeshShape(shape=dist_parsed)
 
         placements = []
         for entry in placement_entries or []:
@@ -228,11 +214,9 @@ def _restore_topology(
                 placements.append(ttnn.PlacementReplicate())
         if not placements:
             placements.append(ttnn.PlacementReplicate())
-        if len(placements) < 2:
-            placements.insert(0, ttnn.PlacementReplicate())
 
-        rows, cols = mesh_shape_tuple[0], mesh_shape_tuple[1]
-        mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+        total = dist_parsed[0]
+        mesh_coords = [ttnn.MeshCoordinate(coords=[i]) for i in range(total)]
     else:
         return  # Nothing to restore
 
@@ -333,13 +317,6 @@ def replicate_with_topology(
             mesh_shape_tuple = (1, 1)
         elif len(mesh_shape_tuple) == 1:
             mesh_shape_tuple = (mesh_shape_tuple[0], 1)
-        try:
-            _actual = get_model_traced_mesh_shape()
-            if _actual and len(_actual) == 2:
-                mesh_shape_tuple = tuple(_actual)
-        except Exception:
-            pass
-
         if dist_parsed:
             try:
                 _restore_topology(tensor, entries, dist_parsed, mesh_shape_tuple)

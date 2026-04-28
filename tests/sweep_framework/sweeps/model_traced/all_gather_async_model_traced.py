@@ -289,6 +289,10 @@ def run(
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
 
+        # The loader remaps dim -> arg2 via _NAMED_TO_POSITIONAL_REMAP
+        if dim is None:
+            dim = kwargs.get("arg2")
+
         input_shape = input_a_shape
         input_dtype = input_a_dtype
         layout = input_a_layout
@@ -495,28 +499,19 @@ def run(
             worker_sub_device_id = ttnn.SubDeviceId(0)
             sub_device_stall_group = [worker_sub_device_id]
 
-            # Set sub-device stall group
             device.set_sub_device_stall_group(sub_device_stall_group)
 
-            # Create semaphores for CCL operations - one set per iteration
             ccl_semaphore_handles = [
                 [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
                 for _ in range(num_iters)
             ]
 
-            # Create barrier semaphore if needed
             barrier_semaphore_handles = []
             if barrier_semaphore is not None:
                 barrier_semaphore_handles = [
                     ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
                 ]
 
-            # Persistent output buffers are not created for model_traced configs.
-            # They are a performance optimization (for tracing) but not required
-            # for correctness.  Creating them here is problematic because the
-            # traced input memory_config (often sharded) may not fit the gathered
-            # output shape, and the C++ op requires the persistent buffer's memory
-            # layout to match the input's.
             persistent_output_buffers = []
 
             for i in range(num_iters):
@@ -524,23 +519,14 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # The master trace was recorded when semaphore was
-                        # optional, but the current C++ binding requires it
-                        # as a positional arg.  Pass semaphores so the op
-                        # actually executes and the tracer captures args.
-                        # validate_sweep_trace.py strips CCL infra keys
-                        # (multi_device_global_semaphore, persistent_output_buffer,
-                        # subdevice_id, barrier_semaphore, etc.) during
-                        # normalization so the comparison still matches.
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
-                            None,  # persistent_output_buffer (optional)
+                            None,  # persistent_output_buffer
                             dim,
-                            ccl_semaphore_handles[i],
+                            multi_device_global_semaphore=ccl_semaphore_handles[i],
                             num_links=num_links,
                             memory_config=output_memory_config,
                             topology=topology,
-                            subdevice_id=worker_sub_device_id,
                             cluster_axis=cluster_axis,
                         )
                     else:
