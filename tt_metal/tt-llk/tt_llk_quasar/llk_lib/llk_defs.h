@@ -52,6 +52,14 @@ enum class BroadcastType : std::uint8_t
     SCALAR,
 };
 
+enum class Transpose : std::uint8_t
+{
+    None      = 0,
+    IntraFace = 1,
+    InterFace = 2,
+    Both      = 3,
+};
+
 enum class SfpuType : std::uint32_t
 {
     tanh,

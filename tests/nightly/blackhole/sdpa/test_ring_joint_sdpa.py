@@ -289,33 +289,59 @@ def fa_rand(*shape):
 
 def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, is_causal=False):
     """
-    PyTorch reference implementation for ring joint attention with dummy joint tensors.
+    Memory-efficient PyTorch reference for ring joint attention.
 
-    Simulates the ring joint attention computation:
-    1. Each device processes local Q attending to all K/V (via ring rotation)
-    2. Joint tensors are dummy/empty (seq_len=0) for WAN 2.2
-
-    Args:
-        q, k, v: Main attention tensors
-        joint_q, joint_k, joint_v: Joint tensors (can be empty)
-        is_causal: Whether to use causal attention mask
+    Chunks over heads and the combined Q sequence so the [B, H, Sq, Sk]
+    attention matrix never materializes at full size — CPU SDPA's math
+    kernel otherwise allocates it in fp32 and OOMs on long sequences.
     """
-    local_seq_len = q.size(2)
+    SEQ_CHUNK = 4096
+    HEAD_CHUNK = 16
+
+    main_seq_len = q.size(2)
 
     combined_q = torch.cat([q, joint_q], dim=2)
-
-    # Combine K, V with joint_K, joint_V (full distributed sequence + joint)
     combined_k = torch.cat([k, joint_k], dim=2)
     combined_v = torch.cat([v, joint_v], dim=2)
 
-    # Compute attention for local portion (simulating one device)
-    attn_out = torch.nn.functional.scaled_dot_product_attention(combined_q, combined_k, combined_v, is_causal=is_causal)
+    B, H, total_seq, _ = combined_q.shape
+    Dv = combined_v.shape[-1]
 
-    # Split outputs back into main and joint parts
-    main_out = attn_out[:, :, :local_seq_len, :]
-    joint_out = attn_out[:, :, local_seq_len:, :]
+    def take_heads(t, h_start, h_end):
+        # MLA broadcasts a single KV head across all Q heads via expand (no copy).
+        if t.shape[1] != H:
+            return t.expand(B, h_end - h_start, -1, -1)
+        return t[:, h_start:h_end]
 
-    return main_out, joint_out
+    if total_seq <= SEQ_CHUNK and H <= HEAD_CHUNK:
+        attn_out = torch.nn.functional.scaled_dot_product_attention(
+            combined_q,
+            take_heads(combined_k, 0, H),
+            take_heads(combined_v, 0, H),
+            is_causal=is_causal,
+        )
+    else:
+        attn_out = torch.empty(B, H, total_seq, Dv, dtype=combined_q.dtype)
+        for h_start in range(0, H, HEAD_CHUNK):
+            h_end = min(h_start + HEAD_CHUNK, H)
+            q_heads = combined_q[:, h_start:h_end]
+            k_heads = take_heads(combined_k, h_start, h_end)
+            v_heads = take_heads(combined_v, h_start, h_end)
+            for seq_start in range(0, total_seq, SEQ_CHUNK):
+                seq_end = min(seq_start + SEQ_CHUNK, total_seq)
+                q_chunk = q_heads[:, :, seq_start:seq_end]
+                if is_causal:
+                    q_pos = torch.arange(seq_start, seq_end).unsqueeze(1)
+                    k_pos = torch.arange(seq_end).unsqueeze(0)
+                    mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
+                    out = torch.nn.functional.scaled_dot_product_attention(
+                        q_chunk, k_heads[:, :, :seq_end], v_heads[:, :, :seq_end], attn_mask=mask
+                    )
+                else:
+                    out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads)
+                attn_out[:, h_start:h_end, seq_start:seq_end] = out
+
+    return attn_out[:, :, :main_seq_len], attn_out[:, :, main_seq_len:]
 
 
 # ============================================================================
