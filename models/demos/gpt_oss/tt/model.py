@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import torch
 from loguru import logger
 
@@ -104,8 +102,7 @@ class Model:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
-        use_deepseek_prefill=False,
-        prefill_seq_len=128,
+        prefill_seq_len=1024,
     ):
         """
         Initialize GPT-OSS model
@@ -184,7 +181,6 @@ class Model:
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=use_throughput_experts,
                 tokens_per_device=max_local_batch_size,
-                use_deepseek_prefill=use_deepseek_prefill,
                 prefill_seq_len=prefill_seq_len,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
@@ -294,8 +290,7 @@ class Model:
         create_kv_cache=True,
         users_row_sharded=False,
         use_throughput_experts=False,
-        use_deepseek_prefill=False,
-        prefill_seq_len=128,
+        prefill_seq_len=1024,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -318,7 +313,6 @@ class Model:
             max_local_batch_size=args.max_local_batch_size,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
-            use_deepseek_prefill=use_deepseek_prefill,
             prefill_seq_len=prefill_seq_len,
         )
 
@@ -627,26 +621,23 @@ class Model:
         num_rows = mesh_device.shape[0]
         batch_size = len(prompt_lens)
         actual_batch_size = batch_size
-        # Pad to multiple of num_rows
-        if batch_size % num_rows != 0:
-            users_per_row = (batch_size + num_rows - 1) // num_rows
-            pad_count = users_per_row * num_rows - batch_size
+        # upr (users-per-row-per-iter): pack 8 short-prompt users per row per
+        # iter to amortise trace cost; long-prompt batches already saturate the
+        # device so packing would exhaust DRAM. Below 16 users total it is not
+        # worth padding up to 32 just to use upr=8.
+        max_seq = max(prefill_seq_lens) if prefill_seq_lens else 128
+        upr = 8 if (max_seq <= 128 and batch_size > 16) else 1
+        # Pad batch up to multiple of (num_rows * upr) so num_iters is integer.
+        align = num_rows * upr
+        if batch_size % align != 0:
+            pad_count = align - (batch_size % align)
             tokens = torch.cat([tokens, torch.zeros(pad_count, tokens.shape[1], dtype=tokens.dtype)], dim=0)
             prompt_lens = list(prompt_lens) + [int(prompt_lens[0])] * pad_count
             prefill_seq_lens = list(prefill_seq_lens) + [prefill_seq_lens[0]] * pad_count
             if page_table is not None:
                 page_table = torch.cat([page_table, page_table[:1].expand(pad_count, -1)], dim=0)
-            batch_size = users_per_row * num_rows
+            batch_size += pad_count
         users_per_row = batch_size // num_rows
-        # Pack upr users per pass to amortise trace cost. Default upr=8 when
-        # max prefill seq <= 128 (memory permits packing); else upr=1 (longer
-        # seqs already saturate the device, packing exhausts DRAM).
-        max_seq = max(prefill_seq_lens) if prefill_seq_lens else 128
-        default_upr = 8 if max_seq <= 128 else 1
-        upr = max(1, int(os.environ.get("GPT_OSS_USERS_PER_ROW", default_upr)))
-        upr = min(upr, users_per_row)
-        while users_per_row % upr != 0:
-            upr -= 1
         num_iters = users_per_row // upr
 
         max_padded_len = max(prefill_seq_lens)
@@ -661,7 +652,11 @@ class Model:
         vocab_size = model_args.vocab_size if model_args else self.vocab_size
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
         trace_key = "rsbp_" + str(max_padded_len) + "_upr" + str(upr) + ("_nolm" if skip_lm else "_lm")
-        enable_trace_current = enable_trace and model_args.can_enable_trace(max_padded_len, 0)
+        # Only trace short sequences; longer prefills are one-shot per call so trace
+        # capture cost is not amortised, and capture itself can blow trace memory.
+        enable_trace_current = (
+            enable_trace and max_padded_len <= 4096 and model_args.can_enable_trace(max_padded_len, 0)
+        )
 
         tc_ids = trace_cache["ids"]
         tc_inputs = trace_cache["inputs"]

@@ -33,8 +33,7 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
-        use_deepseek_prefill=False,
-        prefill_seq_len=128,
+        prefill_seq_len=1024,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -70,10 +69,12 @@ class MLP:
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 )
 
-            # Create DeepSeek prefill config if requested
+            # DeepSeek prefill config: always created when throughput experts are
+            # enabled. The two were previously gated by separate flags but were always
+            # set together by every caller; now bundled.
             prefill_deepseek_config = None
             deepseek_permuted_weights = None
-            if use_deepseek_prefill:
+            if use_throughput_experts:
                 import torch as _torch
 
                 from .experts_throughput.prefill_deepseek import _compute_weight_permutation
