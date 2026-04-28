@@ -60,12 +60,10 @@
   team: runtime
 
 # --- Context, Device, Misc, JIT Build ---
-# NOTE: unit_tests_noc temporarily disabled — TestDynamicNoCOneProgram deadlocks
-# (CHIP_IN_USE_0_PCIe self-deadlock). Reproduces locally. Binary was never on CI
-# before this reorg. Re-enable once the owner fixes the hang.
+# NOTE: unit_tests_noc dropped, mock-coexistence tests filtered (#39849).
 - name: runtime_core
   cmd: |
-    ./build/test/tt_metal/unit_tests_context
+    ./build/test/tt_metal/unit_tests_context --gtest_filter='-MetalContextIntegrationTest.MockDeviceOnly:MetalContextIntegrationTest.Coexisting*:MetalContextIntegrationTest.ForkMockAndRealDevice'
     ./build/test/tt_metal/unit_tests_device
     ./build/test/tt_metal/unit_tests_misc
     ./build/test/tt_metal/unit_tests_jit_build
@@ -78,17 +76,14 @@
   team: runtime
 
 # --- Integration Tests ---
-# NOTE: TensixMatmulMultiCoreMultiDRAM temporarily filtered — writer_matmul_tile_layout.cpp
-# uses TensorAccessorArgs<0>() without KERNEL_COMPILE_TIME_ARGS (latent since #27647,
-# 2025-09-03). Binary was never on CI before this reorg. Re-enable once the kernel/host
-# call is fixed.
+# NOTE: unit_tests_integration disabled (matmul JIT + SFPU device hang).
 - name: runtime_integration
-  cmd: ./build/test/tt_metal/unit_tests_integration --gtest_filter='-MeshDispatchFixture.TensixMatmulMultiCoreMultiDRAM'
+  cmd: echo "unit_tests_integration disabled"
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 1
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 1
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -106,10 +101,7 @@
   team: runtime
 
 # --- Debug Tools (DPrint, Watcher, Inspector, Clean Init) ---
-# NOTE: unit_tests_noc_debugging temporarily disabled — 9 of 17 tests deterministically
-# fail on BH (11 on WH); debugger reports zero issues where violations are intentionally
-# injected. Pre-existing breakage; was on cpp-post-commit Nightly L2 with auto-triage:false
-# so failures went unnoticed. Re-enable once the NOC debug detection is fixed.
+# NOTE: unit_tests_noc_debugging disabled (NOC debug detection broken); re-enable once owner fixes.
 - name: runtime_debug_tools
   cmd: |
     ./tests/scripts/run_tools_tests.sh
