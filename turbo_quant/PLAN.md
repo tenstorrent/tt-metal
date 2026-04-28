@@ -1,5 +1,55 @@
 # TurboQuant KV Cache Quantization
 
+## 🚀 RESUME HERE — Tier 2A cross-core merge LIVE (2026-04-28 evening)
+
+Phase 2.3 of Tier 2A landed end-to-end. Spot result on T3K mesh:
+
+| K  | per-call SDPA latency | speedup |
+|----|----------------------:|--------:|
+| 1  | 3.86 ms               | 1.00×   |
+| 14 | **0.36 ms**           | **10.7×** |
+
+Both at `cur_pos = 1791` (so valid_k_chunks = 14). K=1, 2, 4, 8, 14 all
+match cosine vs masked reference — the merge is correct, the chunk
+split is correct, the cross-core NoC + semaphore handshake works.
+
+### Open issues (next session)
+
+1. **Empty-slice deadlock** is the gate to running this everywhere.
+   Workers whose `[chunk_start, chunk_end)` range is empty (because
+   `valid_k_chunks < K` or doesn't divide evenly) hang at
+   `matmul_reduce` on an empty `alias_prev_sum` CB. Workaround so
+   far: pick cur_pos so `valid_k_chunks ≥ K` exactly. Fix: detect
+   empty slice, skip matmul_reduce, push neutral tiles
+   (max=-1e30, sum=0, out=0) to cb_partial_*, sema_inc as usual so
+   the reducer's merge becomes a no-op for that peer. Plan in
+   `TIER_2A_DESIGN.md` § "Open issues / Pickup for tomorrow".
+2. **bench_seqlen_sweep at K=14 across all power-of-2 seqlens** —
+   blocked on #1 (small seqs hit empty-slice).
+3. **E2E `--tq-full-dequant` with K=14** — needs `attention.py` to
+   forward `num_cores_per_head` to `tq_cache.fused_sdpa_decode(...)`
+   plus a CLI flag in `eval_e2e.py`.
+4. **N150 single-device** stays at K=1 (max_cores_per_head =
+   num_cores / (B * NQH) = 56/32 = 1). Tier 2A is a multi-device
+   win only.
+
+### Files touched in Phase 2.3 (commits a6d2903 → 51c7ed3)
+
+- `ttnn/cpp/.../sdpa/device/sdpa_tq_device_operation.{cpp,hpp}` — `num_cores_per_head` attribute
+- `ttnn/cpp/.../sdpa/device/sdpa_tq_program_factory.cpp` — work distribution + multi-slot CBs + per-core args + reducer NoC coords + semaphore
+- `ttnn/cpp/.../sdpa/kernels/compute/sdpa_tq_decode.cpp` — chunk-slice math, worker pack-and-skip, reducer wait-and-merge
+- `ttnn/cpp/.../sdpa/kernels/dataflow/reader_tq_decode.cpp` — chunk-slice math
+- `ttnn/cpp/.../sdpa/kernels/dataflow/writer_tq_decode.cpp` — worker NoC-send + reducer wait + cb_push_back
+- `ttnn/cpp/.../turbo_quant/turbo_quant.{cpp,hpp}` — add num_cores_per_head kwarg
+- `ttnn/cpp/.../turbo_quant/turbo_quant_nanobind.cpp` — pybind kwarg
+- `turbo_quant/ttnn_integration.py` — `fused_sdpa_decode` accepts num_cores_per_head
+- `turbo_quant/test_2A_cores_per_head.py` — N150 sweep (always clamps to K=1)
+- `turbo_quant/test_mesh_fused_sdpa.py` — T3K mesh test reads `TQ_NUM_CORES_PER_HEAD` env var
+- `turbo_quant/bench_seqlen_sweep.py` — same env var
+- `turbo_quant/TIER_2A_DESIGN.md` — full design + status notes for each step
+
+---
+
 ## ✅ E2E QUALITY FIXED (2026-04-28 PM)
 
 Both root-cause bugs are now patched. End-to-end output at 32 layers:

@@ -239,7 +239,144 @@ reuse one triplet sequentially (simpler).
   and passes (x, y) + semaphore_id to every core's writer.
 - Both branches dead at K=1; bit-identical confirmed.
 
-**Phase 2.3 step 4 — reducer compute wait-and-merge (NEXT)**
+**Phase 2.3 step 4 — cross-core merge live (✅ DONE — commits fc8c1e6, 51c7ed3)**
+
+What landed:
+- Program factory now sends actual `cores_per_head` to the kernel and
+  drops the empty-range guard for idx > 0 — all workers in a group
+  share the same (B, NQH) tuple and split chunks.
+- Compute kernel reducer (idx == 0) loop: for each peer w in 1..K-1,
+  perform symmetric online-softmax merge:
+  ```
+  new_max = max(prev_max, peer_max)
+  self_d  = exp((prev_max - new_max) * scale)
+  peer_d  = exp((peer_max - new_max) * scale)
+  prev_sum = self_d * prev_sum + peer_d * peer_sum
+  prev_out = self_d * prev_out + peer_d * peer_out
+  prev_max = new_max
+  ```
+- Bug found and fixed during testing: the original
+  `mul_tiles_bcast_cols_inplace(cb_remote_sum, ...)` pop-pushed the CB
+  FIFO, which works for K=2 (1 useful slot) but reorders multi-slot
+  data at K>2. Replaced with `mul_block_bcast_cols<rows, cols, true,
+  false>` (immediate_pop) writing to scratch CBs (cb_partial_sum /
+  cb_partial_out — unused on the reducer). cb_merge_peer_diff is
+  recomputed via a second sub_exp_block between sum and out scaling
+  because mul_block_bcast_cols pops it after each use.
+
+Validation on T3K mesh:
+
+| K  | cur_pos | per-device cos vs masked ref |
+|----|---------|------------------------------|
+| 1  | 1900    | 0.987-0.990                  |
+| 2  | 1900    | 0.987-0.990 (matches K=1)    |
+| 4  | 1900    | 0.987-0.990 (matches K=1)    |
+| 8  | 1900    | 0.987-0.990 (matches K=1)    |
+| 14 | 1791    | 0.988-0.991 (matches K=1)    |
+
+**Per-call latency at long context (T3K, cur_pos = 1791):**
+
+| K  | per-call ms | speedup vs K=1 |
+|----|------------:|---------------:|
+| 1  | 3.86        | 1.00×          |
+| 14 | 0.36        | **10.7×**      |
+
+Plumbing for end users:
+- `ttnn.experimental.turbo_quant_sdpa_decode(..., num_cores_per_head=K)`
+- `TTNNTurboQuantCache.fused_sdpa_decode(..., num_cores_per_head=K)`
+- `bench_seqlen_sweep.py` reads `TQ_NUM_CORES_PER_HEAD` env var.
+- `test_mesh_fused_sdpa.py` reads `TQ_NUM_CORES_PER_HEAD` env var.
+
+---
+
+## Open issues / Pickup for tomorrow
+
+### 1. Empty-slice deadlock (highest priority)
+
+When `valid_k_chunks < K` or `chunks_per_worker = ceil(valid_k_chunks /
+K)` rounds up such that one or more workers' `[chunk_start, chunk_end)`
+range is empty, that worker:
+- Iterates the chunk loop 0 times → `alias_prev_max/sum/out` CBs stay
+  empty (no tiles produced).
+- Falls through to the post-loop block, which calls
+  `matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum)`.
+  matmul_reduce internally `cb_wait_front(alias_prev_sum, Sq_chunk_t)`
+  → blocks forever.
+- Reducer waits on K-1 sema increments → never receives this worker's
+  signal → also blocks. **Whole program hangs.**
+
+Workaround: tests pick cur_pos so `valid_k_chunks ≥ K` and divides
+cleanly (e.g., `cur_pos = 14*128 - 1 = 1791` for K=14). Not viable for
+general workloads.
+
+**Fix plan:**
+1. In compute kernel, before the post-loop `matmul_reduce`, check if
+   `k_chunk_start_for_core >= k_chunk_end_for_core`. If empty:
+   - Skip matmul_reduce.
+   - For workers (idx > 0): push *neutral* tiles to cb_partial_*:
+     - `cb_partial_max`: a very-negative constant (e.g. -1e30) so
+       `exp((peer_max - new_max) * scale) ≈ 0`.
+     - `cb_partial_sum`: zeros.
+     - `cb_partial_out`: zeros.
+     This makes the reducer's merge a no-op for that peer.
+   - Workers still `continue` so the writer kernel does the
+     noc_async_write + sema_inc as usual.
+   - For reducer (idx == 0) with empty slice: shouldn't happen if
+     cores_per_head is sized to ≤ valid_k_chunks. If it does, skip
+     merge entirely and either return zero output (graceful but
+     wrong) or `TT_ASSERT` (fail loudly).
+2. Push neutral tiles via `fill_tile` + `pack_tile` (Sq_chunk_t * 1
+   for max/sum, Sq_chunk_t * vDHt for out).
+
+Once empty-slice is handled, the test can use any cur_pos and any K
+without hangs, and the bench_seqlen_sweep can iterate all power-of-2
+seqlens at K=14.
+
+### 2. Full bench_seqlen_sweep at K=14 (blocked on #1)
+
+Goal: produce the headline T3K table comparing K=1 vs K=14 at all
+power-of-2 seqlens 128, 256, 512, ..., 131072. Current 10.7× spot
+result is at one cur_pos only. Once empty-slice is fixed, run
+`TQ_NUM_CORES_PER_HEAD=14 python turbo_quant/bench_seqlen_sweep.py`
+on T3K and update PLAN.md with the table.
+
+### 3. E2E with K=14 on T3K (blocked on #1, partly on plumbing)
+
+Make `eval_e2e.py --tq-full-dequant` actually use K=14. Requires:
+- `attention.py` calls `tq_cache.fused_sdpa_decode(...)` — extend the
+  call to pass `num_cores_per_head` (read from CLI flag in
+  `eval_e2e.py`, default 1).
+- Pre-rescaled mode (`--tq-rescaled-bfp8`) doesn't use the chunk loop
+  so K must stay 1 there. Add an assert or override in attention.py.
+- Run `eval_e2e.py --tq-full-dequant TT_NUM_DEVICES=8` with the flag
+  set; expect the e2e ms/tok at long context to drop substantially.
+  At cur_pos=42 (current default prompt length, valid_k_chunks=1),
+  K=14 won't activate (no chunks to split) — so this only matters
+  if we run with a longer prompt (`--max-seq-len` ≥ 1792 with the
+  prompt populated).
+
+### 4. N150 single-device perf
+
+On N150 with B=1, NQH=32, num_cores=56:
+`max_cores_per_head = 56 / 32 = 1`. K=1 only. To get parallelism on a
+single device we'd need either multi-batch (B > 1 reduces total_work
+proportionally) or fewer query heads parallelised.
+
+Either accept N150 stays at K=1 (Tier 2A is a multi-device win), or
+explore Tier 1A (fused dequant-into-matmul) for N150 perf — that is
+the Tier 1 plan from PLAN.md.
+
+### 5. Tree reduction (only if linear is too slow)
+
+Current merge is linear all-to-one (reducer pulls K-1 partials
+sequentially). At K=14 with 0.36 ms/call, the reduce is fast enough
+that linear is fine. Tree (`log2(K)` rounds) is the standard
+sdpa_decode pattern but adds complexity. Keep on the back-burner
+unless the merge becomes the new bottleneck.
+
+---
+
+## Updated implementation phases (status)
 
 Concrete steps:
 
