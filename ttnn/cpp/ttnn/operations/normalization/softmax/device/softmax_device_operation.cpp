@@ -326,7 +326,6 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     shard_shape[1],
                     tensors_args.input_tensor.tensor_spec().tile().get_width());
 
-                // SHARD SPEC VALIDATION
                 const auto& a = tensors_args.input_tensor;
                 if (a.is_sharded()) {
                     const auto& shard_spec = a.shard_spec().value();
@@ -338,7 +337,6 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     const auto device_grid = a.device()->compute_with_storage_grid_size();
                     const auto program_grid = program_config.compute_with_storage_grid_size;
 
-                    // 1. Grid hierarchy: shard_spec.grid ⊆ program_config.grid ⊆ device.grid
                     TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
 
                     const CoreRange device_range(CoreCoord{0, 0}, CoreCoord{device_grid.x - 1, device_grid.y - 1});
@@ -356,15 +354,12 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                         program_grid.x,
                         program_grid.y);
 
-                    // 2. Shard shape must be non-zero
                     TT_FATAL(
                         shard_shape[0] > 0 && shard_shape[1] > 0,
                         "shard shape must be non-zero, got H={} W={}",
                         shard_shape[0],
                         shard_shape[1]);
 
-                    // 3. Tile alignment. Sharded softmax derives block_h / block_w as integer division of
-                    //    the shard dims by the tile size; both shard dims must be tile-aligned (no repack path).
                     TT_FATAL(
                         shard_shape[0] % tile_height == 0,
                         "shard height {} must be divisible by tile height {}",
@@ -376,7 +371,6 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                         shard_shape[1],
                         tile_width);
 
-                    // 4. Total elements: num_cores * per-shard elements == physical tensor volume
                     const auto num_cores = shard_grid.num_cores();
                     const auto total_from_shards = static_cast<uint64_t>(num_cores) * shard_shape[0] * shard_shape[1];
                     TT_FATAL(
