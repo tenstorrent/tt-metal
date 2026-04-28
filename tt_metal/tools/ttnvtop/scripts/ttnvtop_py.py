@@ -398,10 +398,10 @@ class TtnvtopApp(App):
     Screen { background: $background; }
     Header { background: $primary-darken-2; }
     .pane-title { color: $accent; padding: 0 1; }
-    #chips-row { height: 30%; min-height: 12; border: solid $primary-darken-3; }
-    #programs-pane { width: 50%; border: solid $primary-darken-3; }
-    #chips-pane    { width: 50%; border: solid $primary-darken-3; padding: 1; overflow: auto; }
-    #timeline      { height: 25%; min-height: 8; border: solid $primary-darken-3; padding: 0 1; overflow: auto; }
+    #chips-row { height: 45%; min-height: 16; border: solid $primary-darken-3; }
+    #programs-pane { width: 40%; border: solid $primary-darken-3; }
+    #chips-pane    { width: 60%; border: solid $primary-darken-3; padding: 1; overflow: auto; }
+    #timeline      { height: 22%; min-height: 8; border: solid $primary-darken-3; padding: 0 1; overflow: auto; }
     #history-pane  { height: 1fr; border: solid $primary-darken-3; }
     DataTable      { height: 100%; }
     """
@@ -409,6 +409,7 @@ class TtnvtopApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "reset_history", "Reset history"),
+        Binding("space", "toggle_pause", "Pause/resume"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
@@ -417,6 +418,7 @@ class TtnvtopApp(App):
     history: Dict[int, HistoryEntry] = {}
     names: Dict[int, dict] = {}
     session_start: float = 0.0
+    paused: bool = False
 
     def __init__(self, shm_glob: str, registry_path: str, hz: float):
         super().__init__()
@@ -443,7 +445,13 @@ class TtnvtopApp(App):
         self.history.clear()
         self.session_start = time.monotonic()
 
+    def action_toggle_pause(self) -> None:
+        self.paused = not self.paused
+        self.sub_title = "PAUSED" if self.paused else "live"
+
     def refresh_data(self) -> None:
+        if self.paused:
+            return  # freeze the view; data path stops collecting too
         # Refresh registry.
         try:
             self.names = _read_registry(self.registry_path)
@@ -515,13 +523,19 @@ class TtnvtopApp(App):
             )
         else:
             t = Text()
+            # Cell layout (8 chars wide per core × 2 rows per y):
+            #   row 1:  ' #495   '   ← prog id (or '  ___  ' if idle)
+            #   row 2:  '  87%   '   ← F% (colored by saturation)
+            # Plus 2 dim header columns for x labels and y labels. Empty
+            # NOC slots (e.g. dispatch/eth cores) render as 8 spaces so
+            # the grid keeps its rectangular shape.
+            CELL_W = 8
             for ci in sorted(self.chips):
                 ch = self.chips[ci]
-                # Compact text grid (one row per NOC y).
                 if not ch.cores:
                     continue
                 t.append(
-                    f"chip {ci}  asic 0x{ch.asic_id:x}  {ch.aiclk_mhz} MHz  {len(ch.cores)} cores\n",
+                    f"\nchip {ci}  asic 0x{ch.asic_id:x}  {ch.aiclk_mhz} MHz  {len(ch.cores)} cores\n",
                     style="bold",
                 )
                 max_x = max(c[0] for c in ch.cores)
@@ -531,28 +545,46 @@ class TtnvtopApp(App):
                 grid: Dict[Tuple[int, int], Tuple] = {}
                 for c in ch.cores:
                     grid[(c[0], c[1])] = c
-                t.append("    ")
+                # x header
+                t.append("     ")
                 for x in range(W):
-                    t.append(f"{x:>4}", style="dim")
+                    t.append(f"x={x:<2d}".center(CELL_W), style="dim")
                 t.append("\n")
                 for y in range(H):
-                    t.append(f"{y:>2}  ", style="dim")
+                    # Row 1: prog id labels
+                    t.append(f"y={y:<2d}".rjust(5), style="dim")
                     for x in range(W):
                         c = grid.get((x, y))
                         if c is None:
-                            t.append("    ", style="grey15")
+                            t.append(" " * CELL_W)
+                            continue
+                        kid = c[5]
+                        prog = (kid >> 10) & 0x1FFFFF if kid else 0
+                        if prog == 0:
+                            t.append("  ___   ", style="grey39")
+                        else:
+                            label = f"#{prog}"
+                            t.append(label.center(CELL_W), style=progcolor(prog))
+                    t.append("\n")
+                    # Row 2: F% number
+                    t.append("     ")
+                    for x in range(W):
+                        c = grid.get((x, y))
+                        if c is None:
+                            t.append(" " * CELL_W)
                             continue
                         kid = c[5]
                         fp = c[6]
                         prog = (kid >> 10) & 0x1FFFFF if kid else 0
                         f_pct = fp / 10.0
                         if prog == 0:
-                            t.append(" ___", style="grey39")
+                            t.append("        ", style="grey39")
                         else:
-                            t.append(f"{prog%1000:>3}", style=progcolor(prog))
-                            t.append("█", style=fcolor(f_pct))
+                            label = f"{f_pct:.0f}%"
+                            t.append(label.center(CELL_W), style=fcolor(f_pct))
                     t.append("\n")
-                t.append("\n")
+                    # Spacer between rows
+                    t.append("\n")
             chips_pane.update(t)
 
         self.query_one(ProgramsWidget).update_rows(self.chips, self.names)
