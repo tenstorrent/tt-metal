@@ -4,10 +4,6 @@
 
 """Quantization and compute precision configuration for the Wan pipeline.
 
-Allows sweeping weight dtype (bfloat16/bfloat8_b/bfloat4_b), compute precision
-(HiFi4/HiFi2/LoFi), and ring SDPA precision without modifying any baseline
-tt-metal model code.
-
 Usage:
     from models.tt_dit.pipelines.wan.quant_config import QuantConfig, apply_quant_config
 
@@ -106,6 +102,31 @@ class QuantConfig:
         """All compute LoFi, rest default."""
         lc = LinearQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
         sc = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
+        return QuantConfig(
+            self_attn_qkv=lc,
+            self_attn_out=lc,
+            cross_attn_q=lc,
+            cross_attn_kv=lc,
+            cross_attn_out=lc,
+            ffn_ff1=lc,
+            ffn_ff2=lc,
+            ring_sdpa=sc,
+        )
+
+    @staticmethod
+    def all_bf8_lofi() -> QuantConfig:
+        """All weights + activations bfloat8_b, LoFi compute, SDPA bf8 HiFi2."""
+        lc = LinearQuantConfig(
+            weight_dtype=ttnn.bfloat8_b,
+            activation_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc=False,
+        )
+        sc = SDPAQuantConfig(
+            input_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc=False,
+        )
         return QuantConfig(
             self_attn_qkv=lc,
             self_attn_out=lc,

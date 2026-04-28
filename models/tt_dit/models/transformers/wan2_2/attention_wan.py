@@ -368,7 +368,7 @@ class WanAttention(Module):
         use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
         norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
 
-        # Norm spatial before splitting heads (+ optional fused output dtype cast)
+        # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
             q_1BNF,
             num_heads_per_device=self.n_local_heads,

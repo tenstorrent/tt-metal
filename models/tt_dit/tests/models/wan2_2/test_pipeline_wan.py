@@ -37,8 +37,8 @@ from ....utils.test import line_params, ring_params
         # BH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
         [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
-        # WH (ring) on 4x8 with bf8 quantization
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True, "all_weights_bf8"],
+        # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
         "2x2sp0tp1",
@@ -48,7 +48,7 @@ from ....utils.test import line_params, ring_params
         "bh_4x8sp1tp0_linear",
         "bh_4x8sp1tp0_ring",
         "bh_4x32sp1tp0",
-        "wh_4x8sp1tp0_bf8",
+        "2x4sp0tp1_bf8_lofi",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -148,7 +148,7 @@ def test_pipeline_inference(
 
         return frames
 
-    def evaluate_output_with_clip(prompt, frames):
+    def check_output_with_clip(prompt, frames):
         if int(ttnn.distributed_context_get_rank()) == 0:
             # Sample ~8 evenly-spaced frames from the video
             total_frames = frames.shape[0]
@@ -176,7 +176,7 @@ def test_pipeline_inference(
 
     if no_prompt:
         frames = run(prompt=prompt, number=0, seed=42)
-        evaluate_output_with_clip(prompt, frames)
+        check_output_with_clip(prompt, frames)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -185,4 +185,4 @@ def test_pipeline_inference(
             if prompt[0] == "q":
                 break
             frames = run(prompt=prompt, number=i, seed=i)
-            evaluate_output_with_clip(prompt, frames)
+            check_output_with_clip(prompt, frames)
