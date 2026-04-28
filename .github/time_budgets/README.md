@@ -1,1 +1,354 @@
-IyBDSSBUaW1lIEJ1ZGdldCBTeXN0ZW0KClRoaXMgZGlyZWN0b3J5IGNvbnRhaW5zIHRoZSBjb25maWd1cmF0aW9uIGZpbGVzIHRoYXQgZGVmaW5lIGhvdyBDSSBtYWNoaW5lLWhvdXJzIGFyZQpidWRnZXRlZCBhY3Jvc3MgdGVhbXMuIFRoZSBlbmZvcmNlbWVudCBzY3JpcHQgKGBzY3JpcHRzL2J1ZGdldF9jaGVjay5weWApIHJlYWRzIHRoZXNlCmZpbGVzIG9uIGV2ZXJ5IFBSIHRoYXQgdG91Y2hlcyBwaXBlbGluZXMsIHdvcmtmbG93IGZpbGVzLCBvciB0aGlzIGRpcmVjdG9yeSBpdHNlbGYuCgotLS0KCiMjIERpcmVjdG9yeSBjb250ZW50cwoKfCBGaWxlIHwgUHVycG9zZSB8CnwtLS0tLS18LS0tLS0tLS0tfAp8IGBwb29scy55YW1sYCB8IFdlZWtseSBtYWNoaW5lLWhvdXJzIHBlciBoYXJkd2FyZSBTS1Ug4oCUIGFjdHVhbCBTbm93Zmxha2Ugb2JzZXJ2ZWQgdXNhZ2UgZm9yIHR0LW1ldGFsIHwKfCBgYWxsb2NhdGlvbnMueWFtbGAgfCBGcmFjdGlvbmFsIHNoYXJlIG9mIGVhY2ggcG9vbCBhbGxvY2F0ZWQgdG8gZWFjaCB0ZWFtICgqKmFjdGl2ZSDigJQgdXNlZCBieSB0aGUgc2NyaXB0KiopIHwKfCBgYWxsb2NhdGlvbnNfdXNhZ2VfYmFzZWRfdjIueWFtbGAgfCBVc2FnZS1kZXJpdmVkIGFsbG9jYXRpb25zLCBwaXBlbGluZV9yZW9yZyArIGFsbCBsZWdhY3kgKGJ1Y2tldC0yKSB3b3JrZmxvd3Mg4oCUIHJlZmVyZW5jZSB8CnwgYGFsbG9jYXRpb25zX3VzYWdlX2Jhc2VkX3RpbWVvdXRfeF9zbm93Zmxha2VfcnB3LnlhbWxgIHwgSHlicmlkOiBZQU1MIHRpbWVvdXQgw5cgU25vd2ZsYWtlIHJ1bnMvd2VlayDigJQgd29yc3QtY2FzZSBjZWlsaW5nIGF0IHJlYWwgY2FkZW5jZSDigJQgcmVmZXJlbmNlIHwKfCBgcnVuc19wZXJfd2Vlay55YW1sYCB8IEhvdyBtYW55IHRpbWVzIGVhY2ggcGlwZWxpbmUgKG9yIHRlc3QgWUFNTCkgcnVucyBwZXIgd2VlayB8CnwgYEJVREdFVF9TVEFUVVMubWRgIHwgQXV0by1nZW5lcmF0ZWQgc3RhdHVzIHNuYXBzaG90OyBkbyBub3QgZWRpdCBtYW51YWxseSB8CnwgYFJFQURNRS5tZGAgfCBUaGlzIGZpbGUgfAoKLS0tCgojIyBIb3cgcG9vbHMueWFtbCB3YXMgZGVjaWRlZAoKYHBvb2xzLnlhbWxgIGxpc3RzIHRoZSAqKmFjdHVhbCBvYnNlcnZlZCB3ZWVrbHkgbWFjaGluZS1ob3VycyoqIHR0LW1ldGFsIGpvYnMgY29uc3VtZWQgb24KZWFjaCBoYXJkd2FyZSBTS1UuIFRoZXNlIGFyZSB0aGUgZGVub21pbmF0b3JzIGluIGFsbCBidWRnZXQgY2FsY3VsYXRpb25zLgoKIyMjIEtleSBmb3JtYXQKCktleXMgbWF0Y2ggYC5naXRodWIvc2t1X2NvbmZpZy55YW1sYCBleGFjdGx5LCB3aGljaCBpcyB0aGUgc2luZ2xlIHNvdXJjZSBvZiB0cnV0aCBmb3IKU0tVIOKGkiBydW5uZXIgbGFiZWwgbWFwcGluZy4gQ0l2MSBhbmQgQ0l2MiBTS1VzIGFyZSBzZXBhcmF0ZWQgYnkgY29tbWVudHMgd2l0aGluIGEgZmxhdApzdHJ1Y3R1cmUgKG5vIG5lc3RpbmcpLiBUaGVyZSBhcmUgbm8ga2V5IGNvbGxpc2lvbnMg4oCUIENJdjIga2V5cyBjYXJyeSBhIGBfY2l2MmAgc3VmZml4LgoKIyMjIFZhbHVlcyDigJQgU25vd2ZsYWtlIGFjdHVhbHMgKHR0LW1ldGFsIG9ubHkpCgpgYGAKRm9ybXVsYTogU1VNKEpPQl9FWEVDVVRJT05fVElNRSkgLyAzNjAwIC8gMjggKiA3ClNvdXJjZTogIFRUREFUQVNGLlNXX1RFU1QuQ0lDRF9KT0IgKyBDSUNEX1BJUEVMSU5FCkZpbHRlcjogIFBST0pFQ1QgPSAndHQtbWV0YWwnLCBsYXN0IDI4IGRheXMKYGBgCgpTS1UgbGFiZWxzIGFyZSBtYXRjaGVkIHRvIHNrdV9jb25maWcgZW50cmllcyB1c2luZyBJTElLRSBwYXR0ZXJucyBkZXJpdmVkIGZyb20gZWFjaApTS1UncyBgcnVuc19vbmAgYXJyYXkuIENJdjIgbGFiZWxzIGFyZSBzaW5nbGUgc3RyaW5ncyAoZS5nLiBgdHQtdWJ1bnR1LTIyMDQtTjE1MC12aW9tbXUtc3RhYmxlYCk7CkNJdjEgbGFiZWxzIGFyZSBjb21tYS1zZXBhcmF0ZWQgdGFnIHNldHMgKGUuZy4gYGFyY2gtd29ybWhvbGVfYjAsY29uZmlnLXQzMDAwLGluLXNlcnZpY2VgKS4KCkNJdjIgbWFjaGluZXMgYXJlIHNoYXJlZCBhY3Jvc3MgcmVwb3MgYW5kIG9yZ3MuIFVzaW5nIHR0LW1ldGFsLW9ubHkgb2JzZXJ2ZWQgaG91cnMgYXMKdGhlIGRlbm9taW5hdG9yIGlzIGludGVudGlvbmFsbHkgY29uc2VydmF0aXZlIOKAlCBpdCBkb2VzIG5vdCBjbGFpbSBjYXBhY2l0eSBiZXlvbmQgd2hhdAp0dC1tZXRhbCBhY3R1YWxseSBjb25zdW1lZC4KCn4zLDgwMCBoL3drIGlzIHVudHJhY2tlZDogbGVnYWN5IG11bHRpLWhvc3QgcnVubmVyIGxhYmVscyAoYG11bHRpLWhvc3QtZ2FsYXh5YCwKYG11bHRpLWhvc3QtZ2x4LTR4YCwgYG11bHRpLWhvc3QtdDMwMDBgLCBiYXJlIGhvc3RuYW1lcyBsaWtlIGBnMDRnbHgwM2ApIHRoYXQgaGF2ZSBubwplbnRyeSBpbiBza3VfY29uZmlnLgoKIyMjIE5vdGFibGUgb2JzZXJ2ZWQgdmFsdWVzIChBcHJpbCAyMDI2KQoKYGBgCkNJdjI6ICB3aF9uMzAwX2NpdjIgNSwwMzUgaC93ayAgIGJoX3AxNTBiX2NpdjIgMiw0MTEgICB3aF9uMTUwX2NpdjIgMSwwNTMKQ0l2MTogIHdoX24zMDAgICAgIDEyLDcwNCBoL3drICAgd2hfZ2FsYXh5X3BlcmYgMiw0MDQgIHdoX2xsbWJveCAgICAxLDE1MgpgYGAKCmB3aF9uMzAwYCAoQ0l2MSBjbG91ZCBWTXMpIGRvbWluYXRlcyDigJQgaXQgY2FycmllcyB0aGUgYnVsayBvZiB0dG5uLXVuaXQtdGVzdHMgYW5kCmZkLW5pZ2h0bHkuIGB3aF9uMzAwX2NpdjJgIChiYXJlLW1ldGFsIENJdjIpIGlzIGEgc2VwYXJhdGUgcG9vbC4KCiMjIyBVcGRhdGluZyBwb29scy55YW1sCgpSZS1ydW4gdGhlIFNub3dmbGFrZSBxdWVyeSBkb2N1bWVudGVkIGluIHRoZSBoZWFkZXIgb2YKYGFsbG9jYXRpb25zX3VzYWdlX2Jhc2VkX3RpbWVvdXRfeF9zbm93Zmxha2VfcnB3LnlhbWxgLCByZXBsYWNpbmcgYENPVU5UKERJU1RJTkNUIENJQ0RfUElQRUxJTkVfSUQpYAp3aXRoIGBTVU0oSk9CX0VYRUNVVElPTl9USU1FKS8zNjAwYC4gVXBkYXRlIHZhbHVlcyB3aGVuIHRoZSBoYXJkd2FyZSBmYXJtIGNoYW5nZXMKc2lnbmlmaWNhbnRseSBvciBhZnRlciBtYWpvciBwaXBlbGluZSByZXN0cnVjdHVyaW5nLgoKPiAqKk5vdGUqKjogYGJ1ZGdldF9jaGVjay5weWAgY3VycmVudGx5IHJlc29sdmVzIHBvb2wga2V5cyB1c2luZyBhIGBSVU5ORVJfU0tVX01BUGAKPiBkaWN0IHdpdGggYWdncmVnYXRlZCBuYW1lcyAoYE4xNTBgLCBgTjMwMGAsIGV0Yy4pLiBJdCBuZWVkcyB0byBiZSB1cGRhdGVkIHRvIGxvb2sgdXAKPiBwZXItU0tVIGtleXMgZnJvbSBgc2t1X2NvbmZpZy55YW1sYCBiZWZvcmUgdGhpcyBuZXcgZm9ybWF0IGlzIGVuZm9yY2VkLgoKLS0tCgojIyBIb3cgYWxsb2NhdGlvbnMueWFtbCB3YXMgZGVjaWRlZAoKYGFsbG9jYXRpb25zLnlhbWxgIGdpdmVzIHRoZSAqKmZyYWN0aW9uIG9mIGVhY2ggcG9vbCoqIGFsbG9jYXRlZCB0byBlYWNoIHRlYW0uClZhbHVlcyBwZXIgU0tVIG11c3Qgc3VtIHRvIOKJpCAxLjA7IHRoZSByZW1haW5kZXIgaXMgdW5hbGxvY2F0ZWQgaGVhZHJvb20uCgojIyMgVmVyc2lvbiAxIOKAlCBtYW51YWwgZXN0aW1hdGVzIChjdXJyZW50IGFjdGl2ZSBmaWxlKQoKVGhlIG9yaWdpbmFsIGBhbGxvY2F0aW9ucy55YW1sYCB3YXMgaGFuZC1hdXRob3JlZCBiYXNlZCBvbiByb3VnaCBwcmlvciBrbm93bGVkZ2Ugb2YKd2hpY2ggdGVhbXMgb3duIHdoaWNoIGhhcmR3YXJlLWludGVuc2l2ZSB0ZXN0IHN1aXRlczoKCi0gKipOMTUwIC8gTjMwMCoqOiBtb2RlbHMgdGVhbSBydW5zIHRoZSBoZWF2eSBmYXN0LWRpc3BhdGNoIG5pZ2h0bHkgc3VpdGVzOyBydW50aW1lCiAgb3ducyBtZXRhbGl1bS9kaXNwYXRjaCB0ZXN0czsgTExLIHRlYW0gcnVucyBrZXJuZWwgdmFsaWRhdGlvbi4KLSAqKnAxNTBiIC8gcDMwMGIqKjogTExLIHRlYW0gd2FzIGFsbG9jYXRlZCBhIGxhcmdlIHNoYXJlIGJhc2VkIG9uIHRoZWlyIHBsYW5uZWQgQkgKICBrZXJuZWwgd29yazsgbW9kZWxzIGFuZCBydW50aW1lIHNwbGl0IHRoZSByZW1haW5kZXIuCi0gKipMTE1CT1gqKjogbW9zdGx5IG1vZGVscyAobGFyZ2UgbW9kZWwgaW5mZXJlbmNlKSB3aXRoIHJ1bnRpbWUgdGFraW5nIFQzMDAwIGRpc3BhdGNoLgotICoqZ2FsYXh5Kio6IGhlYXZpbHkgbW9kZWxzIChkZW1vICsgcGVyZiksIHdpdGggc29tZSBydW50aW1lLgoKVGhlc2UgZnJhY3Rpb25zIHdlcmUgc2V0IGJlZm9yZSBhY3R1YWwgdXNhZ2UgZGF0YSB3YXMgYXZhaWxhYmxlLiBUaGV5IGFyZSBpbnRlbnRpb25hbGx5CmNvbnNlcnZhdGl2ZSBzbyB0aGF0IG5vIHRlYW0gY2FuIG1vbm9wb2xpc2UgYSBwb29sIGFuZCBzdGFydmUgb3RoZXJzLgoKIyMjIFVzYWdlLWJhc2VkOiBhbGwgcGlwZWxpbmVzIChhbGxvY2F0aW9uc191c2FnZV9iYXNlZF92Mi55YW1sKQoKQWRkcyBhbGwgbGVnYWN5IGJ1Y2tldC0yIHdvcmtmbG93cyBvbiB0b3Agb2YgcGlwZWxpbmVfcmVvcmcuIFRoaXMgaXMgdGhlIG1vc3QKY29tcGxldGUgcGljdHVyZSBvZiBhY3R1YWwgaGFyZHdhcmUgY29uc3VtcHRpb24uIFNlZSB0aGUgbWV0aG9kb2xvZ3kgY29tbWVudCBpbgp0aGF0IGZpbGUgZm9yIHRoZSBmdWxsIFNub3dmbGFrZSBxdWVyeSBhbmQgYXR0cmlidXRpb24gbG9naWMuCgp8IHwgdjEgKG1hbnVhbCkgfCBhbGwgcGlwZWxpbmVzICh2MikgfCB0aW1lb3V0IMOXIHNmX3JwdyB8CnwtfC0tLS0tLS0tLS0tLXwtLS0tLS0tLS0tLS0tLS0tLS0tfC0tLS0tLS0tLS0tLS0tLS0tfAp8IFNvdXJjZSB8IEh1bWFuIGVzdGltYXRlcyB8IFNub3dmbGFrZSBhY3R1YWxzIHwgWUFNTCB0aW1lb3V0ICsgU25vd2ZsYWtlIHJwdyB8CnwgQ292ZXJhZ2UgfCBwaXBlbGluZV9yZW9yZyBvbmx5IHwgcGlwZWxpbmVfcmVvcmcgKyBidWNrZXQtMiB8IHBpcGVsaW5lX3Jlb3JnICsgYnVja2V0LTIgfAp8IENvc3QgbW9kZWwgfCBgdGltZW91dCDDlyBtYW51YWwgcnB3YCB8IGFjdHVhbCB3YWxsLWNsb2NrIHwgYHRpbWVvdXQgw5cgU25vd2ZsYWtlIHJwd2AgfAp8IFRlYW1zIHwgaW5mcmEsIGxsaywgbW9kZWxzLCBydW50aW1lIHwgbW9kZWxzLCB0dG5uLCBydW50aW1lLCBzY2FsZW91dCwgc2hpZWxkLCBsbGsgfCBtb2RlbHMsIHR0bm4sIHJ1bnRpbWUsIHNjYWxlb3V0LCBzaGllbGQsIGxsayB8CnwgUGVzc2ltaXNtIHwgSGlnaCAod29yc3QtY2FzZSB0aW1lb3V0LCBndWVzc2VkIHJwdykgfCBMb3cgKGFjdHVhbCB0aW1lcykgfCBIaWdoICh3b3JzdC1jYXNlIHRpbWVvdXQsIHJlYWwgY2FkZW5jZSkgfAoKS2V5IGRpZmZlcmVuY2U6IGJ1Y2tldC0yIHdvcmtmbG93cyBzaGlmdCBOMzAwIGhlYXZpbHkgdG93YXJkIG1vZGVscyAoZmQtbmlnaHRseSBhbG9uZQphZGRzIDgsMjAwIGgvd2spIGFuZCBOMTUwL3AxNTBiIHRvd2FyZCBydW50aW1lIHZzIHBpcGVsaW5lX3Jlb3JnLW9ubHkgYXR0cmlidXRpb24uCgpgYGAKYWxsIHBpcGVsaW5lcyBzdW1tYXJ5OgpOMzAwOiAgIG1vZGVscyA3MCUsIHR0bm4gMTYlLCBydW50aW1lIDE0JQpOMTUwOiAgIG1vZGVscyAzMCUsIHR0bm4gMjMlLCBydW50aW1lIDQxJSwgbGxrIDYlCnAxNTBiOiAgcnVudGltZSA2NCUsIHR0bm4gMjQlLCBtb2RlbHMgOCUsIGxsayAzJSwgc2NhbGVvdXQgMSUKcDMwMGI6ICBydW50aW1lIDg1JSwgbW9kZWxzIDE1JQpMTE1CT1g6IHJ1bnRpbWUgODElLCBtb2RlbHMgMTclLCB0dG5uIDIlCmdhbGF4eTogbW9kZWxzIDY3JSwgdHRubiAxOSUsIHNjYWxlb3V0IDE0JQpgYGAKClRvIHByb21vdGUgZWl0aGVyIGZpbGUgdG8gYWN0aXZlOiB1cGRhdGUgdGhlIGBhbGxvY2F0aW9uc2AgbG9hZCBwYXRoIGluCmBidWRnZXRfY2hlY2sucHlgIChsaW5lIDU0NSkgYW5kIHVwZGF0ZSBgcG9vbHMueWFtbGAgd2l0aCBtZWFzdXJlZCB0aHJvdWdocHV0LgoKLS0tCgojIyBIb3cgcnVuc19wZXJfd2Vlay55YW1sIHdhcyBkZWNpZGVkCgpgcnVuc19wZXJfd2Vlay55YW1sYCBtYXBzIHBpcGVsaW5lIG5hbWVzIHRvIGVzdGltYXRlZCB3ZWVrbHkgcnVuIGNvdW50cy4KVGhlc2UgYXJlIHVzZWQgYnkgdGhlIHNjcmlwdCB0byBjb252ZXJ0IGEgcGVyLXJ1biB0aW1lb3V0IGNvc3QgaW50byB3ZWVrbHkgbWFjaGluZS1ob3VyczoKCmBgYAp3ZWVrbHlfaG91cnMgPSB0aW1lb3V0X21pbnV0ZXMgLyA2MCDDlyBydW5zX3Blcl93ZWVrCmBgYAoKQ3VycmVudCB2YWx1ZXM6Cgp8IFBpcGVsaW5lIHwgUnVucy93ZWVrIHwgQmFzaXMgfAp8LS0tLS0tLS0tfC0tLS0tLS0tLS0tfC0tLS0tLS18CnwgYHByLWdhdGUueWFtbGAgfCAyNTYgfCB+NTEgUFJzL2RheSDDlyA1IHdlZWtkYXlzIHwKfCBgbWVyZ2UtZ2F0ZS55YW1sYCB8IDQ5IHwgfjEwIG1lcmdlcy9kYXkgw5cgNSB3ZWVrZGF5cyB8CnwgYHBvc3QtY29tbWl0LnlhbWxgIHwgNDkgfCBzYW1lIGNhZGVuY2UgYXMgbWVyZ2UtZ2F0ZSB8CgpGb3IgKipwaXBlbGluZV9yZW9yZyB0ZXN0IFlBTUxzKiogdGhlIGtleSBpcyB0aGUgWUFNTCBmaWxlbmFtZSAoZS5nLgpgZ2FsYXh5X2UyZV90ZXN0cy55YW1sOiAxMGApLiBDdXJyZW50bHkgdGhlc2UgYXJlIGNvbW1lbnRlZCBvdXQgcGVuZGluZyB0aGUKcGlwZWxpbmVfcmVvcmcgbWlncmF0aW9uIGNvbXBsZXRpbmcuCgpVcGRhdGUgdGhpcyBmaWxlIHdoZW5ldmVyIHBpcGVsaW5lIGZyZXF1ZW5jeSBjaGFuZ2VzIChlLmcuIGFmdGVyIGdhdGUgcmVzdHJ1Y3R1cmluZwpvciBzcGxpdHRpbmcgYSBuaWdodGx5IGludG8gbXVsdGlwbGUgY2FkZW5jZXMpLgoKLS0tCgojIyBIb3cgYnVkZ2V0X2NoZWNrLnB5IHdvcmtzCgojIyMgQ29zdCBtb2RlbAoKVGhlIHNjcmlwdCBjYWxjdWxhdGVzICpwcm9qZWN0ZWQgd2Vla2x5IG1hY2hpbmUtaG91cnMqIHBlciBgKHRlYW0sIHNrdSlgIHBhaXIgdXNpbmcKd29yc3QtY2FzZSB0aW1lb3V0cywgbm90IGFjdHVhbCBleGVjdXRpb24gdGltZXM6CgpgYGAKY29zdCA9ICh0aW1lb3V0X21pbnV0ZXMgLyA2MCkgw5cgcnVuc19wZXJfd2VlawpgYGAKClRoaXMgaXMgcGVzc2ltaXN0aWMgYnkgZGVzaWduIOKAlCBpZiBldmVyeSBqb2IgcnVucyB0byBpdHMgZnVsbCB0aW1lb3V0LCBkb2VzIHRoaXMKdGVhbSdzIGFsbG9jYXRpb24gY292ZXIgaXQ/IFRoZSB2MiBhbGxvY2F0aW9uIGZpbGUgdXNlcyBhY3R1YWxzIGluc3RlYWQsIGJ1dCB0aGUKZW5mb3JjZW1lbnQgc2NyaXB0IHN0aWxsIHVzZXMgdGltZW91dHMgZm9yIGZhc3QsIHN0YXRlbGVzcyBDSSBjaGVja3MuCgojIyMgRGF0YSBzb3VyY2VzCgoqKnBpcGVsaW5lX3Jlb3JnIHRlc3RzKiogKGB0ZXN0cy9waXBlbGluZV9yZW9yZy8qLnlhbWxgKQoKRWFjaCBmaWxlIGNvbnRhaW5zIGEgbGlzdCBvZiB0ZXN0IGVudHJpZXMuIEVhY2ggZW50cnkgaXMgb25lIHBhcmFsbGVsIGpvYiAob25lIG1hY2hpbmUpLgpGaWVsZHMgdXNlZDogYHRlYW06YCwgYHNrdXM6YCAoZGljdCBvZiBza3VfbmFtZSDihpIgYHt0aW1lb3V0LCB0aWVyfWApLiBFYWNoIGVudHJ5IGlzCm9uZSBwYXJhbGxlbCBqb2IgcnVubmluZyBvbiBvbmUgbWFjaGluZS4KCmBgYHlhbWwKIyBFeGFtcGxlOiB0ZXN0cy9waXBlbGluZV9yZW9yZy9ydW50aW1lX3VuaXRfdGVzdHMueWFtbAotIG5hbWU6IHJ1bnRpbWVfZmFzdF9kaXNwYXRjaF9vbl9ldGgKICBjbWQ6IC4vYnVpbGQvdGVzdC90dF9tZXRhbC91bml0X3Rlc3RzX2Rpc3BhdGNoIC4uLgogIHNrdXM6CiAgICB3aF9uMTUwX2NpdjI6CiAgICAgIHRpbWVvdXQ6IDEwCiAgICBiaF9wMTUwYl9jaXYyOgogICAgICB0aW1lb3V0OiAxMAogIHRlYW06IHJ1bnRpbWUKYGBgCgoqKkxlZ2FjeSB3b3JrZmxvdyBmaWxlcyoqIChgLmdpdGh1Yi93b3JrZmxvd3MvKi55YW1sYCkKCldvcmtmbG93cyB0aGF0IHVzZSBgcHJlcGFyZV90ZXN0X21hdHJpeGAgLyBgcHJlcGFyZS10ZXN0LW1hdHJpeGAgYXJlIHRyZWF0ZWQgYXMKcGlwZWxpbmVfcmVvcmcgd3JhcHBlcnMgYW5kIHNraXBwZWQgKHRoZWlyIGNvc3RzIGFyZSBhbHJlYWR5IGNhcHR1cmVkIHZpYSB0aGUgdGVzdApZQU1McyBhYm92ZSkuIEFsbCBvdGhlciB3b3JrZmxvd3MgYXJlIHBhcnNlZCBmb3IgZGlyZWN0IGBydW5zLW9uYCArIGB0aW1lb3V0LW1pbnV0ZXNgCmZpZWxkcyBvbiBlYWNoIGpvYi4gVGVhbSBvd25lcnNoaXAgaXMgcmVzb2x2ZWQgZnJvbSBgQ09ERU9XTkVSU2AuCgo+ICoqTGltaXRhdGlvbioqOiBidWNrZXQtMiBsZWdhY3kgd29ya2Zsb3dzIHVzZSBgdXNlczpgIChyZXVzYWJsZSB3b3JrZmxvd3MpIHdpdGgKPiBgd2l0aDoge3J1bnNfb246IC4uLiwgdGltZW91dF9taW51dGVzOiAuLi59YCBwYXJhbWV0ZXJzLiBTdGF0aWMgWUFNTCBwYXJzaW5nCj4geWllbGRzIG5vdGhpbmcgZm9yIHRoZXNlIGpvYnMg4oCUIHRoZWlyIGBydW5zLW9uYCAvIGB0aW1lb3V0LW1pbnV0ZXNgIHZhbHVlcyBhcmUKPiBub3Qgb24gdGhlIGpvYiBkaWN0IGl0c2VsZi4gQXMgYSByZXN1bHQsIHRoZSBzY3JpcHQgY3VycmVudGx5IHVuZGVyLWNvdW50cyBjb3N0Cj4gZm9yIHRoZXNlIHdvcmtmbG93cy4gVGhlIHVzYWdlLWJhc2VkIHYyIGFsbG9jYXRpb25zIGZpbGUgd2FzIHByb2R1Y2VkIGZyb20KPiBTbm93Zmxha2UgZGF0YSBzcGVjaWZpY2FsbHkgdG8gY29tcGVuc2F0ZSBmb3IgdGhpcyBnYXAuCgojIyMgUnVubmVyIGxhYmVsIOKGkiBTS1UgbWFwcGluZwoKYGBgcHl0aG9uClJVTk5FUl9TS1VfTUFQID0gewogICAgIm4xNTAiOiAgICAgICJOMTUwIiwKICAgICJuMzAwIjogICAgICAiTjMwMCIsCiAgICAicDE1MGIiOiAgICAgInAxNTBiIiwKICAgICJwMzAwYiI6ICAgICAicDMwMGIiLAogICAgImxsbWJveCI6ICAgICJMTE1CT1giLAogICAgImdhbGF4eSI6ICAgICJnYWxheHkiLAogICAgImJsYWNraG9sZSI6ICJwMTUwYiIsICAgIyBhbGlhcwp9CmBgYAoKPiAqKlBlbmRpbmcgdXBkYXRlKio6IHRoaXMgbWFwIHVzZXMgYWdncmVnYXRlZCBwb29sIG5hbWVzIChgTjE1MGAsIGBOMzAwYCwg4oCmKSB3aGljaCBubwo+IGxvbmdlciBtYXRjaCBwb29scy55YW1sIGtleXMuIEl0IG5lZWRzIHRvIGJlIHJld3JpdHRlbiB0byByZXNvbHZlIHJ1bm5lciBsYWJlbHMgdG8KPiBpbmRpdmlkdWFsIHNrdV9jb25maWcgU0tVIG5hbWVzIChlLmcuIGB3aF9uMTUwX2NpdjJgLCBgd2hfbjMwMGApIHVzaW5nIHRoZQo+IGBydW5zX29uYCBhcnJheXMgaW4gYC5naXRodWIvc2t1X2NvbmZpZy55YW1sYC4KClN1YnN0cmluZyBtYXRjaCBhZ2FpbnN0IHRoZSBydW5uZXIgbGFiZWwgc3RyaW5nLiBDUFUtb25seSBydW5uZXJzCihgdWJ1bnR1LWxhdGVzdGAsIGBsYXJnZS1zdGFibGVgLCBldGMuKSBkbyBub3QgbWF0Y2ggYW5kIGFyZSBzaWxlbnRseSBza2lwcGVkLgoKIyMjIEJ1ZGdldCBsaW1pdCBmb3JtdWxhCgpgYGAKbGltaXQodGVhbSwgc2t1KSA9IHBvb2xzW3NrdV0gw5cgYWxsb2NhdGlvbnNbc2t1XVt0ZWFtXQpgYGAKCkEgdGVhbSBpcyBvdmVyIGJ1ZGdldCBpZiB0aGVpciBwcm9qZWN0ZWQgd2Vla2x5IGNvc3QgZXhjZWVkcyB0aGlzIGxpbWl0LgoKIyMjIE1vZGVzCgp8IEZsYWcgfCBXaGF0IGl0IGRvZXMgfAp8LS0tLS0tfC0tLS0tLS0tLS0tLS18CnwgYC0tcmVwb3J0YCB8IEZ1bGwgcGVyLXRlYW0tcGVyLVNLVSByZXBvcnQgYWdhaW5zdCBjdXJyZW50IHN0YXRlIHwKfCBgLS1kaWZmIEJBU0VfUkVGYCB8IFNob3dzIG9ubHkgdGhlIGRlbHRhIGludHJvZHVjZWQgYnkgdGhlIFBSOyBmYWlscyBpZiBwb3N0LW1lcmdlIHRvdGFsIGV4Y2VlZHMgbGltaXQgfAp8IGAtLXVwZGF0ZS1zdGF0dXNgIHwgUmVnZW5lcmF0ZXMgYEJVREdFVF9TVEFUVVMubWRgIChhbHdheXMgcnVucyBpbiBDSSwgZXZlbiBvbiBmYWlsdXJlKSB8CgpFeGl0IGNvZGUgaXMgMSBpZiBhbnkgdGVhbSBpcyBvdmVyIGJ1ZGdldDsgMCBvdGhlcndpc2UuCgojIyMgV2FybmluZyB2cy4gYmxvY2tpbmcKCi0gKipPVkVSKiogKD4xMDAlIG9mIGxpbWl0KSDigJQgc2NyaXB0IGV4aXRzIDEsIFBSIGlzIGJsb2NrZWQuCi0gKipXQVJOKiogKD44NSUgb2YgbGltaXQpIOKAlCBsb2dnZWQgYnV0IGRvZXMgbm90IGJsb2NrLgotIFdvcmtmbG93cyB3aXRoIG5vIENPREVPV05FUlMgbWF0Y2gg4oaSIGF0dHJpYnV0ZWQgdG8gYHVuYXR0cmlidXRlZGA7IGNvc3QgaXMKICByZXBvcnRlZCBidXQgZG9lcyBub3QgY291bnQgYWdhaW5zdCBhbnkgdGVhbSdzIGxpbWl0ICh3YXJuaW5nIG9ubHkpLgoKLS0tCgojIyBDSSB3b3JrZmxvdyAoLmdpdGh1Yi93b3JrZmxvd3MvYnVkZ2V0LWNoZWNrLnlhbWwpCgpUaGUgd29ya2Zsb3cgZmlyZXMgb246Ci0gUHVsbCByZXF1ZXN0cyB0b3VjaGluZyBgdGVzdHMvcGlwZWxpbmVfcmVvcmcvKipgLCBgLmdpdGh1Yi93b3JrZmxvd3MvKipgLCBvcgogIGAuZ2l0aHViL3RpbWVfYnVkZ2V0cy8qKmAKLSBNYW51YWwgYHdvcmtmbG93X2Rpc3BhdGNoYAoKU3RlcHM6CjEuICoqQ2hlY2tvdXQqKiB3aXRoIGZ1bGwgaGlzdG9yeSAoYGZldGNoLWRlcHRoOiAwYCkgc28gYGdpdCBkaWZmYCBhZ2FpbnN0IHRoZSBQUgogICBiYXNlIGlzIGF2YWlsYWJsZS4KMi4gKipJbnN0YWxsIGRlcHMqKjogYHBpcCBpbnN0YWxsIHB5eWFtbGAKMy4gKipDaGVjayBidWRnZXQgZGVsdGEqKjogYGJ1ZGdldF9jaGVjay5weSAtLWRpZmYgPGJhc2Vfc2hhPmAg4oCUIGZhaWxzIHRoZSBQUiBpZgogICB0aGUgY2hhbmdlIHB1c2hlcyBhbnkgdGVhbSBvdmVyIHRoZWlyIGxpbWl0Lgo0LiAqKlJlZ2VuZXJhdGUgQlVER0VUX1NUQVRVUy5tZCoqOiBydW5zIGAtLXVwZGF0ZS1zdGF0dXNgIHJlZ2FyZGxlc3Mgb2Ygc3RlcCAzCiAgIG91dGNvbWUgKGBpZjogYWx3YXlzKClgKS4KNS4gKipVcGxvYWQgYXJ0aWZhY3QqKjogdGhlIGdlbmVyYXRlZCBgQlVER0VUX1NUQVRVUy5tZGAgaXMgYXR0YWNoZWQgdG8gdGhlIHdvcmtmbG93CiAgIHJ1biBzbyByZXZpZXdlcnMgY2FuIGluc3BlY3QgdGhlIGZ1bGwgYnJlYWtkb3duIHdpdGhvdXQgcmUtcnVubmluZyBsb2NhbGx5LgoKLS0tCgojIyBVcGRhdGluZyB0aGVzZSBmaWxlcwoKIyMjIEFkZGluZyBhIG5ldyBoYXJkd2FyZSBTS1UKCjEuIEFkZCBpdCB0byBgc2t1X2NvbmZpZy55YW1sYCB3aXRoIGl0cyBgcnVuc19vbmAgbGFiZWxzLgoyLiBBZGQgaXQgdG8gYHBvb2xzLnlhbWxgIHVzaW5nIHRoZSBzYW1lIGtleSwgd2l0aCBpdHMgb2JzZXJ2ZWQgd2Vla2x5IGhvdXJzIGZyb20KICAgU25vd2ZsYWtlIChgU1VNKEpPQl9FWEVDVVRJT05fVElNRSkvMzYwMC8yOCo3YCwgZmlsdGVyZWQgdG8gYFBST0pFQ1QgPSAndHQtbWV0YWwnYCkuCjMuIEFkZCB0ZWFtIGZyYWN0aW9ucyB0byBgYWxsb2NhdGlvbnMueWFtbGAgKG11c3Qgc3VtIHRvIOKJpCAxLjApLgo0LiBBZGQgYSBydW5uZXIgbGFiZWwgcGF0dGVybiB0byBgUlVOTkVSX1NLVV9NQVBgIGluIGBidWRnZXRfY2hlY2sucHlgLgoKIyMjIEFkZGluZyBhIG5ldyB0ZWFtCgpBZGQgdGhlIHRlYW0ga2V5IHRvIHRoZSByZWxldmFudCBTS1UgZW50cmllcyBpbiBgYWxsb2NhdGlvbnMueWFtbGAgKHJlZHVjZSBvdGhlcgp0ZWFtcycgZnJhY3Rpb25zIHRvIHN0YXkg4omkIDEuMCkuCgojIyMgQ2hhbmdpbmcgcGlwZWxpbmUgZnJlcXVlbmN5CgpVcGRhdGUgdGhlIGFwcHJvcHJpYXRlIGVudHJ5IGluIGBydW5zX3Blcl93ZWVrLnlhbWxgLiBGb3IgYSBuZXcgcGlwZWxpbmVfcmVvcmcgWUFNTCwKYWRkIGEgbmV3IGtleSB1c2luZyB0aGUgWUFNTCBmaWxlbmFtZSAod2l0aCBgLnlhbWxgIGV4dGVuc2lvbikuCgojIyMgSHlicmlkOiB0aW1lb3V0IMOXIFNub3dmbGFrZSBydW5zL3dlZWsgKGFsbG9jYXRpb25zX3VzYWdlX2Jhc2VkX3RpbWVvdXRfeF9zbm93Zmxha2VfcnB3LnlhbWwpCgpBbnN3ZXJzIHRoZSBxdWVzdGlvbjogKmlmIGV2ZXJ5IGpvYiByYW4gdG8gaXRzIGNvbmZpZ3VyZWQgdGltZW91dCBhdCB0aGUgYWN0dWFsIG9ic2VydmVkIGNhZGVuY2UsIGhvdyB3b3VsZCB0aGUgcG9vbCBiZSBzcGxpdD8qCgotICoqVGltZW91dCoqIOKAlCB0YWtlbiBmcm9tIGB0ZXN0cy9waXBlbGluZV9yZW9yZy8qLnlhbWxgIChuZXcgYHNrdXM6YCBkaWN0IGZvcm1hdCkgYW5kIGZyb20gc3RhdGljIGFuYWx5c2lzIG9mIGxlZ2FjeSBpbXBsIGZpbGVzIGluIGAuZ2l0aHViL3dvcmtmbG93cy9gLgotICoqUnVucy93ZWVrKiog4oCUIGBDT1VOVChESVNUSU5DVCBDSUNEX1BJUEVMSU5FX0lEKSAvIDI4ICogN2AgZnJvbSBTbm93Zmxha2UsIHN1bW1pbmcgYm90aCBtYWluLWJyYW5jaCBhbmQgUFItYnJhbmNoIHJ1bnMuCi0gKipUZWFtIG93bmVyc2hpcCoqIOKAlCByZWFkIGRpcmVjdGx5IGZyb20gZWFjaCBwaXBlbGluZV9yZW9yZyBZQU1MJ3MgYHRlYW06YCBmaWVsZCAoYXV0aG9yaXRhdGl2ZSk7IGxlZ2FjeSBidWNrZXQtMiB3b3JrZmxvd3MgYXR0cmlidXRlZCBmcm9tIGBDT0RFT1dORVJTYC4KClVzZSB0aGlzIGZpbGUgd2hlbiB5b3Ugd2FudCBhICpjb25zZXJ2YXRpdmUsIGNhZGVuY2UtYW5jaG9yZWQqIGxpbWl0IHJhdGhlciB0aGFuIGFuIGFjdHVhbHMtYmFzZWQgb25lLiBJdCB3aWxsIGZsYWcgdGVhbXMgd2hvc2UgdGltZW91dHMgYXJlIHBhZGRlZCBmYXIgYmV5b25kIGFjdHVhbCBydW4gdGltZXMuCgpgYGAKTjE1MDogICBydW50aW1lIDM3JSwgdHRubiAzNiUsIGxsayAyMCUsIG1vZGVscyA3JQpOMzAwOiAgIHR0bm4gNTQlLCBydW50aW1lIDM1JSwgbW9kZWxzIDExJQpwMTUwYjogIHJ1bnRpbWUgNDYlLCB0dG5uIDIwJSwgbGxrIDE4JSwgc2NhbGVvdXQgOCUsIG1vZGVscyA4JQpwMzAwYjogIHJ1bnRpbWUgODglLCBtb2RlbHMgMTIlCkxMTUJPWDogbW9kZWxzIDY0JSwgc2NhbGVvdXQgMjQlLCB0dG5uIDEwJSwgc2hpZWxkIDIlCmdhbGF4eTogc2NhbGVvdXQgNDglLCBtb2RlbHMgMjYlLCB0dG5uIDI2JQpgYGAKCk5vdGFibGUgY29ycmVjdGlvbnMgdnMuIGVhcmxpZXIgZXN0aW1hdGVzIChBcHJpbCAyMDI2IHJldmlzaW9uKToKLSAqKmxsayBOMTUwL3AxNTBiKio6IHJhaXNlZCBmcm9tIDYlLzMlIOKGkiAyMCUvMTglIGFmdGVyIGFjY291bnRpbmcgZm9yIGFjdHVhbAogIGBsbGstdGVzdC13b3JtaG9sZWAvYGxsay10ZXN0LWJsYWNraG9sZWAgcnB3ICgzMTcuNzUvd2sgZWFjaCkuCi0gKipMTE1CT1ggcnVudGltZSoqOiBkcm9wcGVkIGZyb20gNyUg4oaSIDAlLiB0M2tfKi55YW1sIGB0ZWFtOmAgZmllbGRzIGFzc2lnbiB0aG9zZQogIGpvYnMgdG8gbW9kZWxzLCBzY2FsZW91dCwgdHRubiwgYW5kIHNoaWVsZCDigJQgbm90IHJ1bnRpbWUuIEhpc3RvcmljYWwgU25vd2ZsYWtlCiAgYXR0cmlidXRpb24gd2FzIHdyb25nLgotICoqZ2FsYXh5IHNjYWxlb3V0Kio6IHJhaXNlZCBmcm9tIDE3JSDihpIgNDglIGFmdGVyIGFkZGluZyBgbXVsdGktaG9zdC1nbHgtMngvNHhgCiAgKDE2NSs1MSBoL3drKSB3aGljaCB3YXMgbWlzc2luZyBmcm9tIGVhcmxpZXIgZXN0aW1hdGVzLgoKIyMjIFByb21vdGluZyB2MiBhbGxvY2F0aW9ucwoKV2hlbiB0aGUgdXNhZ2UtYmFzZWQgYWxsb2NhdGlvbnMgYXJlIHJlYWR5IHRvIGJlY29tZSBhdXRob3JpdGF0aXZlOgoxLiBSZXBsYWNlIChvciByZW5hbWUpIGBhbGxvY2F0aW9ucy55YW1sYCB3aXRoIHRoZSBjb250ZW50IGZyb20KICAgYGFsbG9jYXRpb25zX3VzYWdlX2Jhc2VkX3YyLnlhbWxgLgoyLiBWZXJpZnkgYHBvb2xzLnlhbWxgIHJlZmxlY3RzIGN1cnJlbnQgU25vd2ZsYWtlIGFjdHVhbHMgKGFscmVhZHkgdXBkYXRlZCBBcHJpbCAyMDI2KS4KMy4gVXBkYXRlIGBidWRnZXRfY2hlY2sucHlgIHRvIHJlc29sdmUgcnVubmVyIGxhYmVscyB0byBwZXItU0tVIHNrdV9jb25maWcga2V5cwogICBpbnN0ZWFkIG9mIHRoZSBhZ2dyZWdhdGVkIGBSVU5ORVJfU0tVX01BUGAuCjQuIFJlbW92ZSB0aGUgbm93LXN1cGVyc2VkZWQgZmlsZSB0byBhdm9pZCBjb25mdXNpb24uCg==
+# CI Time Budget System
+
+This directory contains the configuration files that define how CI machine-hours are
+budgeted across teams. The enforcement script (`scripts/budget_check.py`) reads these
+files on every PR that touches pipelines, workflow files, or this directory itself.
+
+---
+
+## Directory contents
+
+| File | Purpose |
+|------|---------|
+| `pools.yaml` | Weekly machine-hours per hardware SKU — actual Snowflake observed usage for tt-metal |
+| `allocations.yaml` | Fractional share of each pool allocated to each team (**active — used by the script**) |
+| `allocations_usage_based_pipeline_reorg.yaml` | Usage-derived allocations, pipeline_reorg tests only — reference |
+| `allocations_usage_based_v2.yaml` | Usage-derived allocations, pipeline_reorg + all legacy (bucket-2) workflows — reference |
+| `allocations_usage_based_timeout_x_snowflake_rpw.yaml` | Hybrid: YAML timeout × Snowflake runs/week — worst-case ceiling at real cadence — reference |
+| `runs_per_week.yaml` | How many times each pipeline (or test YAML) runs per week |
+| `BUDGET_STATUS.md` | Auto-generated status snapshot; do not edit manually |
+| `README.md` | This file |
+
+---
+
+## How pools.yaml was decided
+
+`pools.yaml` lists the **actual observed weekly machine-hours** tt-metal jobs consumed on
+each hardware SKU. These are the denominators in all budget calculations.
+
+### Key format
+
+Keys match `.github/sku_config.yaml` exactly, which is the single source of truth for
+SKU → runner label mapping. CIv1 and CIv2 SKUs are separated by comments within a flat
+structure (no nesting). There are no key collisions — CIv2 keys carry a `_civ2` suffix.
+
+### Values — Snowflake actuals (tt-metal only)
+
+```
+Formula: SUM(JOB_EXECUTION_TIME) / 3600 / 28 * 7
+Source:  TTDATASF.SW_TEST.CICD_JOB + CICD_PIPELINE
+Filter:  PROJECT = 'tt-metal', last 28 days
+```
+
+SKU labels are matched to sku_config entries using ILIKE patterns derived from each
+SKU's `runs_on` array. CIv2 labels are single strings (e.g. `tt-ubuntu-2204-N150-viommu-stable`);
+CIv1 labels are comma-separated tag sets (e.g. `arch-wormhole_b0,config-t3000,in-service`).
+
+CIv2 machines are shared across repos and orgs. Using tt-metal-only observed hours as
+the denominator is intentionally conservative — it does not claim capacity beyond what
+tt-metal actually consumed.
+
+~3,800 h/wk is untracked: legacy multi-host runner labels (`multi-host-galaxy`,
+`multi-host-glx-4x`, `multi-host-t3000`, bare hostnames like `g04glx03`) that have no
+entry in sku_config.
+
+### Notable observed values (April 2026)
+
+```
+CIv2:  wh_n300_civ2 5,035 h/wk   bh_p150b_civ2 2,411   wh_n150_civ2 1,053
+CIv1:  wh_n300     12,704 h/wk   wh_galaxy_perf 2,404  wh_llmbox    1,152
+```
+
+`wh_n300` (CIv1 cloud VMs) dominates — it carries the bulk of ttnn-unit-tests and
+fd-nightly. `wh_n300_civ2` (bare-metal CIv2) is a separate pool.
+
+### Updating pools.yaml
+
+Re-run the Snowflake query documented in the header of
+`allocations_usage_based_timeout_x_snowflake_rpw.yaml`, replacing `COUNT(DISTINCT CICD_PIPELINE_ID)`
+with `SUM(JOB_EXECUTION_TIME)/3600`. Update values when the hardware farm changes
+significantly or after major pipeline restructuring.
+
+> **Note**: `budget_check.py` currently resolves pool keys using a `RUNNER_SKU_MAP`
+> dict with aggregated names (`N150`, `N300`, etc.). It needs to be updated to look up
+> per-SKU keys from `sku_config.yaml` before this new format is enforced.
+
+---
+
+## How allocations.yaml was decided
+
+`allocations.yaml` gives the **fraction of each pool** allocated to each team.
+Values per SKU must sum to ≤ 1.0; the remainder is unallocated headroom.
+
+### Version 1 — manual estimates (current active file)
+
+The original `allocations.yaml` was hand-authored based on rough prior knowledge of
+which teams own which hardware-intensive test suites:
+
+- **N150 / N300**: models team runs the heavy fast-dispatch nightly suites; runtime
+  owns metalium/dispatch tests; LLK team runs kernel validation.
+- **p150b / p300b**: LLK team was allocated a large share based on their planned BH
+  kernel work; models and runtime split the remainder.
+- **LLMBOX**: mostly models (large model inference) with runtime taking T3000 dispatch.
+- **galaxy**: heavily models (demo + perf), with some runtime.
+
+These fractions were set before actual usage data was available. They are intentionally
+conservative so that no team can monopolise a pool and starve others.
+
+### Usage-based: pipeline_reorg only (allocations_usage_based_pipeline_reorg.yaml)
+
+Covers only the jobs that come from `tests/pipeline_reorg/*.yaml` test suites
+(galaxy-*, models-*, t3000-*, blackhole-multi-card-*, single-card-*, vllm-tests,
+multi-host-*, Galaxy-DeepSeek-tests). All legacy bucket-2 workflows are excluded.
+
+```
+N150:   models 100%
+N300:   models 95%, runtime 5%
+p150b:  runtime 74%, models 22%, scaleout 4%
+p300b:  runtime 85%, models 15%
+LLMBOX: runtime 83%, models 17%
+galaxy: models 67%, ttnn 19%, scaleout 14%
+```
+
+### Usage-based: all pipelines (allocations_usage_based_v2.yaml)
+
+Adds all legacy bucket-2 workflows on top of pipeline_reorg. This is the most
+complete picture of actual hardware consumption. See the methodology comment in
+that file for the full Snowflake query and attribution logic.
+
+| | v1 (manual) | pipeline_reorg only | all pipelines | timeout × sf_rpw |
+|-|------------|---------------------|---------------|-----------------|
+| Source | Human estimates | Snowflake actuals | Snowflake actuals | YAML timeout + Snowflake rpw |
+| Coverage | pipeline_reorg only | pipeline_reorg only | pipeline_reorg + bucket-2 | pipeline_reorg + bucket-2 |
+| Cost model | `timeout × manual rpw` | actual wall-clock | actual wall-clock | `timeout × Snowflake rpw` |
+| Teams | infra, llk, models, runtime | models, ttnn, runtime, scaleout | models, ttnn, runtime, scaleout, shield, llk | models, ttnn, runtime, scaleout, shield, llk |
+| Pessimism | High (worst-case timeout, guessed rpw) | Low (actual times) | Low (actual times) | High (worst-case timeout, real cadence) |
+
+Key difference between the two usage-based files: bucket-2 workflows shift N300
+heavily toward models (fd-nightly alone adds 8,200 h/wk) and N150/p150b toward runtime.
+
+```
+                       pipeline_reorg only    all pipelines
+N300  models:               95%                  70%
+N300  runtime:               5%                  14%
+N150  models:              100%                  30%
+N150  runtime:               0%                  41%
+p150b runtime:              74%                  64%
+```
+
+```
+all pipelines summary:
+N300:   models 70%, ttnn 16%, runtime 14%
+N150:   models 30%, ttnn 23%, runtime 41%, llk 6%
+p150b:  runtime 64%, ttnn 24%, models 8%, llk 3%, scaleout 1%
+p300b:  runtime 85%, models 15%
+LLMBOX: runtime 81%, models 17%, ttnn 2%
+galaxy: models 67%, ttnn 19%, scaleout 14%
+```
+
+To promote either file to active: update the `allocations` load path in
+`budget_check.py` (line 545) and update `pools.yaml` with measured throughput.
+
+---
+
+## How runs_per_week.yaml was decided
+
+`runs_per_week.yaml` maps pipeline names to estimated weekly run counts.
+These are used by the script to convert a per-run timeout cost into weekly machine-hours:
+
+```
+weekly_hours = timeout_minutes / 60 × runs_per_week
+```
+
+Current values:
+
+| Pipeline | Runs/week | Basis |
+|---------|-----------|-------|
+| `pr-gate.yaml` | 256 | ~51 PRs/day × 5 weekdays |
+| `merge-gate.yaml` | 49 | ~10 merges/day × 5 weekdays |
+| `post-commit.yaml` | 49 | same cadence as merge-gate |
+
+For **pipeline_reorg test YAMLs** the key is the YAML filename (e.g.
+`galaxy_e2e_tests.yaml: 10`). Currently these are commented out pending the
+pipeline_reorg migration completing.
+
+Update this file whenever pipeline frequency changes (e.g. after gate restructuring
+or splitting a nightly into multiple cadences).
+
+---
+
+## How budget_check.py works
+
+### Cost model
+
+The script calculates *projected weekly machine-hours* per `(team, sku)` pair using
+worst-case timeouts, not actual execution times:
+
+```
+cost = (timeout_minutes / 60) × runs_per_week
+```
+
+This is pessimistic by design — if every job runs to its full timeout, does this
+team's allocation cover it? The v2 allocation file uses actuals instead, but the
+enforcement script still uses timeouts for fast, stateless CI checks.
+
+### Data sources
+
+**pipeline_reorg tests** (`tests/pipeline_reorg/*.yaml`)
+
+Each file contains a list of test entries. Each entry is one parallel job (one machine).
+Fields used: `team:`, `skus:` (dict of sku_name → `{timeout, tier}`). Each entry is
+one parallel job running on one machine.
+
+```yaml
+# Example: tests/pipeline_reorg/runtime_unit_tests.yaml
+- name: runtime_fast_dispatch_on_eth
+  cmd: ./build/test/tt_metal/unit_tests_dispatch ...
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  team: runtime
+```
+
+**Legacy workflow files** (`.github/workflows/*.yaml`)
+
+Workflows that use `prepare_test_matrix` / `prepare-test-matrix` are treated as
+pipeline_reorg wrappers and skipped (their costs are already captured via the test
+YAMLs above). All other workflows are parsed for direct `runs-on` + `timeout-minutes`
+fields on each job. Team ownership is resolved from `CODEOWNERS`.
+
+> **Limitation**: bucket-2 legacy workflows use `uses:` (reusable workflows) with
+> `with: {runs_on: ..., timeout_minutes: ...}` parameters. Static YAML parsing
+> yields nothing for these jobs — their `runs-on` / `timeout-minutes` values are
+> not on the job dict itself. As a result, the script currently under-counts cost
+> for these workflows. The usage-based v2 allocations file was produced from
+> Snowflake data specifically to compensate for this gap.
+
+### Runner label → SKU mapping
+
+```python
+RUNNER_SKU_MAP = {
+    "n150":      "N150",
+    "n300":      "N300",
+    "p150b":     "p150b",
+    "p300b":     "p300b",
+    "llmbox":    "LLMBOX",
+    "galaxy":    "galaxy",
+    "blackhole": "p150b",   # alias
+}
+```
+
+> **Pending update**: this map uses aggregated pool names (`N150`, `N300`, …) which no
+> longer match pools.yaml keys. It needs to be rewritten to resolve runner labels to
+> individual sku_config SKU names (e.g. `wh_n150_civ2`, `wh_n300`) using the
+> `runs_on` arrays in `.github/sku_config.yaml`.
+
+Substring match against the runner label string. CPU-only runners
+(`ubuntu-latest`, `large-stable`, etc.) do not match and are silently skipped.
+
+### Budget limit formula
+
+```
+limit(team, sku) = pools[sku] × allocations[sku][team]
+```
+
+A team is over budget if their projected weekly cost exceeds this limit.
+
+### Modes
+
+| Flag | What it does |
+|------|-------------|
+| `--report` | Full per-team-per-SKU report against current state |
+| `--diff BASE_REF` | Shows only the delta introduced by the PR; fails if post-merge total exceeds limit |
+| `--update-status` | Regenerates `BUDGET_STATUS.md` (always runs in CI, even on failure) |
+
+Exit code is 1 if any team is over budget; 0 otherwise.
+
+### Warning vs. blocking
+
+- **OVER** (>100% of limit) — script exits 1, PR is blocked.
+- **WARN** (>85% of limit) — logged but does not block.
+- Workflows with no CODEOWNERS match → attributed to `unattributed`; cost is
+  reported but does not count against any team's limit (warning only).
+
+---
+
+## CI workflow (.github/workflows/budget-check.yaml)
+
+The workflow fires on:
+- Pull requests touching `tests/pipeline_reorg/**`, `.github/workflows/**`, or
+  `.github/time_budgets/**`
+- Manual `workflow_dispatch`
+
+Steps:
+1. **Checkout** with full history (`fetch-depth: 0`) so `git diff` against the PR
+   base is available.
+2. **Install deps**: `pip install pyyaml`
+3. **Check budget delta**: `budget_check.py --diff <base_sha>` — fails the PR if
+   the change pushes any team over their limit.
+4. **Regenerate BUDGET_STATUS.md**: runs `--update-status` regardless of step 3
+   outcome (`if: always()`).
+5. **Upload artifact**: the generated `BUDGET_STATUS.md` is attached to the workflow
+   run so reviewers can inspect the full breakdown without re-running locally.
+
+---
+
+## Updating these files
+
+### Adding a new hardware SKU
+
+1. Add it to `sku_config.yaml` with its `runs_on` labels.
+2. Add it to `pools.yaml` using the same key, with its observed weekly hours from
+   Snowflake (`SUM(JOB_EXECUTION_TIME)/3600/28*7`, filtered to `PROJECT = 'tt-metal'`).
+3. Add team fractions to `allocations.yaml` (must sum to ≤ 1.0).
+4. Add a runner label pattern to `RUNNER_SKU_MAP` in `budget_check.py`.
+
+### Adding a new team
+
+Add the team key to the relevant SKU entries in `allocations.yaml` (reduce other
+teams' fractions to stay ≤ 1.0).
+
+### Changing pipeline frequency
+
+Update the appropriate entry in `runs_per_week.yaml`. For a new pipeline_reorg YAML,
+add a new key using the YAML filename (with `.yaml` extension).
+
+### Hybrid: timeout × Snowflake runs/week (allocations_usage_based_timeout_x_snowflake_rpw.yaml)
+
+Answers the question: *if every job ran to its configured timeout at the actual observed cadence, how would the pool be split?*
+
+- **Timeout** — taken from `tests/pipeline_reorg/*.yaml` (new `skus:` dict format) and from static analysis of legacy impl files in `.github/workflows/`.
+- **Runs/week** — `COUNT(DISTINCT CICD_PIPELINE_ID) / 28 * 7` from Snowflake, summing both main-branch and PR-branch runs.
+- **Team ownership** — read directly from each pipeline_reorg YAML's `team:` field (authoritative); legacy bucket-2 workflows attributed from `CODEOWNERS`.
+
+Use this file when you want a *conservative, cadence-anchored* limit rather than an actuals-based one. It will flag teams whose timeouts are padded far beyond actual run times.
+
+```
+N150:   runtime 37%, ttnn 36%, llk 20%, models 7%
+N300:   ttnn 54%, runtime 35%, models 11%
+p150b:  runtime 46%, ttnn 20%, llk 18%, scaleout 8%, models 8%
+p300b:  runtime 88%, models 12%
+LLMBOX: models 64%, scaleout 24%, ttnn 10%, shield 2%
+galaxy: scaleout 48%, models 26%, ttnn 26%
+```
+
+Notable corrections vs. earlier estimates (April 2026 revision):
+- **llk N150/p150b**: raised from 6%/3% → 20%/18% after accounting for actual
+  `llk-test-wormhole`/`llk-test-blackhole` rpw (317.75/wk each).
+- **LLMBOX runtime**: dropped from 7% → 0%. t3k_*.yaml `team:` fields assign those
+  jobs to models, scaleout, ttnn, and shield — not runtime. Historical Snowflake
+  attribution was wrong.
+- **galaxy scaleout**: raised from 17% → 48% after adding `multi-host-glx-2x/4x`
+  (165+51 h/wk) which was missing from earlier estimates.
+
+### Promoting v2 allocations
+
+When the usage-based allocations are ready to become authoritative:
+1. Replace (or rename) `allocations.yaml` with the content from
+   `allocations_usage_based_v2.yaml`.
+2. Verify `pools.yaml` reflects current Snowflake actuals (already updated April 2026).
+3. Update `budget_check.py` to resolve runner labels to per-SKU sku_config keys
+   instead of the aggregated `RUNNER_SKU_MAP`.
+4. Remove the now-superseded file to avoid confusion.
