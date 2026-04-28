@@ -85,10 +85,10 @@ uv pip install granite-tsfm
 ## Running Tests
 ```bash
 # All PCC tests (require Wormhole device)
-pytest models/demos/granite_ttm_r1/tests/pcc/ -v
+pytest models/demos/granite_ttm_r1/tests/pcc/ -v -s
 
 # Model size only (no device needed)
-pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_model_size -v
+pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_model_size -v -s
 
 # Stage 3 traced latency / throughput (batch=1)
 pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_and_latency_traced -v -s
@@ -100,10 +100,10 @@ pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_batc
 pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_throughput_pipelined -v -s
 
 # Multi-model serving (100 shared-weight instances)
-pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_multi_model_serving -v
+pytest models/demos/granite_ttm_r1/tests/perf/test_perf.py::test_multi_model_serving -v -s
 
 # Streaming inference tests
-pytest models/demos/granite_ttm_r1/tests/perf/test_streaming.py -v
+pytest models/demos/granite_ttm_r1/tests/perf/test_streaming.py -v -s
 ```
 
 ### Accuracy Tests (using Multiple External Datasets)
