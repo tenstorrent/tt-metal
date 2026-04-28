@@ -8,11 +8,10 @@ Full model integration test with accuracy testing
 import os
 import pickle
 
-import pytest
 import torch
 from loguru import logger
 
-from ..test_factory import TestFactory, parametrize_mesh_with_fabric
+from ..test_factory import TestFactory, parametrize_mesh_shapes, parametrize_mesh_with_fabric
 
 
 class TokenAccuracy:
@@ -140,17 +139,7 @@ def run_accuracy(
 
 
 @parametrize_mesh_with_fabric()
-@pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        (1, 8),
-        (4, 8),
-    ],
-    ids=[
-        "mesh_1x8",
-        "mesh_4x8",
-    ],
-)
+@parametrize_mesh_shapes()
 def test_full_model_accuracy(mesh_device, mesh_shape, device_params, reset_seeds, state_dict):
     """Test full model with accuracy testing using new abstractions"""
 

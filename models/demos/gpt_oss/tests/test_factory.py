@@ -117,23 +117,23 @@ def parametrize_mesh_with_fabric():
     """
     num_devices = ttnn.get_num_devices()
     if num_devices == 1:
-        mesh_params = [pytest.param((1, 1))]
+        mesh_params = [pytest.param((1, 1), id="mesh_1x1")]
         fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
     elif num_devices == 2:
         # 2-card Blackhole (e.g. P300). Open a 1x2 base mesh; the test selects a
         # submesh via the mesh_shape parametrize (use -k mesh_1x1 to run on a
         # single card). Fabric stays disabled since 1x1 needs no CCL.
-        mesh_params = [pytest.param((1, 2))]
+        mesh_params = [pytest.param((1, 2), id="mesh_1x2")]
         fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
     elif num_devices == 8:
-        mesh_params = [pytest.param((1, 8))]
+        mesh_params = [pytest.param((1, 8), id="mesh_1x8")]
         fabric_params = [
             pytest.param(
                 {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
             ),
         ]
     elif num_devices == 32:
-        mesh_params = [pytest.param((4, 8))]
+        mesh_params = [pytest.param((4, 8), id="mesh_4x8")]
         fabric_params = [
             pytest.param(
                 {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
@@ -149,6 +149,32 @@ def parametrize_mesh_with_fabric():
         return func
 
     return decorator
+
+
+def parametrize_mesh_shapes():
+    """Parametrize the inner ``mesh_shape`` (used by tests that call
+    ``mesh_device.create_submesh(MeshShape(mesh_shape))``) with the shapes
+    that fit inside the base mesh opened by ``parametrize_mesh_with_fabric``.
+
+    Tests can use this *together with* ``parametrize_mesh_with_fabric``: the
+    outer decorator opens the base device, this one selects which submesh to
+    test on. On a 32-device system both ``(1,8)`` and ``(4,8)`` submeshes of
+    the ``(4,8)`` base are exercised; on smaller systems only the shapes that
+    actually fit are emitted, so ``-k mesh_1x1`` filters cleanly without
+    pulling in cross-product cases that crash submesh creation.
+    """
+    num_devices = ttnn.get_num_devices()
+    if num_devices == 1:
+        shapes = [pytest.param((1, 1), id="mesh_1x1")]
+    elif num_devices == 2:
+        shapes = [pytest.param((1, 1), id="mesh_1x1"), pytest.param((1, 2), id="mesh_1x2")]
+    elif num_devices == 8:
+        shapes = [pytest.param((1, 8), id="mesh_1x8")]
+    elif num_devices == 32:
+        shapes = [pytest.param((1, 8), id="mesh_1x8"), pytest.param((4, 8), id="mesh_4x8")]
+    else:
+        raise ValueError(f"Invalid number of devices: {num_devices}")
+    return pytest.mark.parametrize("mesh_shape", shapes)
 
 
 def parametrize_batch_seq(configs=None, ids=None):

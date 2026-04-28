@@ -140,6 +140,9 @@ def decode_forward(
         )
         tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     else:
+        # GQA (num_kv_heads > 1) rejects sharded output in the SDPA decode
+        # device op — match the paged path: write to DRAM, then to_memory_config
+        # into the height-sharded layout that downstream concat_heads needs.
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
@@ -150,8 +153,9 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            memory_config=height_sharded_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection

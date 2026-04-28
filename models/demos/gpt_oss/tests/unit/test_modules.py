@@ -14,7 +14,13 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_fo
 from models.tt_transformers.tt.rope import RotarySetup
 
 from ...tt.layer import DecoderLayer
-from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
+from ..test_factory import (
+    TestFactory,
+    compare_tensors,
+    parametrize_batch_seq,
+    parametrize_mesh_shapes,
+    parametrize_mesh_with_fabric,
+)
 
 
 # Helper Functions for Common Test Patterns
@@ -583,17 +589,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         "prefill_4096",
     ],
 )
-@pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        (1, 8),
-        (4, 8),
-    ],
-    ids=[
-        "mesh_1x8",
-        "mesh_4x8",
-    ],
-)
+@parametrize_mesh_shapes()
 @pytest.mark.parametrize(
     # We want to test the first two layers so we capture both sliding and global attention layers
     "layer_idx",
@@ -1043,17 +1039,7 @@ def run_model_forward_test(
         "decode_b128_s1",
     ],
 )
-@pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        (1, 8),
-        (4, 8),
-    ],
-    ids=[
-        "mesh_1x8",
-        "mesh_4x8",
-    ],
-)
+@parametrize_mesh_shapes()
 @pytest.mark.parametrize(
     "num_layers",
     [1],

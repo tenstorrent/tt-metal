@@ -24,6 +24,16 @@ from models.common.sampling.generator import SamplingGenerator, SamplingParams, 
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gpt_oss.tt.model import compute_per_device_vocab
 
+# Every test in this module is pinned to a 4×8 Galaxy mesh with FABRIC_1D_RING
+# (see GPT_OSS_DEVICE_PARAMS below). On systems with fewer devices — e.g. the
+# 1×1 Blackhole P150 dev box — pytest's mesh_device fixture would TT_FATAL when
+# trying to open a 4×8 mesh; skip the whole module instead so the rest of the
+# unit-test suite still runs.
+pytestmark = pytest.mark.skipif(
+    ttnn.get_num_devices() < 32,
+    reason="GPT-OSS sampling tests require a 4×8 Galaxy mesh (32 devices)",
+)
+
 # --- Reference implementation ---
 
 
