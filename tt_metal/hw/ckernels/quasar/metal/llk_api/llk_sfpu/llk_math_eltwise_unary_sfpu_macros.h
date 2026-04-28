@@ -14,6 +14,8 @@
 // =============================================================================
 // SFPU invocation helper
 //
+// TO DO: IMPLEMENT DST_INDEX BOUND CHECK
+//
 // Validates the destination tile index and then dispatches to the LLK SFPU
 // params function. The dst-bound check used to live inside
 // _llk_math_eltwise_unary_sfpu_params_ itself; placing it here keeps the LLK
@@ -31,7 +33,8 @@ namespace ckernel {
 
 template <DstSync DST_SYNC, bool DST_ACCUM, typename Callable, typename... Args>
 inline __attribute__((always_inline)) void _sfpu_check_and_call_(
-    Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode, Args&&... args) {
+    Callable&& sfpu_func, std::uint32_t dst_index, [[maybe_unused]] int vector_mode, Args&&... args) {
+    LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
     _llk_math_eltwise_unary_sfpu_params_(std::forward<Callable>(sfpu_func), dst_index, std::forward<Args>(args)...);
 }
 
