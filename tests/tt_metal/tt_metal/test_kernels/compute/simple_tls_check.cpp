@@ -5,7 +5,7 @@
 // Quasar compute: parity with dataflow simple_tls_check for globals, TLS, and
 // kernel_text_offset grouping. Built for all four TRISC translation units;
 // each ELF carries its own statics. Threading metadata matches DM-style
-// software threads across NEOs for a given TRISC lane when not legacy.
+// software threads across NEOs for a given TRISC within each engine.
 
 #include "api/compute/common.h"
 #include "ckernel.h"
@@ -14,8 +14,6 @@
 #include "../dataflow/simple_tls_check_defines.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
-
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK) || defined(TRISC_ISOLATE_SFPU)
 
 uint32_t shared_global = 5;
 uint32_t uninitialized_global;
@@ -87,5 +85,3 @@ void kernel_main() {
 
     *signal_addr = hartid + 1;
 }
-
-#endif
