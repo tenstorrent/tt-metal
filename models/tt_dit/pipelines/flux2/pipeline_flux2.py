@@ -38,8 +38,8 @@ class Flux2Pipeline:
         self,
         *,
         mesh_device: ttnn.MeshDevice,
-        use_torch_prompt_encoder: bool = False,
-        use_torch_vae_decoder: bool = False,
+        encoder_on_device: bool = True,
+        vae_on_device: bool = True,
         parallel_config: DiTParallelConfig,
         encoder_parallel_config: EncoderParallelConfig | None = None,
         vae_parallel_config: VAEParallelConfig | None = None,
@@ -47,6 +47,8 @@ class Flux2Pipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
+        is_fsdp: bool = False,
+        dynamic_load: bool = False,
     ) -> None:
         self.timing_collector = None
 
@@ -54,6 +56,8 @@ class Flux2Pipeline:
         self._parallel_config = parallel_config
         self._height = height
         self._width = width
+        self.is_fsdp = is_fsdp
+        self.dynamic_load = dynamic_load
 
         # setup encoder and vae parallel configs.
         if encoder_parallel_config is None:
@@ -92,7 +96,7 @@ class Flux2Pipeline:
             for submesh_device in self._submesh_devices
         ]
 
-        self.encoder_device = self._submesh_devices[0] if not use_torch_prompt_encoder else None
+        self.encoder_device = self._submesh_devices[0] if encoder_on_device else None
         self.encoder_mesh_shape = ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
         self.vae_device = self._submesh_devices[0]
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
@@ -102,12 +106,12 @@ class Flux2Pipeline:
 
         checkpoint_name = "black-forest-labs/FLUX.2-dev"
 
-        torch_transformer = diffusers.Flux2Transformer2DModel.from_pretrained(
+        self._torch_transformer = diffusers.Flux2Transformer2DModel.from_pretrained(
             checkpoint_name,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
         )
-        torch_transformer.eval()
+        self._torch_transformer.eval()
 
         self._torch_vae = AutoencoderKLFlux2.from_pretrained(checkpoint_name, subfolder="vae")
         assert isinstance(self._torch_vae, AutoencoderKLFlux2)
@@ -145,56 +149,96 @@ class Flux2Pipeline:
                 ccl_manager=self._ccl_managers[i],
                 parallel_config=parallel_config,
                 padding_config=padding_config,
+                is_fsdp=self.is_fsdp,
             )
-
-            cache.load_model(
-                tt_model=tt_transformer,
-                get_torch_state_dict=torch_transformer.state_dict,
-                model_name="flux2-dev",
-                subfolder="transformer",
-                parallel_config=self._parallel_config,
-                mesh_shape=tuple(submesh_device.shape),
-            )
-
             self.transformers.append(tt_transformer)
-            ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [Tracer(self._step_inner, device=device) for device in self._submesh_devices]
 
-        self._pos_embed = torch_transformer.pos_embed
+        self._pos_embed = self._torch_transformer.pos_embed
 
         self._image_processor = VaeImageProcessor()
 
+        logger.info("creating TT-NN text encoder...")
         with self.encoder_reshape(self.encoder_device):
-            logger.info("creating TT-NN text encoder...")
             self._prompt_encoder = PromptEncoder(
                 checkpoint_name=checkpoint_name,
-                use_torch_encoder=use_torch_prompt_encoder,
+                use_torch_encoder=not encoder_on_device,
                 device=self.encoder_device,
                 parallel_config=self._encoder_parallel_config,
                 ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
             )
 
-            if self.encoder_device is not None:
-                ttnn.synchronize_device(self.encoder_device)
+        if vae_on_device:
+            logger.info("creating TT-NN VAE decoder...")
+            self._vae_decoder = Flux2VaeDecoder(
+                out_channels=3,
+                block_out_channels=[128, 256, 512, 512],
+                layers_per_block=2,
+                z_channels=32,
+                device=self.vae_device,
+                parallel_config=self._vae_parallel_config,
+                ccl_manager=self._ccl_managers[self.vae_submesh_idx],
+            )
+        else:
+            self._vae_decoder = None
 
-            if not use_torch_vae_decoder:
-                logger.info("creating TT-NN VAE decoder...")
-                self._vae_decoder = Flux2VaeDecoder(
-                    out_channels=3,
-                    block_out_channels=[128, 256, 512, 512],
-                    layers_per_block=2,
-                    z_channels=32,
-                    device=self.vae_device,
-                    parallel_config=self._vae_parallel_config,
-                    ccl_manager=self._ccl_managers[self.vae_submesh_idx],
+        if self.dynamic_load:
+            if encoder_on_device:
+                self.transformers[self.encoder_submesh_idx].register_coresident_exclusions(
+                    self._prompt_encoder._encoder
                 )
-                self._vae_decoder.load_torch_state_dict(self._torch_vae.state_dict())
-            else:
-                self._vae_decoder = None
+                self._prompt_encoder._encoder.register_coresident_exclusions(
+                    self.transformers[self.encoder_submesh_idx]
+                )
 
-            if self.encoder_device is not None:
-                ttnn.synchronize_device(self.encoder_device)
+            if vae_on_device:
+                self.transformers[self.vae_submesh_idx].register_coresident_exclusions(self._vae_decoder)
+                self._vae_decoder.register_coresident_exclusions(self.transformers[self.vae_submesh_idx])
+
+        # Load in reverse order of use so the first-used model (encoder) stays loaded before __call__.
+        self._prepare_vae()
+        for i in range(len(self.transformers)):
+            self._prepare_transformer(i)
+        self._prepare_prompt_encoder()
+        if self.encoder_device is not None:
+            ttnn.synchronize_device(self.encoder_device)
+
+        self.warmup()
+
+    def warmup(self) -> None:
+        self.__call__(
+            prompts=["warmup"],
+            num_inference_steps=2,
+            seed=0,
+            traced=False,
+        )
+
+    def _prepare_transformer(self, i: int) -> None:
+        cache.load_model(
+            tt_model=self.transformers[i],
+            get_torch_state_dict=self._torch_transformer.state_dict,
+            model_name="flux2-dev",
+            subfolder="transformer",
+            parallel_config=self._parallel_config,
+            mesh_shape=tuple(self._submesh_devices[i].shape),
+            is_fsdp=self.is_fsdp,
+        )
+
+    def _prepare_prompt_encoder(self) -> None:
+        with self.encoder_reshape(self.encoder_device):
+            self._prompt_encoder.load_weights()
+
+    def _prepare_vae(self) -> None:
+        if self._vae_decoder is not None:
+            cache.load_model(
+                tt_model=self._vae_decoder,
+                get_torch_state_dict=self._torch_vae.state_dict,
+                model_name="flux2-dev",
+                subfolder="vae",
+                parallel_config=self._vae_parallel_config,
+                mesh_shape=tuple(self.vae_device.shape),
+            )
 
     @contextmanager
     def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
@@ -221,12 +265,14 @@ class Flux2Pipeline:
         dit_tp: tuple[int, int],
         encoder_tp: tuple[int, int],
         vae_tp: tuple[int, int],
-        use_torch_prompt_encoder: bool = False,
-        use_torch_vae_decoder: bool = False,
+        encoder_on_device: bool = True,
+        vae_on_device: bool = True,
         num_links: int,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         width: int = 1024,
         height: int = 1024,
+        is_fsdp: bool = False,
+        dynamic_load: bool = False,
     ) -> Flux2Pipeline:
         cfg_factor, cfg_axis = dit_cfg
         sp_factor, sp_axis = dit_sp
@@ -253,8 +299,8 @@ class Flux2Pipeline:
 
         return Flux2Pipeline(
             mesh_device=mesh_device,
-            use_torch_prompt_encoder=use_torch_prompt_encoder,
-            use_torch_vae_decoder=use_torch_vae_decoder,
+            encoder_on_device=encoder_on_device,
+            vae_on_device=vae_on_device,
             parallel_config=dit_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             vae_parallel_config=vae_parallel_config,
@@ -262,6 +308,8 @@ class Flux2Pipeline:
             num_links=num_links,
             width=width,
             height=height,
+            is_fsdp=is_fsdp,
+            dynamic_load=dynamic_load,
         )
 
     def __call__(
@@ -291,6 +339,7 @@ class Flux2Pipeline:
 
         with timer.time_section("total") if timer else nullcontext():
             logger.info("encoding prompts...")
+            self._prepare_prompt_encoder()
 
             if prompt_upsample_temperature is not None:
                 with timer.time_section("prompt_upsampling") if timer else nullcontext():
@@ -364,6 +413,8 @@ class Flux2Pipeline:
                 tt_prompt_rope_sin_list.append(tt_prompt_rope_sin)
 
             logger.info("denoising...")
+            for i in range(len(self.transformers)):
+                self._prepare_transformer(i)
 
             for i, t in enumerate(tqdm.tqdm(timesteps)):
                 with timer.time_step("denoising_step") if timer else nullcontext():
@@ -402,6 +453,7 @@ class Flux2Pipeline:
             logger.info("decoding image...")
 
             with timer.time_section("vae_decoding") if timer else nullcontext():
+                self._prepare_vae()
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
