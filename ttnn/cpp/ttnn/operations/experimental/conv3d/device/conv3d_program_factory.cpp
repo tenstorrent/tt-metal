@@ -74,8 +74,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
             and must be padded with zeros so the MM result is correct.
     */
 
-    // If C_out_block is set, use it. Otherwise, use the full number of output channels.
-    uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : padded_C_out;
     uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
@@ -85,6 +83,62 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
     TT_FATAL(C_in_num_blocks * C_in_block == C_in, "C_in_num_blocks * C_in_block must equal C_in");
+
+    uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
+    uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
+
+    // Compute fp32 partials early so the L1 budget calculation can account for partial_tile_size.
+    bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
+    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
+    auto partial_tile_size = tt::tile_size(partial_data_format);
+
+    // Choose C_out_block: honour the caller's explicit setting, or auto-scale down to fit L1.
+    // weight_tiled, matmul_interm and matmul_result CBs all grow with matmul_N_t = C_out_block/32.
+    // For large padded_C_out (e.g. 1280 for Qwen3VL patch-embed) the unconstrained default
+    // overflows L1 (~1.3 MB budget) causing an internal runtime error.
+    uint32_t C_out_block;
+    if (config.C_out_block > 0) {
+        C_out_block = config.C_out_block;
+    } else {
+        constexpr uint32_t L1_RESERVE = 200 * 1024;
+        const uint32_t l1_budget = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_RESERVE;
+        const uint32_t vol2col_rm_pages_budget = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+        const uint32_t fixed_cb_bytes =
+            ((padded_patch_size * dtype_bytes) * vol2col_rm_pages_budget) +  // vol2col_rm
+            (tile_size * matmul_M_t * matmul_K_t);                           // vol2col_tiled
+        uint32_t var_per_n_t = tile_size * matmul_K_t +          // weight_tiled
+                               partial_tile_size * matmul_M_t +  // matmul_interm
+                               tile_size * matmul_M_t;           // matmul_result_rm
+        if (C_in_num_blocks > 1) {
+            var_per_n_t += partial_tile_size * matmul_M_t;  // reduction
+            var_per_n_t += tile_size;                       // worker_ack
+        }
+        if (use_fp32_partials) {
+            var_per_n_t += tile_size;  // zero tile
+        }
+        if (use_bias) {
+            var_per_n_t += tile_size;  // bias
+        }
+        uint32_t max_n_t =
+            (fixed_cb_bytes < l1_budget && var_per_n_t > 0)
+                ? std::max((l1_budget - fixed_cb_bytes) / var_per_n_t, 1u)
+                : 1u;
+        uint32_t auto_block = std::min(max_n_t * tt::constants::TILE_WIDTH, padded_C_out);
+        // Round down to the largest multiple of TILE_WIDTH that divides padded_C_out evenly
+        while (auto_block > tt::constants::TILE_WIDTH && padded_C_out % auto_block != 0) {
+            auto_block -= tt::constants::TILE_WIDTH;
+        }
+        C_out_block = auto_block;
+        log_debug(
+            tt::LogOp,
+            "Auto C_out_block={} (l1_budget={} fixed={} var_per_n_t={} max_n_t={})",
+            C_out_block,
+            l1_budget,
+            fixed_cb_bytes,
+            var_per_n_t,
+            max_n_t);
+    }
+
     uint32_t C_out_num_blocks = tt::div_up(padded_C_out, C_out_block);
     TT_FATAL(
         C_out_num_blocks * C_out_block == padded_C_out,
@@ -93,8 +147,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         C_out_num_blocks,
         C_out_block);
 
-    uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
-    uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
@@ -134,12 +186,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t cb_weight_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
-
-    // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
-    // This eliminates bf16 truncation between C_in block partial sums.
-    bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
-    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
-    auto partial_tile_size = tt::tile_size(partial_data_format);
 
     uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(
