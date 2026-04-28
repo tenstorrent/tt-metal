@@ -137,7 +137,7 @@ void complete_restore(
 // Only 3 barriers fire per ring iteration (one per TRID):
 //   Q[0]: wB(TRID_INNER), Q[N-2]: wB(TRID_LAST), Q[N-1]: wB(TRID_FIRST).
 // Start from 1 — TRID 0 is the default for all NOC writes and must not be used
-// for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row_no_pop
+// for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row
 // on last ring iter) would inflate the outstanding count and stall the barrier.
 constexpr uint32_t TRID_FIRST = 1;
 constexpr uint32_t TRID_INNER = 2;
@@ -217,11 +217,8 @@ void save_accumulators_with_trid(
     // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row_no_pop on last ring iter).
     // Without this, subsequent noc_async_write calls would inflate save_trid's outstanding count,
     // causing noc_async_write_barrier_with_trid(save_trid) to wait for unrelated writes.
+    // cb_out was already popped per-group inside write_out_row_by_row (via drain_cb_row_grouped).
     noc_async_write_set_trid(0);
-    // Pop cb_out AFTER the trid-flush above: the flush guarantees NOC has
-    // finished reading this call's source L1 bytes, so compute can now
-    // safely reserve and reuse those slots.
-    cb_pop_front(cb_out, out_tiles_to_pop);
     cb_pop_front(cb_max_out, Sq_chunk_t);
     cb_pop_front(cb_sum_out, Sq_chunk_t);
 }
