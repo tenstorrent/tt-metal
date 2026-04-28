@@ -348,6 +348,24 @@ class Llama3Transformer1D(LightweightModule):
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         return x
 
+    def post_process_prefill_output(self, hidden_states: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
+        """Convert traced prefill hidden states into logits for the last token block."""
+        get_last_token_floor = (last_token_idx // 32) * 32
+        x = ttnn.slice(
+            hidden_states,
+            (0, 0, get_last_token_floor, 0),
+            (1, 1, get_last_token_floor + 32, hidden_states.shape[-1]),
+        )
+
+        x = self.norm.prefill_forward(x)
+        x = _all_gather_rmsnorm_tensor(self.norm, x)
+        lm_head_memcfg = self.lm_head.config.input_memcfg
+        if lm_head_memcfg is not None and lm_head_memcfg.is_sharded():
+            x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
+        x = self.lm_head.forward(x)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -667,17 +685,6 @@ class EagerLlamaExecutor:
     def _assert_kv_cache_identity(self, kv_cache):
         return self._engine._assert_kv_cache_identity(kv_cache)
 
-    # =========================================================================
-    # Input Preparation — delegate to engine
-    # =========================================================================
-
-    def prepare_prefill_inputs(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
-    ):
-        return self._engine.prepare_prefill_inputs(
-            tokens, start_pos, page_table, chunk_page_table, trace_enabled, last_token_idx
-        )
-
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         return self._engine.prepare_decode_inputs_host(tokens, current_pos, page_table)
 
@@ -735,7 +742,6 @@ class EagerLlamaExecutor:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
-        enable_trace=True,
         sampling_params=None,
         start_pos=None,
     ):
@@ -745,7 +751,6 @@ class EagerLlamaExecutor:
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
-            enable_trace=enable_trace,
             sampling_params=sampling_params,
             start_pos=start_pos,
         )
@@ -759,7 +764,6 @@ class EagerLlamaExecutor:
         start_pos,
         page_table=None,
         kv_cache=None,
-        enable_trace=True,
         read_from_device=True,
         sampling_params=None,
     ):
@@ -768,7 +772,6 @@ class EagerLlamaExecutor:
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
         )

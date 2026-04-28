@@ -58,6 +58,7 @@ from models.tt_transformers.tt.common import (
 #   - embed_prefill(tokens_tt) -> ttnn.Tensor
 #   - embed_decode(tokens_tt) -> ttnn.Tensor
 #   - prefill_forward(x_embed, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, get_last_token) -> ttnn.Tensor
+#   - post_process_prefill_output(hidden_states, last_token_idx) -> ttnn.Tensor
 #   - decode_forward(x_embed, current_pos, rot_mats, page_table) -> ttnn.Tensor
 #   - gather_and_untilize_logits(logits) -> ttnn.Tensor
 #   - increment_positions(current_pos, rot_mat_idxs) -> None
@@ -200,28 +201,22 @@ class EagerLLMExecutor:
     # Input Preparation
     # =========================================================================
 
-    def prepare_prefill_inputs(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+    def _prepare_prefill_device_inputs(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
     ):
-        """Prepare prefill inputs. Returns (tokens_or_embed, cos, sin, page_table_tt, chunk_page_table_tt)."""
-        device = None if trace_enabled else self.mesh_device
-
+        """Prepare eager prefill device inputs. Returns (tokens_embd, cos, sin, page_table_tt, chunk_page_table_tt)."""
         assert tokens.dim() == 2, "tokens must be 2D"
         tokens_reshaped = tokens.reshape(1, 1, 1, -1)
         S = tokens_reshaped.shape[-1]
         tokens_tt = ttnn.from_torch(
             tokens_reshaped,
-            device=device,
+            device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        # todo)) EagerLLMExecutor cannot have trace enabled!
-        if not trace_enabled:
-            tokens_embd = self.model.embed_prefill(tokens_tt)
-        else:
-            tokens_embd = None
+        tokens_embd = self.model.embed_prefill(tokens_tt)
 
         # todo)) this rope code could be refactored?
         rope = self.model.rope_setup
@@ -232,10 +227,9 @@ class EagerLLMExecutor:
 
         required_end = start_pos + S
         pad_len = max(0, required_end - mat_len)
-        max_seq_len = self.model_args.max_seq_len if self.model_args else mat_len
 
-        prefill_start = 0 if trace_enabled else start_pos
-        slice_end = max_seq_len if trace_enabled else min(mat_len, required_end)
+        prefill_start = start_pos
+        slice_end = min(mat_len, required_end)
 
         cos_slice = rope.cos_matrix[:, :, prefill_start:slice_end, :]
         sin_slice = rope.sin_matrix[:, :, prefill_start:slice_end, :]
@@ -251,7 +245,7 @@ class EagerLLMExecutor:
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=device,
+                device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -262,14 +256,14 @@ class EagerLLMExecutor:
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=device,
+                device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
         return (
-            tokens_tt if trace_enabled else tokens_embd,
+            tokens_embd,
             cos_slice,
             sin_slice,
             tt_page_table,
@@ -372,7 +366,6 @@ class EagerLLMExecutor:
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
-            enable_trace=False,
         )
         ttnn.synchronize_device(self.mesh_device)
 
@@ -418,7 +411,6 @@ class EagerLLMExecutor:
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            enable_trace=False,
             read_from_device=False,
             sampling_params=sampling_params,
         )
@@ -440,8 +432,6 @@ class EagerLLMExecutor:
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
-        # todo)) remove unnecessary enable_trace and sampling_params?
-        enable_trace: bool = True,
         sampling_params: SamplingParams | None = None,
         start_pos: torch.Tensor | None = None,  # [batch_size], int64
     ) -> torch.Tensor:  # [batch_size, 1, vocab_size], float32
@@ -453,7 +443,6 @@ class EagerLLMExecutor:
             kv_cache: Per-layer KV cache from allocate_kv_cache().
             prompt_lens: Actual prompt length per user, shape [batch_size].
             empty_slots: List of user IDs to prefill.
-            enable_trace: Whether tracing is enabled (ignored in eager mode).
             sampling_params: Sampling parameters (not used in prefill).
             start_pos: Starting position for prefix caching, shape [batch_size].
 
@@ -470,9 +459,6 @@ class EagerLLMExecutor:
             assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
         self.mode = Mode.PREFILL
         self._assert_kv_cache_identity(kv_cache)
-
-        if page_table is None:
-            enable_trace = False
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
@@ -513,8 +499,6 @@ class EagerLLMExecutor:
                     page_table[idx : idx + 1],
                     kv_cache,
                     seq_len,
-                    False,
-                    prefill_seq_len,
                 )
                 if page_table is not None
                 else None
@@ -578,7 +562,7 @@ class EagerLLMExecutor:
                 chunk_tokens = tokens[:, chunk_start_rel:chunk_end_rel]
                 chunk_page_table = page_table_padded[:, chunk_start // block_size : chunk_end // block_size]
 
-                prefill_input, cos, sin, page_table_tt, chunk_page_table_tt = self.prepare_prefill_inputs(
+                prefill_input, cos, sin, page_table_tt, chunk_page_table_tt = self._prepare_prefill_device_inputs(
                     chunk_tokens,
                     start_pos=chunk_start,
                     page_table=page_table_padded,
@@ -602,7 +586,7 @@ class EagerLLMExecutor:
                 else:
                     del logits
         else:
-            prefill_input, cos, sin, page_table_tt, _ = self.prepare_prefill_inputs(
+            prefill_input, cos, sin, page_table_tt, _ = self._prepare_prefill_device_inputs(
                 tokens,
                 page_table=page_table,
                 last_token_idx=last_token_idx,
@@ -627,8 +611,6 @@ class EagerLLMExecutor:
         start_pos: torch.Tensor,  # [batch_size], int64
         page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
-        # todo)) remove unnecessary enable_trace?
-        enable_trace: bool = True,
         read_from_device: bool = True,
         sampling_params: SamplingParams | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -639,7 +621,6 @@ class EagerLLMExecutor:
             start_pos: Current position per user, shape [batch_size].
             page_table: Page table for paged attention, shape [batch_size, max_blocks].
             kv_cache: Per-layer KV cache (for identity assertion).
-            enable_trace: Whether tracing is enabled (ignored in eager mode).
             read_from_device: Whether to return host tensors.
             sampling_params: Sampling parameters for on-device sampling.
 
@@ -815,6 +796,62 @@ class TracedLLMExecutor:
         """Decode trace key = whether sampling is on device."""
         return sampling_params is not None
 
+    def _prepare_prefill_trace_inputs_host(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
+    ):
+        """Prepare traced prefill host inputs for copy_host_to_device replay."""
+        assert tokens.dim() == 2, "tokens must be 2D"
+        tokens_reshaped = tokens.reshape(1, 1, 1, -1)
+        S = tokens_reshaped.shape[-1]
+        tokens_tt = ttnn.from_torch(
+            tokens_reshaped,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        rope = self.model.rope_setup
+        rope.load_device_weights()
+        mat_len = rope.cos_matrix.shape[2]
+        seq_len = last_token_idx + 1 if last_token_idx is not None else S
+        assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
+
+        required_end = start_pos + S
+        pad_len = max(0, required_end - mat_len)
+        max_seq_len = self.model_args.max_seq_len if self.model_args else mat_len
+
+        cos_slice = rope.cos_matrix[:, :, 0:max_seq_len, :]
+        sin_slice = rope.sin_matrix[:, :, 0:max_seq_len, :]
+
+        if pad_len > 0:
+            padding = [(0, 0)] * 4
+            padding[2] = (0, pad_len)
+            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+
+        tt_page_table = None
+        if page_table is not None:
+            tt_page_table = ttnn.from_torch(
+                page_table,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        tt_chunk_page_table = None
+        if chunk_page_table is not None:
+            tt_chunk_page_table = ttnn.from_torch(
+                chunk_page_table,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return tokens_tt, cos_slice, sin_slice, tt_page_table, tt_chunk_page_table
+
     # =========================================================================
     # Compile (delegates to eager, captures output specs)
     # =========================================================================
@@ -852,7 +889,6 @@ class TracedLLMExecutor:
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
-            enable_trace=False,  # todo)) WTF!
         )
         ttnn.synchronize_device(self.mesh_device)
 
@@ -895,7 +931,6 @@ class TracedLLMExecutor:
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            enable_trace=False,  # todo)) WTF!
             read_from_device=False,
             sampling_params=sampling_params,
         )
@@ -917,7 +952,6 @@ class TracedLLMExecutor:
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
-        enable_trace: bool = True,
         # todo)) remove unnecessary sampling_params?
         sampling_params: SamplingParams | None = None,
         start_pos: torch.Tensor | None = None,  # [batch_size], int64
@@ -930,15 +964,12 @@ class TracedLLMExecutor:
             kv_cache: Per-layer KV cache from allocate_kv_cache().
             prompt_lens: Actual prompt length per user, shape [batch_size].
             empty_slots: List of user IDs to prefill.
-            enable_trace: Whether tracing is enabled.
             sampling_params: Sampling parameters (not used in prefill).
             start_pos: Starting position for prefix caching, shape [batch_size].
 
         Returns:
             Logits tensor, shape [batch_size, 1, vocab_size].
         """
-        from models.common.models.llama3_8b.model import _all_gather_rmsnorm_tensor
-
         # Boundary assertions
         assert tokens.dim() == 2, f"tokens must be [batch_size, seq_len], got {tokens.dim()}D"
         if page_table is not None:
@@ -950,11 +981,6 @@ class TracedLLMExecutor:
 
         self.mode = Mode.PREFILL
         self._eager._assert_kv_cache_identity(kv_cache)
-
-        # todo)) is this right? compare with TTTv1 to see.
-        # NOTE: TracedLLMExecutor must enabled trace --> it means it has to page_table as well?
-        if page_table is None:
-            enable_trace = False
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
@@ -988,23 +1014,26 @@ class TracedLLMExecutor:
                 dim=-1,
             )
 
-            page_table_user = (
-                _get_prefill_user_page_table(
-                    page_table[idx : idx + 1],
-                    kv_cache,
-                    seq_len,
-                    enable_trace,
-                    prefill_seq_len,
-                )
-                if page_table is not None
-                else None
-            )
-
             can_trace = (
-                enable_trace
+                page_table is not None
                 and self.model_args
                 and self.model_args.can_enable_trace(prefill_seq_len, num_cached_tokens)
             )
+
+            page_table_user = None
+            if page_table is not None:
+                if can_trace:
+                    page_table_user = _get_prefill_trace_user_page_table(
+                        page_table[idx : idx + 1],
+                        kv_cache,
+                        prefill_seq_len,
+                    )
+                else:
+                    page_table_user = _get_prefill_user_page_table(
+                        page_table[idx : idx + 1],
+                        kv_cache,
+                        seq_len,
+                    )
 
             # todo)) there should be warning message about prefill that cannot be traced!
             if can_trace:
@@ -1016,17 +1045,7 @@ class TracedLLMExecutor:
                     last_token_idx=last_token_idx,
                     prefill_seq_len=prefill_seq_len,
                 )
-                logits = self.model.norm.prefill_forward(
-                    ttnn.slice(
-                        logits,
-                        (0, 0, (last_token_idx // 32) * 32, 0),
-                        (1, 1, (last_token_idx // 32) * 32 + 32, logits.shape[-1]),
-                    )
-                )
-                # todo)) either make the whole thing traceable or make the Llama model perform all-gather! --> either way, we can remove this import!
-                logits = _all_gather_rmsnorm_tensor(self.model.norm, logits)
-                logits = self.model.lm_head.forward(logits)
-                logits = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
+                logits = self.model.post_process_prefill_output(logits, last_token_idx)
             else:
                 logits = self._eager._prefill_single_user(
                     prefill_ids,
@@ -1068,10 +1087,9 @@ class TracedLLMExecutor:
                 prefill_seq_len,
             )
 
-        host_inputs = self._eager.prepare_prefill_inputs(
+        host_inputs = self._prepare_prefill_trace_inputs_host(
             tokens,
             page_table=page_table,
-            trace_enabled=True,
             last_token_idx=last_token_idx,
         )
         copy_host_to_device(
@@ -1093,10 +1111,9 @@ class TracedLLMExecutor:
         )
         logger.info(f"Compiled prefill for seq_len={prefill_seq_len}")
 
-        host_inputs = self._eager.prepare_prefill_inputs(
+        host_inputs = self._prepare_prefill_trace_inputs_host(
             tokens,
             page_table=page_table,
-            trace_enabled=True,
             last_token_idx=last_token_idx,
         )
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
@@ -1136,7 +1153,6 @@ class TracedLLMExecutor:
         start_pos: torch.Tensor,  # [batch_size], int64
         page_table: torch.Tensor | None = None,  # [batch_size, max_blocks], int32
         kv_cache: list[list[ttnn.Tensor]] | None = None,
-        enable_trace: bool = True,
         read_from_device: bool = True,
         sampling_params: SamplingParams | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -1147,7 +1163,6 @@ class TracedLLMExecutor:
             start_pos: Current position per user, shape [batch_size].
             page_table: Page table for paged attention, shape [batch_size, max_blocks].
             kv_cache: Per-layer KV cache (for identity assertion).
-            enable_trace: Whether tracing is enabled.
             read_from_device: Whether to return host tensors.
             sampling_params: Sampling parameters for on-device sampling.
 
@@ -1180,19 +1195,6 @@ class TracedLLMExecutor:
             )
             self.model.sampling.seed_manager.get_new_values()
 
-        # todo)) tracedLLMExecutor must enable trace
-        if not enable_trace:
-            return self._eager.decode_forward(
-                tokens,
-                start_pos,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                enable_trace=False,
-                read_from_device=read_from_device,
-                sampling_params=sampling_params,
-            )
-
-        # todo)) should just assert this
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device)
 
@@ -1231,7 +1233,6 @@ class TracedLLMExecutor:
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            enable_trace=False,
             read_from_device=False,
             sampling_params=None,
         )
@@ -1311,6 +1312,11 @@ def _get_validation_context(executor, *, mode: str):
             mode=mode,
         )
     return contextlib.nullcontext()
+
+
+def _is_traced_executor(executor) -> bool:
+    """Identify executors that expose trace-facing APIs."""
+    return hasattr(executor, "trace_id_prefill") and hasattr(executor, "trace_ids_decode")
 
 
 def _compile_prefill_and_decode(
@@ -1434,14 +1440,13 @@ def run_teacher_forcing(
     )
 
     logger.info(f"Teacher forcing: prefilling {prompt_len} tokens with batch={batch_size}")
-    prefill_output = executor.prefill_forward(
-        prompt_tokens,
+    prefill_kwargs = dict(
         page_table=page_table,
         kv_cache=kv_cache,
         prompt_lens=torch.tensor([prompt_len] * batch_size),
         empty_slots=list(range(batch_size)),
-        enable_trace=False,
     )
+    prefill_output = executor.prefill_forward(prompt_tokens, **prefill_kwargs)
 
     first_tokens = torch.argmax(prefill_output, dim=-1).view(-1).tolist()
     predicted_tokens_per_user = [[int(tok)] for tok in first_tokens]
@@ -1453,14 +1458,12 @@ def run_teacher_forcing(
 
         current_pos = torch.full((batch_size,), prompt_len + step - 1, dtype=torch.long)
 
-        logits, _ = executor.decode_forward(
-            decode_token,
-            current_pos,
+        decode_kwargs = dict(
             page_table=page_table,
             kv_cache=kv_cache,
-            enable_trace=False,
             read_from_device=True,
         )
+        logits, _ = executor.decode_forward(decode_token, current_pos, **decode_kwargs)
 
         next_tokens = torch.argmax(logits[:, -1, :], dim=-1).view(-1).tolist()
         for user_id, tok in enumerate(next_tokens):
@@ -1525,7 +1528,6 @@ def run_perf_benchmark(
     max_batch_size: int = 1,
     prompt_lens: torch.Tensor | None = None,
     start_pos: list[int] | None = None,
-    enable_trace: bool = True,
     sampling_params=None,
 ) -> PerfBenchmarkResult:
     """Run timed prefill + decode loop for performance measurement.
@@ -1542,12 +1544,13 @@ def run_perf_benchmark(
         max_batch_size: Maximum batch size.
         prompt_lens: Actual prompt length per user, shape [batch_size].
         start_pos: Starting position for prefix caching.
-        enable_trace: Whether to enable tracing for decode.
         sampling_params: Explicit sampling params (None = host argmax).
 
     Returns:
         PerfBenchmarkResult with raw timings + derived metrics.
     """
+    assert _is_traced_executor(executor), "run_perf_benchmark() expects a traced executor during this transition"
+
     batch_size = tokens.shape[0]
     prompt_len = tokens.shape[1]
     max_batch_size = max(max_batch_size, batch_size)
@@ -1583,9 +1586,7 @@ def run_perf_benchmark(
 
     # Inference prefill: timed run with ops already compiled (this is TTFT)
     t0 = time.perf_counter()
-    prefill_output = executor.prefill_forward(
-        tokens, **prefill_kwargs, enable_trace=False, sampling_params=sampling_params
-    )
+    prefill_output = executor.prefill_forward(tokens, **prefill_kwargs, sampling_params=sampling_params)
     if hasattr(executor, "mesh_device"):
         ttnn.synchronize_device(executor.mesh_device)
     prefill_time = time.perf_counter() - t0
@@ -1613,7 +1614,6 @@ def run_perf_benchmark(
             current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            enable_trace=enable_trace,
             read_from_device=True,
             sampling_params=sampling_params,
         )
@@ -1684,10 +1684,15 @@ def _process_output_decode_tokens(tt_out, B, cluster_shape):
     return _concat_host_output(tt_out, cluster_shape)[0, 0, :B, 0]
 
 
-def _get_prefill_user_page_table(page_table, kv_cache, prefill_len, trace_enabled, prefill_seq_len):
+def _get_prefill_user_page_table(page_table, kv_cache, prefill_len):
     """Slice and pad page table for a single prefill user."""
     block_size = get_block_size(kv_cache)
     num_blocks = num_blocks_in_seq(prefill_len, block_size)
-    if trace_enabled:
-        num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+    return page_table[:, :num_blocks]
+
+
+def _get_prefill_trace_user_page_table(page_table, kv_cache, prefill_seq_len):
+    """Slice page table for traced prefill's padded sequence length."""
+    block_size = get_block_size(kv_cache)
+    num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
     return page_table[:, :num_blocks]
