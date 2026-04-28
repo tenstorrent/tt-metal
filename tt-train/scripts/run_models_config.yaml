@@ -28,12 +28,17 @@ models:
     filename: "tinyllama_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_char.yaml"
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
       - "--track_memory"
     skip-arch:
       - "n150"
       - "n300"
       - "p100"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "TinyLlama/TinyLlama_v1.1"
+      output_file: "data/tokenized_shakespeare_tinyllama"
+
   - name: "Linear Regression"
     filename: "linear_regression"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"
