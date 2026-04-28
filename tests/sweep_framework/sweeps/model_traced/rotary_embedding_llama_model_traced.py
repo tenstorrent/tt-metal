@@ -678,6 +678,11 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    # In decode mode the input n_heads dim (e.g. 8) is tile-padded to 32 by
+    # TILE_LAYOUT.  Slice back to the logical shape before the PCC check.
+    if is_decode_mode and len(output_tensor.shape) == 4 and output_tensor.shape[2] != torch_output_tensor.shape[2]:
+        output_tensor = output_tensor[:, :, : torch_output_tensor.shape[2], :]
+
     # --- Check Results ---
     # Use high PCC threshold (0.9997) to match reference test expectations
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.9997)
