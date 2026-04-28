@@ -1120,9 +1120,49 @@ class TTNNDotsPatchMerger(TTNNModule):
         self.tt_ln_weight = _to_dev(self.tt_ln_weight)
         self.tt_ln_bias = _to_dev(self.tt_ln_bias)
         self.tt_w1 = _to_dev(self.tt_w1)
-        self.tt_w2 = _to_dev(self.tt_w2)
         self.tt_w1_bias = _to_dev(self.tt_w1_bias)
-        self.tt_w2_bias = _to_dev(self.tt_w2_bias)
+
+        # Col-shard w2 across devices so the patch merger natively produces
+        # col-sharded output matching text embeddings.  Weight shape is
+        # [intermediate, H] (already transposed); sharding dim=-1 gives each
+        # device [intermediate, H/num_devices].
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        if num_devices > 1:
+            col_shard_mapper = ttnn.ShardTensor2dMesh(
+                self.device,
+                dims=(None, -1),
+                mesh_shape=list(self.device.shape),
+            )
+            # Re-create w2 on device with col-shard mapper
+            self.tt_w2 = ttnn.from_torch(
+                self._w2_weight.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=mem,
+                mesh_mapper=col_shard_mapper,
+            )
+            if self._w2_bias is not None:
+                self.tt_w2_bias = ttnn.from_torch(
+                    self._w2_bias.to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=mem,
+                    mesh_mapper=col_shard_mapper,
+                )
+            else:
+                self.tt_w2_bias = None
+        else:
+            self.tt_w2 = _to_dev(self.tt_w2)
+            self.tt_w2_bias = _to_dev(self.tt_w2_bias)
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
@@ -1151,11 +1191,14 @@ class TTNNDotsPatchMerger(TTNNModule):
         )
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
+        compute_kc = getattr(self, "compute_kernel_config", None)
+
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_w1,
             bias=self.tt_w1_bias,
             memory_config=mem,
+            compute_kernel_config=compute_kc,
         )
         hidden_states = ttnn.gelu(hidden_states)
         hidden_states = ttnn.linear(
@@ -1163,6 +1206,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             self.tt_w2,
             bias=self.tt_w2_bias,
             memory_config=mem,
+            compute_kernel_config=compute_kc,
         )
 
         return hidden_states
@@ -1378,7 +1422,14 @@ class TTNNDotsOCRVisionTower(TTNNModule):
                 self.patch_merger.to_device(device)
         return self
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
+    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Run the full vision pipeline and return the result as a ttnn.Tensor on device.
+
+        Returns:
+            ttnn.Tensor: [1, 1, N_vision, H/num_devices] in TILE_LAYOUT,
+                col-sharded across devices (on multi-device), or
+                [1, 1, N_vision, H] replicated (on single device).
+        """
         if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")
 
@@ -1431,18 +1482,4 @@ class TTNNDotsOCRVisionTower(TTNNModule):
             if int(x.shape[2]) > merged_seq_len:
                 x = ttnn.slice(x, (0, 0, 0, 0), (int(x.shape[0]), int(x.shape[1]), merged_seq_len, int(x.shape[3])))
 
-        composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
-        result = ttnn.to_torch(x, mesh_composer=composer).to(torch.bfloat16)
-
-        try:
-            num_devices = self.device.get_num_devices()
-            if num_devices > 1 and result.dim() >= 1 and result.shape[0] % num_devices == 0:
-                per = result.shape[0] // num_devices
-                result = result[:per]
-        except Exception:
-            pass
-
-        if result.dim() == 4:
-            result = result.squeeze(0).squeeze(0)
-
-        return result
+        return x

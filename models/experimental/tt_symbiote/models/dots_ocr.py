@@ -485,19 +485,93 @@ class TTNNDotsOCRPipeline(TTNNModule):
         S = text_embeds.shape[-2]
         H = self.config.hidden_size
 
-        vision_embeds = self.vision_tower(pixel_values, image_grid_thw)
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
 
+        # =====================================================================
+        # Step A: Vision tower produces col-sharded output
+        # =====================================================================
+        vision_tt = self.vision_tower.forward(pixel_values, image_grid_thw)
+
+        # =====================================================================
+        # Step B: Build vision table on host, re-upload as col-sharded.
+        # Download col-sharded vision_tt, reassemble full H on host,
+        # prepend zero row, re-upload with ShardTensor2dMesh so the
+        # embedding table is col-sharded [N_vision+1, H/num_devices]
+        # per device.
+        # =====================================================================
+        N_vision = int(vision_tt.shape[2])
+
+        if num_devices > 1:
+            # Col-sharded: concat on last dim to reassemble full H
+            composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
+        else:
+            composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+        vision_host = ttnn.to_torch(vision_tt, mesh_composer=composer).to(torch.bfloat16)
+        ttnn.deallocate(vision_tt)
+
+        if num_devices <= 1 and vision_host.shape[0] > 1:
+            per = vision_host.shape[0] // max(num_devices, 1)
+            vision_host = vision_host[:per]
+
+        vision_host = vision_host.squeeze(0).squeeze(0)  # [N_vision, H]
+
+        zero_row = torch.zeros(1, H, dtype=torch.bfloat16)
+        vision_table_host = torch.cat([zero_row, vision_host], dim=0)  # [N_vision+1, H]
+
+        if num_devices > 1:
+            # Upload as col-sharded so embedding gather produces col-sharded output
+            table_mapper = ttnn.ShardTensor2dMesh(
+                self.device,
+                dims=(None, -1),
+                mesh_shape=list(self.device.shape),
+            )
+        else:
+            table_mapper = ttnn.ReplicateTensorToMesh(self.device)
+
+        vision_table = ttnn.from_torch(
+            vision_table_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=table_mapper,
+        )
+
+        # =====================================================================
+        # Step C: Build gather index on host (tiny: ~19 KB) and upload
+        # gather_idx[0, pos] = 0 for non-image tokens (gathers zero row)
+        #                    = 1..N_vision for image tokens
+        # =====================================================================
         img_mask = input_ids == self.config.image_token_id  # [1, S] bool
-
-        # Build full vision tensor: [1, S, H] with vision embeds at image positions
-        full_vision = torch.zeros(1, S, H, dtype=torch.bfloat16)
         img_positions = img_mask.squeeze().nonzero(as_tuple=True)[0]
-        n_img = min(len(img_positions), vision_embeds.shape[0])
-        full_vision[0, img_positions[:n_img], :] = vision_embeds[:n_img].to(torch.bfloat16)
+        n_img = min(len(img_positions), N_vision)
 
-        # Mask for broadcasting: [1, S, 1]
+        gather_idx = torch.zeros(1, S, dtype=torch.int32)
+        gather_idx[0, img_positions[:n_img]] = torch.arange(1, n_img + 1, dtype=torch.int32)
+
+        tt_idx = ttnn.from_torch(
+            gather_idx,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+
+        # =====================================================================
+        # Step D: Device-side gather via ttnn.embedding
+        # With col-sharded table [N_vision+1, H/num_devices] and replicated
+        # index, each device independently gathers its own H/num_devices
+        # columns -> [1, S, H/num_devices] col-sharded output.
+        # No identity matmul needed!
+        # =====================================================================
+        full_vision_col_sharded = ttnn.embedding(tt_idx, vision_table, layout=ttnn.TILE_LAYOUT)
+        # full_vision_col_sharded: [1, S, H/num_devices] col-sharded, TILE_LAYOUT
+        ttnn.deallocate(tt_idx)
+        ttnn.deallocate(vision_table)
+
+        # =====================================================================
+        # Step E: Build mask and merge
+        # =====================================================================
         mask_float = img_mask.float().unsqueeze(-1)  # [1, S, 1]
-
         tt_mask = ttnn.from_torch(
             mask_float,
             dtype=ttnn.bfloat16,
@@ -506,22 +580,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
 
-        tt_vision = ttnn.from_torch(
-            full_vision,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.device,
-                dims=(None, -1),
-                mesh_shape=list(self.device.shape),
-            ),
-        )
-
-        fused = ttnn.where(tt_mask, tt_vision, text_embeds)
-
-        ttnn.deallocate(tt_mask)
-        ttnn.deallocate(tt_vision)
+        fused = ttnn.where(tt_mask, full_vision_col_sharded, text_embeds)
 
         return fused
 
