@@ -10,6 +10,7 @@
 #include <bit>
 #include <cmath>
 #include <numeric>
+#include <limits>
 
 namespace ttnn::prim {
 
@@ -63,6 +64,20 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
     }
+    TT_FATAL(num_cores > 0, "Reduce H requires at least one worker core");
+    TT_FATAL(
+        all_cores.num_cores() == num_cores,
+        "Split core count mismatch: num_cores={}, all_cores.num_cores()={}",
+        num_cores,
+        all_cores.num_cores());
+    uint32_t cols_assigned_to_group_1 = core_group_1.num_cores() * num_cols_per_core_group_1;
+    uint32_t cols_assigned_to_group_2 = core_group_2.num_cores() * num_cols_per_core_group_2;
+    TT_FATAL(
+        cols_assigned_to_group_1 + cols_assigned_to_group_2 == num_cols,
+        "Reduce H workload mismatch: group1_cols={} + group2_cols={} must equal total_cols={}",
+        cols_assigned_to_group_1,
+        cols_assigned_to_group_2,
+        num_cols);
 
     // Current sharding only supports width, and that input and output are sharded
     if (use_width_sharding) {
@@ -72,6 +87,13 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         core_group_2 = CoreRangeSet();
         num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / tile_width);
         num_cols_per_core_group_2 = 0;
+        cols_assigned_to_group_1 = core_group_1.num_cores() * num_cols_per_core_group_1;
+        cols_assigned_to_group_2 = 0;
+        TT_FATAL(
+            cols_assigned_to_group_1 == num_cols,
+            "Width-sharded Reduce H workload mismatch: assigned_cols={} must equal total_cols={}",
+            cols_assigned_to_group_1,
+            num_cols);
     }
 
     uint32_t src0_cb_index = CBIndex::c_0;
@@ -162,6 +184,19 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         if (num_cols_per_core_group_2 > 0) {
             include_push_sizes(num_cols_per_core_group_2);
         }
+        // Accumulation CBs (acc / intermediate negate staging) scale with chunk_size tiles × dst tile bytes.
+        TT_FATAL(
+            chunk_size > 0, "Reduce H negate path: chunk_size (dest register tiling) must be > 0, got {}", chunk_size);
+        TT_FATAL(
+            dst_single_tile_size > 0,
+            "Reduce H negate path: dst tile byte size must be > 0, got {}",
+            dst_single_tile_size);
+        TT_FATAL(
+            static_cast<uint64_t>(chunk_size) * static_cast<uint64_t>(dst_single_tile_size) <=
+                static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()),
+            "Reduce H negate path: accumulation CB byte size overflows uint32 (chunk_size={}, dst_single_tile_size={})",
+            chunk_size,
+            dst_single_tile_size);
 
         uint32_t acc_cb_index = CBIndex::c_4;
         tt_metal::CircularBufferConfig cb_acc_config =
@@ -293,6 +328,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     } else {
         cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     }
+    TT_FATAL(
+        cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
     if (use_width_sharding) {
         TT_FATAL(NC != 0, "Batch size NC must be non-zero (shape[0]={}, shape[1]={})", shape[0], shape[1]);
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
@@ -335,6 +372,13 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
                     num_cols_read       // output tile start index
                 });
             num_cols_read += num_cols_per_core;
+            if (i == num_cores - 1) {
+                TT_FATAL(
+                    num_cols_read == num_cols,
+                    "Reduce H assigned {} columns across cores, expected {}",
+                    num_cols_read,
+                    num_cols);
+            }
         }
     }
 
