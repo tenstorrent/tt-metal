@@ -106,11 +106,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
 // Runtime parameter signal_output:
 //   false (default): Full sdpa_custom_mm_reuse_dest_srcb - MVMULs for all K tiles + finalization
 //   true: Partial K accumulation - MVMULs only, NO finalization (for intermediate K subblocks)
-//
-// Compile-time parameter output_granularity:
-//   Number of output tiles produced between successive FPU->SFPU semaphore posts when
-//   signal_output is true. nt_dim must be divisible by output_granularity.
-template <std::uint32_t output_granularity = 2>
+template <std::uint32_t output_granularity>
 inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     uint src_index,
     uint dst_index,
@@ -134,7 +130,6 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
         if (signal_output && i == kt_dim - 1) {
             for (uint32_t j = 0; j < nt_dim / output_granularity; j++) {
-                // output_granularity is a small compile-time constant; let the compiler unroll.
                 for (std::uint32_t g = 0; g < output_granularity; g++) {
                     lltt::replay(ckernel::math::replay_buf_offset, 4);
                 }

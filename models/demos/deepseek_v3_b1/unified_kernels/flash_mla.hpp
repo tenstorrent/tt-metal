@@ -717,10 +717,7 @@ struct FlashMLADecode {
 
             constexpr bool exp_approx_mode = false;
 
-            // Number of output tiles produced between FPU->SFPU semaphore signals from the
-            // QK^T*V matmul. The packer below must consume tiles in matching groups.
-            // out_chunk_tiles must be divisible by output_granularity.
-            constexpr uint32_t output_granularity = 2;
+            constexpr uint32_t output_granularity = out_chunk_tiles;
             static_assert(
                 out_chunk_tiles % output_granularity == 0, "out_chunk_tiles must be divisible by output_granularity");
 
@@ -738,6 +735,7 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }
+            pack_block_contiguous_init(sdpa_output_cb);
             uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
             bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
             if (mask_last_chunk) {
@@ -776,7 +774,7 @@ struct FlashMLADecode {
             }
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                pack_tile(max_dst_tile_offset, sdpa_ms_cb);
+                pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
                 cb_push_back(sdpa_ms_cb, Sq_chunk_t);
             } else {
                 compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(
@@ -784,9 +782,7 @@ struct FlashMLADecode {
             }
             for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
                 PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
-                for (uint32_t g = 0; g < output_granularity; g++) {
-                    pack_tile(mm2_dst_tile_offset + i + g, sdpa_output_cb);
-                }
+                pack_block_contiguous(mm2_dst_tile_offset + i, sdpa_output_cb, output_granularity);
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);

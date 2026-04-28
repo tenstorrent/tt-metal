@@ -45,7 +45,7 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
 // Compile-time parameter output_granularity:
 //   Number of output tiles produced between successive FPU->SFPU semaphore posts when
 //   signal_output is true. nt_dim must be divisible by output_granularity.
-template <MathFidelity math_fidelity, std::uint32_t output_granularity = 2>
+template <MathFidelity math_fidelity, std::uint32_t output_granularity>
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const uint src_index,
     const uint dst_index,
