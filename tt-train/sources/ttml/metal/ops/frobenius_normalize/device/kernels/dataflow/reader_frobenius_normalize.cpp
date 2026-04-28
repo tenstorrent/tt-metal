@@ -87,7 +87,7 @@ void kernel_main() {
 
 #ifdef IS_ORIGIN
         // Write own partial at core_index offset (local L1 word store, no NOC)
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_recv_base + core_index * 4) =
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_recv_base + core_index * sizeof(uint32_t)) =
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
         cb_pop_front(cb_sq_partial, 1);
 
@@ -103,7 +103,8 @@ void kernel_main() {
         // 4-byte NOC write of the FP32 partial to origin's cb_recv
         // noc_inline_dw_write allows writing 4-bytes without any padding
         const uint32_t partial_val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1);
-        const uint64_t dst_noc = get_noc_addr(origin_phys_x, origin_phys_y, cb_recv_base + core_index * 4);
+        const uint64_t dst_noc =
+            get_noc_addr(origin_phys_x, origin_phys_y, cb_recv_base + core_index * sizeof(uint32_t));
         noc_inline_dw_write(dst_noc, partial_val);
         noc_async_write_barrier();
         cb_pop_front(cb_sq_partial, 1);
