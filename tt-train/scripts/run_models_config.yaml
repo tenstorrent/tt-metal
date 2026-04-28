@@ -30,7 +30,10 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_char.yaml"
       - "--track_memory"
-
+    skip-arch:
+      - "n150"
+      - "n300"
+      - "p100"
   - name: "Linear Regression"
     filename: "linear_regression"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"

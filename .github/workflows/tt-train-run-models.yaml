@@ -51,7 +51,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: python tt-train/scripts/run_models.py --extra-args "--max_steps 100"; ls -l},
+          {name: tt-train, cmd: python tt-train/scripts/run_models.py; ls -l},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
@@ -110,7 +110,10 @@ jobs:
           echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
 
           # REMOVE LATER
-          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local
+          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata
+          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata/model_checkpoints
+          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata/model_checkpoints/pytorch
+          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata/model_checkpoints/pytorch/huggingface
 
       - name: Install Python dependencies
         run: |
