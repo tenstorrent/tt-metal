@@ -79,31 +79,10 @@ void kernel_main() {
     // require substantially more memory (we would be double buffering four Wt sized CBs)
 
     uint32_t tile_id = 0;
-    uint32_t tile_id_topk = 0;
     uint32_t tile_id_expert = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // input
-        cb_in0.reserve_back(Wt);
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = j * tile_bytes_input});
-            tile_id++;
-            generate_index_tile(cb_intermed_index, j);
-        }
-        noc.async_read_barrier();
-        cb_in0.push_back(Wt);
-
-        // topk mask
-        cb_topk.reserve_back(Kt);
-        for (uint32_t j = 0; j < Kt; ++j) {
-            noc.async_read(
-                s1, cb_topk, tile_bytes_topk, {.page_id = tile_id_topk}, {.offset_bytes = j * tile_bytes_topk});
-            tile_id_topk++;
-        }
-        noc.async_read_barrier();
-        cb_topk.push_back(Kt);
-
         // expert mask
-        /* Not consumed by compute kernel
+        /* Not consumed by compute kernel enable once support is added to compute kernel
         cb_expert.reserve_back(Wt);
         for (uint32_t j = 0; j < Wt; ++j) {
             noc.async_read(
@@ -113,5 +92,28 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_expert.push_back(Wt);
         */
+
+        // input: stream two tiles at a time (Wt is guaranteed to be a multiple of 2 for this kernel).
+        for (uint32_t j = 0; j < Wt; j += 2) {
+            cb_in0.reserve_back(2);
+            noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
+            tile_id++;
+            generate_index_tile(cb_intermed_index, j);
+            noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = tile_bytes_input});
+            tile_id++;
+            generate_index_tile(cb_intermed_index, j + 1);
+            noc.async_read_barrier();
+            cb_in0.push_back(2);
+        }
     }
+
+    // topk mask uses add_tiles_bcast_rows() in compute so no need for Ht loop
+    uint32_t tile_id_topk = 0;
+    cb_topk.reserve_back(Kt);
+    for (uint32_t j = 0; j < Kt; ++j) {
+        noc.async_read(s1, cb_topk, tile_bytes_topk, {.page_id = tile_id_topk}, {.offset_bytes = j * tile_bytes_topk});
+        tile_id_topk++;
+    }
+    noc.async_read_barrier();
+    cb_topk.push_back(Kt);
 }
