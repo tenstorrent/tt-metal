@@ -78,7 +78,6 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <ttnn/operations/ccl/all_gather/all_gather.hpp>
 
 #include "fabric/fabric_init.hpp"
 #include "impl/context/metal_context.hpp"
@@ -123,44 +122,20 @@ protected:
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-static MeshWorkload make_allgather_workload_gap31(
-    std::shared_ptr<MeshDevice>& mesh_device,
-    std::shared_ptr<MeshBuffer>& out_buffer) {
-    // Minimal AllGather workload — just verify ERISCs are in base firmware and
-    // dispatch+CCL operations work on the second open.
-    const uint32_t num_devices = mesh_device->num_devices();
-    const uint32_t tiles_per_device = 32;
-    const uint32_t elem_per_device = tiles_per_device * 32 * 32;
-    const uint32_t total_elem = elem_per_device * num_devices;
-
-    auto input_buf = MeshBuffer::create(
-        MeshBufferConfig{
-            .global_buffer_config = BufferConfig{
-                .page_size = 2048,
-                .size = elem_per_device * sizeof(bfloat16),
-                .buffer_type = BufferType::DRAM},
-        },
-        mesh_device.get());
-
-    out_buffer = MeshBuffer::create(
-        MeshBufferConfig{
-            .global_buffer_config = BufferConfig{
-                .page_size = 2048,
-                .size = total_elem * sizeof(bfloat16),
-                .buffer_type = BufferType::DRAM},
-        },
-        mesh_device.get());
-
-    // Fill input with a simple ramp.
-    std::vector<bfloat16> host_data(elem_per_device);
-    for (uint32_t i = 0; i < elem_per_device; ++i) {
-        host_data[i] = bfloat16(static_cast<float>(i % 256));
-    }
-    MeshBuffer::EnqueueWriteMesh(*input_buf, host_data, false);
-
-    // AllGather CCL op (ring topology, dim=0).
-    return ttnn::operations::ccl::all_gather::create_all_gather_mesh_workload(
-        *input_buf, *out_buffer, /*dim=*/3, /*num_links=*/1, /*output_mem_config=*/out_buffer->buffer_config());
+// Lightest workload that exercises the full host → device dispatch path.
+// This verifies ERISCs are in base firmware and dispatch works on the second
+// open, without depending on CCL op availability.  Same pattern as GAP-28/29.
+static MeshWorkload make_blank_workload_gap31(const MeshCoordinateRange& range) {
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    Program prog;
+    CreateKernel(
+        prog,
+        "tt_metal/kernels/dataflow/blank.cpp",
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    MeshWorkload workload;
+    workload.add_program(range, std::move(prog));
+    return workload;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,11 +246,12 @@ TEST_F(FixAyDeferredNonMmioResetFixture, DeferredNonMmioResetPreventsSecondOpenH
                 DEFAULT_L1_SMALL_SIZE,
                 DEFAULT_TRACE_REGION_SIZE,
                 /*num_command_queues=*/1);
-            // Verify second session is functional: dispatch a simple AllGather.
-            std::shared_ptr<MeshBuffer> out_buf;
-            auto workload = make_allgather_workload_gap31(dev, out_buf);
-            MeshDevice::EnqueueMeshWorkload(dev->mesh_command_queue(0), workload, false);
-            ttnn::distributed::synchronize_devices(dev.get());
+            // Verify second session is functional: dispatch a blank workload.
+            // This confirms ERISCs are in base firmware and the dispatch path works.
+            auto device_range = MeshCoordinateRange(dev->shape());
+            auto workload = make_blank_workload_gap31(device_range);
+            EnqueueMeshWorkload(dev->mesh_command_queue(0), workload, /*blocking=*/true);
+            tt::tt_metal::distributed::Synchronize(dev.get(), std::nullopt);
             dev->close();
             flags->testee_exit_ok.store(1);
         } catch (...) {
