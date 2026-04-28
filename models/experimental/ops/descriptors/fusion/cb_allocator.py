@@ -577,11 +577,6 @@ class CBPoolAllocator:
                     sorted_consuming,
                     producer_max,
                 )
-                print(
-                    f"[CB_BRIDGE] slot {slot_idx}: bumped total_size {old_size} -> {new_size} "
-                    f"(producing_phases={sorted_producing}, "
-                    f"consuming_phases={sorted_consuming}, producer_max={producer_max})"
-                )
             else:
                 logger.debug(
                     "[CB_BRIDGE] slot %d: total_size=%d already covers producer_max=%d "
@@ -591,12 +586,6 @@ class CBPoolAllocator:
                     producer_max,
                     sorted_producing,
                     sorted_consuming,
-                )
-                print(
-                    f"[CB_BRIDGE] slot {slot_idx}: total_size={old_size} already "
-                    f"covers producer_max={producer_max} "
-                    f"(producing_phases={sorted_producing}, "
-                    f"consuming_phases={sorted_consuming})"
                 )
 
     def build_merged_cb_descriptors(
