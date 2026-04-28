@@ -47,6 +47,14 @@ def build_parser():
         "(centroid gather × norm on-the-fly inside SDPA kernel). "
         "Expected to preserve accuracy (>95%% top-1) while keeping 2x memory savings vs baseline.",
     )
+    p.add_argument(
+        "--tq-rescaled-bfp8",
+        action="store_true",
+        help="TQ Performance mode with BFP8 layer_past (no swap to BF16). Pre-rescale "
+        "centroid×norm at update_cache time, store as BFP8, read via standard SDPA decode. "
+        "Same memory as BFP8 baseline (no compression) but tests TQ accuracy with no "
+        "dequant pass at SDPA time — measures the latency floor.",
+    )
     p.add_argument("--batch-size", type=int, default=1, help="Batch size (number of parallel sequences)")
     p.add_argument("--no-trace", action="store_true", help="Disable TTNN trace (slower, useful for debugging)")
     return p
@@ -222,6 +230,27 @@ def main():
     elif args.bfp4_cache:
         # KV_CACHE already allocated as BFP4 at model init (via make_optimizations override).
         print("  Using BFP4 paged cache (allocated at model init via optimization override)")
+    elif args.tq_rescaled_bfp8:
+        # TQ Performance mode but keep the model's BFP8 layer_past (no BF16 swap).
+        # Pre-rescaled centroid×norm values get written into the standard BFP8 paged
+        # cache, then standard SDPA decode reads them — no fused kernel, no dequant
+        # at read time. Memory parity with the BFP8 baseline; tests how close TQ can
+        # get to baseline latency once dequant is amortised at write time.
+        print("  Using TQ Pre-Rescaled BFP8 mode: centroid×norm → BFP8 layer_past + standard SDPA")
+        for layer in tt_model.layers:
+            attn = layer.attention
+            tq = TTNNTurboQuantCache(
+                mesh_device,
+                num_layers=1,
+                num_kv_heads=n_local_kv_heads,
+                head_dim=model_args.head_dim,
+                max_seq_len=32,  # minimal — TQ only contributes rotation/codebook setup
+                bits=args.bits,
+                memory_efficient=False,  # pre-rescale path
+            )
+            if absorb_rotation:
+                tq.rotation_absorbed = True
+            attn.tq_cache = tq
     else:
         # BF16 mode: model init'd BFP8, swap to BF16 (2 bytes/elem).
         print("  Replacing BFP8 layer_past with BF16 paged cache...")
