@@ -53,6 +53,13 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     meaningful configuration difference.
     """
     if isinstance(obj, dict):
+        if obj.get("type") == "Shape" and "value" in obj:
+            import re
+
+            match = re.search(r"\[([0-9,\s]+)\]", str(obj["value"]))
+            if match:
+                return [int(value.strip()) for value in match.group(1).split(",") if value.strip()]
+
         result = {}
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
@@ -257,28 +264,20 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
-                # Arguments match — check if config_hash computation also agrees
-                if sweep_config_hash and sweep_config_hash != source_hash:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="hash_mismatch",
-                            sweep_config_hash=sweep_config_hash,
-                        )
+                # sweep_source_hash is the authoritative join key back to the
+                # master config. The sweep trace's recomputed config_hash can
+                # differ for semantically equivalent runtime representations
+                # (for example Shape(...) vs a plain list), so exact normalized
+                # arguments are a validation match.
+                report.results.append(
+                    ConfigResult(
+                        config_hash=source_hash,
+                        op_name=op_name,
+                        master_config_id=master_cid,
+                        sweep_config_id=sweep_cid,
+                        status="match",
                     )
-                else:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="match",
-                        )
-                    )
+                )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
@@ -475,6 +474,11 @@ def main() -> int:
         default=None,
         help="Coverage threshold (0.0-1.0) below which the job fails. Default: no threshold.",
     )
+    parser.add_argument(
+        "--require-perfect",
+        action="store_true",
+        help="Require zero diffs, zero hash mismatches, zero missing configs, and 100% coverage.",
+    )
     args = parser.parse_args()
 
     master_path = Path(args.master_trace)
@@ -530,6 +534,15 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    if args.require_perfect:
+        if report.missing_sweep or report.coverage < 1.0:
+            print(
+                f"FAIL: perfect validation required but coverage is {report.coverage:.1%} "
+                f"with {len(report.missing_sweep)} missing config(s)",
+                file=sys.stderr,
+            )
+            return 1
 
     if args.pass_threshold is not None and report.coverage < args.pass_threshold:
         print(

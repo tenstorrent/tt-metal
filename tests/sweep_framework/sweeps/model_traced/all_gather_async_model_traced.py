@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import ast
 import os
 import re
 from math import prod
@@ -21,6 +22,8 @@ from tests.sweep_framework.sweep_utils.ccl_common import (
     mesh_shape_iterator,
     validate_serializable_shard_spec,
 )
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import create_tensor_on_mesh
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 # Import V2 master config loader for traced model configurations
@@ -269,6 +272,11 @@ def run(
     input_a_tensor_placement=None,
     memory_config=None,  # output memory_config
     persistent_output_buffer=None,
+    persistent_output_buffer_shape=None,
+    persistent_output_buffer_dtype=None,
+    persistent_output_buffer_layout=None,
+    persistent_output_buffer_memory_config=None,
+    persistent_output_buffer_tensor_placement=None,
     multi_device_global_semaphore=None,  # From traced config (ignored, we create fresh)
     barrier_semaphore=None,  # From traced config (ignored, we create fresh)
     mesh_device=None,  # From traced config (ignored, we use device param)
@@ -477,6 +485,29 @@ def run(
                 if target_sharded_config is not None:
                     tt_input = ttnn.to_memory_config(tt_input, target_sharded_config)
 
+                persistent_tensor = None
+                if persistent_output_buffer_shape not in (None, "__ABSENT__"):
+                    pob_shape = (
+                        tuple(ast.literal_eval(persistent_output_buffer_shape))
+                        if isinstance(persistent_output_buffer_shape, str)
+                        else tuple(persistent_output_buffer_shape)
+                    )
+                    pob_dtype = parse_dict_value("persistent_output_buffer_dtype", persistent_output_buffer_dtype)
+                    pob_layout = parse_dict_value("persistent_output_buffer_layout", persistent_output_buffer_layout)
+                    pob_mem_cfg = parse_dict_value(
+                        "persistent_output_buffer_memory_config",
+                        persistent_output_buffer_memory_config,
+                    )
+                    torch_persistent = torch.zeros(pob_shape, dtype=torch.float32)
+                    persistent_tensor = create_tensor_on_mesh(
+                        torch_persistent,
+                        device,
+                        pob_dtype,
+                        pob_layout,
+                        pob_mem_cfg,
+                        persistent_output_buffer_tensor_placement,
+                    )
+
             else:
                 # Use _get_tensors helper for generality format
                 tt_input, torch_reference, output_memory_config = _get_tensors(
@@ -519,15 +550,23 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
+                        ag_kwargs = {
+                            "persistent_output_buffer": persistent_tensor,
+                            "dim": dim,
+                            "multi_device_global_semaphore": ccl_semaphore_handles[i],
+                            "num_links": num_links,
+                            "topology": topology,
+                            "cluster_axis": cluster_axis,
+                        }
+                        if chunks_per_sync is not None:
+                            ag_kwargs["chunks_per_sync"] = chunks_per_sync
+                        if num_workers_per_link is not None:
+                            ag_kwargs["num_workers_per_link"] = num_workers_per_link
+                        if num_buffers_per_channel is not None:
+                            ag_kwargs["num_buffers_per_channel"] = num_buffers_per_channel
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
-                            None,  # persistent_output_buffer
-                            dim,
-                            multi_device_global_semaphore=ccl_semaphore_handles[i],
-                            num_links=num_links,
-                            memory_config=output_memory_config,
-                            topology=topology,
-                            cluster_axis=cluster_axis,
+                            **ag_kwargs,
                         )
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(

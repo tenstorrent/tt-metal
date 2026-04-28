@@ -93,8 +93,6 @@ def run(
         parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    elif output_memory_config is not None and "memory_config" not in op_kwargs:
-        op_kwargs["memory_config"] = output_memory_config
 
     # num_heads flows through op_kwargs; read it for golden computation
     if num_q_heads is None:

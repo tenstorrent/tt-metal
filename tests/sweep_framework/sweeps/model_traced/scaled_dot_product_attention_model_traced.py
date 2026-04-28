@@ -20,7 +20,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs, parse_dict_value
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -57,6 +61,9 @@ def invalidate_vector(test_vector) -> tuple:
     """
     Filter out configs that are known to cause timeouts or resource issues.
     """
+    if test_vector.get("suite_name") == "model_traced":
+        return False, None
+
     input_shape = test_vector.get("input_a_shape")
 
     # Extract Q shape - handle both dict (V1) and tuple/list (V2) formats
@@ -225,14 +232,18 @@ def run(
         torch_k_for_golden = torch_k_for_golden.repeat(1, repeat_factor, 1, 1)
         if num_heads_q % num_heads_k != 0:
             remaining = num_heads_q - (repeat_factor * num_heads_k)
-            torch_k_for_golden = torch.cat([torch_k_for_golden, torch_k_for_golden[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1)
+            torch_k_for_golden = torch.cat(
+                [torch_k_for_golden, torch_k_for_golden[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1
+            )
 
     if num_heads_v < num_heads_q:
         repeat_factor = num_heads_q // num_heads_v
         torch_v_for_golden = torch_v_for_golden.repeat(1, repeat_factor, 1, 1)
         if num_heads_q % num_heads_v != 0:
             remaining = num_heads_q - (repeat_factor * num_heads_v)
-            torch_v_for_golden = torch.cat([torch_v_for_golden, torch_v_for_golden[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1)
+            torch_v_for_golden = torch.cat(
+                [torch_v_for_golden, torch_v_for_golden[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1
+            )
 
     # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
     # Always use DRAM interleaved for the round-trip (safe on any device).
@@ -283,17 +294,28 @@ def run(
         as_mem_cfg = attention_sink_info.get("memory_config") or mem_config_q
         as_dtype = parse_dict_value("attention_sink_dtype", as_dtype) if isinstance(as_dtype, dict) else as_dtype
         as_layout = parse_dict_value("attention_sink_layout", as_layout) if isinstance(as_layout, dict) else as_layout
-        as_mem_cfg = parse_dict_value("attention_sink_memory_config", as_mem_cfg) if isinstance(as_mem_cfg, dict) else as_mem_cfg
+        as_mem_cfg = (
+            parse_dict_value("attention_sink_memory_config", as_mem_cfg) if isinstance(as_mem_cfg, dict) else as_mem_cfg
+        )
         as_placement = attention_sink_info.get("tensor_placement")
 
         torch_attention_sink = torch.zeros(as_shape, dtype=torch.float32)
         if is_mesh_device and as_placement:
             preallocated_attention_sink = create_tensor_on_mesh(
-                torch_attention_sink, device, as_dtype, as_layout, as_mem_cfg, as_placement,
+                torch_attention_sink,
+                device,
+                as_dtype,
+                as_layout,
+                as_mem_cfg,
+                as_placement,
             )
         else:
             preallocated_attention_sink = ttnn.from_torch(
-                torch_attention_sink, dtype=as_dtype, layout=as_layout, device=device, memory_config=as_mem_cfg,
+                torch_attention_sink,
+                dtype=as_dtype,
+                layout=as_layout,
+                device=device,
+                memory_config=as_mem_cfg,
             )
         op_kwargs["attention_sink"] = preallocated_attention_sink
 
@@ -307,13 +329,23 @@ def run(
         q_tensor = create_tensor_on_mesh(torch_q, device, dtype_q, layout_q, mem_config_q, input_a_tensor_placement)
         if num_heads_k < num_heads_q:
             k_tensor = replicate_with_topology(
-                torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement,
+                torch_k,
+                device,
+                dtype_k,
+                layout_k,
+                mem_config_k,
+                input_b_tensor_placement,
             )
         else:
             k_tensor = create_tensor_on_mesh(torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement)
         if num_heads_v < num_heads_q:
             v_tensor = replicate_with_topology(
-                torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement,
+                torch_v,
+                device,
+                dtype_v,
+                layout_v,
+                mem_config_v,
+                input_c_tensor_placement,
             )
         else:
             v_tensor = create_tensor_on_mesh(torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement)

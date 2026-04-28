@@ -13,6 +13,7 @@ from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
     create_mesh_device,
+    create_tensor_on_mesh,
     mesh_tensor_to_torch,
     get_mesh_composer,
 )
@@ -164,44 +165,14 @@ def run(
         if is_host:
             ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
         elif is_mesh_device:
-            shard_dims, traced_mesh = _get_placement_from_tensor_spec(tensor_spec)
-            mesh_compatible = (
-                traced_mesh is not None
-                and len(traced_mesh) == 2
-                and actual_mesh[0] >= traced_mesh[0]
-                and actual_mesh[1] >= traced_mesh[1]
+            ttnn_tensor = create_tensor_on_mesh(
+                torch_tensor,
+                device,
+                dtype,
+                layout,
+                tensor_mem_config,
+                tensor_spec.get("tensor_placement"),
             )
-
-            if shard_dims is not None and mesh_compatible:
-                # Build global tensor: scale per-device shape by mesh size on each sharded axis.
-                # When shard_dims=(None, None) (full 2D replicate) the shape is unchanged
-                # but we still use ShardTensor2dMesh so the tracer records a 2D distribution.
-                global_shape = list(per_device_shape)
-                for axis_idx, sd in enumerate(shard_dims):
-                    if sd is not None:
-                        esd = sd if sd >= 0 else len(per_device_shape) + sd
-                        global_shape[esd] *= traced_mesh[axis_idx]
-
-                torch_global = torch_tensor.repeat(
-                    *[global_shape[d] // per_device_shape[d] for d in range(len(per_device_shape))]
-                )
-                ttnn_tensor = ttnn.from_torch(
-                    torch_global,
-                    dtype=dtype,
-                    layout=layout,
-                    device=device,
-                    memory_config=tensor_mem_config,
-                    mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=traced_mesh),
-                )
-            else:
-                ttnn_tensor = ttnn.from_torch(
-                    torch_tensor,
-                    dtype=dtype,
-                    layout=layout,
-                    device=device,
-                    memory_config=tensor_mem_config,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-                )
         else:
             ttnn_tensor = ttnn.from_torch(
                 torch_tensor,
@@ -225,7 +196,7 @@ def run(
         op_kwargs["memory_config"] = mem_config
 
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, **op_kwargs)
-    mesh_composer = get_mesh_composer(device, kwargs.get('input_a_tensor_placement')) if is_mesh_device else None
+    mesh_composer = get_mesh_composer(device, kwargs.get("input_a_tensor_placement")) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 

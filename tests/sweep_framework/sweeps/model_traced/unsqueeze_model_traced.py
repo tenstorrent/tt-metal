@@ -54,6 +54,7 @@ def mesh_device_fixture():
     yield (device, device_name)
     ttnn.close_mesh_device(device)
 
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -77,8 +78,10 @@ def run(
         output_memory_config = memory_config
 
     pos_args = extract_positional_args(kwargs)
-    if dim is None:
-        dim = pos_args.get(1, 0)
+    if pos_args.get(1) is not None:
+        dim = pos_args[1]
+    elif dim is None:
+        dim = 0
     if dim is None:
         dim = 0
 
