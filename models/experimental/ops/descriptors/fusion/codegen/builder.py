@@ -362,7 +362,12 @@ def _build_fused_descriptor(
                 for seg in multi_barrier.segments:
                     barrier_addrs.append(seg.release_addr)
             elif risc_type == "compute":
-                barrier_addrs = [multi_barrier.compute_done_addr, multi_barrier.reset_done_addr]
+                barrier_addrs = [
+                    multi_barrier.compute_done_addr,
+                    multi_barrier.reset_done_addr,
+                    multi_barrier.pack_drained_addr,
+                    multi_barrier.math_drained_addr,
+                ]
                 for seg in multi_barrier.segments:
                     barrier_addrs.append(seg.release_addr)
 

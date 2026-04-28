@@ -143,9 +143,12 @@ constexpr uint32_t TRID_FIRST = 1;
 constexpr uint32_t TRID_INNER = 2;
 constexpr uint32_t TRID_LAST = 3;
 
-// Row-by-row drain of output tiles from cb_out to DRAM.
-// Waits for each row group (sbh tile-rows), writes to DRAM, pops.
-// Overlaps DMA with compute: writes issue as soon as each row is ready.
+// Row-by-row drain of cb_out to DRAM; writes overlap with compute's next row-group push.
+// Padding past end_seq_tile is silently skipped by maybe_write_tile.
+//
+// flush_trid: TRID the caller stamped writes with via noc_async_write_set_trid (0 = default).
+// Save path passes save_trid; last-iter write_out path passes 0. Caller handles any final
+// NoC barrier (per-Q write_out path or the trid'd flush in save_accumulators).
 template <typename ReaderType>
 void write_out_row_by_row(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
@@ -153,29 +156,19 @@ void write_out_row_by_row(
     const uint32_t end_seq_tile,
     const uint32_t cb_out,
     const uint32_t tile_bytes,
-    const uint32_t sbh) {
-    const uint32_t out_rows = out_slice.get_d2_size();
-    const uint32_t out_cols = out_slice.get_d3_size();
-    const uint32_t row_tiles = sbh * out_cols;
-    const uint32_t num_row_groups = out_rows / sbh;
-
-    for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
-        cb_wait_front(cb_out, row_tiles);
-        uint32_t read_ptr = get_read_ptr(cb_out);
-        for (uint32_t r = 0; r < sbh; r++) {
-            for (uint32_t col = 0; col < out_cols; ++col) {
-                cat_out_generator.maybe_write_tile(
-                    out_slice.d0,
-                    out_slice.d1,
-                    out_slice.d2_start + rg * sbh + r,
-                    out_slice.d3_start + col,
-                    end_seq_tile,
-                    read_ptr);
-                read_ptr += tile_bytes;
-            }
-        }
-        cb_pop_front(cb_out, row_tiles);
-    }
+    const uint32_t sbh,
+    const uint32_t flush_trid) {
+    drain_cb_row_grouped(
+        cb_out,
+        out_slice.get_d2_size(),
+        out_slice.get_d3_size(),
+        tile_bytes,
+        sbh,
+        flush_trid,
+        [&](uint32_t row, uint32_t col, uint32_t l1_addr) {
+            cat_out_generator.maybe_write_tile(
+                out_slice.d0, out_slice.d1, out_slice.d2_start + row, out_slice.d3_start + col, end_seq_tile, l1_addr);
+        });
 }
 
 // Save all 3 accumulators (out, max, sum) to DRAM, tagged with a TRID for prefetch barriers.
@@ -202,7 +195,7 @@ void save_accumulators_with_trid(
     const uint32_t save_trid) {
     noc_async_write_set_trid(save_trid);
 
-    write_out_row_by_row(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh);
+    write_out_row_by_row(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh, save_trid);
 
     // Bulk drain of max/sum
     cb_wait_front(cb_max_out, Sq_chunk_t);
@@ -653,13 +646,16 @@ void kernel_main() {
                 }
 
                 if (is_last_ring_iter) {
+                    // Last-iter writes carry default trid (caller never set a non-zero trid here);
+                    // pass 0 so the per-group flush waits exactly for these writes.
                     write_out_row_by_row(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         end_seq_tile,
                         cb_out,
                         tile_bytes,
-                        out_subblock_h);
+                        out_subblock_h,
+                        /*flush_trid=*/0);
                     noc_async_write_barrier();
                 } else if (!single_q_chunk) {
                     deferred.pending = true;

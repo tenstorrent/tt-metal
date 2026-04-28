@@ -461,30 +461,125 @@ TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, SemaphoresFail) {
-    // Semaphores are not yet implemented for Quasar
+TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
     sem.unique_id = "sem_0";
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-// Remove once implemented
-TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsFail) {
-    // Semaphore bindings are not yet implemented
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
 
     KernelSpec::SemaphoreBinding binding;
     binding.semaphore_spec_name = "sem_0";
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelSucceedsOnQuasar) {
+    // Quasar permits compute kernels to participate in semaphore signalling.
+    // (The corresponding Gen1 test asserts this is rejected on WH/BH.)
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[1] is the compute kernel in MakeMinimalValidProgramSpec
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    KernelSpec::SemaphoreBinding binding;
+    binding.semaphore_spec_name = "missing_sem";
+    binding.accessor_name = "my_sem";
+    spec.kernels[0].semaphore_bindings = {binding};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("references unknown semaphore 'missing_sem'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    KernelSpec::SemaphoreBinding binding;
+    binding.semaphore_spec_name = "sem_0";
+    binding.accessor_name = "has-dash";
+    spec.kernels[0].semaphore_bindings = {binding};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("semaphore accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem0;
+    sem0.unique_id = "sem_0";
+    sem0.target_nodes = NodeCoord{0, 0};
+
+    SemaphoreSpec sem1;
+    sem1.unique_id = "sem_1";
+    sem1.target_nodes = NodeCoord{0, 0};
+
+    spec.semaphores = {sem0, sem1};
+    spec.workers.value()[0].semaphores = {"sem_0", "sem_1"};
+
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "same"},
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_1", .accessor_name = "same"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    sem.initial_value = 1;
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has initial_value=1 but only zero is supported on Quasar")));
 }
 
 // ---- Named RTA / CRTA / CTA schema validation ----
@@ -1478,12 +1573,11 @@ TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
     SemaphoreSpec sem{
         .unique_id = "my_semaphore",
         .target_nodes = NodeCoord{0, 0},
-        .initial_value = 0,
-        .memory_type = SemaphoreSpec::SemaphoreMemoryType::Register,
+        .initial_value = 7,
     };
 
     EXPECT_EQ(sem.unique_id, "my_semaphore");
-    EXPECT_EQ(sem.memory_type, SemaphoreSpec::SemaphoreMemoryType::Register);
+    EXPECT_EQ(sem.initial_value, 7u);
 }
 
 TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
@@ -1777,6 +1871,63 @@ TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
+    // On WH/BH, compute kernels cannot participate in semaphore signalling.
+    // (The corresponding Quasar test asserts this is allowed there.)
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[1] is the compute kernel in MakeMinimalGen1ValidProgramSpec
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has semaphore bindings, but it is a compute kernel.")));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
+    // Sanity check: binding a semaphore to a DM kernel on WH/BH is allowed.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
+    ASSERT_TRUE(spec.kernels[0].is_dm_kernel());
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
+    // Gen1 accepts non-zero initial values (only Quasar rejects them).
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    sem.initial_value = 3;
+    spec.semaphores = {sem};
+    spec.workers.value()[0].semaphores = {"sem_0"};
+
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
 TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {

@@ -60,6 +60,7 @@
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
+#include "../../../unified_kernels/persistent_loop.hpp"
 #include "../../../metadata/metadata.hpp"
 
 // ============================================================================
@@ -638,7 +639,9 @@ void kernel_main() {
         Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_matmul_core, true>
             mcast;
 
-    uint32_t iteration_count = 0;
+    constexpr uint32_t termination_semaphore_addr = get_named_compile_time_arg_val("termination_semaphore_addr");
+    deepseek_b1_ops::PersistentLoop<Core::persistent_mode> loop(termination_semaphore_addr);
+
     constexpr uint32_t TOKEN_TYPE_BASE = 0;
     constexpr uint32_t TOKEN_TYPE_SPEC = 1;
 
@@ -1110,9 +1113,7 @@ void kernel_main() {
     mcast.init(mcast_args);
 
     // Persistent loop
-    while (true) {
-        iteration_count++;
-
+    while (loop.next()) {
         // Base Stage: run LM head sampling and MTP ops
         if constexpr (Core::is_base_stage) {
             lm_head_sampling();
@@ -1172,10 +1173,6 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
 #endif
-
-        if constexpr (!Core::persistent_mode) {
-            break;
-        }
     }
     mcast.teardown(mcast_args);
 }
