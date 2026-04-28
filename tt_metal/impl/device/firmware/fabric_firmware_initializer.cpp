@@ -598,6 +598,16 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         // can distinguish "was force-reset" from "corrupt from prior crash".
         std::vector<std::string> reset_failed_channels;
         for (const auto& ch : pending) {
+            // FIX AX (#42429): For non-MMIO channels whose device is already confirmed
+            // relay-dead (from a prior channel's failed diagnostic read in this same loop),
+            // skip the diagnostic read entirely.  Each diagnostic read on a dead-relay
+            // non-MMIO device takes the full 5-second UMD timeout before throwing.
+            // Skipping saves (N_channels_per_device - 1) × 5 s per affected device.
+            // The sentinel 0xDEAD'DEAD remains in status_buf — same as if the read had thrown.
+            const bool is_non_mmio_already_dead =
+                cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
+                relay_dead_devices.count(ch.dev->id()) > 0;
+
             // Diagnostic read: log the last-seen status before asserting reset.
             // Wrapped in try/catch — if the read itself throws (e.g. device unresponsive),
             // we still want to proceed with force_reset_channels_ registration and
@@ -605,33 +615,35 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // a single bad read would abort the loop, leaving other channels un-reset and
             // skipping devices_.clear() / init_done.erase(key) at the end of teardown.
             std::vector<uint32_t> status_buf(1, 0xDEAD'DEAD);
-            try {
-                detail::ReadFromDeviceL1(
-                    ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
-            } catch (const std::exception& read_ex) {
-                log_warning(
-                    tt::LogMetal,
-                    "FabricFirmwareInitializer::teardown: diagnostic ReadFromDeviceL1 threw on "
-                    "Device {} chan={}: {} — using sentinel status for log, proceeding with reset",
-                    ch.dev->id(),
-                    ch.eth_chan_id,
-                    read_ex.what());
-                // FIX AJ: relay path is dead — mark device so l1_barrier is skipped below.
-                if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
-                    relay_dead_devices.insert(ch.dev->id());
-                }
-            } catch (...) {
-                // UmdException does not inherit from std::exception; catch it here so it
-                // cannot abort the force-reset loop.  (FIX AU #42429)
-                log_warning(
-                    tt::LogMetal,
-                    "FabricFirmwareInitializer::teardown: diagnostic ReadFromDeviceL1 threw "
-                    "non-std exception on Device {} chan={} (likely UMD relay timeout) — "
-                    "using sentinel status, proceeding with reset",
-                    ch.dev->id(),
-                    ch.eth_chan_id);
-                if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
-                    relay_dead_devices.insert(ch.dev->id());
+            if (!is_non_mmio_already_dead) {
+                try {
+                    detail::ReadFromDeviceL1(
+                        ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                } catch (const std::exception& read_ex) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: diagnostic ReadFromDeviceL1 threw on "
+                        "Device {} chan={}: {} — using sentinel status for log, proceeding with reset",
+                        ch.dev->id(),
+                        ch.eth_chan_id,
+                        read_ex.what());
+                    // FIX AJ: relay path is dead — mark device so l1_barrier is skipped below.
+                    if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
+                        relay_dead_devices.insert(ch.dev->id());
+                    }
+                } catch (...) {
+                    // UmdException does not inherit from std::exception; catch it here so it
+                    // cannot abort the force-reset loop.  (FIX AU #42429)
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: diagnostic ReadFromDeviceL1 threw "
+                        "non-std exception on Device {} chan={} (likely UMD relay timeout) — "
+                        "using sentinel status, proceeding with reset",
+                        ch.dev->id(),
+                        ch.eth_chan_id);
+                    if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
+                        relay_dead_devices.insert(ch.dev->id());
+                    }
                 }
             }
             log_warning(
@@ -647,45 +659,80 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 std::lock_guard<std::mutex> lock(force_reset_channels_mutex_);
                 force_reset_channels_.emplace(ch.dev->id(), ch.eth_chan_id);
             }
-            // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
+            // FIX AX (#42429): Skip assert_risc_reset_at_core for non-MMIO channels whose
+            // relay path is already confirmed dead (either from FIX AU relay-broken path, or
+            // because the diagnostic read above just threw and inserted this device into
+            // relay_dead_devices).
             //
-            // Previously this only called assert_risc_reset_at_core(ALL) without deassert,
-            // leaving ALL RISCs (ERISC0/BRISC + subordinate ERISC/NCRISC) in hardware reset.
-            // The subsequent teardown_fabric_config() only deasserted ERISC0, leaving NCRISC
-            // (which maintains the ETH PHY link) permanently in reset.  On the next test's
-            // fabric init, terminate_stale_erisc_routers() probe reads would timeout because:
-            //   - Non-MMIO devices: relay path dead (MMIO ETH core NCRISC in reset = PHY down)
-            //   - MMIO devices: l1_barrier → wait_for_non_mmio_flush triggered by non-MMIO
-            //     device association could hang or timeout
-            // Result: corrupt=4 probe_dead=4 on all devices, all ETH channels dead.
+            // Root cause of the new hang: assert_risc_reset_at_core on a non-MMIO device goes
+            // through the UMD ETH relay (read_non_mmio inside assert_risc_reset).  When the
+            // relay ERISC is unresponsive, every call takes the full 5-second UMD timeout before
+            // throwing.  With N channels per non-MMIO device and M non-MMIO devices, each channel
+            // costs up to 10 s (5 s diagnostic read + 5 s assert), serialized in the loop.
+            // On a T3K (4 non-MMIO devices × 2 channels each) that is up to 80 s of serial
+            // waiting — enough to blow the CI step timeout.
             //
-            // Fix: immediately deassert after assert (same pattern as FIX AC in
-            // risc_firmware_initializer.cpp and the clean path in teardown_fabric_config).
-            // This restarts the ERISC into base UMD relay firmware with all RISCs running,
-            // preserving the ETH PHY link for the next session's probe reads.
-            try {
-                const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                    ch.dev->id(), ch.eth_logical_core, CoreType::ETH);
-                cluster_.assert_risc_reset_at_core(
-                    tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
-                cluster_.deassert_risc_reset_at_core(
-                    tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
-            } catch (const std::exception& e) {
-                log_error(
+            // The assert_risc_reset_at_core would fail anyway because the relay is dead — there
+            // is no point spending 5 s per channel confirming it.  RiscFirmwareInitializer::
+            // teardown (FIX AC) will PCIe-reset the MMIO ETH cores, which restores the ETH PHY
+            // link and lets non-MMIO ERISCs boot into base firmware in the next session.  We
+            // still register the channel in force_reset_channels_ (done above) and
+            // reset_failed_channels (below) so the next session's diagnostics are correct.
+            const bool is_non_mmio_relay_dead =
+                cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id() &&
+                relay_dead_devices.count(ch.dev->id()) > 0;
+            if (is_non_mmio_relay_dead) {
+                log_warning(
                     tt::LogMetal,
-                    "FabricFirmwareInitializer::teardown: assert/deassert_risc_reset_at_core failed on "
-                    "Device {} chan={}: {} — ERISC may still be running or halted! "
-                    "Next fabric init should expect corrupt state on this channel.",
+                    "FabricFirmwareInitializer::teardown: Device {} chan={} relay confirmed dead — "
+                    "skipping assert_risc_reset_at_core to avoid 5s UMD timeout per channel "
+                    "(FIX AX #42429). RiscFirmwareInitializer::teardown will PCIe-reset MMIO "
+                    "ETH cores and restore the link.",
                     ch.dev->id(),
-                    ch.eth_chan_id,
-                    e.what());
+                    ch.eth_chan_id);
                 reset_failed_channels.push_back(
                     fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id));
-                // FIX AJ: if assert itself threw (relay path completely dead), mark device
-                // so we skip l1_barrier below — l1_barrier on a dead-relay non-MMIO device
-                // blocks indefinitely in wait_for_non_mmio_flush instead of throwing.
-                if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
-                    relay_dead_devices.insert(ch.dev->id());
+            } else {
+                // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
+                //
+                // Previously this only called assert_risc_reset_at_core(ALL) without deassert,
+                // leaving ALL RISCs (ERISC0/BRISC + subordinate ERISC/NCRISC) in hardware reset.
+                // The subsequent teardown_fabric_config() only deasserted ERISC0, leaving NCRISC
+                // (which maintains the ETH PHY link) permanently in reset.  On the next test's
+                // fabric init, terminate_stale_erisc_routers() probe reads would timeout because:
+                //   - Non-MMIO devices: relay path dead (MMIO ETH core NCRISC in reset = PHY down)
+                //   - MMIO devices: l1_barrier → wait_for_non_mmio_flush triggered by non-MMIO
+                //     device association could hang or timeout
+                // Result: corrupt=4 probe_dead=4 on all devices, all ETH channels dead.
+                //
+                // Fix: immediately deassert after assert (same pattern as FIX AC in
+                // risc_firmware_initializer.cpp and the clean path in teardown_fabric_config).
+                // This restarts the ERISC into base UMD relay firmware with all RISCs running,
+                // preserving the ETH PHY link for the next session's probe reads.
+                try {
+                    const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        ch.dev->id(), ch.eth_logical_core, CoreType::ETH);
+                    cluster_.assert_risc_reset_at_core(
+                        tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
+                    cluster_.deassert_risc_reset_at_core(
+                        tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
+                } catch (const std::exception& e) {
+                    log_error(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: assert/deassert_risc_reset_at_core failed on "
+                        "Device {} chan={}: {} — ERISC may still be running or halted! "
+                        "Next fabric init should expect corrupt state on this channel.",
+                        ch.dev->id(),
+                        ch.eth_chan_id,
+                        e.what());
+                    reset_failed_channels.push_back(
+                        fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id));
+                    // FIX AJ: if assert itself threw (relay path completely dead), mark device
+                    // so we skip l1_barrier below — l1_barrier on a dead-relay non-MMIO device
+                    // blocks indefinitely in wait_for_non_mmio_flush instead of throwing.
+                    if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
+                        relay_dead_devices.insert(ch.dev->id());
+                    }
                 }
             }
         }
