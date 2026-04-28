@@ -50,6 +50,8 @@ class UploadableMixin:
                     )
                 for tensor in value:
                     _append_unique_tensor(out, seen_ids, tensor, field.name)
+            elif kind == "passthrough":
+                continue
             else:
                 raise TypeError(f"Unsupported field annotation in {type(self).__name__}.{field.name}: {annotation}")
         return out
@@ -86,6 +88,8 @@ class UploadableMixin:
                         f"Field {type(self).__name__}.{field.name} must be list[ttnn.Tensor], got {type(value)}"
                     )
                 rebuilt_fields[field.name] = [tensor_map[tensor_identity_key(tensor)] for tensor in value]
+            elif kind == "passthrough":
+                rebuilt_fields[field.name] = value
             else:
                 raise TypeError(f"Unsupported field annotation in {type(self).__name__}.{field.name}: {annotation}")
         return type(self)(**rebuilt_fields)
@@ -98,6 +102,8 @@ def _classify_annotation(annotation: object) -> tuple[str, bool]:
             return "tensor", False
         if annotation is OverlappedTensor:
             return "overlapped", False
+        if isinstance(annotation, type) and getattr(annotation, "__upload_passthrough__", False):
+            return "passthrough", False
         raise TypeError(f"Unsupported field annotation: {annotation}")
 
     if origin is list:

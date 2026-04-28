@@ -236,6 +236,10 @@ class SramCompressedExpertSlots:
     weight preparation time, then pass the CTs through when combining.
     """
 
+    # Already device-resident per-core L1 CompressedTensors; skip the
+    # host->device upload walk in `two_phase_upload`.
+    __upload_passthrough__ = True
+
     num_slots: int
     slot_experts: list[int]
     gate_proj: list[CompressedTensor]
