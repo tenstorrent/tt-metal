@@ -428,16 +428,18 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             compute_kernel,
             core,
             {
-                i,  // core_id
-                batch_start,
-                batch_end,
-                head_start,
-                head_end,
-                (uint32_t)0,  // local_q_start
-                (uint32_t)1,  // local_q_end
-                (uint32_t)1,  // num_phases
-                (uint32_t)0,  // use_chunk_start_idx_tensor
-                (uint32_t)0,  // chunked_q_chunk_offset
+                i,            // [0]  core_id
+                batch_start,  // [1]
+                batch_end,    // [2]
+                head_start,   // [3]
+                head_end,     // [4]
+                (uint32_t)0,  // [5]  local_q_start
+                (uint32_t)1,  // [6]  local_q_end
+                // Tier 2A Phase 2.1 — chunk-slice routing repurposes the previously-unused
+                // slots [7] / [8]. Currently disabled: every core gets the full range.
+                (uint32_t)0,  // [7]  core_idx_in_group  (was: num_phases, unused)
+                (uint32_t)1,  // [8]  cores_per_head     (was: use_chunk_start_idx_tensor, unused)
+                (uint32_t)0,  // [9]  chunked_q_chunk_offset
             });
 
         SetRuntimeArgs(

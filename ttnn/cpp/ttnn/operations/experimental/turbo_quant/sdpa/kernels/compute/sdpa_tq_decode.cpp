@@ -423,6 +423,12 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
+    // (Tier 2A Phase 2.1) Per-core chunk-slice routing — currently the program
+    // factory always passes (0, 1) so this core processes every chunk exactly
+    // as before. Phase 2.2 will route different (core_idx_in_group) values to
+    // different cores per (B, NQH) tuple.
+    const uint32_t core_idx_in_group_arg = get_arg_val<uint32_t>(7);
+    const uint32_t cores_per_head_arg = get_arg_val<uint32_t>(8);
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -595,19 +601,15 @@ void kernel_main() {
                 const uint32_t valid_k_chunks_raw = (cur_pos_nb + k_chunk_size_tokens) / k_chunk_size_tokens;
                 const uint32_t valid_k_chunks = valid_k_chunks_raw < k_num_chunks ? valid_k_chunks_raw : k_num_chunks;
 
-                // ── Tier 2A scaffolding: per-core chunk slice ──
-                // Phase 1 (current): both constants are hard-wired so this core
-                // processes the full chunk range — behaviour identical to before.
-                // Phase 2 will promote these to runtime args and route different
-                // (core_idx_in_group) values to different cores within a (B, NQH)
-                // group; partial (max, sum, out) state is then merged across
-                // workers via NoC + semaphore in a separate reduce phase.
+                // ── Tier 2A scaffolding: per-core chunk slice (Phase 2.1) ──
+                // Runtime args (slots 7 / 8) route this core to a slice of the
+                // chunk range. Currently the program factory always sends (0, 1)
+                // so this core processes every chunk just as before. Phase 2.2
+                // will start sending non-trivial values; the cross-core reduce
+                // of partial (max, sum, out) state lands in Phase 2.3-2.5.
                 // See turbo_quant/TIER_2A_DESIGN.md for the full plan.
-                constexpr uint32_t core_idx_in_group = 0;
-                constexpr uint32_t cores_per_head_runtime = 1;
-                const uint32_t chunks_per_worker =
-                    (valid_k_chunks + cores_per_head_runtime - 1) / cores_per_head_runtime;
-                const uint32_t k_chunk_start_for_core = core_idx_in_group * chunks_per_worker;
+                const uint32_t chunks_per_worker = (valid_k_chunks + cores_per_head_arg - 1) / cores_per_head_arg;
+                const uint32_t k_chunk_start_for_core = core_idx_in_group_arg * chunks_per_worker;
                 const uint32_t k_chunk_end_for_core = (k_chunk_start_for_core + chunks_per_worker < valid_k_chunks)
                                                           ? k_chunk_start_for_core + chunks_per_worker
                                                           : valid_k_chunks;
