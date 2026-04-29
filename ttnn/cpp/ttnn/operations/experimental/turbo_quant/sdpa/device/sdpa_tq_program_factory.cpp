@@ -239,8 +239,10 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(Sq_chunk_t * im_tile_size, {{CBIndex::c_31, im_df}})
             .set_page_size(CBIndex::c_31, im_tile_size));
 
-    // Output (c_16)
-    auto out_df = datatype_to_dataformat_converter(output.dtype());
+    // Output (c_16) — output[0] is always the main attention output. When
+    // attrs.return_lse is set, output[1] is the LSE tensor (1 tile per (B, NQH)
+    // BF16, populated by the writer kernel from cb_lse_out=c_3).
+    auto out_df = datatype_to_dataformat_converter(output[0].dtype());
     uint32_t out_tile_size = tile_size(out_df);
     CreateCircularBuffer(
         program,
@@ -459,8 +461,15 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             uint16_t bf16 = static_cast<uint16_t>(f32_bits >> 16);
             return (static_cast<uint32_t>(bf16) << 16) | bf16;
         }(),
+        attrs.return_lse ? 1u : 0u,
     };
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(*output[0].buffer()).append_to(writer_ct_args);
+    // Always append a TensorAccessorArgs for the LSE buffer. When return_lse
+    // is false, output[1] doesn't exist — fall back to output[0]'s accessor as
+    // a placeholder (the kernel's `if constexpr (return_lse)` branch elides
+    // the LSE write so the placeholder is never used).
+    const auto& lse_buffer_for_accessor = attrs.return_lse ? *output[1].buffer() : *output[0].buffer();
+    TensorAccessorArgs(lse_buffer_for_accessor).append_to(writer_ct_args);
 
     KernelHandle writer_kernel = CreateKernel(
         program,
@@ -550,12 +559,13 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             reducer_logical_core_id % grid_size.x, reducer_logical_core_id / grid_size.x};
         const auto reducer_physical = device->worker_core_from_logical_core(reducer_logical);
 
+        const uint32_t lse_addr = attrs.return_lse ? output[1].buffer()->address() : 0u;
         SetRuntimeArgs(
             program,
             writer_kernel,
             core,
             {
-                output.buffer()->address(),
+                output[0].buffer()->address(),
                 i,
                 batch_start,
                 batch_end,
@@ -566,6 +576,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 static_cast<uint32_t>(reducer_physical.x),  // [8] Tier 2A: this group's reducer NoC x
                 static_cast<uint32_t>(reducer_physical.y),  // [9] Tier 2A: this group's reducer NoC y
                 reducer_semaphore_id,                       // [10] Tier 2A: per-program semaphore id
+                lse_addr,                                   // [11] LSE output buffer (0 if !return_lse)
             });
     }
 
@@ -607,7 +618,12 @@ void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
         reader_args[7] = args.cur_pos.buffer()->address();
 
         auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id, core);
-        writer_args[0] = output.buffer()->address();
+        writer_args[0] = output[0].buffer()->address();
+        // writer_args[11] = LSE buffer address (refresh in case it moved between
+        // launches). Untouched when return_lse=false because the kernel never reads it.
+        if (output.size() > 1) {
+            writer_args[11] = output[1].buffer()->address();
+        }
     }
 }
 

@@ -46,8 +46,11 @@ struct SDPATQDeviceOperation {
         const Tensor& cur_pos;     // [B] Int32
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
-    using tensor_return_value_t = Tensor;
+    // Returns either {out} or {out, lse} depending on return_lse. A vector lets
+    // us keep callers that don't ask for LSE on a simple `outs[0]` while the
+    // hybrid path picks up `outs[1]` for the combine.
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     struct MultiCore {
         struct shared_variables_t {
@@ -83,7 +86,7 @@ struct SDPATQDeviceOperation {
 
 namespace ttnn::prim {
 
-Tensor turbo_quant_sdpa_decode(
+std::vector<Tensor> turbo_quant_sdpa_decode(
     const Tensor& q,
     const Tensor& k_indices,
     const Tensor& k_norms,
@@ -94,6 +97,7 @@ Tensor turbo_quant_sdpa_decode(
     const std::vector<float>& centroids,
     float scale,
     bool pre_rescaled = false,
-    uint32_t num_cores_per_head = 1);
+    uint32_t num_cores_per_head = 1,
+    bool return_lse = false);
 
 }  // namespace ttnn::prim

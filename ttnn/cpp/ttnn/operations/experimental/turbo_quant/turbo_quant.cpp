@@ -14,7 +14,7 @@ Tensor turbo_quant_gather_centroids(const Tensor& input_tensor, const std::vecto
     return prim::turbo_quant_gather_centroids(input_tensor, centroids);
 }
 
-Tensor turbo_quant_sdpa_decode(
+std::vector<Tensor> turbo_quant_sdpa_decode(
     const Tensor& q,
     const Tensor& k_indices,
     const Tensor& k_norms,
@@ -25,7 +25,8 @@ Tensor turbo_quant_sdpa_decode(
     const std::vector<float>& centroids,
     float scale,
     bool pre_rescaled,
-    uint32_t num_cores_per_head) {
+    uint32_t num_cores_per_head,
+    bool return_lse) {
     return ::ttnn::prim::turbo_quant_sdpa_decode(
         q,
         k_indices,
@@ -37,7 +38,8 @@ Tensor turbo_quant_sdpa_decode(
         centroids,
         scale,
         pre_rescaled,
-        num_cores_per_head);
+        num_cores_per_head,
+        return_lse);
 }
 
 }  // namespace ttnn

@@ -28,7 +28,12 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(3);
     constexpr uint32_t num_cores = get_compile_time_arg_val(4);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(5);
-    constexpr auto out_args = TensorAccessorArgs<6>();
+    // return_lse: when 1, also write 1 LSE tile per (B, NQH) from cb_lse_out
+    // (c_3) to a second output buffer. Used by the sliding-window hybrid
+    // host-side combine. lse_addr runtime arg supplies the buffer address.
+    constexpr bool return_lse = get_compile_time_arg_val(6) == 1;
+    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr auto lse_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -45,10 +50,12 @@ void kernel_main() {
     const uint32_t reducer_noc_x_arg = get_arg_val<uint32_t>(argidx++);
     const uint32_t reducer_noc_y_arg = get_arg_val<uint32_t>(argidx++);
     const uint32_t reducer_semaphore_id_arg = get_arg_val<uint32_t>(argidx++);
+    const uint32_t lse_addr = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_lse_out = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
     // Tier 2A partial-state CBs.
@@ -61,6 +68,8 @@ void kernel_main() {
 
     const uint32_t out_tile_bytes = get_tile_size(cb_out);
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_bytes);
+    const uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
+    const auto lse_writer = TensorAccessor(lse_args, lse_addr, lse_tile_bytes);
 
     // ── Generate identity/scale tile using proper helper ──
     generate_reduce_scaler(cb_identity_scale, identity_scalar_packed);
@@ -159,6 +168,22 @@ void kernel_main() {
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, out_chunk_tiles);
+
+            // ── LSE write (sliding-window hybrid) ──
+            // 1 tile per (B, NQH) in [B, NQH, 1, TILE_W] BF16 layout. The kernel
+            // only populates one row of the tile (broadcast from the rowsum
+            // matmul_reduce); downstream combine reads column 0.
+            if constexpr (return_lse) {
+                const uint32_t lse_tile_id = nb * NQH * Sq_chunk_t + nq * Sq_chunk_t;
+                cb_wait_front(cb_lse_out, Sq_chunk_t);
+                uint32_t lse_l1_read_addr = get_read_ptr(cb_lse_out);
+                for (uint32_t t = 0; t < Sq_chunk_t; t++) {
+                    noc_async_write_tile(lse_tile_id + t, lse_writer, lse_l1_read_addr);
+                    lse_l1_read_addr += lse_tile_bytes;
+                }
+                noc_async_write_barrier();
+                cb_pop_front(cb_lse_out, Sq_chunk_t);
+            }
         }
     }
 }

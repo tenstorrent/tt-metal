@@ -1058,12 +1058,13 @@ void kernel_main() {
                     }
 
                     // ── LSE export (sliding-window hybrid) ──
-                    // Pack LSE = prev_max + log(prev_sum) to cb_lse_out (c_3)
-                    // BEFORE the recip+normalize. The host-side hybrid combine
-                    // uses LSE from two SDPA calls (this one over old positions
-                    // + a standard SDPA over the BFP8 ring) to merge their
-                    // outputs via online softmax math. cb_3 is otherwise the
-                    // Tier 2A reducer's cb_merge_new_max — return_lse and
+                    // Pack LSE = prev_max·scale + log(prev_sum) to cb_lse_out
+                    // (c_3) BEFORE the recip+normalize. The kernel's softmax
+                    // computes exp((s − max)·scale), so prev_sum holds
+                    // Σ exp((s − max)·scale) and the proper LSE for the *scaled*
+                    // scores is max·scale + log(sum). Used by the host-side
+                    // hybrid combine (LSE_COMBINE_DESIGN.md). c_3 is otherwise
+                    // the Tier 2A reducer's cb_merge_new_max — return_lse and
                     // cores_per_head_arg > 1 must not be set at the same time.
                     if constexpr (return_lse) {
                         constexpr uint32_t cb_lse_out = tt::CBIndex::c_3;
@@ -1080,7 +1081,10 @@ void kernel_main() {
                             // DST 1 = max
                             copy_tile_to_dst_init_short(alias_prev_max);
                             copy_tile(alias_prev_max, i, 1);
-                            // DST 0 = log(sum) + max = LSE
+                            // DST 1 = max · scale  (matches the kernel's softmax scaling)
+                            binop_with_scalar_tile_init();
+                            mul_unary_tile(1, scale_fp32);
+                            // DST 0 = log(sum) + max·scale = LSE
                             add_binary_tile_init();
                             add_binary_tile(0, 1, 0);
                             tile_regs_commit();

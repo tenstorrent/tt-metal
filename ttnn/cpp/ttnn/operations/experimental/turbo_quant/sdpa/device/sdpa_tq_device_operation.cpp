@@ -46,24 +46,43 @@ void SDPATQDeviceOperation::validate_on_program_cache_miss(
 
 SDPATQDeviceOperation::spec_return_value_t SDPATQDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    // Output: same shape as Q, BF16
-    return TensorSpec(
+    spec_return_value_t specs;
+    // [0] Output: same shape as Q, BF16
+    specs.emplace_back(
         args.q.logical_shape(),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(args.q.layout()), attrs.output_mem_config));
+    if (attrs.return_lse) {
+        // [1] LSE: shape [B, NQH, 1, TILE_W=32], 1 tile per (B, NQH) entry.
+        // Kernel packs one BF16 LSE value per tile (col 0 of row 0); rest is
+        // padding from the broadcast pack. Host-side combine reads col 0.
+        const auto& q_shape = args.q.logical_shape();
+        constexpr uint32_t TILE_W = 32;
+        ttnn::Shape lse_shape({q_shape[0], q_shape[1], q_shape[2], TILE_W});
+        specs.emplace_back(
+            lse_shape,
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(args.q.layout()), attrs.output_mem_config));
+    }
+    return specs;
 }
 
 SDPATQDeviceOperation::tensor_return_value_t SDPATQDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    auto output_spec = compute_output_specs(attrs, args);
-    return create_device_tensor(output_spec, args.q.device());
+    auto specs = compute_output_specs(attrs, args);
+    tensor_return_value_t outs;
+    outs.reserve(specs.size());
+    for (const auto& spec : specs) {
+        outs.push_back(create_device_tensor(spec, args.q.device()));
+    }
+    return outs;
 }
 
 }  // namespace ttnn::operations::experimental::turbo_quant
 
 namespace ttnn::prim {
 
-Tensor turbo_quant_sdpa_decode(
+std::vector<Tensor> turbo_quant_sdpa_decode(
     const Tensor& q,
     const Tensor& k_indices,
     const Tensor& k_norms,
@@ -74,10 +93,12 @@ Tensor turbo_quant_sdpa_decode(
     const std::vector<float>& centroids,
     float scale,
     bool pre_rescaled,
-    uint32_t num_cores_per_head) {
+    uint32_t num_cores_per_head,
+    bool return_lse) {
     using Op = ttnn::operations::experimental::turbo_quant::SDPATQDeviceOperation;
     return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{scale, centroids, pre_rescaled, ttnn::MemoryConfig{}, num_cores_per_head},
+        Op::operation_attributes_t{
+            scale, centroids, pre_rescaled, ttnn::MemoryConfig{}, num_cores_per_head, return_lse},
         Op::tensor_args_t{q, k_indices, k_norms, v_indices, v_norms, page_table, cur_pos});
 }
 

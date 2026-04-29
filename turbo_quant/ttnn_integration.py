@@ -913,7 +913,8 @@ class TTNNTurboQuantCache:
         scale: float,
         page_table: "ttnn.Tensor" = None,
         num_cores_per_head: int = 1,
-    ) -> "ttnn.Tensor":
+        return_lse: bool = False,
+    ):
         """Run fused TQ SDPA decode directly on BFP4 index + BF16 norm caches.
 
         Reads BFP4 indices from k/v_indices_dev, BF16 norms from k/v_norms_dev,
@@ -927,9 +928,14 @@ class TTNNTurboQuantCache:
             page_table: Required for paged caches. Int32 device tensor
                 [B, max_pages_per_batch]. For contiguous caches, a 1x1 dummy
                 tensor is allocated internally.
+            num_cores_per_head: Tier 2A cross-core split (default 1).
+            return_lse: if True, also returns LSE = max + log(sum) per
+                (B, NQH) for the sliding-window hybrid combine.
 
         Returns:
-            BF16 attention output [B, NQH, 1, DH] on device.
+            If return_lse=False: BF16 attention output [B, NQH, 1, DH] on device.
+            If return_lse=True: tuple (out, lse) where lse is a BF16 tensor
+                of shape [B, NQH, 1, 32] (1 tile per (B, NQH)).
         """
         _require_ttnn()
         centroids = get_codebook(self.head_dim, self.bits, device="cpu", dtype=torch.float32).centroids.tolist()
@@ -950,7 +956,7 @@ class TTNNTurboQuantCache:
             _pt = page_table
             _own_pt = False
 
-        out = ttnn.experimental.turbo_quant_sdpa_decode(
+        outs = ttnn.experimental.turbo_quant_sdpa_decode(
             q,
             self.k_indices_dev[layer_idx],
             self.k_norms_dev[layer_idx],
@@ -962,10 +968,14 @@ class TTNNTurboQuantCache:
             scale,
             False,  # pre_rescaled
             num_cores_per_head,
+            return_lse,
         )
         if _own_pt:
             ttnn.deallocate(_pt)
-        return out
+        # Op now returns a list — [out] or [out, lse].
+        if return_lse:
+            return outs[0], outs[1]
+        return outs[0]
 
     def sliding_window_sdpa_decode(
         self,

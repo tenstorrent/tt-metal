@@ -70,6 +70,9 @@ Args:
         values split the chunk range across cores and merge partial state via a
         cross-core reduce; cap is the number of compute cores available divided
         by total (B * NQH) tuples.
+    return_lse: If true, returns [out, lse] where lse holds LSE = max + log(sum)
+        per (B, NQH) for the sliding-window hybrid host-side online-softmax
+        combine. Default false returns [out].
 )doc",
         &ttnn::turbo_quant_sdpa_decode,
         nb::arg("q").noconvert(),
@@ -82,7 +85,8 @@ Args:
         nb::arg("centroids"),
         nb::arg("scale"),
         nb::arg("pre_rescaled") = false,
-        nb::arg("num_cores_per_head") = 1);
+        nb::arg("num_cores_per_head") = 1,
+        nb::arg("return_lse") = false);
 }
 
 }  // namespace ttnn::operations::experimental::turbo_quant
