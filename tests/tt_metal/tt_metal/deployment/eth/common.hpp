@@ -9,6 +9,15 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
+/* Performance debug helpers */
+#define NOW() std::chrono::high_resolution_clock::now()
+#define DELTA(s, start)                                                                       \
+    do {                                                                                      \
+        double delta_ms = std::chrono::duration<double, std::milli>(NOW() - (start)).count(); \
+        log_info(tt::LogTest, "      {} done in {} ms", (s), delta_ms);                       \
+        start = NOW();                                                                        \
+    } while (0)
+
 namespace tt::tt_metal {
 
 [[maybe_unused]]
@@ -143,7 +152,7 @@ static void track_eth_progress_timeout(
         uint32_t curr_send = read_eth_l1_u32(send_device, send_core, iter_l1_addr);
         uint32_t curr_recv = read_eth_l1_u32(recv_device, recv_core, iter_l1_addr);
 
-        if ((curr_send == expected_count - 1) && (curr_recv == expected_count - 1)) {
+        if ((curr_send == expected_count) && (curr_recv == expected_count)) {
             break;
         }
 
@@ -170,7 +179,6 @@ static void wait_to_finish_eth_timeout(
     distributed::MeshCoordinateRange& device_range,
     const CoreCoord& send_core,
     const CoreCoord& recv_core,
-    uint32_t recv_l1_address,
     uint32_t iter_l1_addr,
     uint32_t expected_count) {
     /* ==================== */
@@ -253,35 +261,36 @@ static bool data_dram_check(
     uint32_t dram_start_addr,
     uint32_t dram_end_addr,
     uint32_t dram_bank_id,
-    std::vector<uint32_t>& inputs) {
+    std::span<uint32_t>& inputs) {
     /* ==================== */
     uint64_t total_transferred = dram_end_addr - dram_start_addr;
     std::vector<uint32_t> outputs;
 
     detail::ReadFromDeviceDRAMChannel(recv_device, dram_bank_id, dram_start_addr, total_transferred, outputs);
-    log_info(tt::LogTest, "      Read {} bytes", outputs.size() * sizeof(uint32_t));
+    log_info(tt::LogTest, "      Read {} bytes from bank {}", outputs.size() * sizeof(uint32_t), dram_bank_id);
     TT_FATAL(inputs.size() == outputs.size(), "Input and output vector sizes must match");
-    bool pass = inputs == outputs;
+    // inputs == std::span(outputs);
+    // bool pass = !memcmp(&inputs[0], &outputs[0], inputs.size() * sizeof inputs[0]);
 
-    if (!pass) {
-        uint64_t total_mismatches = 0;
-        for (long i = 0; i < inputs.size(); i++) {
-            if (inputs[i] != outputs[i]) {
-                if (!total_mismatches) {
-                    log_critical(
-                        tt::LogTest,
-                        "      Input and output data don't match starting at: {:x}",
-                        dram_start_addr + i * sizeof(uint32_t));
-                }
-                total_mismatches++;
-                // log_critical(tt::LogTest, "      Input and output data don't match at {:08x}: {:08x} {:08x}", i,
-                // inputs[i], outputs[i]);
+    uint64_t total_mismatches = 0;
+    for (long i = 0; i < inputs.size(); i++) {
+        if (inputs[i] != outputs[i]) {
+            if (!total_mismatches) {
+                log_critical(
+                    tt::LogTest,
+                    "      Input and output data don't match starting at: {:x}",
+                    dram_start_addr + i * sizeof(uint32_t));
             }
+            total_mismatches++;
+            // log_critical(tt::LogTest, "      Input and output data don't match at {:08x}: {:08x} {:08x}", i,
+            // inputs[i], outputs[i]);
         }
+    }
+    if (total_mismatches) {
         log_critical(tt::LogTest, "      Total mismatches: {} words", total_mismatches);
     }
 
-    return pass;
+    return !total_mismatches;
 }
 
 template <typename FIXTURE>
@@ -312,6 +321,13 @@ static void tensix_zero_dram(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
+    DataMovementConfig config = {
+        .compile_args =
+            {
+                buffer0,
+                transfer_size,
+            },
+    };
 
     // log_info(tt::LogTest, "      start {:8x}", dram_start_addr);
     // log_info(tt::LogTest, "      end   {:8x}", dram_end_addr);
@@ -332,14 +348,6 @@ static void tensix_zero_dram(
             // log_info(tt::LogTest, "      start  {:8x}", start_addr);
             // log_info(tt::LogTest, "      end    {:8x}", end_addr);
             // log_info(tt::LogTest, "      size   {:8x}", end_addr - start_addr);
-            DataMovementConfig config = {
-                .compile_args =
-                    {
-                        dram_bank_id,
-                        buffer0,
-                        transfer_size,
-                    },
-            };
             auto kernel = tt_metal::CreateKernel(
                 zero_program, "tests/tt_metal/tt_metal/deployment/kernels/zero_kernel.cpp", core, config);
             tt_metal::SetRuntimeArgs(
@@ -348,6 +356,7 @@ static void tensix_zero_dram(
                 core,
                 {
                     id,
+                    dram_bank_id,
                     start_addr,
                     end_addr,
                 });
@@ -359,6 +368,199 @@ static void tensix_zero_dram(
     fixture->FinishCommands(mesh_device);
 
     // log_info(tt::LogTest, "      done zeroing bank {}", dram_bank_id);
+}
+
+template <typename FIXTURE>
+[[maybe_unused]]
+static void tensix_counter_dram(
+    FIXTURE* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t dram_start_addr,
+    uint32_t dram_end_addr,
+    uint32_t dram_bank_id) {
+    /* ==================== */
+    TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
+    tt_metal::Program zero_program = tt_metal::Program();
+
+    auto* const device = mesh_device->get_devices()[0];
+    CoreCoord core_grid = device->compute_with_storage_grid_size();
+    uint32_t total_bytes = dram_end_addr - dram_start_addr;
+    uint32_t core_count = core_grid.x * core_grid.y;
+    uint64_t per_core_bytes = total_bytes / core_count;
+    per_core_bytes = ((per_core_bytes + 15) >> 4) << 4;
+
+    TT_FATAL((total_bytes % 16) == 0, "Total size must be divisible by 16");
+    TT_FATAL((per_core_bytes % 16) == 0, "Per core size must be divisible by 16");
+
+    uint32_t transfer_size = 160 * 1024;
+    struct l1_allocator alloc = new_erisc_allocator();
+    uint32_t buffer0 = l1_alloc(&alloc, transfer_size);
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+    DataMovementConfig config = {
+        .compile_args =
+            {
+                buffer0,
+                transfer_size,
+            },
+    };
+
+    // log_info(tt::LogTest, "      start {:8x}", dram_start_addr);
+    // log_info(tt::LogTest, "      end   {:8x}", dram_end_addr);
+    uint32_t kernel_id = 0;
+    for (uint32_t x = 0; x < core_grid.x; x++) {
+        for (uint32_t y = 0; y < core_grid.y; y++) {
+            CoreCoord core = CoreCoord(x, y);
+
+            uint32_t id = kernel_id++;
+            uint32_t start_addr = dram_start_addr + id * per_core_bytes;
+            uint32_t end_addr =
+                start_addr + per_core_bytes > dram_end_addr ? dram_end_addr : start_addr + per_core_bytes;
+
+            start_addr = (start_addr >> 4) << 4;
+            end_addr = ((end_addr + 15) >> 4) << 4;
+
+            // log_info(tt::LogTest, "      kernel {}, {}", id, core);
+            // log_info(tt::LogTest, "      start  {:8x}", start_addr);
+            // log_info(tt::LogTest, "      end    {:8x}", end_addr);
+            // log_info(tt::LogTest, "      size   {:8x}", end_addr - start_addr);
+            auto kernel = tt_metal::CreateKernel(
+                zero_program, "tests/tt_metal/tt_metal/deployment/kernels/counter_kernel.cpp", core, config);
+            tt_metal::SetRuntimeArgs(
+                zero_program,
+                kernel,
+                core,
+                {
+                    id,
+                    dram_bank_id,
+                    start_addr,
+                    end_addr,
+                });
+        }
+    }
+
+    workload.add_program(device_range, std::move(zero_program));
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    // log_info(tt::LogTest, "      done zeroing bank {}", dram_bank_id);
+}
+
+template <typename FIXTURE>
+[[maybe_unused]]
+static bool tensix_compare_dram_banks(
+    FIXTURE* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t dram_start_addr,
+    uint32_t dram_end_addr,
+    uint32_t dram_bank_id0,
+    uint32_t dram_bank_id1) {
+    /* ==================== */
+    TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
+    // log_critical(tt::LogTest, "      comparing {} and {}", dram_bank_id0, dram_bank_id1);
+
+    tt_metal::Program cmp_program = tt_metal::Program();
+
+    auto* const device = mesh_device->get_devices()[0];
+    CoreCoord core_grid = device->compute_with_storage_grid_size();
+    uint32_t total_bytes = dram_end_addr - dram_start_addr;
+    uint32_t core_count = core_grid.x * core_grid.y;
+    uint64_t per_core_bytes = total_bytes / core_count;
+    per_core_bytes = ((per_core_bytes + 15) >> 4) << 4;
+    TT_FATAL((total_bytes % 16) == 0, "Total size must be divisible by 16");
+    TT_FATAL((per_core_bytes % 16) == 0, "Per core size must be divisible by 16");
+
+    uint32_t transfer_size = 160 * 1024;
+    struct l1_allocator alloc = new_erisc_allocator();
+    uint32_t error_counter = l1_alloc(&alloc, sizeof(uint32_t));
+    uint32_t first_error_addr = l1_alloc(&alloc, sizeof(uint32_t));
+    uint32_t buffer0 = l1_alloc(&alloc, transfer_size);
+    uint32_t buffer1 = l1_alloc(&alloc, transfer_size);
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+
+    // log_info(tt::LogTest, "      bank0 {}, bank1 {}", dram_bank_id0, dram_bank_id1);
+    // log_info(tt::LogTest, "      start {:8x}", dram_start_addr);
+    // log_info(tt::LogTest, "      end   {:8x}", dram_end_addr);
+    DataMovementConfig config = {
+        .compile_args =
+            {
+                buffer0,
+                buffer1,
+                transfer_size,
+                error_counter,
+                first_error_addr,
+            },
+    };
+
+    uint32_t kernel_id = 0;
+    for (uint32_t x = 0; x < core_grid.x; x++) {
+        for (uint32_t y = 0; y < core_grid.y; y++) {
+            CoreCoord core = CoreCoord(x, y);
+
+            uint32_t id = kernel_id++;
+            uint32_t start_addr = dram_start_addr + id * per_core_bytes;
+            uint32_t end_addr =
+                start_addr + per_core_bytes > dram_end_addr ? dram_end_addr : start_addr + per_core_bytes;
+
+            start_addr = (start_addr >> 4) << 4;
+            end_addr = ((end_addr + 15) >> 4) << 4;
+
+            // log_info(tt::LogTest, "      kernel {}, {}", id, core);
+            // log_info(tt::LogTest, "      start  {:8x}", start_addr);
+            // log_info(tt::LogTest, "      end    {:8x}", end_addr);
+            // log_info(tt::LogTest, "      size   {:8x}", end_addr - start_addr);
+            auto kernel = tt_metal::CreateKernel(
+                cmp_program, "tests/tt_metal/tt_metal/deployment/kernels/cmp_kernel.cpp", core, config);
+            tt_metal::SetRuntimeArgs(
+                cmp_program,
+                kernel,
+                core,
+                {
+                    id,
+                    dram_bank_id0,
+                    dram_bank_id1,
+                    start_addr,
+                    end_addr,
+                });
+        }
+    }
+
+    workload.add_program(device_range, std::move(cmp_program));
+    fixture->RunProgram(mesh_device, workload, true);
+    fixture->FinishCommands(mesh_device);
+
+    uint64_t total_errors = 0;
+    uint32_t first_error = -1;
+
+    for (uint32_t x = 0; x < core_grid.x; x++) {
+        for (uint32_t y = 0; y < core_grid.y; y++) {
+            CoreCoord core = CoreCoord(x, y);
+            uint32_t errors = read_l1_u32(device, core, error_counter);
+            total_errors += errors;
+            if (errors) {
+                uint32_t t = read_l1_u32(device, core, first_error_addr);
+                if (t < first_error) {
+                    first_error = t;
+                }
+            }
+        }
+    }
+
+    if (total_errors) {
+        log_critical(
+            tt::LogTest,
+            "      done comparing bank {} and {} with {} mismatched words starting at {:x}",
+            dram_bank_id0,
+            dram_bank_id1,
+            total_errors,
+            first_error);
+    }
+    return !total_errors;
 }
 
 }  // namespace tt::tt_metal

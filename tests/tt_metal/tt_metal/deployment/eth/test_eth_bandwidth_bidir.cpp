@@ -140,7 +140,6 @@ static bool run_test_bandwidth_bidir(
         device_range,
         send_core,
         recv_core,
-        recv_l1_address,
         iter_l1_address,
         transfer_count);
 
@@ -148,8 +147,8 @@ static bool run_test_bandwidth_bidir(
     pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
     pass &= bandwidth_check(recv_device, recv_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
 
-    // pass &= data_check(recv_device, recv_core, recv_l1_address, inputs) || true;
-    // pass &= data_check(send_device, send_core, recv_l1_address, inputs) || true;
+    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
+    pass &= data_check(send_device, send_core, recv_l1_address, inputs);
 
     return pass;
 }

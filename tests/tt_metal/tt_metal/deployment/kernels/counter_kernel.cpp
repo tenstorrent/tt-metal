@@ -20,14 +20,15 @@ void kernel_main() {
 
     uint32_t* buf = (uint32_t*)buffer_addr;
 
-    for (uint32_t i = 0; i < transfer_size / 4; i++) {
-        buf[i] = 0;
-    }
-
     uint32_t remaining = end_addr - start_addr;
     uint32_t curr_addr = start_addr;
 
     while (remaining) {
+        // TODO double buffer?
+        for (uint32_t i = 0; i < transfer_size / 4; i++) {
+            buf[i] = curr_addr + i + 1;
+        }
+
         const uint32_t to_send = transfer_size < remaining ? transfer_size : remaining;
 
         uint64_t noc_addr = get_noc_addr_from_bank_id<true>(bank_id, curr_addr);
