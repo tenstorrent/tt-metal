@@ -36,7 +36,7 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
 
     host_name = socket.gethostname()
-    logger.info(f"Host name: {host_name}")
+    logger.debug(f"Host name: {host_name}")
 
     # Create device groups that contain replicated data
     # Data is replicated on each column of the mesh
@@ -49,10 +49,10 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
     rank_row_start = int(rank) * total_rows // int(size)
     rank_row_end = rank_row_start + total_rows // int(size)
 
-    logger.info(f"Rank: {rank}, Size: {size}, Row start: {rank_row_start}, Row end: {rank_row_end}")
+    logger.debug(f"Rank: {rank}, Size: {size}, Row start: {rank_row_start}, Row end: {rank_row_end}")
 
     num_layers = config.num_layers
-    print(f"Num layers is: ", num_layers)
+    logger.debug(f"Num layers is: {num_layers}")
 
     all_fabric_node_ids = []
     for row in range(rank_row_start, rank_row_end):
@@ -64,23 +64,23 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
 
         all_fabric_node_ids.extend(fabric_node_ids)
         group_idx = lookup_table.add_device_group(fabric_node_ids)
-        logger.info(f"Device group {int(group_idx)}: {len(fabric_node_ids)} nodes")
+        logger.debug(f"Device group {int(group_idx)}: {len(fabric_node_ids)} nodes")
         for idx, fid in enumerate(fabric_node_ids):
             mesh_id = int(fid.mesh_id)
             chip_id = int(fid.chip_id)
-            logger.info(f"  Node {idx}: mesh_id={mesh_id}, chip_id={chip_id}")
+            logger.debug(f"  Node {idx}: mesh_id={mesh_id}, chip_id={chip_id}")
 
         device_group_idx_per_row.append(group_idx)
 
     for fid in all_fabric_node_ids:
         lookup_table.set_fabric_node_host(fid, host_name=host_name)
-        logger.info(
+        logger.debug(
             f"Set host name for fabric node id: mesh_id={int(fid.mesh_id)}, chip_id={int(fid.chip_id)} to {host_name}"
         )
 
     num_tokens_in_strip = seq_len // (mesh_shape[sp_axis] * 2)
     num_chunks_in_strip = num_tokens_in_strip // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    logger.info(f"Num tokens in strip is: {num_tokens_in_strip} num_chunks in strip is: {num_chunks_in_strip}")
+    logger.debug(f"Num tokens in strip is: {num_tokens_in_strip} num_chunks in strip is: {num_chunks_in_strip}")
 
     # describes high and low sequence length per rank
     seq_len_per_rank = seq_len // (int(size) * 2)
@@ -97,23 +97,23 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
 
         low_strip_start_idx = low_strip_end_idx + 1
         high_strip_end_idx = high_strip_start_idx - 1
-        logger.info(
+        logger.debug(
             f"Token positions for device group index: Rank = {rank}, Device group index = {device_group_idx_per_row[row]} are {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
         )
 
     slot = 0
     current_position = 0  # Must be chunk-aligned
     chunks_per_device_group = num_chunks_in_strip * 2
-    logger.info("chunks_per_device_group = ", chunks_per_device_group)
+    logger.debug("chunks_per_device_group = ", chunks_per_device_group)
 
-    logger.info(f"kvpe cache shape is: {tt_kvpe_cache.shape}")
+    logger.debug(f"kvpe cache shape is: {tt_kvpe_cache.shape}")
     dram_bank_base_addr = tt_kvpe_cache.buffer_address()
     for row in range(len(device_group_idx_per_row)):
         group_idx = device_group_idx_per_row[row]
         curr_bank_id = 0
         curr_bank_offset = 0
 
-        logger.info(
+        logger.debug(
             f"Rank: {rank} Populating device_group_index: {group_idx} with positions: {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
         )
         (current_position, max_position) = device_position_indices_low_strip[row]
@@ -128,7 +128,7 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
                 location.size_bytes = chunk_size_bytes
                 location.device_group_index = group_idx
                 lookup_table.set(layer, layer_current_position, slot, location)
-                logger.info(
+                logger.debug(
                     f"Rank: {rank} Set location for (layer={layer}, pos={layer_current_position}, slot={slot}, bank_id={curr_bank_id}, curr_bank_offset = {curr_bank_offset} noc_addr = 0x{noc_addr:X})"
                 )
 

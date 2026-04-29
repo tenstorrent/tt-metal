@@ -109,6 +109,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
     // Stage 0 entry and loopback exit are intra-mesh on mesh_0 (not from inter-mesh cables).
     // Pick two unclaimed chips with a direct intra-mesh ethernet link (loopback_exit -> stage_0_entry).
     // Prefer a non-Z link when available so the loopback hop matches typical NESW mesh wiring.
+    // Collect ALL unclaimed nodes; the directly-connected pair may not be the first ones found.
     auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
     std::vector<tt::tt_fabric::FabricNodeId> unclaimed_mesh_0_nodes;
     for (const auto& coord : mesh_0_coord_range) {
@@ -116,9 +117,6 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
         tt::tt_fabric::FabricNodeId fn(mesh_ids[0], chip_id);
         if (!used_nodes.contains(fn)) {
             unclaimed_mesh_0_nodes.push_back(fn);
-            if (unclaimed_mesh_0_nodes.size() >= unclaimed_needed) {
-                break;
-            }
         }
     }
     TT_FATAL(
@@ -676,22 +674,8 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
 }  // namespace
 
 std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initialize_loopback) {
-    log_info(
-        LogMetal,
-        "[generate_blitz_decode_pipeline] rank={} initialize_loopback={} — building topology",
-        *tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->rank(),
-        initialize_loopback);
     auto stages = build_pipeline_from_topology(initialize_loopback);
-    log_info(
-        LogMetal,
-        "[generate_blitz_decode_pipeline] rank={} — built {} stages, validating",
-        *tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->rank(),
-        stages.size());
     validate_pipeline(stages, initialize_loopback);
-    log_info(
-        LogMetal,
-        "[generate_blitz_decode_pipeline] rank={} — validated, entering barrier",
-        *tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->rank());
 
     // Synchronize all ranks before returning so that downstream socket creation
     // (which cascades sequentially through stages) starts from a common point.
@@ -702,7 +686,6 @@ std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initia
     const auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     ctx->barrier();
 
-    log_info(LogMetal, "[generate_blitz_decode_pipeline] rank={} — barrier complete, returning", *ctx->rank());
     return stages;
 }
 

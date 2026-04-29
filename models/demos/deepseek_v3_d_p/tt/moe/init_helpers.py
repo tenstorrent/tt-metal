@@ -75,6 +75,7 @@ class ExpertMapping:
     - `get_global_expert_idx()`: Computes global expert index from (group, chip, local_expert)
     - `gather_weights_for_mesh_distribution()`: Gathers weights in mesh order using the above
     - `create_dispatch_table()`: Creates runtime dispatch table for token routing
+    - `create_global_expert_idx_table()`: Builds a (group, chip, local_expert) -> global expert id lookup tensor
     - `get_weights_mesh_mapper()`: Returns mesh mapper with dims=(0, 1) for weight distribution
 
     The default layout is column-major: experts 0..N are placed in group 0, then N+1..2N in group 1, etc.
@@ -241,6 +242,48 @@ class ExpertMapping:
         return table
 
     @staticmethod
+    def create_global_expert_idx_table(
+        experts_per_chip: int,
+        dispatch_group_size: int,
+        num_dispatch_groups: int,
+        is_col_major: bool = True,
+    ) -> torch.Tensor:
+        """
+        Build a lookup tensor mapping mesh position (group, chip, local_expert) to
+        global expert index, using `get_global_expert_idx` as the source of truth.
+
+        Args:
+            experts_per_chip: Number of experts per chip
+            dispatch_group_size: Number of chips per dispatch group (mesh rows)
+            num_dispatch_groups: Number of dispatch groups (mesh columns)
+            is_col_major: Expert ordering (True=column-major, False=row-major)
+
+        Returns:
+            Tensor of shape (num_dispatch_groups, dispatch_group_size, experts_per_chip)
+            where table[g, c, e] is the global expert id assigned to local_expert e
+            on chip c of dispatch group g.
+        """
+        table = torch.zeros(
+            (num_dispatch_groups, dispatch_group_size, experts_per_chip),
+            dtype=torch.int32,
+        )
+        for group in range(num_dispatch_groups):
+            for chip in range(dispatch_group_size):
+                for local_expert in range(experts_per_chip):
+                    table[group, chip, local_expert] = ExpertMapping.get_global_expert_idx(
+                        group=group,
+                        chip=chip,
+                        local_expert=local_expert,
+                        experts_per_chip=experts_per_chip,
+                        dispatch_group_size=dispatch_group_size,
+                        num_dispatch_groups=num_dispatch_groups,
+                        is_col_major=is_col_major,
+                    )
+
+        logger.debug(f"[ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape={table.shape}")
+        return table
+
+    @staticmethod
     def get_weights_mesh_mapper(mesh_device):
         """
         Create mesh mapper for routed expert weight tensors.
@@ -300,6 +343,10 @@ def get_gate_outputs(
             Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
         expert_token_counts: Total tokens per expert (sparse per group, replicated across dispatch_group_size)
             Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
+        expert_region_offsets: Expert region component of expert_offsets — identical across
+            the dispatch_group_size dimension. Equals expert_offsets minus the
+            per-source-device local offset.
+            Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
         expert_counter: Per-chip token counts for each expert (sparse per group).
             Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
     """
@@ -329,22 +376,55 @@ def get_gate_outputs(
 
     # Cumsum along dispatch_group_size (dim=1) per group
     cum_sum = torch.cumsum(expert_counter, dim=1)
-    expert_offsets = torch.cat(
+    local_expert_offsets = torch.cat(
         [torch.zeros((num_dispatch_groups, 1, num_routed_experts), dtype=torch.int32), cum_sum[:, :-1, :]], dim=1
     )
 
     # Token counts: last row of cumsum, replicated across dispatch_group_size
     expert_token_counts = cum_sum[:, -1:, :].expand(-1, dispatch_group_size, -1).contiguous()
 
+    # Partial cumsum along expert dimension (dim=-1)
+    # Split num_routed_experts into (num_chips, experts_per_chip), cumsum within each chip
+    # Pad each expert's count to TILE_SIZE so each expert starts at a tile boundary in the dispatch buffer
+    aligned_token_counts = ((expert_token_counts + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    global_expert_offsets = torch.reshape(
+        aligned_token_counts,
+        (num_dispatch_groups, dispatch_group_size, num_routed_experts // experts_per_chip, experts_per_chip),
+    )
+    global_expert_offsets = torch.cumsum(global_expert_offsets, dim=-1)
+    global_expert_offsets = torch.cat(
+        [
+            torch.zeros(
+                (num_dispatch_groups, dispatch_group_size, num_routed_experts // experts_per_chip, 1), dtype=torch.int32
+            ),
+            global_expert_offsets[:, :, :, :-1],
+        ],
+        dim=-1,
+    )
+    global_expert_offsets = torch.reshape(
+        global_expert_offsets,
+        (num_dispatch_groups, dispatch_group_size, num_routed_experts),
+    )
+    # Snapshot expert region component (shared across source devices) before adding local offsets
+    expert_region_offsets = global_expert_offsets.clone()
+    global_expert_offsets += local_expert_offsets
+
     logger.debug(f"[get_gate_outputs] OUTPUT SHAPES:")
     logger.debug(f"  expert_counter.shape={expert_counter.shape}")
-    logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
+    logger.debug(f"  local_expert_offsets.shape={local_expert_offsets.shape}")
+    logger.debug(f"  global_expert_offsets.shape={global_expert_offsets.shape}")
+    logger.debug(f"  expert_region_offsets.shape={expert_region_offsets.shape}")
     logger.debug(f"  expert_token_counts.shape={expert_token_counts.shape}")
-    return expert_offsets, expert_token_counts, expert_counter
+    return global_expert_offsets, expert_token_counts, expert_region_offsets, expert_counter
 
 
 def compute_constants(
-    seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    seq_len_per_chip,
+    num_routed_experts,
+    num_experts_per_tok,
+    num_devices,
+    dispatch_group_size,
+    dispatch_buffer_capacity_factor,
 ):
     """
     Compute derived constants for MoE configuration.
@@ -355,19 +435,30 @@ def compute_constants(
         num_experts_per_tok: Number of experts each token is routed to
         num_devices: Number of devices across which experts are distributed
         dispatch_group_size: Number of devices in each dispatch group
-        capacity_factor: Capacity factor for load balancing
+        dispatch_buffer_capacity_factor: Multiplier for the flat dispatch
+            buffer; callers must pick the smallest integer such that
+            dgs*seq*factor is not smaller than the theoretical worst-case
+            required buffer size.
 
     Returns:
         experts_per_chip: Number of experts per chip
         metadata_len: Length of metadata per token
+        max_dispatch_buffer_token_size: Total token capacity of the dispatch buffer
         max_dispatched_tokens_per_expert: Maximum tokens per expert
     """
+    assert (
+        seq_len_per_chip % ttnn.TILE_SIZE == 0
+    ), f"seq_len_per_chip ({seq_len_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
+
     experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
-    # total number of tokens in group times x distribution ratio (8/256 == 2/64)
-    balanced_load = (dispatch_group_size * seq_len_per_chip) * num_experts_per_tok // num_routed_experts
-    max_dispatched_tokens_per_expert = int(balanced_load * capacity_factor)
-    return experts_per_chip, metadata_len, max_dispatched_tokens_per_expert
+
+    # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
+    # we support replicated experts (See Issue #41293)
+    max_dispatched_tokens_per_expert = dispatch_group_size * seq_len_per_chip
+    max_dispatch_buffer_token_size = max_dispatched_tokens_per_expert * dispatch_buffer_capacity_factor
+
+    return experts_per_chip, metadata_len, max_dispatch_buffer_token_size, max_dispatched_tokens_per_expert
 
 
 def initialize_test_inputs(

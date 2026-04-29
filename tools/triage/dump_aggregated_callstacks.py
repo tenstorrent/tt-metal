@@ -132,7 +132,7 @@ class AggregationBucket:
     def add_core(self, location: OnChipCoordinate, device_label: str):
         """Add a core to this aggregation bucket."""
 
-        coord_str = location.to_str("noc0")
+        coord_str = location.to_user_str()
         self.core_locations.add(f"{device_label}:{coord_str}")
         self.device_labels.add(device_label)
 

@@ -1412,23 +1412,23 @@ void apply_causal_mask_lightweight(
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        int32_t diag_col = (int32_t)(q_start_tile + row) - (int32_t)k_start_tile;
+        int32_t diag_col = static_cast<int32_t>(q_start_tile + row) - static_cast<int32_t>(k_start_tile);
         uint32_t row_offset = row * num_cols;
 
         if (diag_col < 0) {
             // Entire row above diagonal -> stamp all neginf
             stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
-        } else if ((uint32_t)diag_col < num_cols) {
+        } else if (static_cast<uint32_t>(diag_col) < num_cols) {
             // Stamp the diagonal tile
             tile_regs_acquire();
             copy_tile(mask_cb, diag_idx, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile<true>(0, out_cb, row_offset + (uint32_t)diag_col);
+            pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
             tile_regs_release();
 
             // Stamp neginf tiles to the right of diagonal
-            uint32_t neginf_start = (uint32_t)diag_col + 1;
+            uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
             if (neginf_start < num_cols) {
                 stamp_tile_range_l1_acc<dst_batch>(
                     mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
@@ -1447,7 +1447,7 @@ void apply_causal_mask_lightweight(
  * template parameter(s), not by default-constructing this context.
  */
 struct LightweightMaskContext {
-    bool is_causal = false;                  // True only on ring_iter 0 for causal configs
+    bool is_causal = false;                  // Causal masking active for this context instance
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
     uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
@@ -2495,7 +2495,7 @@ void sdpa_ring(
         out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
-        q_num_chunks,    // q_num_chunks (number of local q chunks)
+        q_num_chunks,    // q_num_chunks (total per-head chunks: local + joint)
         0,               // local_q_start (not used)
         0,               // chunked_q_chunk_offset (not used)
         0,

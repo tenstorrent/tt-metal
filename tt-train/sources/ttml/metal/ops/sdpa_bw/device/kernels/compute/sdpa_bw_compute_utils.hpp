@@ -146,13 +146,18 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
 // The reduction is done via matmul with a column of ones (cb_mat_mul_reduction).
+// Computes u_scalar = rowsum(dO * O) and packs the result to cb_u_scalar_row.
+// When cb_u_scaler_output != 0, also packs a second copy to that CB (for DRAM flush
+// to the KV kernel). Both packs happen directly from DST at full FP32 precision,
+// avoiding a separate copy-pack cycle.
 void compute_u_scalar_row(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
     /*output result*/ const uint32_t cb_u_scalar_row,
     /*mutmul reduction*/ const uint32_t cb_mat_mul_reduction,
     const uint32_t tiles_per_row,
-    const uint32_t scaler_bits) {
+    const uint32_t scaler_bits,
+    const uint32_t cb_u_scaler_output) {
     const uint32_t accum_register = 0;
     // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
     // accumulation to dest regs
@@ -195,6 +200,12 @@ void compute_u_scalar_row(
     cb_reserve_back(cb_u_scalar_row, onetile);
     pack_reconfig_data_format(cb_u_scalar_row);
     pack_tile(accum_register, cb_u_scalar_row);
+
+    cb_reserve_back(cb_u_scaler_output, onetile);
+    pack_reconfig_data_format(cb_u_scaler_output);
+    pack_tile(accum_register, cb_u_scaler_output);
+    cb_push_back(cb_u_scaler_output, onetile);
+
     tile_regs_release();
     cb_push_back(cb_u_scalar_row, onetile);
 }

@@ -78,6 +78,14 @@ enum BroadcastType
     SCALAR = 0x3, // A - None || B - Scalar Broadcast
 };
 
+enum class Transpose : std::uint8_t
+{
+    None      = 0,
+    IntraFace = 1,
+    InterFace = 2,
+    Both      = 3,
+};
+
 enum src_op_id_e
 {
     OP_SRC0 = 0,

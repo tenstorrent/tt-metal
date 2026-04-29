@@ -33,7 +33,7 @@ namespace {
 using test_helpers::BindDFBToKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
-using test_helpers::MakeMinimalWorker;
+using test_helpers::MakeMinimalWorkUnit;
 
 // ============================================================================
 // Test Fixture
@@ -96,27 +96,26 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     spec.program_id = "dfb_accessor_loopback";
 
     // Producer: BRISC reads from DRAM → DFB
-    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp"};
     producer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // Consumer: NCRISC reads DFB → DRAM
-    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp"};
     consumer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // DFB: both kernels bind it, with different local accessor names
-    auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries);
+    auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     BindDFBToKernel(producer, "loopback_dfb", "my_local_dfb_name", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "loopback_dfb", "a_dfb_named_bob", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"}, {"loopback_dfb"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     // -------------------------------------------------------
     // Create Program
@@ -228,7 +227,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     // Producer: BRISC reads DRAM → DFB. 1 named RTA, 1 named CRTA, 2 named CTAs, 3 RTA
     // varargs, 1 CRTA vararg.
-    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp"};
     producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
@@ -240,7 +239,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     // Consumer: NCRISC reads DFB → DRAM. Uses default `args` namespace, 1 named RTA,
     // 1 named CRTA, 2 named CTAs, 2 RTA varargs (note: different count from producer —
     // this verifies the named_rta_words offset is baked per-kernel), 1 CRTA vararg.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp"};
     consumer.runtime_arguments_schema.named_runtime_args = {"dst_addr"};
@@ -249,15 +248,14 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     consumer.runtime_arguments_schema.num_common_runtime_varargs = 1;
     consumer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
 
-    auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries_in_dfb);
+    auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries_in_dfb);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     BindDFBToKernel(producer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"}, {"loopback_dfb"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -307,6 +305,91 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// Semaphore Accessor Name Loopback Test
+// ============================================================================
+//
+// Targeted test for the semaphore accessor name plumbing.
+// Very minimal: just one semaphore and two kernels that sync on it via
+// different local accessor names.
+//
+//   - Producer (BRISC) and consumer (NCRISC) each resolve their accessor name
+//     to a sem ID. Test only completes if both land on the same underlying ID.
+//   - If producer's sem::signal ID != consumer's sem::waiter ID, consumer hangs
+//     forever on wait(1).
+//
+// Proves: kernel_bindings_generated.h emits the sem:: namespace correctly, both
+// kernels' views agree on the sem ID, Metal 2.0 allocates the sem (on Gen1).
+
+TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    const NodeCoord node{0, 0};
+
+    // A SemaphoreSpec describes a Program-scope semaphore: it identifies the sem by name and
+    // declares which nodes will see it. Initial value defaults to 0.
+    SemaphoreSpec sem{
+        .unique_id = "only_sem",
+        .target_nodes = node,
+    };
+
+    // A KernelSpec binds the semaphore by its `unique_id` and gives it a kernel-local
+    // `accessor_name` — the name the kernel source uses to refer to it. The runtime emits
+    // `sem::<accessor_name>` constants in `kernel_bindings_generated.h` for the kernel to
+    // consume. The producer and consumer below choose different accessor names for the same
+    // semaphore.
+    KernelSpec producer{
+        .unique_id = "producer",
+        .source =
+            KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp"},
+        .num_threads = 1,
+        .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
+        .config_spec =
+            DataMovementConfiguration{
+                .gen1_data_movement_config =
+                    DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                    },
+            },
+    };
+    KernelSpec consumer{
+        .unique_id = "consumer",
+        .source =
+            KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp"},
+        .num_threads = 1,
+        .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
+        .config_spec =
+            DataMovementConfiguration{
+                .gen1_data_movement_config =
+                    DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                    },
+            },
+    };
+
+    // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
+    WorkUnitSpec work_unit{
+        .unique_id = "work_unit_0",
+        .kernels = {"producer", "consumer"},
+        .target_nodes = node,
+    };
+
+    // The ProgramSpec aggregates everything and is consumed by `MakeProgramFromSpec`.
+    ProgramSpec spec{
+        .program_id = "semaphore_accessor_loopback",
+        .kernels = {producer, consumer},
+        .semaphores = {sem},
+        .work_units = std::vector<WorkUnitSpec>{work_unit},
+    };
+
+    Program program = MakeProgramFromSpec(spec);
+    detail::LaunchProgram(device, program);
+    // If we got here, both kernels resolved their sem accessors to the same ID.
 }
 
 }  // namespace
