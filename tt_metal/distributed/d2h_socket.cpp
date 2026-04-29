@@ -24,6 +24,13 @@
 
 namespace tt::tt_metal::distributed {
 
+namespace {
+
+// `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
+constexpr uint32_t k_x86_clflush_line_bytes = 64;
+
+}  // namespace
+
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
@@ -434,7 +441,7 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     uint32_t* src = using_hugepage_ ? hugepage_data_host_ptr_ + (read_ptr_ / sizeof(uint32_t))
                                     : host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
     if (using_hugepage_) {
-        for (uint32_t i = 0; i < num_bytes; i += 64) {
+        for (uint32_t i = 0; i < num_bytes; i += k_x86_clflush_line_bytes) {
             _mm_clflush(reinterpret_cast<char*>(src) + i);
         }
         _mm_lfence();
