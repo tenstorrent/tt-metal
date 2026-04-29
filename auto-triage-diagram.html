@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Auto-Triage Workflow Diagram</title>
+  <style>
+    :root {
+      --bg: #0f1217;
+      --panel: #161b22;
+      --panel-2: #1c232c;
+      --border: #2a3340;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-2: #79c0ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #bc8cff;
+      --orange: #f0883e;
+      --pink: #ff7b72;
+      --cyan: #56d4dd;
+      --case1: #3fb950;
+      --case2: #d29922;
+      --case3: #58a6ff;
+      --case4: #f0883e;
+      --case5: #bc8cff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 48px 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
+        Helvetica, Arial, sans-serif;
+      background: radial-gradient(ellipse at top, #1a2332 0%, var(--bg) 60%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .page {
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+
+    /* ---------- Header ---------- */
+    .header {
+      text-align: center;
+      margin-bottom: 56px;
+    }
+    .header .eyebrow {
+      display: inline-block;
+      padding: 4px 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .header h1 {
+      margin: 0 0 12px;
+      font-size: 40px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header p {
+      margin: 0 auto;
+      max-width: 720px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    /* ---------- Section titles ---------- */
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 56px 0 20px;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--muted);
+    }
+    .section-title::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ---------- Generic node ---------- */
+    .node {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 22px;
+      position: relative;
+    }
+    .node.accent { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.08); }
+    .node.success { border-color: var(--green); }
+    .node.warning { border-color: var(--yellow); }
+    .node.danger  { border-color: var(--red); }
+    .node.purple  { border-color: var(--purple); }
+    .node.muted   { opacity: 0.65; border-style: dashed; }
+
+    .node-eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .node-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 6px;
+    }
+    .node-sub {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .node code {
+      background: rgba(110,118,129,0.18);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--accent-2);
+    }
+
+    /* ---------- Trigger row ---------- */
+    .trigger-row {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 24px;
+    }
+    .arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 24px;
+    }
+
+    /* ---------- Inputs grid ---------- */
+    .inputs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .input-chip {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+    }
+    .input-chip .k { color: var(--accent-2); font-family: ui-monospace, SFMono-Regular, monospace; }
+    .input-chip .v { color: var(--muted); display: block; margin-top: 2px; }
+
+    /* ---------- Pipeline ---------- */
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      position: relative;
+    }
+    .pipeline::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 28px;
+      width: 2px;
+      background: linear-gradient(
+        to bottom,
+        var(--accent) 0%,
+        var(--accent) 50%,
+        var(--purple) 100%
+      );
+      opacity: 0.3;
+      border-radius: 2px;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 16px;
+      align-items: stretch;
+    }
+    .step-marker {
+      width: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .step-marker .dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(88,166,255,0.18);
+      z-index: 1;
+    }
+    .step-marker .dot.success { background: var(--green); box-shadow: 0 0 0 4px rgba(63,185,80,0.18); }
+    .step-marker .dot.warning { background: var(--yellow); box-shadow: 0 0 0 4px rgba(210,153,34,0.18); }
+    .step-marker .dot.purple  { background: var(--purple); box-shadow: 0 0 0 4px rgba(188,140,255,0.18); }
+    .step-marker .dot.muted   { background: var(--muted); box-shadow: 0 0 0 4px rgba(139,148,158,0.12); }
+
+    .step-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+    }
+    .step-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    .step-head h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .step-head .tag {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .step-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .step-card .files {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .file-chip {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      color: var(--accent-2);
+      background: rgba(88,166,255,0.08);
+      border: 1px solid rgba(88,166,255,0.25);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    /* ---------- LLM Box ---------- */
+    .llm-box {
+      margin-top: 12px;
+      padding: 12px 14px;
+      background: rgba(188,140,255,0.06);
+      border: 1px dashed rgba(188,140,255,0.4);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--purple);
+    }
+    .llm-box .badge {
+      background: rgba(188,140,255,0.18);
+      color: var(--purple);
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    /* ---------- Cases grid ---------- */
+    .cases {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+    .case {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+    }
+    .case::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--accent);
+    }
+    .case.case1::before { background: var(--case1); }
+    .case.case2::before { background: var(--case2); }
+    .case.case3::before { background: var(--case3); }
+    .case.case4::before { background: var(--case4); }
+    .case.case5::before { background: var(--case5); }
+
+    .case .num {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .case h4 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .case p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+    .case .retry-flag {
+      display: inline-block;
+      margin-top: 10px;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--orange);
+      background: rgba(240,136,62,0.1);
+      border: 1px solid rgba(240,136,62,0.35);
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+
+    /* ---------- Retry flow ---------- */
+    .retry-flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+    .retry-step {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      position: relative;
+      text-align: center;
+    }
+    .retry-step .ix {
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: var(--orange);
+      color: #1b1b1b;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 8px;
+    }
+    .retry-step h5 {
+      margin: 0 0 4px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .retry-step p {
+      margin: 0;
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .retry-step + .retry-step::before {
+      content: "→";
+      position: absolute;
+      left: -10px;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .retry-outcomes {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .outcome {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      font-size: 12px;
+    }
+    .outcome .label {
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .outcome .desc { color: var(--muted); font-size: 11.5px; }
+    .outcome.pass  { border-color: rgba(63,185,80,0.4); }
+    .outcome.same  { border-color: rgba(248,81,73,0.4); }
+    .outcome.diff  { border-color: rgba(240,136,62,0.4); }
+    .outcome.timeout { border-color: rgba(210,153,34,0.4); }
+    .outcome.pass  .label { color: var(--green); }
+    .outcome.same  .label { color: var(--red); }
+    .outcome.diff  .label { color: var(--orange); }
+    .outcome.timeout .label { color: var(--yellow); }
+
+    /* ---------- Outputs ---------- */
+    .outputs {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+    }
+    .output-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .output-card .icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: rgba(88,166,255,0.12);
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      margin-bottom: 10px;
+    }
+    .output-card h4 {
+      margin: 0 0 6px;
+      font-size: 15px;
+    }
+    .output-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+
+    /* ---------- Legend ---------- */
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      justify-content: center;
+      margin-top: 56px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+    }
+
+    /* ---------- Footer ---------- */
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 32px;
+    }
+    .footer code {
+      color: var(--accent-2);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- ============ HEADER ============ -->
+    <header class="header">
+      <span class="eyebrow">tt-metal · CI Automation</span>
+      <h1>Auto-Triage Workflow</h1>
+      <p>
+        How a failing CI job in <code>tt-metal</code> gets automatically diagnosed
+        by an LLM, optionally retried on real hardware, and reported back to
+        Slack — all driven by the composite action in
+        <code>tt-auto-triage</code>.
+      </p>
+    </header>
+
+    <!-- ============ TRIGGER ============ -->
+    <div class="section-title">1 · Trigger</div>
+    <div class="trigger-row">
+      <div class="node accent">
+        <div class="node-eyebrow">tt-metal repo</div>
+        <h3 class="node-title">.github/workflows/auto-triage.yml</h3>
+        <p class="node-sub">
+          Manual <code>workflow_dispatch</code>. Operator (or upstream
+          automation) supplies the failing workflow + job name and optional
+          Slack thread context.
+        </p>
+        <div class="inputs-grid">
+          <div class="input-chip"><span class="k">workflow_name</span><span class="v">e.g. galaxy-quick</span></div>
+          <div class="input-chip"><span class="k">job_name</span><span class="v">subjob within workflow</span></div>
+          <div class="input-chip"><span class="k">slack_ts</span><span class="v">thread to reply into</span></div>
+          <div class="input-chip"><span class="k">slack_channel_id</span><span class="v">where to post</span></div>
+          <div class="input-chip"><span class="k">send-slack-message</span><span class="v">true / false</span></div>
+          <div class="input-chip"><span class="k">cutoff_commit</span><span class="v">ignore newer runs</span></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node purple">
+        <div class="node-eyebrow">tt-auto-triage repo</div>
+        <h3 class="node-title">actions/auto-triage@main</h3>
+        <p class="node-sub">
+          Composite GitHub Action that orchestrates the full triage pipeline
+          using bash modules + GitHub Copilot CLI.
+        </p>
+      </div>
+    </div>
+
+    <!-- ============ PIPELINE ============ -->
+    <div class="section-title">2 · Composite Action Pipeline</div>
+    <div class="pipeline">
+
+      <div class="step">
+        <div class="step-marker"><div class="dot"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Stage scripts &amp; mirror repo</h3>
+            <span class="tag">setup</span>
+          </div>
+          <p>
+            Copies the <code>auto_triage/</code> tooling into
+            <code>.auto_triage/</code> in the runner workspace and rsyncs the
+            checked-out tt-metal tree into <code>.auto_triage/workspace/</code>
+            so the LLM can read source files.
+          </p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Find boundaries</h3>
+            <span class="tag">discover</span>
+          </div>
+          <p>
+            Pages through workflow runs to locate the
+            <strong>last successful</strong> and <strong>first failing</strong>
+            run of the target subjob, defining the suspect commit window.
+          </p>
+          <div class="files">
+            <span class="file-chip">modules/boundaries/find_boundaries.sh</span>
+            <span class="file-chip">workflow_finder.sh</span>
+            <span class="file-chip">run_processor.sh</span>
+            <span class="file-chip">job_matcher.sh</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Download Slack directory</h3>
+            <span class="tag">setup</span>
+          </div>
+          <p>
+            Pulls the Slack user/group directory so later stages can resolve
+            commit authors, reviewers, and code-owners to ping.
+          </p>
+          <div class="files">
+            <span class="file-chip">download_slack_directory.py</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Install ripgrep · Node 22 · Copilot CLI</h3>
+            <span class="tag">setup</span>
+          </div>
+          <p>
+            Provisions the runtime needed by the LLM stages:
+            <code>rg</code> for fast log search and
+            <code>@github/copilot</code> for the analysis passes.
+          </p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot purple"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Filter stage — <em>filter_triage.sh</em></h3>
+            <span class="tag">llm pass · 1</span>
+          </div>
+          <p>
+            First Copilot pass. Determines whether the failure is deterministic
+            and downloads commit metadata + per-commit changed files for the
+            window between the boundary runs.
+          </p>
+          <div class="files">
+            <span class="file-chip">filter_triage.sh</span>
+            <span class="file-chip">instructions/filter_instructions_for_llm.txt</span>
+            <span class="file-chip">instructions/filter_hang_instructions_for_llm.txt</span>
+          </div>
+          <div class="llm-box">
+            <span class="badge">LLM</span>
+            Reads logs, annotations, and the commit list — writes
+            <code>commit_info.json</code> and <code>error_message.txt</code>.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot purple"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Main analysis — <em>auto_triage.sh</em></h3>
+            <span class="tag">llm pass · 2</span>
+          </div>
+          <p>
+            Second Copilot pass. Reasons over the commit window and the failure
+            evidence, picks one of five cases, scores commits by confidence,
+            and produces the human-readable explanation + structured Slack
+            payload. An optional <code>followups.manifest</code> entry adds a
+            third LLM pass when a hang is suspected.
+          </p>
+          <div class="files">
+            <span class="file-chip">auto_triage.sh</span>
+            <span class="file-chip">instructions/instructions_for_llm.txt</span>
+            <span class="file-chip">instructions/hang_stage_instructions_for_llm.txt</span>
+            <span class="file-chip">modules/analysis/llm_runner.sh</span>
+          </div>
+          <div class="llm-box">
+            <span class="badge">LLM</span>
+            Writes <code>output/explanation.md</code> +
+            <code>output/slack_message.json</code> (validated by
+            <code>sanitize_slack_message.py</code>).
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot muted"></div></div>
+        <div class="step-card" style="opacity:.7;">
+          <div class="step-head">
+            <h3>Auto-fix PR (optional, currently disabled)</h3>
+            <span class="tag">disabled</span>
+          </div>
+          <p>
+            Would ask Copilot to draft a small PR fixing the failure when
+            <code>create_PR_boolean.json</code> is enabled. Disabled today via
+            <code>tenstorrent/tt-auto-triage#3</code>.
+          </p>
+          <div class="files">
+            <span class="file-chip">run_auto_fix.sh</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot warning"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Retry on deterministic — <em>retry_orchestrator.sh</em></h3>
+            <span class="tag">verify</span>
+          </div>
+          <p>
+            For Case 1 / Case 4 on supported single-card hardware
+            (N150/N300/P100A/P150/P300), re-runs the failing job to confirm the
+            failure is actually deterministic. Outcome can re-classify the
+            failure as Case 3 (non-deterministic) and overwrite the Slack
+            payload + explanation.
+          </p>
+          <div class="files">
+            <span class="file-chip">scripts/retry_on_deterministic.sh</span>
+            <span class="file-chip">modules/retry/retry_orchestrator.sh</span>
+            <span class="file-chip">hardware_checker.sh</span>
+            <span class="file-chip">run_trigger.sh</span>
+            <span class="file-chip">result_comparator.sh</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot success"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Send Slack notification</h3>
+            <span class="tag">report</span>
+          </div>
+          <p>
+            Delegates to the <code>slack-report-auto-triage</code> action which
+            fetches the parent thread's job-owner, builds the formatted
+            payload, and posts it (threaded if <code>slack_ts</code> is set).
+          </p>
+          <div class="files">
+            <span class="file-chip">actions/slack-report-auto-triage</span>
+            <span class="file-chip">scripts/build_slack_payload.sh</span>
+            <span class="file-chip">scripts/fetch_job_owner.sh</span>
+            <span class="file-chip">scripts/resolve_group_pings.py</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker"><div class="dot success"></div></div>
+        <div class="step-card">
+          <div class="step-head">
+            <h3>Publish summary &amp; upload artifacts</h3>
+            <span class="tag">report</span>
+          </div>
+          <p>
+            Appends <code>explanation.md</code> to
+            <code>$GITHUB_STEP_SUMMARY</code> and uploads
+            <code>auto-triage-data</code> + <code>auto-triage-output</code>
+            artifacts for inspection.
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ CASE MATRIX ============ -->
+    <div class="section-title">3 · The five failure cases</div>
+    <div class="cases">
+      <div class="case case1">
+        <div class="num">Case 1</div>
+        <h4>Deterministic · culprit identified</h4>
+        <p>One specific commit clearly explains the failure. Single-commit Slack message with author + reviewers.</p>
+        <span class="retry-flag">Eligible for retry</span>
+      </div>
+      <div class="case case2">
+        <div class="num">Case 2</div>
+        <h4>Deterministic · culprit unknown</h4>
+        <p>Failure is deterministic but the exact commit can't be identified (expired logs, &gt;100 commits, missing data).</p>
+      </div>
+      <div class="case case3">
+        <div class="num">Case 3</div>
+        <h4>Outside tt-metal</h4>
+        <p>Non-deterministic / infra / external. Also where retried Case 1·4 land if they pass or produce a different error.</p>
+      </div>
+      <div class="case case4">
+        <div class="num">Case 4</div>
+        <h4>Deterministic · multiple suspects</h4>
+        <p>Clearly from the commit window but ≥2 plausible suspects. All commits ranked by confidence in the artifact.</p>
+        <span class="retry-flag">Eligible for retry</span>
+      </div>
+      <div class="case case5">
+        <div class="num">Case 5</div>
+        <h4>Deterministic · partial metadata</h4>
+        <p>Some commits in the window couldn't be downloaded. Best-effort culprit ranking with explicit caveat.</p>
+      </div>
+    </div>
+
+    <!-- ============ RETRY FLOW ============ -->
+    <div class="section-title">4 · Retry-on-deterministic flow</div>
+    <div class="retry-flow">
+      <div class="retry-step">
+        <div class="ix">1</div>
+        <h5>Eligibility</h5>
+        <p>Case 1 or 4 · supported HW · last success &lt; 3h runtime</p>
+      </div>
+      <div class="retry-step">
+        <div class="ix">2</div>
+        <h5>Trigger rerun</h5>
+        <p>Re-run the failing job via <code>gh</code> on a new attempt</p>
+      </div>
+      <div class="retry-step">
+        <div class="ix">3</div>
+        <h5>Wait</h5>
+        <p>Poll up to 180 min for completion</p>
+      </div>
+      <div class="retry-step">
+        <div class="ix">4</div>
+        <h5>Compare errors</h5>
+        <p>LLM compares original vs retry error text</p>
+      </div>
+      <div class="retry-step">
+        <div class="ix">5</div>
+        <h5>Update + notify</h5>
+        <p>Patch <code>slack_message.json</code> &amp; thread reply</p>
+      </div>
+    </div>
+
+    <div class="retry-outcomes">
+      <div class="outcome pass">
+        <div class="label">Retry passed</div>
+        <div class="desc">→ rewrite as Case 3 (non-deterministic)</div>
+      </div>
+      <div class="outcome same">
+        <div class="label">Same error</div>
+        <div class="desc">→ confirm deterministic, keep original case</div>
+      </div>
+      <div class="outcome diff">
+        <div class="label">Different error</div>
+        <div class="desc">→ rewrite as Case 3 with new evidence</div>
+      </div>
+      <div class="outcome timeout">
+        <div class="label">Timeout / cancelled</div>
+        <div class="desc">→ keep original analysis, append note</div>
+      </div>
+    </div>
+
+    <!-- ============ OUTPUTS ============ -->
+    <div class="section-title">5 · Outputs</div>
+    <div class="outputs">
+      <div class="output-card">
+        <div class="icon">📝</div>
+        <h4>explanation.md</h4>
+        <p>Human-readable triage report. Posted to the workflow run's job summary and uploaded as an artifact.</p>
+      </div>
+      <div class="output-card">
+        <div class="icon">📦</div>
+        <h4>slack_message.json</h4>
+        <p>Structured payload describing case, scenario, failing run URL, commits, developers to ping, and notes.</p>
+      </div>
+      <div class="output-card">
+        <div class="icon">💬</div>
+        <h4>Slack notification</h4>
+        <p>Formatted message posted to the configured channel (threaded into <code>slack_ts</code> when supplied).</p>
+      </div>
+      <div class="output-card">
+        <div class="icon">🗂️</div>
+        <h4>GitHub artifacts</h4>
+        <p><code>auto-triage-data</code> (commit metadata, boundaries, comparisons) and <code>auto-triage-output</code> (final files).</p>
+      </div>
+    </div>
+
+    <!-- ============ LEGEND ============ -->
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:var(--accent)"></span>Setup / orchestration</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--purple)"></span>LLM analysis (Copilot CLI)</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--yellow)"></span>Verification (hardware retry)</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--green)"></span>Reporting / outputs</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Disabled</div>
+    </div>
+
+    <div class="footer">
+      Generated from <code>.github/workflows/auto-triage.yml</code> +
+      <code>tt-auto-triage/.github/actions/auto-triage</code>.
+    </div>
+
+  </div>
+</body>
+</html>

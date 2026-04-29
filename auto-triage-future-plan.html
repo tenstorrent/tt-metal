@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Automated CI Triage — Future Plan</title>
+  <style>
+    :root {
+      --bg: #0f1217;
+      --bg-2: #0b0e13;
+      --panel: #161b22;
+      --panel-2: #1c232c;
+      --border: #2a3340;
+      --border-2: #3b4654;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --dim: #6e7681;
+
+      --accent: #58a6ff;
+      --accent-2: #79c0ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #bc8cff;
+      --orange: #f0883e;
+      --pink: #ff7b72;
+      --cyan: #56d4dd;
+      --magenta: #f778ba;
+
+      /* slice colors */
+      --s-export: #56d4dd;
+      --s-issues: #58a6ff;
+      --s-owners: #bc8cff;
+      --s-slack: #f778ba;
+      --s-lifecycle: #3fb950;
+      --s-draft: #f0883e;
+      --s-bug: #f85149;
+      --s-report: #79c0ff;
+      --s-state: #d29922;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      padding: 48px 24px 80px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
+        Helvetica, Arial, sans-serif;
+      background:
+        radial-gradient(ellipse at top, #1a2332 0%, var(--bg) 60%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.55;
+    }
+    .page { max-width: 1320px; margin: 0 auto; }
+
+    code {
+      background: rgba(110,118,129,0.18);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+      color: var(--accent-2);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    em { color: var(--muted); font-style: normal; }
+
+    /* ================= HEADER ================= */
+    .header { text-align: center; margin-bottom: 48px; }
+    .header .eyebrow {
+      display: inline-block;
+      padding: 4px 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .header h1 {
+      margin: 0 0 14px;
+      font-size: 42px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header p {
+      margin: 0 auto;
+      max-width: 780px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    /* ================= SECTION ================= */
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 56px 0 18px;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--muted);
+    }
+    .section-title::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .section-intro {
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 900px;
+      margin: 0 0 24px;
+    }
+
+    /* ================= ARCHITECTURE ================= */
+    .arch {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+    }
+    .arch-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .arch-card .role {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .arch-card h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .arch-card h3 code { color: var(--accent-2); background: transparent; padding: 0; }
+    .arch-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .arch-card.caller    { border-left: 3px solid var(--accent); }
+    .arch-card.logic     { border-left: 3px solid var(--purple); }
+    .arch-card.issues    { border-left: 3px solid var(--s-issues); }
+    .arch-card.fork      { border-left: 3px solid var(--orange); }
+    .arch-card.slack     { border-left: 3px solid var(--magenta); }
+    .arch-card.state     { border-left: 3px solid var(--yellow); }
+
+    /* ================= MERMAID WRAPPER ================= */
+    .mermaid-frame {
+      position: relative;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px 20px 16px;
+      overflow-x: auto;
+    }
+    .mermaid-frame + .mermaid-frame { margin-top: 16px; }
+    .mermaid-caption {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12.5px;
+      text-align: center;
+    }
+    .mermaid { font-family: inherit !important; }
+    .mermaid svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+
+    /* Small floating legend in the corner of a diagram */
+    .diagram-legend {
+      position: absolute;
+      top: 10px;
+      right: 14px;
+      font-size: 10.5px;
+      color: var(--muted);
+      line-height: 1.4;
+      z-index: 2;
+      pointer-events: none;
+      letter-spacing: 0.01em;
+    }
+
+    /* Callout (used for pre-existing / transitional notes) */
+    .callout {
+      margin-top: 18px;
+      background: rgba(210, 153, 34, 0.06);
+      border: 1px solid rgba(210, 153, 34, 0.35);
+      border-left: 3px solid var(--yellow);
+      border-radius: 8px;
+      padding: 14px 16px 15px;
+    }
+    .callout-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--yellow);
+      margin-bottom: 6px;
+    }
+    .callout p {
+      margin: 0;
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .callout p code { font-size: 11.5px; }
+    .callout-mermaid {
+      margin-top: 14px;
+      padding: 12px 8px 4px;
+      background: rgba(0,0,0,0.18);
+      border-radius: 6px;
+      overflow-x: auto;
+    }
+    .callout-mermaid .mermaid svg {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* ================= CAPABILITIES ================= */
+    .caps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .cap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 22px 24px;
+      position: relative;
+    }
+    .cap-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--c, var(--accent)) 14%, transparent);
+      color: var(--c, var(--accent));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      margin-bottom: 12px;
+    }
+    .cap h4 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 600;
+    }
+    .cap p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.6;
+    }
+
+    /* ================= DRAFT PR SPLIT (inside the draft cap) ================= */
+    .draft-modes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    @media (max-width: 720px) { .draft-modes { grid-template-columns: 1fr; } }
+    .mode {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+    .mode .head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .mode h5 { margin: 0; font-size: 13px; font-weight: 600; }
+    .mode .flag {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .mode.disable .flag { color: var(--yellow); background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.35); }
+    .mode.fix .flag     { color: var(--green);  background: rgba(63,185,80,0.08);  border: 1px solid rgba(63,185,80,0.35); }
+    .mode p { margin: 0; font-size: 12px; color: var(--muted); }
+
+    /* ================= FOOTER ================= */
+    .footer {
+      text-align: center;
+      color: var(--dim);
+      font-size: 12px;
+      margin-top: 56px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- ================================ HEADER ================================ -->
+    <header class="header">
+      <span class="eyebrow">tt-metal · CI Autonomy Epic</span>
+      <h1>Automated CI Triage — Future Plan</h1>
+      <p>
+        A fully autonomous CI triage system for tt-metal: detects real
+        failures, files issues, assigns the right owners, notifies Slack,
+        opens draft PRs to disable or fix failing tests using dev input
+        from Slack threads, tracks bug escapes, and closes the loop when
+        tests go green again — with no human in the orchestration path.
+      </p>
+    </header>
+
+    <!-- ================================ ARCHITECTURE ================================ -->
+    <div class="section-title">1 · Surfaces &amp; repos</div>
+    <p class="section-intro">
+      One caller workflow in <code>tt-metal</code>, all logic in
+      <code>tt-auto-triage</code>, with Slack as the single human-in-the-loop
+      surface.
+    </p>
+    <div class="arch">
+      <div class="arch-card caller">
+        <div class="role">Caller</div>
+        <h3><code>tenstorrent/tt-metal</code></h3>
+        <p>Hosts <code>.github/workflows/triage-ci.yaml</code> — the entry
+          point that fires on a <code>schedule</code> (every few hours) and
+          on-demand. Forwards inputs and secrets to the reusable workflows in
+          tt-auto-triage.</p>
+      </div>
+      <div class="arch-card logic">
+        <div class="role">Reusable logic</div>
+        <h3><code>tenstorrent/tt-auto-triage</code></h3>
+        <p>All triage components live here as reusable workflows and composite
+          actions. Versioned independently of tt-metal so logic changes ship
+          without a tt-metal release.</p>
+      </div>
+      <div class="arch-card issues">
+        <div class="role">Issue store</div>
+        <h3><code>tenstorrent/tt-metal</code> issues</h3>
+        <p>Auto-created triage issues land in the same repo as the failing
+          code, deduplicated by failure fingerprint so the same break never
+          opens two issues.</p>
+      </div>
+      <div class="arch-card fork">
+        <div class="role">Draft PR target</div>
+        <h3><code>tenstorrent/tt-metal</code></h3>
+        <p>Draft disable and fix PRs are pushed back into tt-metal under an
+          <code>auto-triage/</code> branch namespace, linked to their parent
+          issue.</p>
+      </div>
+      <div class="arch-card slack">
+        <div class="role">Human-in-the-loop</div>
+        <h3>Slack <code>#ci-triage</code></h3>
+        <p>Single surface for human input. Thread replies are parsed as
+          control signals — <em>ack</em>, <em>defer</em>, or
+          <em>fix-hint</em> — that steer downstream actions.</p>
+      </div>
+      <div class="arch-card state">
+        <div class="role">Cross-run memory</div>
+        <h3><code>ci_triage_state.json</code></h3>
+        <p>Per-fingerprint state carried between runs: issue #, Slack
+          <code>ts</code>, disable PR, attempt count, owner responsiveness.
+          Lets the system resume where it left off.</p>
+      </div>
+    </div>
+
+    <!-- ================================ END-TO-END PIPELINE ================================ -->
+    <div class="section-title">2 · End-to-end pipeline</div>
+    <p class="section-intro">
+      Every few hours, the bot wakes up, gathers the current state of CI and
+      Slack, decides what each failing or recently-fixed job needs, takes
+      exactly one action per case, and saves state for the next run.
+    </p>
+    <div class="mermaid-frame">
+      <pre class="mermaid">
+flowchart TB
+    classDef trigger  fill:#0b2545,stroke:#58a6ff,color:#e6edf3,stroke-width:1.5px;
+    classDef gather   fill:#0f2d2e,stroke:#56d4dd,color:#e6edf3,stroke-width:1.5px;
+    classDef decide   fill:#1a1530,stroke:#bc8cff,color:#e6edf3,stroke-width:1.5px;
+    classDef action   fill:#2a1a10,stroke:#f0883e,color:#e6edf3,stroke-width:1.5px;
+    classDef finalize fill:#10221a,stroke:#3fb950,color:#e6edf3,stroke-width:1.5px;
+
+    T["⏰ Scheduled run<br/>every few hours"]:::trigger
+
+    subgraph GATHER["① Gather inputs"]
+      direction LR
+      G1["Load prior triage state"]:::gather
+      G2["Snapshot CI runs<br/>+ Slack threads"]:::gather
+      G1 --> G2
+    end
+
+    D{"② For each failure,<br/>what should happen next?"}:::decide
+
+    A1["File issue,<br/>assign owners,<br/>notify Slack<br/><i>culprit-commit author<br/>+ CODEOWNERS or team,<br/>OOO-aware</i>"]:::action
+    A2["Draft PR to<br/>disable the test"]:::action
+    A3["Draft PR to<br/>attempt a fix<br/><i>using dev's hint</i>"]:::action
+    A4["Close the issue<br/>+ reply in thread"]:::action
+    A6["Reassign issue<br/>+ re-notify"]:::action
+
+    BE{"③ Identify the fix commit<br/>(linked PR, or scan commits<br/>between last green and<br/>first red) — which layer<br/>does it live in?"}:::decide
+    A5["Record a bug escape<br/><i>horizontal if same layer,<br/>vertical if lower layer</i>"]:::action
+
+    F["④ Save state<br/>+ publish run summary"]:::finalize
+
+    T --> GATHER --> D
+    D -- "new consecutive failure" --> A1
+    D -- "no owner reply in N hours" --> A2
+    D -- "dev left a fix hint in Slack" --> A3
+    D -- "dev requested reassignment" --> A6
+    D -- "job is green again" --> A4
+    A4 --> BE
+    BE -- "fix landed in the same<br/>or a lower layer" --> A5
+    BE -- "no real fix commit<br/>(flaky / self-resolved)" --> F
+    A1 --> F
+    A2 --> F
+    A3 --> F
+    A5 --> F
+    A6 --> F
+    F -. "carries forward to next run" .-> G1
+      </pre>
+      <div class="mermaid-caption">
+        Every edge out of a diamond is labeled with the condition that fires
+        it, so there's exactly one action per failure per run. The bug-escape
+        classifier only runs on failures that just went green — it locates
+        the real fix commit and compares its architectural layer to the
+        failing test's layer. Same layer means that layer's own gate tests
+        should have caught it (horizontal); lower layer means the lower
+        layer's tests should have caught it before it bubbled up (vertical);
+        no identifiable fix means the failure self-resolved and there's no
+        escape to log. The dashed arrow is the state artifact, carried from
+        one scheduled run to the next.
+      </div>
+
+      <!-- Callout: pre-existing independent bug-escapes workflow -->
+      <div class="callout">
+        <div class="callout-label">Shipping already — will fold into step ③</div>
+        <p>
+          A standalone <strong>bug-escapes workflow</strong> already exists
+          today on the <code>ebanerjee/bug-escapes</code> branch in both
+          <code>tt-metal</code> (caller) and <code>tt-auto-triage</code>
+          (reusable logic). It runs independently of the rest of the autonomy
+          pipeline and produces its own <code>bug-escapes-output.json</code>
+          artifact. Once the scheduled pipeline above is live, this workflow
+          gets folded into step ③ as its classifier and retired as a
+          standalone job.
+        </p>
+        <div class="callout-mermaid">
+          <pre class="mermaid">
+flowchart LR
+    classDef caller   fill:#0b2545,stroke:#58a6ff,color:#e6edf3,stroke-width:1.5px;
+    classDef phase    fill:#2a1a10,stroke:#f0883e,color:#e6edf3,stroke-width:1.5px;
+    classDef artifact fill:#1b1b1b,stroke:#8b949e,color:#e6edf3,stroke-dasharray:4 3;
+
+    C["tt-metal<br/><i>bug-escapes-ci.yaml</i>"]:::caller
+    P1["① Discover<br/>workflows per layer"]:::phase
+    P2["② Identify<br/>consistent failures"]:::phase
+    P3["③ Find<br/>fix-point commits"]:::phase
+    P4["④ Verify the fix<br/><i>re-run test on<br/>before / after branches</i>"]:::phase
+    P5["⑤ Classify<br/>horizontal / vertical"]:::phase
+    O[("bug-escapes-output.json")]:::artifact
+
+    C --> P1 --> P2 --> P3 --> P4 --> P5 --> O
+          </pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================ TRIGGER + AUTO-TRIAGE v1 ================================ -->
+    <div class="section-title">3 · How auto-triage v1 plugs in</div>
+    <p class="section-intro">
+      The existing <code>auto-triage.yml</code> workflow becomes one of the
+      decision-making inputs — its classification (Case 1–5) drives whether
+      the draft-PR stage runs in <code>disable</code> or <code>fix</code> mode.
+    </p>
+    <div class="mermaid-frame">
+      <div class="diagram-legend">SLA = service level agreement</div>
+      <pre class="mermaid">
+flowchart LR
+    classDef existing fill:#0b2545,stroke:#58a6ff,color:#e6edf3,stroke-width:1.5px;
+    classDef planned  fill:#1a1530,stroke:#bc8cff,color:#e6edf3,stroke-width:1.5px;
+    classDef action   fill:#2a1a10,stroke:#f0883e,color:#e6edf3,stroke-width:1.5px;
+    classDef case     fill:#10221a,stroke:#3fb950,color:#e6edf3;
+    classDef bad      fill:#2a1216,stroke:#f85149,color:#e6edf3;
+
+    F["Failing CI job"]:::existing --> AT["auto-triage v1<br/><i>composite action</i><br/>Copilot analysis"]:::existing
+    AT --> C1["Case 1<br/>deterministic + culprit"]:::case
+    AT --> C2["Case 2<br/>deterministic, unknown"]:::case
+    AT --> C3["Case 3<br/>non-deterministic / outside"]:::case
+    AT --> C4["Case 4<br/>deterministic, multiple"]:::case
+    AT --> C5["Case 5<br/>partial metadata"]:::case
+
+    C1 --> ISS
+    C2 --> ISS
+    C4 --> ISS
+    C5 --> ISS
+    C3 --> FLAKE["Flake tracker<br/>(bug-escape signals)"]:::bad
+
+    ISS["File issue<br/>+ assign owner(s)<br/><i>culprit author + CODEOWNERS,<br/>OOO &amp; ex-employees filtered,<br/>can resolve to a team</i>"]:::planned --> NOTE["Slack notify<br/>the owner(s)"]:::planned
+    NOTE --> WAIT{{"Dev replies<br/>in thread?"}}
+    WAIT -- "fix hint" --> FIXPR["Draft FIX PR<br/><i>try_to_fix = true</i>"]:::action
+    WAIT -- "@reassign user/team" --> REA["Reassign issue<br/>+ re-notify"]:::action
+    WAIT -- "defer, or no reply past SLA" --> DISPR["Draft DISABLE PR<br/><i>try_to_fix = false</i>"]:::action
+    REA --> NOTE
+    FIXPR --> LIFE
+    DISPR --> LIFE
+    LIFE["Issue lifecycle"]:::planned
+    LIFE -- "tests green again" --> CLOSE(["Close issue<br/>post 'resolved' in thread"]):::case
+      </pre>
+      <div class="mermaid-caption">
+        The auto-triage classification feeds both the issue-creation decision
+        and the default draft-PR mode. Slack replies can override the default.
+      </div>
+    </div>
+
+    <!-- ================================ CAPABILITIES ================================ -->
+    <div class="section-title">4 · What the system delivers</div>
+    <p class="section-intro">
+      Six end-user-visible capabilities. Each one is a behavior the bot owns
+      end-to-end with no human in the orchestration path.
+    </p>
+    <div class="caps">
+
+      <div class="cap">
+        <div class="cap-icon" style="--c: var(--s-issues)">📂</div>
+        <h4>Files real issues</h4>
+        <p>Watches every CI workflow for consecutively failing jobs, decides
+          whether the failure is real (vs. flake / infra), drafts a structured
+          issue body, and opens an issue in <code>tt-metal</code>. Idempotent
+          by failure fingerprint — the same break never opens two issues.</p>
+      </div>
+
+      <div class="cap">
+        <div class="cap-icon" style="--c: var(--s-owners)">🎯</div>
+        <h4>Picks the right owners — and lets devs change them</h4>
+        <p>Combines three signals to pick assignees: the
+          <strong>culprit commit's author</strong> when auto-triage identified
+          one with high confidence, <strong>CODEOWNERS</strong> for the failing
+          test's path, and the <strong>on-call team</strong> for the affected
+          architectural layer when no single human is the right fit. Filters out
+          former employees and anyone currently marked OOO / on vacation, and
+          falls back to the team handle if every individual is unavailable.
+          Devs can reassign from either GitHub or the Slack thread (e.g.
+          <code>@reassign &lt;user-or-team&gt;</code>) — the issue updates and
+          future notifications re-route to the new owner.</p>
+      </div>
+
+      <div class="cap">
+        <div class="cap-icon" style="--c: var(--s-slack)">💬</div>
+        <h4>Notifies in Slack and listens back</h4>
+        <p>Posts a thread per issue in <code>#ci-triage</code> with the
+          failure summary and assignees. Treats thread replies as first-class
+          control signals — <em>ack</em>, <em>defer</em>, or
+          <em>fix-hint</em> — that steer the next action.</p>
+      </div>
+
+      <div class="cap">
+        <div class="cap-icon" style="--c: var(--s-draft)">🛠️</div>
+        <h4>Opens draft PRs to disable <em>or</em> fix</h4>
+        <p>If the owner stays silent past SLA, opens a draft PR that
+          <strong>disables</strong> the failing test to keep CI moving. If
+          a dev replies in the thread with a fix hint, opens a draft PR that
+          <strong>attempts the fix</strong> using that hint plus the
+          auto-triage explanation.</p>
+        <div class="draft-modes">
+          <div class="mode disable">
+            <div class="head"><h5>Disable mode</h5><span class="flag">default</span></div>
+            <p>Skip / xfail the failing test. Lets the rest of CI stay
+              green while the human investigates.</p>
+          </div>
+          <div class="mode fix">
+            <div class="head"><h5>Fix mode</h5><span class="flag">on Slack hint</span></div>
+            <p>Cursor agent uses the dev's reply + the auto-triage
+              explanation to draft a minimal patch.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="cap">
+        <div class="cap-icon" style="--c: var(--s-bug)">🚨</div>
+        <h4>Tracks bug escapes</h4>
+        <p>Detects which failures slipped past PR-gate and merge-gate and
+          were only caught later. Classifies each escape as
+          <em>horizontal</em> (a gap in the same layer the test covers) or
+          <em>vertical</em> (the lower layer's tests should have caught it),
+          so coverage gaps surface where they actually exist.</p>
+      </div>
+
+      <div class="cap">
+        <div class="cap-icon" style="--c: var(--s-lifecycle)">♻️</div>
+        <h4>Closes the loop automatically</h4>
+        <p>When the originally failing job goes green for N consecutive runs,
+          the bot closes the issue, posts a "resolved" reply into the Slack
+          thread, and clears the fingerprint from triage state.</p>
+      </div>
+
+    </div>
+
+    <!-- ================================ FOOTER ================================ -->
+    <div class="footer">
+      Autonomous CI triage system · single bot, no human in the orchestration path.
+    </div>
+
+  </div>
+
+  <!-- =============== MERMAID =============== -->
+  <script type="module">
+    const { default: mermaid } = await import(
+      "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+    );
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "loose",
+      themeVariables: {
+        background: "#161b22",
+        primaryColor: "#1c232c",
+        primaryTextColor: "#e6edf3",
+        primaryBorderColor: "#3b4654",
+        lineColor: "#6e7681",
+        tertiaryColor: "#0f1217",
+        fontFamily:
+          '-apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text", Helvetica, Arial, sans-serif',
+      },
+      flowchart: { htmlLabels: true, curve: "basis", nodeSpacing: 36, rankSpacing: 48 },
+    });
+    await mermaid.run({ querySelector: ".mermaid" });
+  </script>
+</body>
+</html>
