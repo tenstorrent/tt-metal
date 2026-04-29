@@ -145,7 +145,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, "trace_region_size": 30000000},
+                {"fabric_config": None, "trace_region_size": 100000000},
                 id="1x1",
                 marks=pytest.mark.skip(reason="No supported gpt_oss mesh shape fits on this system"),
             )
@@ -156,7 +156,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
                 shape,
                 {
                     "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
-                    "trace_region_size": 30000000,
+                    "trace_region_size": 100000000,
                 },
                 id=f"{shape[0]}x{shape[1]}",
             )
