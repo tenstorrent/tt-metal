@@ -13,14 +13,21 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file
 
-_VGGT_REF = Path("/home/ttuser/experiments/vggt/vggt_ref")
+# VGGT_REF_PATH: path to the facebook/VGGT upstream source tree (cloned repo).
+# VGGT_WEIGHTS_PATH: path to model.safetensors from facebook/VGGT-1B on HuggingFace.
+_VGGT_REF = Path(
+    os.environ.get("VGGT_REF_PATH", "/home/ttuser/experiments/vggt/vggt_ref")
+)
 if str(_VGGT_REF) not in sys.path:
     sys.path.insert(0, str(_VGGT_REF))
 
 _WEIGHTS = Path(
-    "/home/ttuser/.cache/huggingface/hub/"
-    "models--facebook--VGGT-1B/snapshots/"
-    "860abec7937da0a4c03c41d3c269c366e82abdf9/model.safetensors"
+    os.environ.get(
+        "VGGT_WEIGHTS_PATH",
+        "/home/ttuser/.cache/huggingface/hub/"
+        "models--facebook--VGGT-1B/snapshots/"
+        "860abec7937da0a4c03c41d3c269c366e82abdf9/model.safetensors",
+    )
 )
 
 
