@@ -176,9 +176,7 @@ public:
                     case 12:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(
-                            " -Wl,--defsym=__fw_data={} ",
-                            MEM_TRISC0_GLOBAL_BASE);  // for legacy kernels
+                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
                         flags +=
                             fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);

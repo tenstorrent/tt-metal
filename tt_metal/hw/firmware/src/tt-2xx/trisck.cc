@@ -67,14 +67,18 @@ uint32_t _start() {
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
 
-    // Each trisc in engine 0 initializes globals for its group.
+    // NEO0 initializes shared .bss/.data (do_crt1) for this TRISC role, then publishes GO. All NEOs must wait
+    // before do_thread_crt1: running TLS init on non-NEO0 before NEO0 finishes do_crt1 races the shared LDM image.
     if (neo_id == 0) {
         do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-        (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[NUM_DM_CORES + 1 + trisc_id] = SHARED_GLOBALS_READY_GO;
+        (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] =
+            SHARED_GLOBALS_READY_GO;
     }
     do_thread_crt1(__tdata_lma);
     // Wait until first thread in the group has set its slot to GO.
-    while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[NUM_DM_CORES + 1 + trisc_id] != SHARED_GLOBALS_READY_GO);
+    while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
+           SHARED_GLOBALS_READY_GO) {
+    }
 
     // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
     uint32_t config_index = MaxDMProcessorsPerCoreType + neo_id;

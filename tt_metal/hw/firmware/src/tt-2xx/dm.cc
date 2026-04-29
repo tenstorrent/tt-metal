@@ -282,6 +282,13 @@ extern "C" uint32_t _start1() {
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
+                // DM + TRISC handshake (dmk.cc + trisck.cc). Reset once before subordinates run.
+                // run_triscs() returns immediately while TRISC firmware runs; clearing shared_globals_ready after
+                // run_triscs races trisck publishing GO on slots 8..11 and causes infinite wait there.
+                for (uint32_t i = 0; i < MaxNumKernels; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
+
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
