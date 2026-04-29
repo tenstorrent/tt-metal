@@ -751,9 +751,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             uint32_t next_slot = (old_fences + entry_size >= prefetch_q_limit)
                                      ? prefetch_q_base
                                      : old_fences + entry_size;
-            uint32_t slot_val = 0;
+            DispatchSettings::prefetch_q_entry_type slot_val = 0;
             ctx.get_cluster().read_core(
-                &slot_val, sizeof(uint32_t), this->prefetcher_cores[cq_id], next_slot);
+                &slot_val, sizeof(DispatchSettings::prefetch_q_entry_type), this->prefetcher_cores[cq_id], next_slot);
             if (slot_val == 0) {
                 // Slot is clear.  Re-read the fence to close the TOCTOU window: if firmware
                 // was mid-consume (cleared slot but not yet updated fence), the re-read will
