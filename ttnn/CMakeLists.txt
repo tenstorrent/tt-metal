@@ -300,6 +300,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/bf16_to_fp8/bf16_to_fp8_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
@@ -716,6 +717,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
+        TTNN::Ops::Experimental::DeepSeekPrefill::Bf16ToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
         TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
@@ -970,6 +972,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/bf16_to_fp8)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum)

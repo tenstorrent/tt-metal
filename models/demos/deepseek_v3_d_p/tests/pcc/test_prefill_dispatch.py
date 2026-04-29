@@ -87,6 +87,25 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 # LogicalCoord is coordinate in withing a2a dispatch group
 
 
+def log_fp8_bin_histogram(x: torch.Tensor, name: str = "x") -> None:
+    """Log how many elements land in each fp8_e4m3fn exponent bin.
+
+    The 'max half-ULP' column is the worst-case round-to-nearest error any element
+    in that bin can produce when cast bf16 -> fp8_e4m3fn. The bin holding the worst
+    observed dispatch error is the bin that produced it.
+    """
+    a = x.detach().abs().to(torch.float32)
+    edges = [0.0, 0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 448, float("inf")]
+    logger.info(f"[fp8 bin histogram] {name}: shape={tuple(x.shape)} numel={x.numel():,} max|x|={a.max().item():.4f}")
+    logger.info(f"  {'bin':>16}  {'count':>10}  {'max half-ULP':>14}")
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        n = ((a >= lo) & (a < hi)).sum().item()
+        if n == 0:
+            continue
+        half_ulp_str = f"{hi / 16:.4f}" if hi <= 448 else "OVERFLOW->NaN"
+        logger.info(f"    [{lo:>6}, {hi:>6}) {n:>10}  {half_ulp_str:>14}")
+
+
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
     [
@@ -183,6 +202,8 @@ def test_ttnn_dispatch(
     if use_fp8_output:
         fp8_info = torch.finfo(torch.float8_e4m3fn)
         x = x.clamp(min=fp8_info.min, max=fp8_info.max)
+        # Show which fp8 exponent bins the input populates — explains observed max abs error.
+        log_fp8_bin_histogram(x, name="x")
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
