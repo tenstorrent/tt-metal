@@ -72,17 +72,13 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const std::uint32_t operand = 0) {
-    if constexpr (src_b_bcast_type == BroadcastType::NONE) {
-        const std::uint32_t operand_id = get_operand_id(operand);
-        const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-        const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-        _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
-    } else if constexpr (!unpack_to_dest) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+
+    if constexpr (src_b_bcast_type != BroadcastType::NONE && !unpack_to_dest) {
         llk_math_eltwise_unary_broadcast<src_b_bcast_type, false, is_fp32_dest_acc_en>(dst_index, operand);
     } else {
-        const std::uint32_t operand_id = get_operand_id(operand);
-        const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-        const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
         _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
     }
 }
