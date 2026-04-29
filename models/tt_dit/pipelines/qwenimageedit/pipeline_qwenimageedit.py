@@ -738,15 +738,28 @@ class QwenImageEditPipeline:
                     dtype=torch.float32,
                 )
 
-            # Pack noise latents (same packing as QwenImage)
+            # Pack noise latents (same packing as QwenImage). When ``sp_factor == 1`` the
+            # per-submesh latent tensor is replicated, so we can upload the raw noise
+            # (and image latents, if any) straight to device and let ``pack_latents_device``
+            # + ``ttnn.concat`` assemble the transformer input on device. For sp_factor > 1
+            # the sequence axis is sharded across the mesh, which would require a
+            # rank-aware device-side slice that ttnn does not expose yet, so we keep the
+            # original host path for that case.
             noise_h, noise_w = noise_latents.shape[3], noise_latents.shape[4]
-            latents = _pack_latents(noise_latents, transformer_batch_size, self._num_channels_latents, noise_h, noise_w)
+            sp_factor = self._parallel_config.sequence_parallel.factor
+            use_device_pack = sp_factor == 1
 
-            # Concatenate noise + image latents along sequence dimension
-            if image_latents_packed is not None:
-                latent_model_input = torch.cat([latents, image_latents_packed], dim=1)
+            noise_seq_len = (noise_h // 2) * (noise_w // 2)
+            if use_device_pack:
+                latent_model_input = None
             else:
-                latent_model_input = latents
+                latents = _pack_latents(
+                    noise_latents, transformer_batch_size, self._num_channels_latents, noise_h, noise_w
+                )
+                if image_latents_packed is not None:
+                    latent_model_input = torch.cat([latents, image_latents_packed], dim=1)
+                else:
+                    latent_model_input = latents
 
             # RoPE: build img_shapes accounting for noise + image patches
             p = self._patch_size
@@ -762,7 +775,6 @@ class QwenImageEditPipeline:
             # assemble them on device via QwenPosEmbedTT. For sp_factor > 1 we still
             # need to shard along the sequence axis at upload time, so we fall back to
             # the host builder (no ttnn replicated->SP-sharded reshard primitive yet).
-            sp_factor = self._parallel_config.sequence_parallel.factor
             use_device_pos_embed = sp_factor == 1
             if not use_device_pos_embed:
                 spatial_rope, prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
@@ -797,9 +809,24 @@ class QwenImageEditPipeline:
                     on_host=True,
                 )
 
-                tt_initial_latents = tensor.from_torch(
-                    latent_model_input, device=submesh_device, on_host=False, mesh_axes=[None, sp_axis, None]
-                )
+                if use_device_pack:
+                    tt_noise = tensor.from_torch(noise_latents, device=submesh_device, on_host=False)
+                    tt_noise_packed = tensor.pack_latents_device(
+                        tt_noise,
+                        transformer_batch_size,
+                        self._num_channels_latents,
+                        noise_h,
+                        noise_w,
+                    )
+                    if image_latents_packed is not None:
+                        tt_image_packed = tensor.from_torch(image_latents_packed, device=submesh_device, on_host=False)
+                        tt_initial_latents = ttnn.concat([tt_noise_packed, tt_image_packed], dim=1)
+                    else:
+                        tt_initial_latents = tt_noise_packed
+                else:
+                    tt_initial_latents = tensor.from_torch(
+                        latent_model_input, device=submesh_device, on_host=False, mesh_axes=[None, sp_axis, None]
+                    )
 
                 if use_device_pos_embed:
                     cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
@@ -856,9 +883,6 @@ class QwenImageEditPipeline:
                 tt_prompt_rope_sin_list.append(tt_prompt_rope_sin)
 
             logger.info("denoising...")
-
-            # Track the noise-only sequence length for slicing output
-            noise_seq_len = latents.shape[1]
 
             for submesh_nr in range(len(self._submesh_devices)):
                 ttnn.copy_host_to_device_tensor(
