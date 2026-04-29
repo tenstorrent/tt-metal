@@ -19,6 +19,10 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+  # OOM-kills ttsim runner (exit code 137) — stress tests sized for real HW, not ttsim
+  # https://github.com/tenstorrent/tt-metal/commit/067854964f01d6070d138f1b93c034ec453bd053
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
 
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
@@ -60,6 +64,10 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+  # OOM-kills ttsim runner (exit code 137) — stress tests sized for real HW, not ttsim
+  # https://github.com/tenstorrent/tt-metal/commit/067854964f01d6070d138f1b93c034ec453bd053
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
+  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
 
   # MOVD2B failures
   # https://github.com/tenstorrent/tt-metal/issues/41286
