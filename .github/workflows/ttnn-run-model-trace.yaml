@@ -43,6 +43,7 @@ on:
         default: 120
 
 permissions:
+  actions: read
   contents: read
   packages: write
 

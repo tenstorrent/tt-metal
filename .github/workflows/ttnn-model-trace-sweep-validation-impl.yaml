@@ -38,6 +38,7 @@ on:
         default: ""
 
 permissions:
+  actions: read
   contents: read
   packages: write
 jobs:

@@ -88,6 +88,7 @@ on:
         description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
 
 permissions:
+  actions: read
   packages: write
   contents: write
 
