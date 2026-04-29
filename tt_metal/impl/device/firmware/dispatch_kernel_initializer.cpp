@@ -19,6 +19,8 @@
 
 #include "dispatch/topology.hpp"
 
+#include "hal.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::llrt::internal_ {
@@ -429,6 +431,23 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
                             tt_cxy_pair(device->id(), virtual_core), tt::umd::RiscType::ALL);
                         cluster_.deassert_risc_reset_at_core(
                             tt_cxy_pair(device->id(), virtual_core), tt::umd::RiscType::ALL);
+                        // FIX PB: clear ERISC dispatch launch flag after rescue hard-reset.
+                        // Identical to FIX PA in risc_firmware_initializer.cpp: hw reset does NOT zero L1,
+                        // so fw_launch_addr retains its non-zero value from the prior dispatch session.
+                        // On the next test's open, erisc_app_still_running() sees non-zero flag →
+                        // 500ms wait_until_cores_done timeout fires → another force-reset → loop.
+                        // (Observed cascade: runs 25094103200 / 25095358480, 146+ occurrences.)
+                        try {
+                            const auto aeth_idx = hal_.get_programmable_core_type_index(
+                                HalProgrammableCoreType::ACTIVE_ETH);
+                            const uint32_t fw_launch_addr =
+                                hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                            cluster_.write_core_immediate(
+                                device->id(), virtual_core, std::vector<uint32_t>{0}, fw_launch_addr);
+                        } catch (...) {
+                            // Best-effort: MMIO chips always succeed via PCIe; non-MMIO chips
+                            // are already excluded by the relay guard at the top of this function.
+                        }
                         log_info(
                             tt::LogMetal,
                             "rescue_stuck_dispatch_cores: Device {} hard-reset dispatch core ({},{})",
