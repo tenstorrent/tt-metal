@@ -745,7 +745,9 @@ struct FlashMLADecode {
             cb_reserve_back(sdpa_output_cb, vDHt);
             cb_reserve_back(sdpa_ms_cb, Sq_chunk_t);
             tile_regs_acquire();
+            tensix_sync();
             for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+                DeviceZoneScopedN("compute_sdpa_chunk");
                 bool last_chunk = chunk == (num_chunks - 1);
                 compute_sdpa_chunk<
                     Sk_chunk_t,
@@ -771,6 +773,7 @@ struct FlashMLADecode {
                     chunk == 0,
                     !sdpa_output_is_final && last_chunk,
                     mask_last_chunk && last_chunk);
+                tensix_sync();
             }
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

@@ -268,29 +268,61 @@ void compute_sdpa_chunk(
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
-
-    // Reduce Max (SFPU)
-    PACK((llk_math_sfpu_sdpa_reduce_max_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size>(
-        mm1_dst_offset, max_dst_offset, !first_chunk)));
+    tensix_sync();
+    {
+        DeviceZoneScopedN("mm");
+        sdpa_custom_mm_block<transpose_k>(
+            cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
+        tensix_sync();
+    }
+    // Profile testing, manually wait/clear the semaphores before reduce
+    for (uint32_t i = 0; i < chunk_size - 1; i++) {
+        PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+        PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+    }
+    PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+    tensix_sync();
+    {
+        DeviceZoneScopedN("reduce_max");
+        // Reduce Max (SFPU)
+        PACK((llk_math_sfpu_sdpa_reduce_max_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size, true>(
+            mm1_dst_offset, max_dst_offset, !first_chunk)));
+        tensix_sync();
+    }
+    PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
     // Bcast Sub (FPU)
     // Wait for SFPU to finish (sem is 0)
     sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);  // For tile shape
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
     sdpa_bcast_col_srca_srcb_reuse_preamble(max_dst_offset);
-    sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false>(mm1_dst_offset);
+    tensix_sync();
+    {
+        DeviceZoneScopedN("bcast_sub");
+        sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false>(mm1_dst_offset);
+        tensix_sync();
+    }
     if (!first_chunk) {
         // Exp Sub (SFPU)
         // Signal FPU that tile is ready
         // This should just init an lreg constant and is what's needed for non-approx exp
-        PACK((non_approx_exp_mul_prev<exp_approx_mode, scale_bf16>(sum_dst_offset, corr_exp_dst_offset)));
+        tensix_sync();
+        {
+            DeviceZoneScopedN("non_approx_exp_mul_prev");
+            PACK((non_approx_exp_mul_prev<exp_approx_mode, scale_bf16>(sum_dst_offset, corr_exp_dst_offset)));
+            tensix_sync();
+        }
         PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
         // Bcast Mul (FPU)
         // Wait for SFPU that tile is ready (sem is non-zero)
         sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
         MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
         sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
-        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true>(mm2_dst_offset);
+        tensix_sync();
+        {
+            DeviceZoneScopedN("bcast_mul");
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true>(mm2_dst_offset);
+            tensix_sync();
+        }
         // FPU has consumed the tile
         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
         // Reset to 0
@@ -299,7 +331,9 @@ void compute_sdpa_chunk(
     }
     // Exp Mul Scale (SFPU)
     PACK((init_fast_approx_exp_constants<scale_fp32>()));
+    tensix_sync();
     for (uint32_t i = 0; i < chunk_size; i++) {
+        DeviceZoneScopedN("fast_approx_exp");
         // Wait for FPU that tile is ready (sem is non-zero)
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
         // Each tile is 8x32, which is the same as a full 16x16 face
@@ -307,27 +341,37 @@ void compute_sdpa_chunk(
         PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
         // No stall since we waited on sfpu already
         PACK((t6_semaphore_post<p_stall::NONE>(SFPU_FPU)));
+        tensix_sync();
     }
 
     // MM (FPU)
     sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, cb_k, cb_out, transpose_v, chunk_size, num_tiles_v);
-    sdpa_custom_mm_reuse_dest_srcb_block<output_granularity>(
-        cb_q,
-        cb_k,
-        0,
-        0,
-        mm1_dst_offset,
-        mm2_dst_offset,
-        transpose_v,
-        chunk_size,
-        num_tiles_v,
-        num_tiles_k,
-        last_chunk);
-
+    tensix_sync();
+    {
+        DeviceZoneScopedN("mm2");
+        sdpa_custom_mm_reuse_dest_srcb_block<output_granularity>(
+            cb_q,
+            cb_k,
+            0,
+            0,
+            mm1_dst_offset,
+            mm2_dst_offset,
+            transpose_v,
+            chunk_size,
+            num_tiles_v,
+            num_tiles_k,
+            last_chunk);
+        tensix_sync();
+    }
     // Reduce Sum (SFPU)
     PACK((ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_()));
-    PACK((llk_math_sfpu_sdpa_reduce_sum_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size, true>(
-        mm1_dst_offset, sum_dst_offset, !first_chunk)));
+    tensix_sync();
+    {
+        DeviceZoneScopedN("reduce_sum");
+        PACK((llk_math_sfpu_sdpa_reduce_sum_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size, true>(
+            mm1_dst_offset, sum_dst_offset, !first_chunk)));
+        tensix_sync();
+    }
     // Signal SFPU is done for the chunk
     if (!first_chunk) {
         // Wait for FPU to signal (this doesn't block SFPU logic)
