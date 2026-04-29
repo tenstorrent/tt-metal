@@ -159,9 +159,9 @@ def main() -> int:
     # Report failing models
     failing_models = []
 
-    # Check that both --filter-filenames and --exclude-filnames are not used together
+    # Check that both --filter-filenames and --exclude-filenames are not used together
     if parsed_args.filter_filenames and parsed_args.exclude_filenames:
-        raise Exception("Using both --filter-filenames and --exclude-filnames is not supported.")
+        raise Exception("Using both --filter-filenames and --exclude-filenames is not supported.")
 
     filter_filenames = parsed_args.filter_filenames.split(",") if parsed_args.filter_filenames else []
     exclude_filenames = parsed_args.exclude_filenames.split(",") if parsed_args.exclude_filenames else []
