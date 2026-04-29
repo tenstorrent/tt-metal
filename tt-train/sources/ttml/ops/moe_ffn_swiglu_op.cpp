@@ -22,12 +22,12 @@ namespace ttml::ops {
 
 namespace {
 
-// Slice rows [row_lo, row_hi) of a [1,1,T,inner] tensor.
-ttnn::Tensor slice_rows(const ttnn::Tensor& T, uint32_t row_lo, uint32_t row_hi, uint32_t inner) {
+// Slice rows [row_lo, row_hi) of a [1, 1, T_cap, inner_dim] tensor.
+ttnn::Tensor slice_rows(const ttnn::Tensor& tensor, uint32_t row_lo, uint32_t row_hi, uint32_t inner_dim) {
     static const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
     const ttsl::SmallVector<uint32_t> start = {0U, 0U, row_lo, 0U};
-    const ttsl::SmallVector<uint32_t> end = {1U, 1U, row_hi, inner};
-    return ttnn::slice(T, start, end, step);
+    const ttsl::SmallVector<uint32_t> end = {1U, 1U, row_hi, inner_dim};
+    return ttnn::slice(tensor, start, end, step);
 }
 
 }  // namespace
