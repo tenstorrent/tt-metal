@@ -797,7 +797,11 @@ class CompressedTensor:
         # Global max shard size across all devices
         alignment = _get_alignment(memory_config.buffer_type)
         global_max = max(sz for dev_sizes in all_shard_sizes.values() for sz in dev_sizes)
-        self.max_shard_size = _align(global_max, alignment)
+
+        # Defensive floor: if every shard is empty (e.g. all-bfp0 assignment),
+        # _align(0, alignment) = 0 which would yield page_size 0 in the C++ buffer
+        # path and SIGFPE. Match _pack_single_device by ensuring at least `alignment`.
+        self.max_shard_size = max(_align(global_max, alignment), alignment)
 
         logical_shape = ttnn.Shape(list(tensor.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)

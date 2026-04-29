@@ -455,6 +455,11 @@ class MoeRoutedExpertOp:
             "cb_out_descriptor": cb_out_descriptor,
             "weights_dtype": weights_tensor.dtype,
             "weights_tile": weights_tile,
+            # Single-tensor (dense / non-routed) path runs exactly one "expert".
+            # _setup_dimensions reads gate_proj_params["num_active_experts"] unconditionally
+            # (e.g. for down_proj gather/mcast sizing) — provide 1 so the dense path matches
+            # the MoE setup_matmul_expert_dram contract.
+            "num_active_experts": 1,
         }
 
     @staticmethod
