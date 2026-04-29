@@ -33,6 +33,7 @@ jobs:
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:

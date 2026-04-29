@@ -41,6 +41,7 @@ on:
 run-name: "(Galaxy) Health"
 
 permissions:
+  actions: read
   packages: write
   contents: write
 
@@ -48,6 +49,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:

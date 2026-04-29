@@ -101,6 +101,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     needs: determine-tests
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:

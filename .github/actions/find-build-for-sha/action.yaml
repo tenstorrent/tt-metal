@@ -50,44 +50,54 @@ runs:
           const MAX_PAGES = 5; // Search up to 500 recent artifacts
           let found = null;
 
-          for (let page = 1; page <= MAX_PAGES; page++) {
-            const resp = await github.rest.actions.listArtifactsForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100,
-              page
-            });
+          try {
+            for (let page = 1; page <= MAX_PAGES; page++) {
+              const resp = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+                page
+              });
 
-            const artifacts = resp.data.artifacts;
-            if (artifacts.length === 0) {
-              console.log(`Page ${page}: no more artifacts`);
-              break;
+              const artifacts = resp.data.artifacts;
+              if (artifacts.length === 0) {
+                console.log(`Page ${page}: no more artifacts`);
+                break;
+              }
+
+              console.log(`Page ${page}: checking ${artifacts.length} artifacts...`);
+
+              for (const artifact of artifacts) {
+                // Skip expired artifacts
+                if (artifact.expired) continue;
+
+                // Skip artifacts from the current run
+                if (artifact.workflow_run && artifact.workflow_run.id === context.runId) continue;
+
+                // Must be a TTMetal build artifact
+                if (!artifact.name.startsWith('TTMetal_build_any')) continue;
+
+                // Must contain our commit SHA
+                if (!artifact.name.includes(sha)) continue;
+
+                // Match profiler variant
+                const hasProfiler = artifact.name.includes('_profiler');
+                if (tracy !== hasProfiler) continue;
+
+                found = artifact;
+                break;
+              }
+
+              if (found) break;
             }
-
-            console.log(`Page ${page}: checking ${artifacts.length} artifacts...`);
-
-            for (const artifact of artifacts) {
-              // Skip expired artifacts
-              if (artifact.expired) continue;
-
-              // Skip artifacts from the current run
-              if (artifact.workflow_run && artifact.workflow_run.id === context.runId) continue;
-
-              // Must be a TTMetal build artifact
-              if (!artifact.name.startsWith('TTMetal_build_any')) continue;
-
-              // Must contain our commit SHA
-              if (!artifact.name.includes(sha)) continue;
-
-              // Match profiler variant
-              const hasProfiler = artifact.name.includes('_profiler');
-              if (tracy !== hasProfiler) continue;
-
-              found = artifact;
-              break;
-            }
-
-            if (found) break;
+          } catch (err) {
+            // If we lack actions:read permission, the API returns 403.
+            // Gracefully fall through to building from scratch.
+            console.log(`⚠️ Could not list artifacts (${err.status || err.message}) — will build fresh`);
+            console.log('Hint: ensure the calling job has "actions: read" permission');
+            core.setOutput('run-id', '');
+            core.setOutput('found', 'false');
+            return;
           }
 
           if (found) {

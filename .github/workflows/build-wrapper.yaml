@@ -82,6 +82,7 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 permissions:
+  actions: read
   packages: write
 
 jobs:
@@ -98,6 +99,7 @@ jobs:
     if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:
@@ -117,6 +119,7 @@ jobs:
     if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     strategy:

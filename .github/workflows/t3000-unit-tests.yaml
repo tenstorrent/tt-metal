@@ -44,6 +44,7 @@ on:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
 
 permissions:
+  actions: read
   packages: write
   contents: write
 
@@ -51,6 +52,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:
