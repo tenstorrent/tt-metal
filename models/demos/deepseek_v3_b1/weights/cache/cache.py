@@ -276,6 +276,11 @@ class TensorCache:
             host_fused = ttnn.load_tensor(paths.data_path, device=None)
             mc = host_fused.memory_config()
             mc.experimental_set_per_core_allocation(True)
+            logger.info(
+                "[cache._load_fused] PER_CORE BRANCH HIT for {} (per_core_in_mc={})",
+                paths.object_dir.name[:12],
+                getattr(mc, "is_per_core_allocated", lambda: "?")(),
+            )
             fused = ttnn.allocate_tensor_on_device(
                 host_fused.shape,
                 host_fused.dtype,
@@ -284,6 +289,18 @@ class TensorCache:
                 memory_config=mc,
             )
             ttnn.copy_host_to_device_tensor(host_fused, fused)
+            got_per_core = bool(getattr(fused, "is_per_core_allocated", lambda: False)())
+            logger.info(
+                "[cache._load_fused] post-allocate is_per_core_allocated={} for {}",
+                got_per_core,
+                paths.object_dir.name[:12],
+            )
+            if not got_per_core:
+                raise RuntimeError(
+                    f"[cache._load_fused] per_core requested but allocate_tensor_on_device "
+                    f"produced a lockstep buffer for {paths.object_dir}; "
+                    f"shape={host_fused.shape} dtype={host_fused.dtype} layout={host_fused.layout} mc={mc}"
+                )
         else:
             fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
         # If the loaded fused buffer ended up per-core allocated, verify that its
