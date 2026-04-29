@@ -43,6 +43,7 @@ from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
 
 
 class Attention(LightweightModule):
@@ -307,6 +308,42 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        self.short_seq_limit = 32
+        _grid = device.compute_with_storage_grid_size()
+        _fp32_linear = self.compute_kernel_config.fp32_dest_acc_en
+        self._decode_wqkv_progcfg = make_linear_1d_program_config(
+            m=1,
+            k=hidden_size,
+            n=_fused_qkv,
+            grid_x=_grid.x,
+            grid_y=_grid.y,
+            fp32_dest_acc_en=_fp32_linear,
+        )
+        self._short_seq_wqkv_progcfg = make_linear_1d_program_config(
+            m=self.short_seq_limit,
+            k=hidden_size,
+            n=_fused_qkv,
+            grid_x=_grid.x,
+            grid_y=_grid.y,
+            fp32_dest_acc_en=_fp32_linear,
+        )
+        self._decode_wo_progcfg = make_linear_1d_program_config(
+            m=1,
+            k=_o_rows,
+            n=hidden_size,
+            grid_x=_grid.x,
+            grid_y=_grid.y,
+            fp32_dest_acc_en=_fp32_linear,
+        )
+        self._short_seq_wo_progcfg = make_linear_1d_program_config(
+            m=self.short_seq_limit,
+            k=_o_rows,
+            n=hidden_size,
+            grid_x=_grid.x,
+            grid_y=_grid.y,
+            fp32_dest_acc_en=_fp32_linear,
+        )
+
         # Pre-compute HEIGHT_SHARDED memory config for paged_update_cache input.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
         # For batch=1: tensor [1, 1, num_kv_heads, head_dim] padded to [1, 1, tile(kv_heads), head_dim].
@@ -366,9 +403,15 @@ class Attention(LightweightModule):
         """
         batch_size = x.shape[0]
         is_decode = mode == "decode"
-
-        # Use DRAM for attention linear ops - L1 showed no benefit and adds overhead
-        # linear_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        seq_len = x.shape[2]
+        if is_decode or seq_len == 1:
+            wqkv_progcfg = self._decode_wqkv_progcfg
+            wo_progcfg = self._decode_wo_progcfg
+        elif seq_len <= self.short_seq_limit:
+            wqkv_progcfg = self._short_seq_wqkv_progcfg
+            wo_progcfg = self._short_seq_wo_progcfg
+        else:
+            wqkv_progcfg = wo_progcfg = None
 
         # QKV projection
         xqkv = ttnn.linear(
@@ -376,6 +419,7 @@ class Attention(LightweightModule):
             self.wqkv,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=wqkv_progcfg,
         )
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
@@ -707,6 +751,7 @@ class Attention(LightweightModule):
             self.wo,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=wo_progcfg,
         )
         ttnn.deallocate(attn_output)
 
