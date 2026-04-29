@@ -229,10 +229,8 @@ class ZImageTransformerTTNN(LightweightModule):
 
     # ── Optimized norm ─────────────────────────────────────────────────────────
 
-    def _rms_norm_f32(self, x, norm_weight, scale_inv_dim, eps, hidden_dim):
-        """Fused RMS norm — replaces the manual 9-op F32 sequence."""
-        if x.dtype == ttnn.DataType.FLOAT32:
-            x = ttnn.typecast(x, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    def _rms_norm(self, x, norm_weight, scale_inv_dim, eps, hidden_dim):
+        """Fused RMS norm via ttnn.rms_norm."""
         x = self._ensure_tile(x)
         return ttnn.rms_norm(
             x,
@@ -254,20 +252,14 @@ class ZImageTransformerTTNN(LightweightModule):
             # Fallback: manual F32 RMSNorm (should not happen after _prep_qk_norm_weights)
             return self._qk_norm_manual(qk, norm_weight, seq_len, num_heads)
 
-        dtype_in = qk.dtype
-        if dtype_in == ttnn.DataType.FLOAT32:
-            qk = ttnn.typecast(qk, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qk = self._ensure_tile(qk)
-        out = ttnn.rms_norm(
+        return ttnn.rms_norm(
             qk,
             epsilon=RMS_EPS,
             weight=flat_w,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=REDUCE_KERNEL,
         )
-        if dtype_in == ttnn.DataType.FLOAT32:
-            out = ttnn.typecast(out, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return out
 
     def _qk_norm_manual(self, qk, norm_weight, seq_len, num_heads):
         """Fallback manual F32 per-head RMSNorm (matches base model_ttnn.py exactly)."""
@@ -370,7 +362,6 @@ class ZImageTransformerTTNN(LightweightModule):
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = self._ccl.reduce_scatter(x, dim=3, mesh_axis=1, use_persistent_buffer=True)
         x = self._ccl.all_gather(x, dim=3, mesh_axis=1, use_hyperparams=True, use_persistent_buffer=True)
-        x = ttnn.typecast(x, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
 
@@ -381,28 +372,26 @@ class ZImageTransformerTTNN(LightweightModule):
         final_prefix = "all_final_layer.2-1"
 
         cond = ttnn.silu(adaln_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        scale_raw = ttnn.matmul(
+        scale = ttnn.matmul(
             cond,
             self.weights[f"{final_prefix}.adaLN_modulation.1.weight"],
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
         )
-        scale_raw = ttnn.add(
-            scale_raw,
+        scale = ttnn.add(
+            scale,
             self.weights[f"{final_prefix}.adaLN_modulation.1.bias"],
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        scale_raw_bf16 = ttnn.typecast(scale_raw, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        one = ttnn.typecast(self.weights["_one"], ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        scale = ttnn.add(one, scale_raw_bf16, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scale = ttnn.add(
+            self.weights["_one"], scale, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         scale = ttnn.reshape(scale, [1, 1, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if x_3d.dtype == ttnn.DataType.FLOAT32:
-            x_3d = ttnn.typecast(x_3d, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x_3d = self._ensure_tile(x_3d)
 
         x_norm = ttnn.layer_norm(
@@ -445,21 +434,20 @@ class ZImageTransformerTTNN(LightweightModule):
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
         )
         x = ttnn.add(
             x,
             self.weights["all_x_embedder.2-1.bias"],
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x = ttnn.typecast(x, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(x, [1, IMG_PATCHES, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _cap_embed(self, cap_feats):
         if len(cap_feats.shape) == 3:
             cap_feats = ttnn.reshape(cap_feats, [CAP_TOKENS, 2560], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = self._rms_norm_f32(
+        x = self._rms_norm(
             cap_feats,
             norm_weight=self.weights["cap_embedder.0.weight"],
             scale_inv_dim=self.weights["_scale_cap"],
@@ -472,12 +460,11 @@ class ZImageTransformerTTNN(LightweightModule):
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
         )
         x = ttnn.add(
-            x, self.weights["cap_embedder.1.bias"], dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x, self.weights["cap_embedder.1.bias"], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        x = ttnn.typecast(x, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(x, [1, CAP_TOKENS, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _timestep_embed(self, timestep):
@@ -504,31 +491,29 @@ class ZImageTransformerTTNN(LightweightModule):
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
         )
         t_emb = ttnn.add(
             t_emb,
             self.weights["t_embedder.mlp.0.bias"],
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         t_emb = ttnn.silu(t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        t_emb = ttnn.typecast(t_emb, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         t_emb = ttnn.matmul(
             t_emb,
             self.weights["t_embedder.mlp.2.weight"],
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
         )
         t_emb = ttnn.add(
             t_emb,
             self.weights["t_embedder.mlp.2.bias"],
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        t_emb = ttnn.typecast(t_emb, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(t_emb, [1, ADALN_EMBED_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _adaLN_modulation(self, adaln_input, block_prefix):
@@ -544,10 +529,9 @@ class ZImageTransformerTTNN(LightweightModule):
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.DataType.FLOAT32,
+            dtype=ttnn.DataType.BFLOAT16,
         )
-        mod = ttnn.add(mod, self.weights[b_key], dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        mod = ttnn.typecast(mod, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mod = ttnn.add(mod, self.weights[b_key], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         mod = ttnn.reshape(mod, [1, 1, 4 * HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         H = HIDDEN_DIM
         s = lambda a, b: ttnn.slice(mod, [0, 0, a], [1, 1, b], [1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -644,12 +628,10 @@ class ZImageTransformerTTNN(LightweightModule):
         return ttnn.reshape(emb, [1, seq_len, 1, out_half_dim, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _block_with_adaLN(self, x, adaln_input, seq_len, block_prefix):
-        if x.dtype != ttnn.DataType.FLOAT32:
-            x = ttnn.typecast(x, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         scale_msa, gate_msa, scale_mlp, gate_mlp = self._adaLN_modulation(adaln_input, block_prefix)
         x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        norm1_x = self._rms_norm_f32(
+        norm1_x = self._rms_norm(
             x_3d,
             self.weights[f"{block_prefix}.attention_norm1.weight"],
             self.weights["_scale_hidden"],
@@ -658,7 +640,7 @@ class ZImageTransformerTTNN(LightweightModule):
         )
         norm1_x = ttnn.multiply(norm1_x, scale_msa, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_out = self._attention(norm1_x, seq_len, block_prefix)
-        norm2_out = self._rms_norm_f32(
+        norm2_out = self._rms_norm(
             attn_out,
             self.weights[f"{block_prefix}.attention_norm2.weight"],
             self.weights["_scale_hidden"],
@@ -666,13 +648,13 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         x = ttnn.add(
-            ttnn.typecast(x_3d, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            x_3d,
             ttnn.multiply(gate_msa, norm2_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        norm3_x = self._rms_norm_f32(
+        norm3_x = self._rms_norm(
             x,
             self.weights[f"{block_prefix}.ffn_norm1.weight"],
             self.weights["_scale_hidden"],
@@ -683,7 +665,7 @@ class ZImageTransformerTTNN(LightweightModule):
         mlp_out = self._mlp(
             ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG), seq_len, block_prefix
         )
-        norm4_out = self._rms_norm_f32(
+        norm4_out = self._rms_norm(
             mlp_out,
             self.weights[f"{block_prefix}.ffn_norm2.weight"],
             self.weights["_scale_hidden"],
@@ -699,11 +681,9 @@ class ZImageTransformerTTNN(LightweightModule):
         return x
 
     def _block_no_adaLN(self, x, seq_len, block_prefix, is_caption=False):
-        if x.dtype != ttnn.DataType.FLOAT32:
-            x = ttnn.typecast(x, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        norm1_x = self._rms_norm_f32(
+        norm1_x = self._rms_norm(
             x_3d,
             self.weights[f"{block_prefix}.attention_norm1.weight"],
             self.weights["_scale_hidden"],
@@ -711,7 +691,7 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         attn_out = self._attention(norm1_x, seq_len, block_prefix, is_caption=is_caption)
-        norm2_out = self._rms_norm_f32(
+        norm2_out = self._rms_norm(
             attn_out,
             self.weights[f"{block_prefix}.attention_norm2.weight"],
             self.weights["_scale_hidden"],
@@ -719,13 +699,13 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         x = ttnn.add(
-            ttnn.typecast(x_3d, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            x_3d,
             norm2_out,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        norm3_x = self._rms_norm_f32(
+        norm3_x = self._rms_norm(
             x,
             self.weights[f"{block_prefix}.ffn_norm1.weight"],
             self.weights["_scale_hidden"],
@@ -735,7 +715,7 @@ class ZImageTransformerTTNN(LightweightModule):
         mlp_out = self._mlp(
             ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG), seq_len, block_prefix
         )
-        norm4_out = self._rms_norm_f32(
+        norm4_out = self._rms_norm(
             mlp_out,
             self.weights[f"{block_prefix}.ffn_norm2.weight"],
             self.weights["_scale_hidden"],

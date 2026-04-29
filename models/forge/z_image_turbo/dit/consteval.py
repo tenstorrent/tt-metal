@@ -15,17 +15,10 @@ def _basic(input, device):
     return ttnn.to_layout(x, ttnn.Layout.TILE, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def _typecast_f32(input, device):
+def _permute(input, device):
     x = ttnn.to_device(input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.to_layout(x, ttnn.Layout.TILE, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.typecast(x, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-
-def _permute_typecast(input, device):
-    x = ttnn.to_device(input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x = ttnn.to_layout(x, ttnn.Layout.TILE, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x = ttnn.permute(x, [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
-    return ttnn.typecast(x, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.permute(x, [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
 
 
 def _reshape_64_2(input, device):
@@ -70,8 +63,8 @@ _BLOCK_WEIGHTS = [
 ]
 
 _ADALN_WEIGHTS = [
-    ("adaLN_modulation.0.bias", _typecast_f32),
-    ("adaLN_modulation.0.weight", _permute_typecast),
+    ("adaLN_modulation.0.bias", _basic),
+    ("adaLN_modulation.0.weight", _permute),
 ]
 
 
@@ -133,21 +126,21 @@ def run_const_evals(weights, device):
 
     # ── Timestep embedder ─────────────────────────────────────────────────────
     for i in (0, 2):
-        weights[f"t_embedder.mlp.{i}.bias"] = _typecast_f32(weights[f"t_embedder.mlp.{i}.bias"], device)
-        weights[f"t_embedder.mlp.{i}.weight"] = _permute_typecast(weights[f"t_embedder.mlp.{i}.weight"], device)
+        weights[f"t_embedder.mlp.{i}.bias"] = _basic(weights[f"t_embedder.mlp.{i}.bias"], device)
+        weights[f"t_embedder.mlp.{i}.weight"] = _permute(weights[f"t_embedder.mlp.{i}.weight"], device)
 
     # ── Unique weights ────────────────────────────────────────────────────────
-    weights["all_final_layer.2-1.adaLN_modulation.1.bias"] = _typecast_f32(
+    weights["all_final_layer.2-1.adaLN_modulation.1.bias"] = _basic(
         weights["all_final_layer.2-1.adaLN_modulation.1.bias"], device
     )
-    weights["all_final_layer.2-1.adaLN_modulation.1.weight"] = _permute_typecast(
+    weights["all_final_layer.2-1.adaLN_modulation.1.weight"] = _permute(
         weights["all_final_layer.2-1.adaLN_modulation.1.weight"], device
     )
-    weights["all_x_embedder.2-1.bias"] = _typecast_f32(weights["all_x_embedder.2-1.bias"], device)
-    weights["all_x_embedder.2-1.weight"] = _permute_typecast(weights["all_x_embedder.2-1.weight"], device)
+    weights["all_x_embedder.2-1.bias"] = _basic(weights["all_x_embedder.2-1.bias"], device)
+    weights["all_x_embedder.2-1.weight"] = _permute(weights["all_x_embedder.2-1.weight"], device)
     weights["cap_embedder.0.weight"] = _reshape_1_2560(weights["cap_embedder.0.weight"], device)
-    weights["cap_embedder.1.bias"] = _typecast_f32(weights["cap_embedder.1.bias"], device)
-    weights["cap_embedder.1.weight"] = _permute_typecast(weights["cap_embedder.1.weight"], device)
+    weights["cap_embedder.1.bias"] = _basic(weights["cap_embedder.1.bias"], device)
+    weights["cap_embedder.1.weight"] = _permute(weights["cap_embedder.1.weight"], device)
 
     # ── Constant generators (computed, not from model weights) ────────────────
     weights["_t_scale"] = _sbf16(1000.0)
