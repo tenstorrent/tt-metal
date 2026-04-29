@@ -102,6 +102,7 @@ def make_deepseek_sampling_args(
     max_top_k: int = MAX_TOP_K,
     max_batch_size: int = USERS_PER_ROW,
     sampling_all_gather_axis: int = 1,
+    pad_logits_to_power_of_2: bool = True,
 ) -> DeepseekSamplingArgs:
     cluster_shape = tuple(mesh_device.shape)
     sampling_dp = int(cluster_shape[0])  # one sampling group per row
@@ -117,6 +118,7 @@ def make_deepseek_sampling_args(
         sampling_dp=sampling_dp,
         cluster_shape=cluster_shape,
         sampling_all_gather_axis=sampling_all_gather_axis,
+        pad_logits_to_power_of_2=pad_logits_to_power_of_2,
     )
 
 
