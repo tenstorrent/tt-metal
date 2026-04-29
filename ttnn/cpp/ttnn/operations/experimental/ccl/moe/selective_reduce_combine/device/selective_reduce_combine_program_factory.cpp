@@ -82,15 +82,17 @@ auto launch_mux_workers(
     const uint32_t available_cores = mux_core_range_set.num_cores();
 
     // Validate sufficient cores exist before selection to prevent segfault in select_from_corerangeset
-    TT_FATAL(
-        needed_cores <= available_cores,
-        "Not enough mux cores! Needed: {} (num_links={} * neighbors.size()={}), Available: {}. "
-        "mux_core_range_set={}",
-        needed_cores,
-        num_links,
-        neighbors.size(),
-        available_cores,
-        mux_core_range_set.str());
+    if (needed_cores > 0) {
+        TT_FATAL(
+            needed_cores <= available_cores,
+            "Not enough mux cores! Needed: {} (num_links={} * neighbors.size()={}), Available: {}. "
+            "mux_core_range_set={}",
+            needed_cores,
+            num_links,
+            neighbors.size(),
+            available_cores,
+            mux_core_range_set.str());
+    }
 
     const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, needed_cores - 1);
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
