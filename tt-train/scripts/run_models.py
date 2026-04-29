@@ -46,9 +46,9 @@ def get_git_commit_hash() -> str:
     return sha
 
 
-def get_arch_name() -> str:
-    with open("/sys/class/tenstorrent/tenstorrent!0/tt_card_type", "r") as arch_name:
-        return arch_name.read().rstrip()
+def get_card_type() -> str:
+    with open("/sys/class/tenstorrent/tenstorrent!0/tt_card_type", "r") as card_type:
+        return card_type.read().rstrip()
 
 
 def run_and_save_log(cmd: list[str], log_path: Path) -> int:
@@ -149,8 +149,8 @@ def main() -> int:
     git_commit_hash = get_git_commit_hash()
 
     # Get additional metadata
-    arch_name = get_arch_name()
-    ci_runner_label = get_env("CI_RUNNER_LABEL", required=False)
+    arch_name = get_env("ARCH_NAME", required=False)
+    card_type = get_card_type()
 
     # Create output directory to store metrics
     output_dir = Path(_verify_path(parsed_args.output_dir, tt_metal_runtime_root))
@@ -194,9 +194,9 @@ def main() -> int:
         args = process_args(model["args"]) if model["args"] is not None else []
 
         # Check if model should be skipped
-        if (skip_arches := model.get("skip-arch")) is not None:
-            skip_arch = skip_arches if isinstance(skip_arches, list) else [skip_arches]
-            if any(a in arch_name for a in skip_arch):
+        if (skip_cards := model.get("skip-card")) is not None:
+            skip_card = skip_cards if isinstance(skip_cards, list) else [skip_cards]
+            if any(a in card_type for a in skip_card):
                 print(f"Skipping {model_filename}")
                 continue
 
@@ -275,7 +275,7 @@ def main() -> int:
             step_time_p99=step_data["step_time_p99"],
             mfu=step_data["mfu"],
             arch_name=arch_name,
-            ci_runner_label=ci_runner_label,
+            ci_runner_label=card_type,
         )
         print(pydantic_data)
 
