@@ -1,7 +1,7 @@
 name: Find existing build for SHA
 description: >
   Searches the repository's artifact list for a prior build artifact matching
-  the current commit SHA and requested configuration (tracy/non-tracy).
+  the current commit SHA and requested configuration (tracy, distributed).
   Works across ALL workflow types — direct workflow_dispatch, workflow_call
   from Sanity, Merge Gate, etc. — because it searches artifacts by name
   rather than querying workflow runs by workflow ID.
@@ -14,6 +14,13 @@ inputs:
       tracy input so the correct artifact variant is selected.
     required: false
     default: 'false'
+  distributed:
+    description: >
+      Whether to look for a distributed-enabled build artifact.
+      Artifacts built with distributed=false have '_no_distributed' in their
+      name. Must match the calling workflow's distributed input.
+    required: false
+    default: 'true'
   check-wheel:
     description: >
       Also check for a matching wheel artifact in the prior run.
@@ -51,17 +58,20 @@ runs:
         script: |
           const sha = context.sha;
           const tracy = '${{ inputs.tracy }}' === 'true';
+          const distributed = '${{ inputs.distributed }}' !== 'false';
           const checkWheel = '${{ inputs.check-wheel }}' === 'true';
 
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
-          console.log(`Config: tracy=${tracy}, check-wheel=${checkWheel}`);
+          console.log(`Config: tracy=${tracy}, distributed=${distributed}, check-wheel=${checkWheel}`);
 
           // Artifact names follow the pattern:
           //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{SHA}_{RUN_ID}
           // Wheel artifact names follow the pattern:
           //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
           // The SHA in the name is the full commit SHA (or sanitized ref).
-          // We search all recent repo artifacts for names containing our SHA.
+          // We match on: SHA (exact), profiler/tracy variant, and distributed variant.
+          // Platform/arch/toolchain are not matched because >99% of builds use the
+          // same defaults, and the SHA already ensures code identity.
 
           const MAX_PAGES = 5; // Search up to 500 recent artifacts
           let foundBuild = null;
@@ -96,10 +106,15 @@ runs:
 
                 // Check for C++ build artifact
                 if (!foundBuild && artifact.name.startsWith('TTMetal_build_any')) {
+                  // Match tracy/profiler variant
                   const hasProfiler = artifact.name.includes('_profiler');
-                  if (tracy === hasProfiler) {
-                    foundBuild = artifact;
-                  }
+                  if (tracy !== hasProfiler) continue;
+
+                  // Match distributed variant
+                  const hasNoDistributed = artifact.name.includes('_no_distributed');
+                  if (distributed === hasNoDistributed) continue;
+
+                  foundBuild = artifact;
                 }
 
                 // Check for wheel artifact (only if requested)
