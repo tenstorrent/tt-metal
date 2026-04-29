@@ -13,6 +13,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "hostdev/realtime_profiler_msgs.h"
+// Uncomment to compile in ncrisc_debug L1 heartbeats (RT_PROF_NCRISC_DBG_* in realtime_profiler_ring_buffer.hpp):
+// #define RT_PROFILER_NCRISC_DEBUG
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "api/debug/dprint.h"
 
@@ -52,11 +54,9 @@ __attribute__((noinline)) void push_entry_to_host(
     uint32_t host_fifo_start,
     uint32_t fifo_page_aligned_size) {
     noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
-    // Heartbeat: _pad[9] increments before the potentially-blocking socket_reserve_pages,
-    // _pad[10] after. A growing gap means NCRISC is stuck waiting on the host receiver.
-    ring_buffer->_pad[9]++;
+    RT_PROF_NCRISC_DBG_INC(ring_buffer, socket_reserve_pages_enter_count);
     socket_reserve_pages(sock, 1);
-    ring_buffer->_pad[10]++;
+    RT_PROF_NCRISC_DBG_INC(ring_buffer, socket_reserve_pages_exit_count);
 
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(data_addr_hi) << 32) | static_cast<uint64_t>(host_write_ptr);
 
@@ -72,49 +72,33 @@ __attribute__((noinline)) void push_entry_to_host(
     socket_notify_receiver(sock);
 
     noc_async_write_barrier();
-    // Heartbeat: incremented once the write barrier returns. If _pad[10] keeps growing
-    // while _pad[11] stalls, NCRISC is wedged in the write barrier (NOC credits not returning).
-    ring_buffer->_pad[11]++;
+    RT_PROF_NCRISC_DBG_INC(ring_buffer, push_write_barrier_exit_count);
 }
 
-// Heartbeat markers written to ring_buffer->_pad[] so host can diagnose NCRISC progress:
-// _pad[0]  = stage (1=started, 2=config_wait, 3=socket_init, 4=main_loop, 5=pushing)
-// _pad[1]  = config_buffer_addr seen by NCRISC
-// _pad[2]  = pcie_xy_enc from socket config
-// _pad[3]  = fifo_addr_lo from socket config
-// _pad[4]  = loop iteration counter
-// _pad[5]  = push count
-// _pad[6]  = L1 address of rt_profiler_msg->config_buffer_addr (read site)
-// _pad[7]  = raw 32-bit value at that address
-// _pad[8]  = RING_BUFFER_ADDR define value
-// _pad[9]  = socket_reserve_pages entries (bumped before the blocking call)
-// _pad[10] = socket_reserve_pages exits (bumped once the call returned)
-// _pad[11] = noc_async_write_barrier exits after push_entry_to_host
-
 void kernel_main() {
-    ring_buffer->_pad[0] = 1;  // stage: kernel started
-    ring_buffer->_pad[6] = reinterpret_cast<uint32_t>(&rt_profiler_msg->config_buffer_addr);
-    ring_buffer->_pad[8] = RING_BUFFER_ADDR;
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_STARTED);
+    RT_PROF_NCRISC_DBG_SET(
+        ring_buffer, config_buffer_addr_field_l1_ptr, reinterpret_cast<uint32_t>(&rt_profiler_msg->config_buffer_addr));
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, ring_buffer_addr_literal, RING_BUFFER_ADDR);
 
     // Wait for config_buffer_addr to be written by the host
-    ring_buffer->_pad[0] = 2;  // stage: waiting for config
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_CONFIG_WAIT);
     uint32_t socket_config_addr = 0;
     uint32_t wait_iters = 0;
     while (socket_config_addr == 0) {
         invalidate_l1_cache();
         socket_config_addr = rt_profiler_msg->config_buffer_addr;
-        // Also write the raw value we see, so host can compare
-        ring_buffer->_pad[7] = socket_config_addr;
+        RT_PROF_NCRISC_DBG_SET(ring_buffer, config_buffer_addr_raw, socket_config_addr);
         wait_iters++;
-        ring_buffer->_pad[4] = wait_iters;
+        RT_PROF_NCRISC_DBG_SET(ring_buffer, loop_iteration, wait_iters);
         if (ring_buffer->terminate) {
             return;
         }
     }
-    ring_buffer->_pad[1] = socket_config_addr;
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, socket_config_addr, socket_config_addr);
 
     // Initialize socket from the config buffer (fresh read every launch)
-    ring_buffer->_pad[0] = 3;  // stage: initializing socket
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_SOCKET_INIT);
     invalidate_l1_cache();
     SocketSenderInterface profiler_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(profiler_socket, realtime_profiler_page_size);
@@ -132,17 +116,17 @@ void kernel_main() {
     uint32_t host_write_ptr = data_addr_lo;
     uint32_t host_fifo_start = data_addr_lo;
 
-    ring_buffer->_pad[2] = pcie_xy_enc;
-    ring_buffer->_pad[3] = data_addr_lo;
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, pcie_xy_enc, pcie_xy_enc);
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, fifo_addr_lo, data_addr_lo);
 
-    ring_buffer->_pad[0] = 4;  // stage: entering main loop
+    RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
     uint32_t loop_count = 0;
     uint32_t push_count = 0;
 
     while (true) {
         invalidate_l1_cache();
         loop_count++;
-        ring_buffer->_pad[4] = loop_count;
+        RT_PROF_NCRISC_DBG_SET(ring_buffer, loop_iteration, loop_count);
 
         if (rt_ring_empty(ring_buffer)) {
             if (ring_buffer->terminate) {
@@ -151,7 +135,7 @@ void kernel_main() {
             continue;
         }
 
-        ring_buffer->_pad[0] = 5;  // stage: pushing entry
+        RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_PUSHING);
         uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->read_index);
         push_entry_to_host(
             profiler_socket,
@@ -163,7 +147,7 @@ void kernel_main() {
             fifo_page_aligned_size);
         ring_buffer->read_index++;
         push_count++;
-        ring_buffer->_pad[5] = push_count;
-        ring_buffer->_pad[0] = 4;  // stage: back to main loop
+        RT_PROF_NCRISC_DBG_SET(ring_buffer, push_count, push_count);
+        RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
     }
 }

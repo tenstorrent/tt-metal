@@ -20,6 +20,33 @@
 constexpr uint32_t RT_PROFILER_RING_CAPACITY = 4096;  // must be power-of-2
 constexpr uint32_t RT_PROFILER_ENTRY_SIZE = 64;       // matches D2H socket page size
 
+// NCRISC progress / heartbeat (cq_realtime_profiler_push.cpp). Host may read via L1 for
+// post-mortems; not used for protocol correctness.
+enum RtProfilerNcriscStage : uint32_t {
+    RT_PROFILER_NCRISC_STAGE_STARTED = 1,
+    RT_PROFILER_NCRISC_STAGE_CONFIG_WAIT = 2,
+    RT_PROFILER_NCRISC_STAGE_SOCKET_INIT = 3,
+    RT_PROFILER_NCRISC_STAGE_MAIN_LOOP = 4,
+    RT_PROFILER_NCRISC_STAGE_PUSHING = 5,
+};
+
+struct RtProfilerNcriscDebug {
+    uint32_t stage;
+    uint32_t socket_config_addr;
+    uint32_t pcie_xy_enc;
+    uint32_t fifo_addr_lo;
+    uint32_t loop_iteration;  // config-wait spin count, then main-loop iteration counter
+    uint32_t push_count;
+    uint32_t config_buffer_addr_field_l1_ptr;
+    uint32_t config_buffer_addr_raw;
+    uint32_t ring_buffer_addr_literal;
+    uint32_t socket_reserve_pages_enter_count;
+    uint32_t socket_reserve_pages_exit_count;
+    uint32_t push_write_barrier_exit_count;
+};
+
+static_assert(sizeof(RtProfilerNcriscDebug) == 48);
+
 // Ring buffer for BRISC -> NCRISC handoff. BRISC writes entries at write_index;
 // NCRISC reads entries at read_index and pushes them to the host via PCIe.
 // Single-producer single-consumer: no locks required.
@@ -27,12 +54,25 @@ struct RtProfilerRingBuffer {
     volatile uint32_t write_index;  // incremented by BRISC after writing an entry
     volatile uint32_t read_index;   // incremented by NCRISC after pushing an entry
     volatile uint32_t terminate;    // set by BRISC to tell NCRISC to drain and exit
-    uint32_t _pad[13];              // pad header to 64 bytes for alignment
+    // BRISC (cq_realtime_profiler): incremented once per enqueue attempt blocked on a full ring
+    volatile uint32_t ring_full_wait_count;
+    RtProfilerNcriscDebug ncrisc_debug;
     uint8_t data[RT_PROFILER_RING_CAPACITY][RT_PROFILER_ENTRY_SIZE];
 };
 
 // 64 + 4096*64 = 262208 bytes total
 static_assert(sizeof(RtProfilerRingBuffer) == 64 + RT_PROFILER_RING_CAPACITY * RT_PROFILER_ENTRY_SIZE);
+static_assert(offsetof(RtProfilerRingBuffer, data) == 64);
+
+// NCRISC L1 debug stores (cq_realtime_profiler_push.cpp). Off by default; define RT_PROFILER_NCRISC_DEBUG
+// in that file (before including this header) to compile in heartbeat stores.
+#ifdef RT_PROFILER_NCRISC_DEBUG
+#define RT_PROF_NCRISC_DBG_SET(rb, field, value) ((rb)->ncrisc_debug.field = (value))
+#define RT_PROF_NCRISC_DBG_INC(rb, field) ((rb)->ncrisc_debug.field++)
+#else
+#define RT_PROF_NCRISC_DBG_SET(rb, field, value) ((void)0)
+#define RT_PROF_NCRISC_DBG_INC(rb, field) ((void)0)
+#endif
 
 // Bytes reserved for the D2H sender socket config (sender_socket_md + bytes_acked +
 // d2h_sender_socket_md, each rounded up to L1_ALIGNMENT). The actual on-wire size
