@@ -20,10 +20,15 @@ Notes:
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional
 
 import torch
 import torch.nn.functional as F
+
+# Default weight directory can be overridden with TT_GAZE_LLE_WEIGHTS. Defaults
+# to ./weights/ (what scripts/download_data.sh populates).
+_DEFAULT_WEIGHTS_DIR = os.environ.get("TT_GAZE_LLE_WEIGHTS", "./weights")
 
 
 def _interpolate_pos_embed_2d(
@@ -132,11 +137,19 @@ def load_gaze_lle_into_reference(
 
 def load_pretrained(
     ref_model,
-    dinov2_path: str = "/home/ttuser/experiments/gaze-lle/weights/dinov2_vitb14_pretrain.pth",
-    gaze_path: Optional[str] = "/home/ttuser/experiments/gaze-lle/weights/gazelle_dinov2_vitb14_inout.pt",
+    dinov2_path: Optional[str] = None,
+    gaze_path: Optional[str] = None,
     verbose: bool = True,
 ):
-    """Convenience wrapper: loads both checkpoints into ``ref_model`` in place."""
+    """Convenience wrapper: loads both checkpoints into ``ref_model`` in place.
+
+    ``dinov2_path`` / ``gaze_path`` default to files inside
+    ``$TT_GAZE_LLE_WEIGHTS`` (or ``./weights/`` if the env var is unset).
+    """
+    if dinov2_path is None:
+        dinov2_path = os.path.join(_DEFAULT_WEIGHTS_DIR, "dinov2_vitb14_pretrain.pth")
+    if gaze_path is None:
+        gaze_path = os.path.join(_DEFAULT_WEIGHTS_DIR, "gazelle_dinov2_vitb14_inout.pt")
     dinov2_sd = torch.load(dinov2_path, map_location="cpu", weights_only=False)
     gaze_sd = torch.load(gaze_path, map_location="cpu", weights_only=False) if gaze_path else {}
     return load_gaze_lle_into_reference(ref_model, dinov2_sd, gaze_sd, verbose=verbose)

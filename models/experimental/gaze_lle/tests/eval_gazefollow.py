@@ -35,8 +35,10 @@ from PIL import Image
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 
-WEIGHTS_DIR = Path("/home/ttuser/experiments/gaze-lle/weights")
-DATASET_PATH = Path("/home/ttuser/experiments/gaze-lle/data/gazefollow/test.parquet")
+WEIGHTS_DIR = Path(os.environ.get("TT_GAZE_LLE_WEIGHTS", "./weights"))
+DATASET_PATH = Path(
+    os.environ.get("TT_GAZE_LLE_DATA", "./data")
+) / "gazefollow" / "test.parquet"
 
 
 def load_models(device=None):

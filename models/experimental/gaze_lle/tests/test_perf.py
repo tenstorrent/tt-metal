@@ -18,8 +18,8 @@ def test_gaze_lle_forward_perf(device, variant):
     Run with::
 
         python3 -m tracy --no-runtime-analysis --collect-noc-traces \
-            --profiler-capture-perf-counters=all support-count=10000 -v -r -o \
-            -m pytest models/experimental/gaze_lle/tests/test_perf.py
+            --profiler-capture-perf-counters=all --op-support-count=10000 \ \
+            -v -r -o ./tracy_out -m pytest models/experimental/gaze_lle/tests/test_perf.py
 
     After one dispatch for program caching we do a steady-state captured pass.
     """

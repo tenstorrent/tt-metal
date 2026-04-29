@@ -12,11 +12,11 @@ within bf16/bfp8/LoFi numerics on real data, not just random weights).
 Heatmap and peak-gaze predictions are also dumped to artifacts for visual
 inspection.
 
-Assumes these files exist (download scripts elsewhere):
-    /home/ttuser/experiments/gaze-lle/weights/dinov2_vitb14_pretrain.pth
-    /home/ttuser/experiments/gaze-lle/weights/gazelle_dinov2_vitb14_inout.pt
-    /home/ttuser/experiments/gaze-lle/data/the_office.png
-    /home/ttuser/experiments/gaze-lle/data/succession.png
+Assumes the following files exist (use ``scripts/download_data.sh`` to fetch):
+    $TT_GAZE_LLE_WEIGHTS/dinov2_vitb14_pretrain.pth      (default ./weights/)
+    $TT_GAZE_LLE_WEIGHTS/gazelle_dinov2_vitb14_inout.pt
+    $TT_GAZE_LLE_DATA/the_office.png                     (default ./data/)
+    $TT_GAZE_LLE_DATA/succession.png
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ from models.experimental.gaze_lle.reference.load_pretrained import load_pretrain
 from models.experimental.gaze_lle.reference.torch_gaze_lle import build_gaze_lle
 from models.experimental.gaze_lle.tt.tt_gaze_lle import TtGazeLLE
 
-WEIGHTS_DIR = Path("/home/ttuser/experiments/gaze-lle/weights")
-DATA_DIR = Path("/home/ttuser/experiments/gaze-lle/data")
-ARTIFACTS_DIR = Path("/home/ttuser/experiments/gaze-lle/eval_artifacts")
+WEIGHTS_DIR = Path(os.environ.get("TT_GAZE_LLE_WEIGHTS", "./weights"))
+DATA_DIR = Path(os.environ.get("TT_GAZE_LLE_DATA", "./data"))
+ARTIFACTS_DIR = Path(os.environ.get("TT_GAZE_LLE_ARTIFACTS", "./eval_artifacts"))
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
