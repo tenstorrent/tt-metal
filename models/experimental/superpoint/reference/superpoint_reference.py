@@ -10,9 +10,7 @@ from transformers import SuperPointForKeypointDetection, AutoImageProcessor
 
 
 MODEL_ID = "magic-leap-community/superpoint"
-DEFAULT_NATURAL_IMAGE = Path(
-    "/home/ttuser/experiments/superpoint/tt-metal/models/sample_data/house_in_field_1080p.jpg"
-)
+DEFAULT_NATURAL_IMAGE = Path(__file__).resolve().parents[3] / "sample_data" / "house_in_field_1080p.jpg"
 
 
 def load_reference_model():
