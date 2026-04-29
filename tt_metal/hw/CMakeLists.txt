@@ -316,6 +316,8 @@ set(GPP_FLAGS_common
     -Wno-error=unused-but-set-variable
     -Wno-unused-variable
     -Wno-unused-function
+    -Wno-volatile
+    -Wno-template-body
     -Os
     -fno-tree-loop-distribute-patterns
 )
