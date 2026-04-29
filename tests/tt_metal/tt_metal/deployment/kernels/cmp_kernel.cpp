@@ -50,9 +50,6 @@ void kernel_main() {
         noc_async_read_barrier();
 
         for (uint32_t i = 0; i < to_read / 4; i++) {
-            if (i < 4) {
-                // DPRINT << HEX() << "err " << buff0[i] << " " << buff1[i] << " " << errors << ENDL();
-            }
             if (buff0[i] != buff1[i]) {
                 if (!*errorcnt) {
                     *first_error_addr = i + curr_addr;

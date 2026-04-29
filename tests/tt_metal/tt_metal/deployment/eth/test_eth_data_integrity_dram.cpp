@@ -35,13 +35,14 @@ static void prepare_receiver_integrity_dram(
     uint32_t dram_start_addr,
     uint32_t dram_end_addr,
     uint32_t dram_bank_id,
+    uint32_t send_bank_id,
     tt_metal::Program* recv_program,
     bool init_recv_dram) {
     /* ============= */
     tensix_zero_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, dram_bank_id);
     if (init_recv_dram) {
         log_info(tt::LogTest, "      initing ram bank {}", dram_bank_id);
-        tensix_counter_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, dram_bank_id);
+        tensix_counter_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id);
     }
 
     auto recv_eth_config = tt_metal::EthernetConfig{
@@ -187,6 +188,7 @@ static bool run_test_integrity_dram(
         dram_start_addr,
         dram_end_addr,
         recv_bank_id,
+        send_bank_id,
         &recv_program,
         init_recv_dram);
 
