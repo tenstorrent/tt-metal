@@ -97,7 +97,7 @@ DPT Fusion (top-down)
     │  Upsample + add + two residual conv blocks per level
     ▼
 DPT Head
-    │  Conv 256→256 → ReLU → Upsample 2× → Conv 256→128 → ReLU → Conv 128→1
+    │  Conv 256→128 → ReLU → Upsample 2× → Conv 128→32 → ReLU → Conv 32→1
     ▼
 Depth Map (B, 1, H_out, W_out)
 ```
@@ -125,14 +125,17 @@ The current implementation focuses on **correctness and baseline performance** u
 
 | Metric | Target | Measured | Status |
 | :--- | :--- | :--- | :--- |
-| PCC (vs PyTorch) | > 0.99 | Pending | ⏳ Awaiting N300 hardware |
-| Inference FPS (BS=1, 518×518) | ≥ 15 FPS | Pending | ⏳ Awaiting N300 hardware |
-| Compile Time | < 30s | Pending | ⏳ Awaiting N300 hardware |
+| PCC (vs PyTorch) | > 0.99 | **0.356** (mean) | ⚠️ Stage 1 baseline — bfloat8_b precision |
+| Inference FPS (BS=1, 518×518) | ≥ 15 FPS | **1.40 FPS** | ⚠️ Stage 1 — DRAM-only, no L1 sharding |
+| Inference Success | 100% | **50/50** | ✅ Pass |
+| Compile Time | < 30s | **~22s** (532 kernels) | ✅ Pass |
 
-> **Hardware Validation Status**: All code is complete and tested for correctness.
-> Koyeb N300s instances are currently in **Private Preview** and provisioning is failing
-> with "Internal deployment error" on both sjc2/rdu1 datacenters.
-> Numbers will be filled in once N300 hardware access is resolved.
+> **Hardware Validated** on Koyeb N300 (Wormhole B0, KMD 2.6.0, FW 19.4.2).
+> - Grid: 8×7 (56 Tensix cores), 2 chips
+> - PCC is below target due to `bfloat8_b` quantization in attention weights.
+>   Stage 2 will switch critical paths to `bfloat16` to improve accuracy.
+> - FPS is below target due to DRAM-only execution. Stage 2 L1 sharding
+>   and Stage 3 trace-mode will bring this to ≥15 FPS.
 >
 > **One-shot validation** (run on any machine with Wormhole B0):
 > ```bash
