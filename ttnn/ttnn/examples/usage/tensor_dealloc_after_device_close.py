@@ -33,44 +33,44 @@ def _timeout_handler(signum, frame):
     )
 
 
-# Arm a watchdog so the test fails loudly instead of blocking the CI job for 40 min.
-# signal.SIGALRM / signal.alarm are POSIX-only (Linux, macOS, BSD). Windows Python lacks
-# both, and only the main thread on POSIX may install these handlers. This example is
-# primarily targeted at Linux CI; on other platforms we skip the watchdog and rely on
-# the outer CI job timeout to catch a hang.
-_watchdog_active = False
-if hasattr(signal, "SIGALRM") and hasattr(signal, "alarm"):
-    signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.alarm(_TIMEOUT_SECONDS)
-    _watchdog_active = True
-else:
+# Check whether SIGALRM is available (POSIX-only; Windows lacks it).
+_has_alarm = hasattr(signal, "SIGALRM") and hasattr(signal, "alarm")
+if not _has_alarm:
     print(
         f"[warn] tensor_dealloc_after_device_close: SIGALRM unavailable on {sys.platform}; "
         "running without watchdog (hang will rely on CI job timeout).",
         file=sys.stderr,
     )
 
+device = ttnn.open_device(device_id=0)
+
+t = torch.rand(32, 32, dtype=torch.float32)
+
+# Dispatching this op calls enqueue_record_event_to_host() and
+# track_completion_event_on_tensors(), which sets pending_event_ids_[0] = event_N
+# on both input_tensor and output_tensor's MeshBuffers.
+input_tensor = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+output_tensor = ttnn.exp(input_tensor)
+
+# Ensure the result is correct while the device is still alive.
+torch_output = ttnn.to_torch(output_tensor)
+
+# Close the device:
+#   1. ~FDMeshCommandQueue() flushes outstanding work and kills reader threads.
+#   2. Device::close() resets sysmem_manager_.
+#   3. is_initialized() → false.
+# The Python `device` variable still holds the shared_ptr<MeshDevice>.
+ttnn.close_device(device)
+
+# --- Arm the watchdog ONLY around the deallocation phase ---
+# The regression scenario is: del tensor after close_device() hangs forever in
+# wait_for_pending_events(). The compute phase above (exp, to_torch) can legitimately
+# take a long time on slow backends like TTsim, so we must NOT include it in the timer.
+if _has_alarm:
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(_TIMEOUT_SECONDS)
+
 try:
-    device = ttnn.open_device(device_id=0)
-
-    t = torch.rand(32, 32, dtype=torch.float32)
-
-    # Dispatching this op calls enqueue_record_event_to_host() and
-    # track_completion_event_on_tensors(), which sets pending_event_ids_[0] = event_N
-    # on both input_tensor and output_tensor's MeshBuffers.
-    input_tensor = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.exp(input_tensor)
-
-    # Ensure the result is correct while the device is still alive.
-    torch_output = ttnn.to_torch(output_tensor)
-
-    # Close the device:
-    #   1. ~FDMeshCommandQueue() flushes outstanding work and kills reader threads.
-    #   2. Device::close() resets sysmem_manager_.
-    #   3. is_initialized() → false.
-    # The Python `device` variable still holds the shared_ptr<MeshDevice>.
-    ttnn.close_device(device)
-
     # Explicitly deallocate tensors while `device` is still in scope.
     # Before the fix this triggered EventSynchronize() on a closed device → infinite spin.
     del output_tensor
@@ -80,7 +80,7 @@ try:
     # `device` goes out of scope here — fine, device is already closed.
 
 finally:
-    if _watchdog_active:
+    if _has_alarm:
         signal.alarm(0)  # Disarm watchdog.
 
 print("[pass] tensor_dealloc_after_device_close: no hang after ttnn.close_device()")
