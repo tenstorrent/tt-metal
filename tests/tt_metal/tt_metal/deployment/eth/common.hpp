@@ -217,7 +217,7 @@ static bool data_check(
     tt::tt_metal::IDevice* const recv_device,
     const CoreCoord& recv_core,
     uint32_t recv_l1_address,
-    std::vector<uint32_t>& inputs) {
+    std::span<uint32_t> inputs) {
     /* ==================== */
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         recv_device->id(),
@@ -225,17 +225,18 @@ static bool data_check(
         recv_l1_address,
         inputs.size() * sizeof(uint32_t));
 
-    bool pass = readback_vec == inputs;
-    if (!pass) {
-        for (int i = 0; i < inputs.size(); i++) {
-            if (inputs[i] != readback_vec[i]) {
-                log_critical(tt::LogTest, "      Mismatch at index: {}", i);
+    uint64_t total_errors = 0;
+    for (int i = 0; i < inputs.size(); i++) {
+        if (inputs[i] != readback_vec[i]) {
+            if (!total_errors) {
+                log_critical(tt::LogTest, "      Mismatch at Core: {}", recv_core);
             }
+            log_critical(tt::LogTest, "      Mismatch at index: {}", i);
+            total_errors++;
         }
-        log_critical(tt::LogTest, "      Mismatch at Core: {}", recv_core);
     }
 
-    return pass;
+    return !total_errors;
 }
 
 [[maybe_unused]]

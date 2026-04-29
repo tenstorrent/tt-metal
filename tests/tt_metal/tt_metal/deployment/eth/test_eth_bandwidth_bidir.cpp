@@ -28,7 +28,7 @@ static void prepare_bidir(
     uint32_t transfer_size,
     uint32_t transfer_count,
     uint32_t send_delta_addr,
-    std::vector<uint32_t>& inputs,
+    span<uint32_t> inputs,
     DataMovementProcessor processor,
     uint32_t num_bytes_per_send,
     uint32_t iter_l1_address,
@@ -72,7 +72,8 @@ static bool run_test_bandwidth_bidir(
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
     const CoreCoord& recv_core,
-    DataMovementProcessor processor0) {
+    DataMovementProcessor processor0,
+    span<uint32_t> inputs) {
     /* =================== */
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
@@ -84,8 +85,7 @@ static bool run_test_bandwidth_bidir(
     uint32_t num_bytes_per_send = transfer_size / 2;
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
 
-    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
-    std::vector<uint32_t> all_zeros(inputs.size(), 0);
+    span<uint32_t> inp = inputs.subspan(0, transfer_size / sizeof inp[0]);
 
     struct l1_allocator alloc = new_erisc_allocator();
 
@@ -103,7 +103,7 @@ static bool run_test_bandwidth_bidir(
         transfer_size,
         transfer_count,
         send_delta_addr,
-        inputs,
+        inp,
         processor0,
         num_bytes_per_send,
         iter_l1_address,
@@ -119,7 +119,7 @@ static bool run_test_bandwidth_bidir(
         transfer_size,
         transfer_count,
         send_delta_addr,
-        inputs,
+        inp,
         processor0,
         num_bytes_per_send,
         iter_l1_address,
@@ -147,8 +147,8 @@ static bool run_test_bandwidth_bidir(
     pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
     pass &= bandwidth_check(recv_device, recv_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
 
-    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
-    pass &= data_check(send_device, send_core, recv_l1_address, inputs);
+    pass &= data_check(recv_device, recv_core, recv_l1_address, inp);
+    pass &= data_check(send_device, send_core, recv_l1_address, inp);
 
     return pass;
 }
@@ -158,6 +158,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidthBidir) {
 
     bool pass = true;
     int n = 0;
+    vector<uint32_t> inputs = generate_uniform_random_vector<uint32_t>(0, 100, 1 << 20);
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -182,7 +183,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetBandwidthBidir) {
 
                     log_info(tt::LogTest, "    running on {}", processor);
                     pass &= run_test_bandwidth_bidir(
-                        this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
+                        this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor, inputs);
                     n++;
                 }
             }
