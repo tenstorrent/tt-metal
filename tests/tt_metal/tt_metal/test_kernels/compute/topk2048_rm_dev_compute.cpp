@@ -30,6 +30,8 @@ void kernel_main() {
     topk_xl_init();
     const bool ascending = false;
 
+    uint64_t topk_local_sort_wall_clock_cycles_total = 0;
+
     // one input takes 2 tiles
     for (uint32_t t = 0; t < num_in_tiles; t += 2) {
         cb0.wait_front(2);
@@ -37,37 +39,45 @@ void kernel_main() {
         copy_tile(tt::CBIndex::c_0, 0, 0);
         copy_tile(tt::CBIndex::c_0, 1, 1);
 
+        const uint64_t wall_t0 = ckernel::read_wall_clock();
         topk_xl_local_sort(0, ascending);
+        const uint64_t wall_t1 = ckernel::read_wall_clock();
+        topk_local_sort_wall_clock_cycles_total += (wall_t1 - wall_t0);
         // topk_xl_merge(0);
         // topk_xl_rebuild(0, ascending);
 
         cb0.pop_front(2);
     }
 
-#ifdef TRISC_MATH
-    // use risc to read DEST directly
-    cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_fmt_RMW, 0b000 /* RISC_DEST_FMT_FP32 */);
-    cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 0);
-    cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 0);
-    tensix_sync();
+    // #ifdef TRISC_MATH
+    //     // use risc to read DEST directly
+    //     cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_fmt_RMW, 0b000 /* RISC_DEST_FMT_FP32 */);
+    //     cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 0);
+    //     cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 0);
+    //     tensix_sync();
 
-    volatile float* dst32 = reinterpret_cast<volatile float*>(0xFFBD8000U);
-    DEVICE_PRINT("DEST[row][col] FP32:\n");
-    for (int row = 0; row < 128; row++) {
-        DEVICE_PRINT("row {:03d}: ", row);
-        for (int col = 0; col < 16; col++) {
-            float val = dst32[row * 16 + col];
-            DEVICE_PRINT("{:11.6f} ", val);
-        }
-        DEVICE_PRINT("\n");
-    }
-#endif
+    //     volatile float* dst32 = reinterpret_cast<volatile float*>(0xFFBD8000U);
+    //     DEVICE_PRINT("DEST[row][col] FP32:\n");
+    //     for (int row = 0; row < 128; row++) {
+    //         DEVICE_PRINT("row {:03d}: ", row);
+    //         for (int col = 0; col < 16; col++) {
+    //             float val = dst32[row * 16 + col];
+    //             DEVICE_PRINT("{:11.6f} ", val);
+    //         }
+    //         DEVICE_PRINT("\n");
+    //     }
+    // #endif
 
     cb16.reserve_back(k_output_tiles);
     for (uint32_t t = 0; t < k_output_tiles; t++) {
         pack_tile(t, tt::CBIndex::c_16);
     }
     cb16.push_back(k_output_tiles);
+
+    DEVICE_PRINT(
+        "topk_xl_local_sort wall_clock cycles (total over {} input-tile pairs): {}\n",
+        num_in_tiles / 2,
+        topk_local_sort_wall_clock_cycles_total);
 
     release_dst();
 }

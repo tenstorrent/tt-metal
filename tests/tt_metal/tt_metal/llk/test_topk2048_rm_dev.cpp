@@ -146,7 +146,9 @@ bool verify_topk_outputs(const std::vector<uint32_t>& out_u32, const std::vector
     }
     table += fmt::format("{:-^100}\n", "");
     table += fmt::format("overall: {}\n", all_ok ? "PASS" : "FAIL");
-    log_info(LogTest, "{}", table);
+    if (!all_ok) {
+        log_info(LogTest, "{}", table);
+    }
     return all_ok;
 }
 
