@@ -26,7 +26,7 @@
 The Models team is focused on developing the following models, optimizing them for performance, accuracy, and compatibility. Follow each model link for more details.
 
 >[!IMPORTANT]
-> For a **full model list** see the **[Models by Hardware](https://github.com/tenstorrent/tt-inference-server/blob/main/docs/model_support/models_by_hardware.md)**.
+> For a **full model list** see the **[Model Compatibility Matrix](https://tenstorrent.com/developers)**.
 
 >[!NOTE]
 > Performance Metrics:
