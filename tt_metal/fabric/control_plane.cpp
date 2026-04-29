@@ -116,6 +116,40 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     return fixed_asic_position_pinnings;
 }
 
+// Blitz decode pipeline: octet mesh (4x2 device topology, 8 chips) ASIC-position pinnings for chips 0, 3, and 7 on
+// Blackhole Galaxy (QSFP / tray layout vs logical mesh). Only used when cluster is Blackhole Galaxy and the mesh
+// shape matches decode MGDs (dims [4,2]).
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>
+get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(MeshId mesh_id, const MeshShape& mesh_shape) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+    if (mesh_shape.mesh_size() != 8 || mesh_shape[0] != 4 || mesh_shape[1] != 2) {
+        return fixed_asic_position_pinnings;
+    }
+
+    std::vector<AsicPosition> node0_positions;
+    node0_positions.emplace_back(AsicPosition{1, 1});
+    node0_positions.emplace_back(AsicPosition{1, 3});
+    node0_positions.emplace_back(AsicPosition{2, 4});
+    node0_positions.emplace_back(AsicPosition{2, 2});
+
+    std::vector<AsicPosition> node3_positions;
+    node3_positions.emplace_back(AsicPosition{3, 1});
+    node3_positions.emplace_back(AsicPosition{3, 3});
+    node3_positions.emplace_back(AsicPosition{4, 4});
+    node3_positions.emplace_back(AsicPosition{4, 2});
+
+    std::vector<AsicPosition> node7_positions;
+    node7_positions.emplace_back(AsicPosition{3, 2});
+    node7_positions.emplace_back(AsicPosition{3, 4});
+    node7_positions.emplace_back(AsicPosition{4, 3});
+    node7_positions.emplace_back(AsicPosition{4, 1});
+
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 0}, std::move(node0_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 6}, std::move(node3_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 7}, std::move(node7_positions));
+    return fixed_asic_position_pinnings;
+}
+
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -498,8 +532,12 @@ void ControlPlane::init_control_plane(
                 const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
                 const size_t mesh_chip_count = mesh_shape.mesh_size();
 
-                // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
-                if (!is_1d && mesh_chip_count % 32 == 0) {
+                if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !is_1d &&
+                    mesh_chip_count == 8 && mesh_shape[0] == 4 && mesh_shape[1] == 2) {
+                    auto mesh_pinnings = get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(mesh_id, mesh_shape);
+                    fixed_asic_position_pinnings.insert(
+                        fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                } else if (!is_1d && mesh_chip_count % 32 == 0) {
                     auto mesh_pinnings =
                         get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
                     fixed_asic_position_pinnings.insert(
@@ -608,8 +646,12 @@ void ControlPlane::init_control_plane_auto_discovery() {
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
             const size_t mesh_chip_count = mesh_shape.mesh_size();
 
-            // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
-            if (!is_1d && mesh_chip_count % 32 == 0) {
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !is_1d &&
+                mesh_chip_count == 8 && mesh_shape[0] == 4 && mesh_shape[1] == 2) {
+                auto mesh_pinnings = get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(mesh_id, mesh_shape);
+                fixed_asic_position_pinnings.insert(
+                    fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+            } else if (!is_1d && mesh_chip_count % 32 == 0) {
                 auto mesh_pinnings =
                     get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
                 fixed_asic_position_pinnings.insert(
