@@ -25,16 +25,6 @@
 
 namespace ckernel {
 
-#if defined(ARCH_QUASAR) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
-// Shared by unpack and math TRISCs: 32b dest uses unpack-to-dest. Only declared on UNPACK/MATH
-// because get_operand_id / get_operand_dst_format come from llk_operands.h which is unpack/math-only.
-ALWI bool quasar_unary_bcast_unpack_to_dest_enabled(const uint32_t icb) {
-    const std::uint32_t dst_format = get_operand_dst_format(get_operand_id(icb));
-    return (dst_format == static_cast<std::uint32_t>(DataFormat::Float32)) ||
-           (dst_format == static_cast<std::uint32_t>(DataFormat::Int32));
-}
-#endif
-
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -68,15 +58,21 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
-    UNPACK(
-        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
-             ? llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(false, icb)
-             : llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(false, icb)));
-
-    MATH(
-        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
-             ? llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type>(icb)
-             : llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+    if (enable_unpack_to_dest) {
+        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
+            false, false /*transpose within 16x16 face*/, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type>(icb)));
+    } else {
+        UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
+            false, false /*transpose within 16x16 face*/, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
+    }
+#endif
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 
@@ -104,16 +100,21 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
     }
 #endif
 #else
-    UNPACK(
-        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
-             ? llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)
-             : llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-
-    MATH(
-        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
-             ? llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)
-             : llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(
-                   dst_tile_index, icb)));
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+    if (enable_unpack_to_dest) {
+        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
+        MATH((
+            llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
+    } else {
+        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(
+            dst_tile_index, icb)));
+    }
+#endif
 #endif
 }
 
@@ -193,7 +194,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 
     if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
         UNPACK((llk_unpack_A_init<new_bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
-            false, new_icb)));
+            false, false /*transpose within 16x16 face*/, new_icb)));
     }
 
     if (unpacker_dst_format_change) {

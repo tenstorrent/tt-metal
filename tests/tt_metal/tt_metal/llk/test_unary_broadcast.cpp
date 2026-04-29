@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <algorithm>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -10,6 +11,7 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <cmath>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -163,37 +165,28 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
 
 namespace {
 
-// On mismatch, dump full unpacked vectors (32 floats per row). Cost is O(n) vs compare; negligible vs device run.
 void log_unpacked_vectors_for_mismatch(
-    std::string_view result_label, const std::vector<bfloat16>& gold_bf16, const std::vector<bfloat16>& res_bf16) {
-    std::vector<float> gold_f(gold_bf16.size());
-    std::vector<float> res_f(res_bf16.size());
-    for (size_t k = 0; k < gold_bf16.size(); ++k) {
-        gold_f[k] = static_cast<float>(gold_bf16[k]);
-        res_f[k] = static_cast<float>(res_bf16[k]);
-    }
-    log_info(
-        tt::LogTest,
-        "{} — full unpacked golden vs device ({} elements; 32 values per row)",
-        result_label,
-        gold_f.size());
-    std::cout << "golden:\n";
+    std::string_view result_label, const std::vector<float>& gold_f, const std::vector<float>& res_f) {
+    log_info(tt::LogTest, "{} — golden ({} elements; 32 per row):", result_label, gold_f.size());
     print_vector_fixed_numel_per_row(gold_f, 32);
-    std::cout << "device:\n";
+    log_info(tt::LogTest, "device:");
     print_vector_fixed_numel_per_row(res_f, 32);
 }
 
 void log_unpacked_vectors_for_mismatch(
-    std::string_view result_label, const std::vector<float>& gold_f, const std::vector<float>& res_f) {
-    log_info(
-        tt::LogTest,
-        "{} — full unpacked golden vs device ({} elements; 32 values per row)",
-        result_label,
-        gold_f.size());
-    std::cout << "golden:\n";
-    print_vector_fixed_numel_per_row(gold_f, 32);
-    std::cout << "device:\n";
-    print_vector_fixed_numel_per_row(res_f, 32);
+    std::string_view result_label, const std::vector<bfloat16>& gold_bf16, const std::vector<bfloat16>& res_bf16) {
+    TT_ASSERT(gold_bf16.size() == res_bf16.size());
+    std::vector<float> gold_f;
+    std::vector<float> res_f;
+    gold_f.reserve(gold_bf16.size());
+    res_f.reserve(res_bf16.size());
+    std::transform(gold_bf16.begin(), gold_bf16.end(), std::back_inserter(gold_f), [](bfloat16 bf) {
+        return static_cast<float>(bf);
+    });
+    std::transform(res_bf16.begin(), res_bf16.end(), std::back_inserter(res_f), [](bfloat16 bf) {
+        return static_cast<float>(bf);
+    });
+    log_unpacked_vectors_for_mismatch(result_label, gold_f, res_f);
 }
 
 }  // namespace
@@ -223,6 +216,8 @@ bool check_is_close(
         return true;
     }
     if (T_out == tt::DataFormat::Bfp8_b) {
+        // Host side may do nearest to even but device side may do nearest rounding, with rounding up
+        // in case of tie. Also need to note packer source format, which may lead to additional rounding.
         constexpr float atol = 0.03125f;
         auto gold_refloat = unpack_bfp8_tiles_into_float_vec(packed_golden, true, false);
         auto res_refloat = unpack_bfp8_tiles_into_float_vec(device_res, true, false);
@@ -468,12 +463,29 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-// 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR only (not NONE).
-// Quasar loop currently exercises SCALAR + Float16_b only (see TODO #38092).
-TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
-    if (this->arch_ != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Unary broadcast DFB test requires Quasar";
+// FIXME: https://github.com/tenstorrent/tt-metal/issues/36142
+TEST_F(MeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar uses TensixComputeUnaryBroadcastQuasarDfb";
     }
+    for (BroadcastDim bcast_dim : {BroadcastDim::NONE, BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
+        for (tt::DataFormat in_t : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
+            for (tt::DataFormat out_t : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
+                UnaryBroadcastConfig test_config = {.broadcast_dim = bcast_dim, .in_t = in_t, .out_t = out_t};
+                log_info(
+                    tt::LogTest,
+                    "Testing UNARY BROADCAST bcast={} in_t={} out_t={}",
+                    broadcast_dim_to_type.at(test_config.broadcast_dim),
+                    test_config.in_t,
+                    test_config.out_t);
+                run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+// 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR only (not NONE).
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     constexpr BroadcastDim k_quasar_dims[] = {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
     constexpr struct {
         tt::DataFormat in_t;
