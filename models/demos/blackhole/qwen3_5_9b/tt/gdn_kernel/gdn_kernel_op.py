@@ -232,8 +232,8 @@ def _build_prefill_device_program(
         compile_time_args=compute_ct,
         runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
         ),
