@@ -303,17 +303,27 @@ def run_moe_perf_with_approximation(
     SP ops (Dispatch, Combine, expert FFN Matmul, ...) come from 8x1.
     TP ops (AllGather, ReduceScatter, AllBroadcast, gate, ...) come from 2x4.
     """
+    # Collect proxy failures (perf-out-of-range or anything else) so 8x1 → 2x4 →
+    # approximation all run end-to-end regardless of which one fails. Re-raised
+    # at the end as a single AssertionError so pytest still reports FAIL with
+    # all offending proxies named.
+    proxy_failures: list[tuple[str, str]] = []
+
     logger.info("=== 8x1 proxy: dispatch + combine + expert FFN ===")
-    run_model_device_perf_test_with_merge(
-        command=command_8x1,
-        expected_device_perf_ns_per_iteration=expected_ns_8x1,
-        subdir=subdir,
-        model_name=model_name_8x1,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        margin=margin,
-        comments=comments_8x1,
-    )
+    try:
+        run_model_device_perf_test_with_merge(
+            command=command_8x1,
+            expected_device_perf_ns_per_iteration=expected_ns_8x1,
+            subdir=subdir,
+            model_name=model_name_8x1,
+            num_iterations=num_iterations,
+            batch_size=batch_size,
+            margin=margin,
+            comments=comments_8x1,
+        )
+    except (AssertionError, Exception) as e:
+        logger.warning(f"8x1 proxy FAILED but continuing to 2x4: {type(e).__name__}: {e}")
+        proxy_failures.append(("8x1", f"{type(e).__name__}: {e}"))
     csv_8x1 = get_latest_ops_log_filename(subdir)
     logger.info(f"8x1 CSV: {csv_8x1}")
 
@@ -326,25 +336,37 @@ def run_moe_perf_with_approximation(
         shutil.copy(csv_8x1, tmp_csv_8x1)
 
         logger.info("=== 2x4 proxy: gate + TP collectives ===")
-        run_model_device_perf_test_with_merge(
-            command=command_2x4,
-            expected_device_perf_ns_per_iteration=expected_ns_2x4,
-            subdir=subdir,
-            model_name=model_name_2x4,
-            num_iterations=num_iterations,
-            batch_size=batch_size,
-            margin=margin,
-            comments=comments_2x4,
-        )
+        try:
+            run_model_device_perf_test_with_merge(
+                command=command_2x4,
+                expected_device_perf_ns_per_iteration=expected_ns_2x4,
+                subdir=subdir,
+                model_name=model_name_2x4,
+                num_iterations=num_iterations,
+                batch_size=batch_size,
+                margin=margin,
+                comments=comments_2x4,
+            )
+        except (AssertionError, Exception) as e:
+            logger.warning(f"2x4 proxy FAILED: {type(e).__name__}: {e}")
+            proxy_failures.append(("2x4", f"{type(e).__name__}: {e}"))
         csv_2x4 = get_latest_ops_log_filename(subdir)
         logger.info(f"2x4 CSV: {csv_2x4}")
 
         logger.info("=== Approximating 8x4 galaxy total from 8x1 + 2x4 ===")
-        df_approx = approximate_8x4_perf(csv_8x1=tmp_csv_8x1, csv_2x4=csv_2x4)
-        logger.info(f"\n{df_approx.to_string(index=False)}")
+        try:
+            df_approx = approximate_8x4_perf(csv_8x1=tmp_csv_8x1, csv_2x4=csv_2x4)
+            logger.info(f"\n{df_approx.to_string(index=False)}")
+        except Exception as e:
+            logger.warning(f"8x4 approximation FAILED: {type(e).__name__}: {e}")
+            proxy_failures.append(("8x4-approx", f"{type(e).__name__}: {e}"))
     finally:
         if tmp_csv_8x1:
             os.unlink(tmp_csv_8x1)
+
+    if proxy_failures:
+        summary = "; ".join(f"{which}: {msg}" for which, msg in proxy_failures)
+        raise AssertionError(f"MoE perf proxy/approximation failure(s): {summary}")
 
 
 def run_mla_perf_with_approximation(
