@@ -11,6 +11,7 @@ This module handles the necessary dimension rearrangement.
 Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
 
+import os
 from typing import Optional, Tuple
 
 import torch
@@ -18,6 +19,8 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
+
+_SDPA_DECODE_EXPERIMENT_LOGGED = [False]
 
 
 class Attention(LightweightModule):
@@ -383,6 +386,15 @@ class Attention(LightweightModule):
         Returns:
             (output [batch, 1, seq_len, hidden_size], updated_kv_cache)
         """
+        if os.environ.get("QWEN3_TTS_SDPA_DECODE_EXPERIMENT", "0") == "1" and not _SDPA_DECODE_EXPERIMENT_LOGGED[0]:
+            # Hook for future Gemma4/qwen3_vl-style decode SDPA — blocked today by QK-norm + DRAM layout vs
+            # nlp_create_qkv_heads_decode / scaled_dot_product_attention_decode tensor contracts.
+            print(
+                "QWEN3_TTS_SDPA_DECODE_EXPERIMENT=1 (attention forward): decode SDPA path not integrated; "
+                "still using fp32 matmul SDPA. See models/demos/gemma4/tt/attention/decode.py for reference."
+            )
+            _SDPA_DECODE_EXPERIMENT_LOGGED[0] = True
+
         batch_size = x.shape[0]
         is_decode = mode == "decode"
         seq_len = x.shape[2]
