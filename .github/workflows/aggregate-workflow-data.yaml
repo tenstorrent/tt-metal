@@ -328,9 +328,19 @@ jobs:
         id: set-outputs
         if: always()
         shell: bash
+        env:
+          FAKE_HAS_FAILED: ${{ steps.inject-fake.outputs.has_failed_workflows }}
+          FAKE_HAS_REGRESSIONS: ${{ steps.inject-fake.outputs.has_regressions }}
+          ANALYZE_HAS_FAILED: ${{ steps.analyze.outputs.has_failed_workflows }}
+          ANALYZE_HAS_REGRESSIONS: ${{ steps.analyze.outputs.has_regressions }}
         run: |
-          echo "has_failed_workflows=${{ steps.inject-fake.outputs.has_failed_workflows || steps.analyze.outputs.has_failed_workflows }}" >> "$GITHUB_OUTPUT"
-          echo "has_regressions=${{ steps.inject-fake.outputs.has_regressions || steps.analyze.outputs.has_regressions }}" >> "$GITHUB_OUTPUT"
+          # Use env vars instead of GHA || expressions to avoid null/empty coalescing bugs
+          HAS_FAILED="${FAKE_HAS_FAILED:-$ANALYZE_HAS_FAILED}"
+          HAS_REGRESSIONS="${FAKE_HAS_REGRESSIONS:-$ANALYZE_HAS_REGRESSIONS}"
+          echo "has_failed_workflows=${HAS_FAILED}" >> "$GITHUB_OUTPUT"
+          echo "has_regressions=${HAS_REGRESSIONS}" >> "$GITHUB_OUTPUT"
+          echo "DEBUG: FAKE_HAS_FAILED='${FAKE_HAS_FAILED}' ANALYZE_HAS_FAILED='${ANALYZE_HAS_FAILED}' => HAS_FAILED='${HAS_FAILED}'"
+          echo "DEBUG: FAKE_HAS_REGRESSIONS='${FAKE_HAS_REGRESSIONS}' ANALYZE_HAS_REGRESSIONS='${ANALYZE_HAS_REGRESSIONS}' => HAS_REGRESSIONS='${HAS_REGRESSIONS}'"
 
   handle-failures:
     needs: analyze-data
