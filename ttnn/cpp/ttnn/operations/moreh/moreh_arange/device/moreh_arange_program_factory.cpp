@@ -85,15 +85,14 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output.buffer()->address(),
-                tile_offset,
-                num_tiles_per_core,
-                std::bit_cast<uint32_t>(start),
-                std::bit_cast<uint32_t>(step),
-                output.element_size()});
+            {output.buffer(),
+             tile_offset,
+             num_tiles_per_core,
+             std::bit_cast<uint32_t>(start),
+             std::bit_cast<uint32_t>(step),
+             output.element_size()});
 
         tile_offset += num_tiles_per_core;
     }
