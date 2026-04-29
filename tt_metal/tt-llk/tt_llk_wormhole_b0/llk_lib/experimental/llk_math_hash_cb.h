@@ -26,7 +26,7 @@
 //   SFPSHFT2(0,H,TMP,4)      : SHFLSHR1 within each 8-lane group; VD<8 required.
 //     Scheduling hazard: SFPNOP required before reading VD on the next cycle.
 //     Hardware bug: lane 0 of each group reads a stale vc0 instead of 0.
-//     Workaround: SHFLROR1(LREG9, LREG9) before the loop zeroes vc0 (VD=9<12
+//     Workaround: SHFLROR1(LCONST_0, LCONST_0) before the loop zeroes vc0 (VD=9<12
 //     satisfies the vc0-update condition; write is suppressed since VD=9>=8).
 //   SFPSHFT2(0,0,0,1)         : CHAINED_COPY4 — LReg[3][i] = LReg[0][i+8] (i<24).
 //     No scheduling constraint for mode 1.
@@ -131,8 +131,8 @@ inline void _llk_math_hash_cb_tile_(std::uint32_t dst_tile_idx)
 inline void _llk_math_hash_cb_reduce_and_store_(std::uint32_t dst_tile_idx)
 {
     // Phase 1: zero vc0 (WH SHFLSHR1 hardware bug workaround).
-    // SHFLROR1 with VD=LREG9: VD=9<12 updates vc0=LReg[9]=0; write suppressed (9>=8).
-    TTI_SFPSHFT2(0, p_sfpu::LREG9, p_sfpu::LREG9, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    // SHFLROR1 with VD=LCONST_0 (index 9): VD=9<12 updates vc0=LReg[9]=0; write suppressed (9>=8).
+    TTI_SFPSHFT2(0, p_sfpu::LCONST_0, p_sfpu::LCONST_0, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
 
     for (int r = 0; r < 4; ++r)
     {
@@ -148,26 +148,26 @@ inline void _llk_math_hash_cb_reduce_and_store_(std::uint32_t dst_tile_idx)
 
     // Round 1 (+8): LReg[3] = H[lane+8]  → lane 0 of LReg[3] = G1.
     TTI_SFPMOV(0, 6, 0, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG9, 1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG9, 2, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG9, 3, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 1, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 2, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 3, 0);
     TTI_SFPSHFT2(0, 0, 0, sfpi::SFPSHFT2_MOD1_SUBVEC_CHAINED_COPY4);
     TTI_SFPXOR(0, 3, 5, 0); // LReg[5][0] = G0^G1
 
     // Round 2 (+16): chain from LReg[3] (= H[lane+8]) to get H[lane+16].
     // LReg[3] still holds H[lane+8] from round 1.
     TTI_SFPMOV(0, 3, 0, 0); // LReg[0] = H[lane+8]
-    TTI_SFPMOV(0, p_sfpu::LREG9, 1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG9, 2, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG9, 3, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 1, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 2, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 3, 0);
     TTI_SFPSHFT2(0, 0, 0, sfpi::SFPSHFT2_MOD1_SUBVEC_CHAINED_COPY4); // LReg[3] = H[lane+16]
     TTI_SFPXOR(0, 3, 5, 0);                                          // LReg[5][0] = G0^G1^G2
 
     // Round 3 (+24): chain from LReg[3] (= H[lane+16]) to get H[lane+24].
     TTI_SFPMOV(0, 3, 0, 0); // LReg[0] = H[lane+16]
-    TTI_SFPMOV(0, p_sfpu::LREG9, 1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG9, 2, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG9, 3, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 1, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 2, 0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 3, 0);
     TTI_SFPSHFT2(0, 0, 0, sfpi::SFPSHFT2_MOD1_SUBVEC_CHAINED_COPY4); // LReg[3] = H[lane+24]
     TTI_SFPXOR(0, 3, 5, 0);                                          // LReg[5][0] = G0^G1^G2^G3
 
