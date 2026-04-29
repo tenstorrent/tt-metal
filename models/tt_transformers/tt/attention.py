@@ -567,13 +567,25 @@ class Attention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
 
         # Q, K Rotary Embeddings
-        if self.args.use_qk_fused:
+        if callable(getattr(self, "custom_rope_fn", None)):
+            q_heads_1BQD, k_heads_1BKD = self.custom_rope_fn(
+                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, current_pos
+            )
+            ttnn.deallocate(q_heads_pre_rot_1BQD)
+            ttnn.deallocate(k_heads_pre_rot_1BKD)
+            # paged_fused_update_cache requires k_heads to be sharded;
+            # custom_rope_fn returns DRAM tensors, so re-shard to match v_heads.
+            kv_shard_cfg = self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher)
+            k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, kv_shard_cfg)
+        elif self.args.use_qk_fused:
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
             )
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )
+            ttnn.deallocate(q_heads_pre_rot_1BQD)
+            ttnn.deallocate(k_heads_pre_rot_1BKD)
         else:
             # Q Rotary Embeddings
             q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
@@ -584,8 +596,8 @@ class Attention(LightweightModule):
             k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
                 k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
             )
-        ttnn.deallocate(q_heads_pre_rot_1BQD)
-        ttnn.deallocate(k_heads_pre_rot_1BKD)
+            ttnn.deallocate(q_heads_pre_rot_1BQD)
+            ttnn.deallocate(k_heads_pre_rot_1BKD)
         ###
         # KV update
         ###
@@ -600,7 +612,10 @@ class Attention(LightweightModule):
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
 
-        if self.args.use_qk_fused:
+        # paged_fused_update_cache requires K and V on non-overlapping cores.
+        # With custom_rope_fn, K is re-sharded to the same core as V → use non-fused.
+        use_fused_kv = self.args.use_qk_fused and not callable(getattr(self, "custom_rope_fn", None))
+        if use_fused_kv:
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
             )
@@ -659,6 +674,9 @@ class Attention(LightweightModule):
         )
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
+
+        if callable(getattr(self, "pre_wo_hook", None)):
+            attn_output_cat = self.pre_wo_hook(attn_output_cat)
 
         if self.use_fused_all_gather_matmul or self.prefetcher is not None:
             attn_output_cat = ttnn.to_memory_config(

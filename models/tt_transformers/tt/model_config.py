@@ -475,6 +475,7 @@ class ModelArgs:
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+        "Qwen3.6-35B-A3B": "models/tt_transformers/model_params/Qwen3.6-35B-A3B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -649,7 +650,7 @@ class ModelArgs:
             self._use_fused_all_gather_matmul = (
                 self.num_devices == 8
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
+                and ((self.n_heads * self.head_dim) // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
                 and self.ccl_topology() == ttnn.Topology.Ring
             ) or self.prefetcher is not None
@@ -1088,6 +1089,8 @@ class ModelArgs:
         model_specific_ceil_warmup_lengths = {
             # Qwen3-32B hangs at 8192, so we cap at 4096
             "Qwen3-32B": 4096,
+            # Qwen3.6-35B-A3B: cap for DeltaNet prefill (sequential recurrence)
+            "Qwen3.6-35B-A3B": 2048,
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
@@ -1747,7 +1750,7 @@ class ModelArgs:
                         num_to_core_range_set(self.num_devices),
                         [
                             self.tile_padded_batch_rows,
-                            self.dim // self.num_devices,
+                            (self.n_heads * self.head_dim) // self.num_devices,
                         ],
                         ttnn.ShardOrientation.ROW_MAJOR,
                     ),
@@ -1781,7 +1784,7 @@ class ModelArgs:
                         num_to_core_range_set(self.num_devices),
                         [
                             self.tile_padded_batch_rows,
-                            self.dim // self.num_devices,
+                            (self.n_heads * self.head_dim) // self.num_devices,
                         ],
                         ttnn.ShardOrientation.ROW_MAJOR,
                     ),
@@ -1814,9 +1817,9 @@ class ModelArgs:
                     )
                     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                         compute_with_storage_grid_size=do_core_grid_size,
-                        in0_block_w=self.dim
+                        in0_block_w=(self.n_heads * self.head_dim)
                         // self.tile_size
-                        // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
+                        // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x K] x [K x dim/8] = [32 x dim/8]
                         out_subblock_h=1,
                         out_subblock_w=get_out_subblock_w(
                             do_per_core_N, out_subblock_h=1
@@ -2313,6 +2316,7 @@ class ModelArgs:
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3.6-35B": {"P150x8": 4},
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
@@ -2586,9 +2590,18 @@ class ModelArgs:
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
 
+        self.n_routed_experts = text_config.get("num_experts", 0)
+        self.moe_intermediate_size = text_config.get("moe_intermediate_size", 0)
+        self.shared_expert_intermediate_size = text_config.get("shared_expert_intermediate_size", 0)
+
         # Handle different MLP dimension specifications
         if "intermediate_size" in text_config:
             self.hidden_dim = text_config["intermediate_size"]
+            self.ffn_dim_multiplier = None
+            self.multiple_of = None
+        elif "moe_intermediate_size" in text_config:
+            # MoE-only models (no dense FFN): use expert intermediate size as hidden_dim
+            self.hidden_dim = text_config["moe_intermediate_size"]
             self.ffn_dim_multiplier = None
             self.multiple_of = None
 
@@ -2649,11 +2662,33 @@ class ModelArgs:
 
         self.layer_types = text_config.get("layer_types", None)
 
+        # Qwen3.5 / Qwen3.6 Gated DeltaNet (linear attention) params
+        self.linear_num_key_heads = text_config.get("linear_num_key_heads", None)
+        self.linear_num_value_heads = text_config.get("linear_num_value_heads", None)
+        self.linear_key_head_dim = text_config.get("linear_key_head_dim", None)
+        self.linear_value_head_dim = text_config.get("linear_value_head_dim", None)
+        self.linear_conv_kernel_dim = text_config.get("linear_conv_kernel_dim", None)
+        self.is_qwen35 = self.linear_num_key_heads is not None
+        if self.is_qwen35:
+            # vision_config exists in Qwen3.5/3.6 HF config but we only handle text
+            self.is_multimodal = False
+            # RMSNorm uses zero-centered weights: output * (1 + weight)
+            self.rms_norm_add_unit_offset = True
+            # Replicate KV heads to be divisible by num_devices (2 → 8 for bh_lb)
+            if self.num_devices > 1 and self.n_kv_heads < self.num_devices:
+                _kv_rep = self.num_devices // self.n_kv_heads  # e.g. 4 for n_kv=2, devices=8
+                self.n_kv_heads = self.n_kv_heads * _kv_rep
+                self._kv_head_replications = _kv_rep
+            else:
+                self._kv_head_replications = 1
+
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
+        # RoPE params — Qwen3.5/3.6 nests these under rope_parameters
+        rope_params_nested = text_config.get("rope_parameters", {})
+        self.partial_rotary_factor = rope_params_nested.get("partial_rotary_factor", 1.0)
+        self.rope_theta = text_config.get("rope_theta") or rope_params_nested.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -2678,6 +2713,9 @@ class ModelArgs:
 
         self._set_vision_params(config)
         self.is_multimodal = "vision_config" in config or self.is_vision()
+        # Qwen3.5/3.6 has vision_config in HF config but we only handle text weights
+        if getattr(self, "is_qwen35", False):
+            self.is_multimodal = False
 
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
@@ -2797,7 +2835,9 @@ class ModelArgs:
                 self._set_vision_params({"vision_config": merged_vision_config})
 
             # Set is_multimodal using original config that has vision_config
-            self.is_multimodal = "vision_config" in config or self.is_vision()
+            # Skip for qwen35/qwen36: HF config has vision_config section but model is text-only
+            if not getattr(self, "is_qwen35", False):
+                self.is_multimodal = "vision_config" in config or self.is_vision()
         else:
             self._set_params_from_dict(config)
 
@@ -2880,6 +2920,8 @@ class ModelArgs:
         text_module_map = {
             "MLP": "feed_forward",
             "Attention": "attention",
+            "GatedDeltaNet": "linear_attn",
+            "GatedAttention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
@@ -2912,12 +2954,18 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+        try:
+            from transformers import AutoModelForVision2Seq
+        except ImportError:
+            AutoModelForVision2Seq = None
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+        candidates = [c for c in (AutoModelForVision2Seq, AutoModelForImageTextToText) if c is not None]
+        for model_cls in candidates:
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
@@ -2938,6 +2986,11 @@ class ModelArgs:
             else:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
+
+            # For qwen35: outer Qwen3_5MoeConfig nests model params inside text_config;
+            # use text_config directly so AutoModelForCausalLM can instantiate correctly.
+            if getattr(self, "is_qwen35", False) and hasattr(config, "text_config"):
+                config = config.text_config
 
             model_cls = self.get_hf_model_cls()
 
@@ -2990,6 +3043,15 @@ class ModelArgs:
                 state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
             else:
                 state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+        elif getattr(self, "is_qwen35", False):
+            # Qwen3.5/3.6 hybrid model: custom conversion (handles packed experts, KV replication, gated q)
+            self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
+            self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
+            state_dict = standardize_hf_keys(state_dict)
+            from models.tt_transformers.tt.qwen36_utils import convert_hf_to_meta_qwen36
+            # n_kv_heads here is the ORIGINAL value (before replication) for conversion
+            orig_n_kv = self.n_kv_heads // getattr(self, "_kv_head_replications", 1)
+            state_dict = convert_hf_to_meta_qwen36(state_dict, self.head_dim, self.n_heads, orig_n_kv)
         else:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
@@ -3003,7 +3065,11 @@ class ModelArgs:
                 state_dict.pop(k)
         if getattr(self, "is_mixture_of_experts", False):
             self.moe = True
-            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
+            if getattr(self, "is_qwen35", False):
+                # Qwen3.6: num_experts set from config (mlp.experts.* keys, not block_sparse_moe)
+                self.num_experts = getattr(self, "n_routed_experts", 256)
+            else:
+                self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
         return state_dict
 
     # =========================================================================
@@ -4248,6 +4314,8 @@ def num_to_coregrid(x):
         return ttnn.CoreGrid(y=2, x=6)
     if x == 20:
         return ttnn.CoreGrid(y=4, x=5)
+    if 1 <= x <= 8:
+        return ttnn.CoreGrid(y=1, x=x)
 
 
 def determine_device_name(mesh_device):
