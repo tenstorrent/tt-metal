@@ -84,7 +84,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  *
  * Runtime parameter signal_output:
  *   false (default): Normal operation without signaling
- *   true: Signal SFPU semaphore every other tile for pipelining with subsequent operations
+ *   true: Signal SFPU semaphore for pipelining with subsequent operations
  *
  * Usage pattern for partial K:
  *   for (k = 0; k < num_k_subblocks - 1; k++) {
@@ -107,6 +107,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | signal_output  | Signal SFPU semaphore for pipelining (default false).                   | bool     | true or false                                  | False    |
  */
 // clang-format on
+template <std::uint32_t output_granularity>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -122,8 +123,8 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
-    MATH(
-        (llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY>(isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
+    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity>(
+        isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
 }
 
 }  // namespace ckernel

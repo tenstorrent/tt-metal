@@ -11,9 +11,8 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
-from helpers.chip_architecture import ChipArchitecture
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
-from helpers.llk_params import EltwiseBinaryReuseDestType, MathOperation
+from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType, MathOperation
 
 
 class EltwiseFpu(Fpu):
@@ -58,8 +57,8 @@ class EltwiseFpu(Fpu):
         ).reshape(operation.max_output_dimensions)
 
         if (
-            config.architecture == ChipArchitecture.WORMHOLE
-            and self.operation == MathOperation.Elwmul
+            self.operation == MathOperation.Elwmul
+            or compute_unit.acc_to_dest == AccToDest.Yes
         ):
             golden_tensor = golden_tensor + tensor_dst
 
@@ -75,17 +74,18 @@ class EltwiseFpu(Fpu):
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
-        face_r_dim = operation.face_r_dim
-        face_c_dim = operation.face_c_dim
-        num_faces_r_dim = operation.in0_tile_r_dim // face_r_dim
-        num_faces_c_dim = operation.in0_tile_c_dim // face_c_dim
+        face_r_dim = operation.output.tile_shape.face_r_dim
+        face_c_dim = operation.output.tile_shape.face_c_dim
+        num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
+        num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
+        acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
         return (
             f"// Operation {stage}: Eltwise {op} FPU\n"
             f"_llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}, {reuse_dest}>"
-            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, 0);\n"
+            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {acc_to_dest});\n"
         )
 
     def calculate(
@@ -99,17 +99,18 @@ class EltwiseFpu(Fpu):
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         op = self.operation.cpp_enum_value
-        face_r_dim = operation.face_r_dim
-        face_c_dim = operation.face_c_dim
-        num_faces_r_dim = operation.in0_tile_r_dim // face_r_dim
-        num_faces_c_dim = operation.in0_tile_c_dim // face_c_dim
+        face_r_dim = operation.output.tile_shape.face_r_dim
+        face_c_dim = operation.output.tile_shape.face_c_dim
+        num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
+        num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
+        clear_fp32_dst_acc = compute_unit.clear_fp32_dst_acc.cpp_enum_value
 
         return (
             f"_llk_math_eltwise_binary_<{op}, {broadcast_type}, dest_sync{stage},\n"
             f"{dest_acc}, {math_fidelity}, {reuse_dest}>"
-            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {block.tile_id_block}, false\n"
+            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {block.tile_id_block}, {clear_fp32_dst_acc}\n"
             f");\n"
         )
 
