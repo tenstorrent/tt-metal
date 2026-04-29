@@ -49,6 +49,10 @@ Throughput figures are post-compilation (warm runs); first cold run excludes ker
 | **Latency** (ms/sample) | 7692 | **~1.93ms** | <30ms | ✅ **15x better** |
 | **Speedup vs baseline** | 1x | **~4,000x** | 1,538x | ✅ **2.6x target** |
 
+### TTNN Profiler Per-Op Report
+
+Per-op timings were collected using `tools/tracy/profile_this.py` and uploaded as a performance sheet:
+- Google Sheet (per-op timings): https://docs.google.com/spreadsheets/d/1vU8d7gAq-cSTVftSHBpYJykTUgDaw54lbA_zJcsaBn4/edit?usp=sharing
 
 ## Getting Started
 
