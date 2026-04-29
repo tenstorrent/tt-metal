@@ -99,10 +99,10 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // DRAM buffer pointers for kernel runtime arguments
-    const auto* input_buffer = input_tensor.buffer();
-    const auto* values_buffer = value_tensor.buffer();
-    const auto* index_buffer = index_tensor.buffer();
-    const auto* input_indices_buffer = input_indices_tensor.has_value() ? input_indices_tensor->buffer() : nullptr;
+    auto* const input_buffer = input_tensor.buffer();
+    auto* const values_buffer = value_tensor.buffer();
+    auto* const index_buffer = index_tensor.buffer();
+    auto* const input_indices_buffer = input_indices_tensor.has_value() ? input_indices_tensor->buffer() : nullptr;
 
     const auto* device = input_tensor.device();
 
@@ -491,11 +491,11 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Configure runtime arguments for each local processing core
     for (auto core : local_cores) {
         // Local reader
-        reader_local_desc.runtime_args.emplace_back(
+        reader_local_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input_buffer->address(),               // DRAM address of input values tensor
-                0,                                     // Height offset (no height parallelism currently)
+            {
+                input_buffer,                          // DRAM address of input values tensor
+                0u,                                    // Height offset (no height parallelism currently)
                 core_id * Wt_local,                    // Width offset for this core's chunk
                 static_cast<uint32_t>(is32_bit_data),  // Flag indicating if data is 32-bit
                 input_indices_tensor.has_value() ? input_indices_buffer->address()
@@ -521,11 +521,11 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     }
 
     // Final writer
-    writer_final_desc.runtime_args.emplace_back(
+    writer_final_desc.emplace_runtime_args(
         final_core,
-        KernelDescriptor::CoreRuntimeArgs{
-            values_buffer->address(),  // DRAM address for TopK values output tensor
-            index_buffer->address(),   // DRAM address for TopK indices output tensor
+        {
+            values_buffer,  // DRAM address for TopK values output tensor
+            index_buffer,   // DRAM address for TopK indices output tensor
         });
 
     desc.kernels.push_back(std::move(reader_local_desc));

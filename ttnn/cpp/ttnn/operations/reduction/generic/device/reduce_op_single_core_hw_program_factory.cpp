@@ -187,15 +187,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
 
-    reader_desc.runtime_args.emplace_back(
-        selected_core_coord, KernelDescriptor::CoreRuntimeArgs{a.buffer()->address(), num_tensor_tiles, 0});
+    reader_desc.emplace_runtime_args(selected_core_coord, {a.buffer(), num_tensor_tiles, 0u});
 
     TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
     uint32_t out_dim_divider = Ht * Wt;
 
-    writer_desc.runtime_args.emplace_back(
-        selected_core_coord,
-        KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
+    writer_desc.emplace_runtime_args(selected_core_coord, {output.buffer(), num_tensor_tiles / out_dim_divider, 0u});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

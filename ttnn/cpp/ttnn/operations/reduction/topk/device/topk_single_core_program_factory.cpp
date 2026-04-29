@@ -54,9 +54,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // Device memory buffer pointers for kernel runtime arguments
-    const auto* input_buffer = input_tensor.buffer();
-    const auto* values_buffer = value_tensor.buffer();
-    const auto* index_buffer = index_tensor.buffer();
+    auto* const input_buffer = input_tensor.buffer();
+    auto* const values_buffer = value_tensor.buffer();
+    auto* const index_buffer = index_tensor.buffer();
 
     // Tensor shape and dimension calculations
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -256,20 +256,20 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                reader_desc.runtime_args.emplace_back(
+                reader_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input_buffer->address(),
+                    {
+                        input_buffer,
                         id,
                         work_per_core,
                         tensor_args.indices.has_value() ? tensor_args.indices->buffer()->address()
                                                         : 0u,  // Optional indices tensor
                     });
-                writer_desc.runtime_args.emplace_back(
+                writer_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        values_buffer->address(),
-                        index_buffer->address(),
+                    {
+                        values_buffer,
+                        index_buffer,
                         id,
                         work_per_core,
                     });

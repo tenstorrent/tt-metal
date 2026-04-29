@@ -103,10 +103,8 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
     };
 
     CoreCoord core_coord = {0, 0};
-    reader_desc.runtime_args.emplace_back(
-        core_coord, KernelDescriptor::CoreRuntimeArgs{src_buffer->address(), num_tiles, 0});
-    writer_desc.runtime_args.emplace_back(
-        core_coord, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), /*num_tiles=*/1u, 0u});
+    reader_desc.emplace_runtime_args(core_coord, {src_buffer, num_tiles, 0u});
+    writer_desc.emplace_runtime_args(core_coord, {dst_buffer, /*num_tiles=*/1u, 0u});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

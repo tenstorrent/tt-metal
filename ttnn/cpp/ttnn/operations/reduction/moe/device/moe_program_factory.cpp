@@ -221,12 +221,12 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     reader_desc.core_ranges = core_ranges;
     reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.runtime_args.emplace_back(
+    reader_desc.emplace_runtime_args(
         core.start_coord,
-        KernelDescriptor::CoreRuntimeArgs{
-            input_buffer->address(),
-            topk_mask_buffer->address(),
-            expert_mask_buffer->address(),
+        {
+            input_buffer,
+            topk_mask_buffer,
+            expert_mask_buffer,
         });
 
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index, Ht, k};
@@ -239,10 +239,10 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     writer_desc.core_ranges = core_ranges;
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.emplace_back(
+    writer_desc.emplace_runtime_args(
         core.start_coord,
-        KernelDescriptor::CoreRuntimeArgs{
-            out_buffer->address(),
+        {
+            out_buffer,
         });
 
     std::vector<uint32_t> compute_args = {

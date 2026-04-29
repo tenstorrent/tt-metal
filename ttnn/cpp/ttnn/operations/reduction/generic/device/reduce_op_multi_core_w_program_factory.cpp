@@ -228,18 +228,18 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             TT_THROW("Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = num_rows_per_core * Wt;
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                a.buffer()->address(),
+            {
+                a.buffer(),
                 num_tensor_tiles_per_core,
                 num_tiles_read  // tile index of row to start reading from
             });
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output.buffer()->address(),
+            {
+                output.buffer(),
                 num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
                 num_tiles_read / out_dim_divider              // output tile start index
             });

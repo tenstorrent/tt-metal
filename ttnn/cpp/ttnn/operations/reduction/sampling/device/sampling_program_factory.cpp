@@ -329,11 +329,11 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     reader_desc.config = ReaderConfigDescriptor{};
     // The reader kernel is created once on the entire core_grid; set the same runtime args on every core
     for (const auto& core : cores) {
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input_values_buffer->address(),
-                input_indices_buffer->address(),
+            {
+                input_values_buffer,
+                input_indices_buffer,
             });
     }
     desc.kernels.push_back(std::move(reader_desc));
@@ -375,10 +375,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         writer_desc.core_ranges = single_core;
         writer_desc.compile_time_args = writer_compile_time_args;
         writer_desc.config = WriterConfigDescriptor{};
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output_buffer->address(), temp_buffer->address(), k_buffer->address(), p_buffer->address()});
+        writer_desc.emplace_runtime_args(core, {output_buffer, temp_buffer, k_buffer, p_buffer});
         desc.kernels.push_back(std::move(writer_desc));
 
         std::vector<uint32_t> compute_args = {

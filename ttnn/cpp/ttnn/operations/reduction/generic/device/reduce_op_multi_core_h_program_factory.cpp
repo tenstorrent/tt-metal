@@ -377,18 +377,17 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             } else {
                 TT_THROW("Core not in specified core ranges");
             }
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    a.buffer()->address(),
-                    (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
-                    num_cols_read % Wt,
-                    num_cols_per_core});
+                {a.buffer(),
+                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
+                 num_cols_read % Wt,
+                 num_cols_per_core});
 
-            writer_desc.runtime_args.emplace_back(
+            writer_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    output.buffer()->address(),
+                {
+                    output.buffer(),
                     num_cols_per_core,  // number of tiles to write
                     num_cols_read       // output tile start index
                 });

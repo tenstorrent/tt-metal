@@ -420,16 +420,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             }
             uint32_t num_input_tiles_per_core = num_work_units_per_core * Wt;
             uint32_t num_output_tiles_per_core = num_work_units_per_core;
-            reader_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    tensor_arg.buffer()->address(), num_input_tiles_per_core, input_tiles_offset});
+            reader_desc.emplace_runtime_args(core, {tensor_arg.buffer(), num_input_tiles_per_core, input_tiles_offset});
             (in_g1 ? compute_desc_g1 : *compute_desc_g2)
                 .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_work_units_per_core});
-            writer_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    tensor_return_value.buffer()->address(), num_output_tiles_per_core, output_tiles_offset});
+            writer_desc.emplace_runtime_args(
+                core, {tensor_return_value.buffer(), num_output_tiles_per_core, output_tiles_offset});
             input_tiles_offset += num_input_tiles_per_core;
             output_tiles_offset += num_output_tiles_per_core;
         }
@@ -460,23 +455,19 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             // Reader: read all columns for all NC slices assigned to this core.
             uint32_t num_cols = Wt * nc_slices_per_core;
             uint32_t col_start_tile_id = nc_slice_offset * HtWt;
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    tensor_arg.buffer()->address(),
-                    col_start_tile_id,
-                    /*curr_col_in_batch=*/0u,
-                    num_cols});
+                {tensor_arg.buffer(),
+                 col_start_tile_id,
+                 /*curr_col_in_batch=*/0u,
+                 num_cols});
             // Compute: runtime arg is total NC slices (not num_outputs).
             (in_g1 ? compute_desc_g1 : *compute_desc_g2)
                 .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{nc_slices_per_core});
             // Writer: runtime args are {dst_addr, NC_per_core, output_tile_start_id}.
             // NC_per_core is total NC slices; the writer uses reduce_batch_size
             // (compile-time) to determine how many to group per output.
-            writer_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    tensor_return_value.buffer()->address(), nc_slices_per_core, output_offset});
+            writer_desc.emplace_runtime_args(core, {tensor_return_value.buffer(), nc_slices_per_core, output_offset});
             nc_slice_offset += nc_slices_per_core;
             output_offset += num_outputs_per_core;
         }
@@ -496,19 +487,15 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             } else {
                 TT_THROW("Core not in specified core ranges");
             }
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    tensor_arg.buffer()->address(),
-                    (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
-                    num_cols_read % Wt,
-                    num_cols_per_core});
+                {tensor_arg.buffer(),
+                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
+                 num_cols_read % Wt,
+                 num_cols_per_core});
             (in_g1 ? compute_desc_g1 : *compute_desc_g2)
                 .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_cols_per_core});
-            writer_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    tensor_return_value.buffer()->address(), num_cols_per_core, num_cols_read});
+            writer_desc.emplace_runtime_args(core, {tensor_return_value.buffer(), num_cols_per_core, num_cols_read});
             num_cols_read += num_cols_per_core;
         }
     }
