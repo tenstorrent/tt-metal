@@ -858,24 +858,33 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-    } else {
-        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-    }
-
+    // FIX NX (#42429): for non-MMIO chips, wrap both write_to_device and wait_for_non_mmio_flush
+    // in a try/catch. write_to_non_mmio does not short-circuit on relay_broken_, so even after
+    // a prior FIX AE catch has marked the relay broken, a subsequent write_to_device call will
+    // still attempt the write and timeout (~5s per chip). Callers such as
+    // WatcherServer::init_devices() and set_internal_routing_info_for_ethernet_cores iterate all
+    // chips; once a relay is dead this catch prevents uncaught exceptions from propagating to
+    // test SetUp() and killing the test process.
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
-        // FIX AE (#42429): catch flush timeout so a dead relay doesn't hang the caller for 5s.
-        // On timeout, mark relay broken so all subsequent flushes for this chip are instant.
         try {
+            // DMA is MMIO-only (supports_dma_operations returns false for remote chips), so only
+            // the write_to_device (non-MMIO) path is relevant here.
+            this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+            // FIX AE (#42429): catch flush timeout so a dead relay doesn't hang the caller for 5s.
             this->driver_->wait_for_non_mmio_flush(chip_id);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogDevice,
-                "FIX AE: wait_for_non_mmio_flush(chip {}) threw: {}. Marking relay broken.",
+                "FIX NX: write_core(chip {}) threw: {}. Marking relay broken.",
                 chip_id,
                 e.what());
             this->driver_->mark_relay_broken(chip_id);
+        }
+    } else {
+        if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
+            this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        } else {
+            this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
         }
     }
 }
