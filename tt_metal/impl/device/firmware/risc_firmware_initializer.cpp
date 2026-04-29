@@ -162,7 +162,20 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
                 // can enter an undefined state by reading a corrupted launch message. Routing firmware will never
                 // run in this case, causing UMD issued transactions to hang.
-                clear_launch_messages_on_eth_cores(device_id);
+                //
+                // FIX NW (#42429): Skip clear_launch_messages_on_eth_cores for non-MMIO (remote) chips.
+                // clear_launch_messages_on_eth_cores calls cluster_.write_core() and cluster_.l1_barrier()
+                // which both go through RemoteProtocol → write_to_non_mmio / wait_for_non_mmio_flush.
+                // When the MMIO relay is dead (stale FABRIC firmware left by a prior session), those
+                // calls time out (5s each) and throw, propagating through the async future up to SetUp()
+                // and failing the test fixture — same root cause as FIX NV for get_device_aiclk.
+                // Skipping non-MMIO chips here is safe: run_launch_phase calls
+                // terminate_active_ethernet_cores_on_all_chips() which unconditionally resets all ETH
+                // cores on every chip (MMIO and non-MMIO) before firmware is launched. Any stale launch
+                // messages on non-MMIO ETH cores are cleared by that full ETH-core reset.
+                if (mmio_ids_set.count(device_id)) {
+                    clear_launch_messages_on_eth_cores(device_id);
+                }
             }
         }));
     }
