@@ -525,6 +525,16 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             }
         }
 
+        // FIX PE (GAP-56): Track channels that exit the poll loop via clean TERMINATE
+        // acknowledgment so we can zero fw_launch_addr for them after the loop.
+        // ERISC firmware does not self-clear fw_launch_addr on TERMINATE — it stays
+        // non-zero in L1 after a clean exit.  On the next test's reset_cores(),
+        // erisc_app_still_running() reads this non-zero value and fires a false-positive
+        // 500ms wait, cascading into force-reset for all 4 MMIO devices every test.
+        // FIX PC already clears fw_launch_addr on the force-reset path; this covers
+        // the clean clean-exit path (e.g. Devices 1, 3 on T3000 after a partial quiesce).
+        std::vector<PendingChannel> cleanly_terminated;
+
         // Poll all pending channels until each terminates or the global deadline expires.
         // Channels that terminate early are removed from the list; remaining channels after
         // the deadline get force-reset in a second pass below.
@@ -539,7 +549,11 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                             std::vector<uint32_t> status_buf(1, 0);
                             detail::ReadFromDeviceL1(
                                 ch.dev, ch.eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
-                            return status_buf[0] == terminated_val;
+                            if (status_buf[0] == terminated_val) {
+                                cleanly_terminated.push_back(ch);  // FIX PE: capture for fw_launch_addr clear
+                                return true;
+                            }
+                            return false;
                         } catch (const std::exception& e) {
                             // Read failed (e.g. ERISC completely unresponsive).
                             // Keep this channel in pending so it gets force-reset in the
@@ -561,6 +575,34 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     std::this_thread::sleep_for(std::chrono::microseconds(100));
                 } else {
                     ttsl::pause();
+                }
+            }
+        }
+
+        // FIX PE (GAP-56): Clear fw_launch_addr for channels that terminated cleanly.
+        // These channels passed the TERMINATE handshake but fw_launch_addr is never
+        // zeroed by the ERISC on clean exit.  Without this clear, erisc_app_still_running()
+        // in the next test's reset_cores() sees a non-zero fw_launch_addr and fires a
+        // false-positive 500ms wait → force-reset cascade on every subsequent test.
+        if (!cleanly_terminated.empty()) {
+            const auto aeth_idx = hal_.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+            const uint32_t fw_launch_addr_val = hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+            for (const auto& ch : cleanly_terminated) {
+                try {
+                    const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        ch.dev->id(), ch.eth_logical_core, CoreType::ETH);
+                    cluster_.write_core_immediate(
+                        ch.dev->id(), virtual_eth_coord, std::vector<uint32_t>{0}, fw_launch_addr_val);
+                    log_debug(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: Device {} chan={} FIX PE — "
+                        "cleared fw_launch_addr after clean TERMINATE acknowledgment",
+                        ch.dev->id(),
+                        ch.eth_chan_id);
+                } catch (...) {
+                    // Best-effort: MMIO writes succeed via PCIe; relay-broken non-MMIO
+                    // devices may throw — acceptable, they will be PCIe-reset by
+                    // RiscFirmwareInitializer::teardown anyway.
                 }
             }
         }
