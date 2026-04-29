@@ -173,7 +173,7 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
-@pytest.mark.timeout(7200)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "mesh_shape",
     [
@@ -962,10 +962,9 @@ def test_gpt_oss_demo(
         )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
-            ml_model_name=model_args[0].base_model_name,
+            run_type=f"{tt_device_name}-demo",
+            ml_model_name=model_name,
             ml_model_type="llm",
-            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},

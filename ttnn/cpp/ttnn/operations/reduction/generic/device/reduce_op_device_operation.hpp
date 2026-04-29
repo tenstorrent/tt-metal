@@ -50,7 +50,6 @@ ttnn::Tensor reduce(
     const std::optional<DataType>& output_dtype,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool negate = false,
-    float post_mul_scaler = 1.0f);
+    bool negate = false);
 
 }  // namespace ttnn::prim

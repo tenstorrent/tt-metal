@@ -41,10 +41,10 @@ PCC_THRESHOLD_KVPE = 0.999
 
 
 @pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
+    "input_source, pcc_validation, isl_total",
     [
-        ("random", False, 1024, 2),
-        ("abc_1k", True, 1024, 2),
+        ("random", False, 1024),
+        ("abc_1k", True, 1024),
     ],
     ids=["smoke-random", "pcc-abc_1k"],
 )
@@ -90,7 +90,6 @@ def test_prefill_block(
     mesh_device,
     device_params,
     isl_total,
-    dispatch_buffer_capacity_factor,
     layer_type,
     gate_fallback_mode,
     num_links,
@@ -186,7 +185,6 @@ def test_prefill_block(
         state_dict=state_dict,
         layer_idx=layer_idx,
         seq_len=isl_total,
-        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
         topology=topology,
         sp_axis=sp_axis,

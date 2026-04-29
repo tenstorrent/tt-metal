@@ -24,7 +24,6 @@ from models.demos.wormhole.mamba.tt.preprocessing import (
     split_sequence_length,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.model_config import determine_device_name
 
 
 class TokenDisplay:
@@ -213,7 +212,7 @@ class DemoResult:
 
 def run_mamba_demo(
     prompts: List[str],
-    device: ttnn.MeshDevice,
+    device: ttnn.Device,
     model_version: MambaPretrainedModelName = "state-spaces/mamba-2.8b-slimpj",
     batch_size: int = 32,
     generated_sequence_length: int = 50,
@@ -386,9 +385,8 @@ def run_mamba_demo(
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=f"demo_perf",
-        ml_model_name=model_version.removeprefix("state-spaces/"),
+        ml_model_name=model_version,
         ml_model_type="llm",
-        device_name=determine_device_name(device),
         num_layers=64,
         batch_size=batch_size,
         config_params={"prefill_chunk_size": prefill_chunk_size},

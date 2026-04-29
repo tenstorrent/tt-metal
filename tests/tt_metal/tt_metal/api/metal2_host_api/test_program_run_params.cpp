@@ -2,29 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//---------------------------------------------------------------------------------
 // Unit tests for the Metal 2.0 Host API: ProgramRunParams and SetProgramRunParameters
-// These tests all use mock device (Quasar and Wormhole) for API-level validation.
 //
 // Test categories:
 //   1. Validation tests (parameter validation errors)
 //   2. Success tests (basic functionality)
 //   3. Repeated call tests (calling SetProgramRunParameters multiple times)
 //
-//---------------------------------------------------------------------------------
 // NOTE: The current tests only attempt to set ProgramRunParams for a Program that has not yet been enqueued for
 // execution. The way Program currently works, dispatch data structures are not created until the first enqueue, which
 // makes the argument update pathways different the first time vs. subsequent times. This is patently insane. I plan to
 // fix this for ProgramSpec / Metal 2.0.
-//
-//---------------------------------------------------------------------------------
-// NOTE: These unit tests use shortcut functions to create minimal valid ProgramSpec
-// objects to cut repeated boilerplate (test_helpers.hpp)
-//
-// This is NOT intended as a recommended pattern for production code!
-// See the Metal 2.0 Host API documentation and programming examples for
-// recommended patterns for constructing ProgramSpec objects in production code.
-//---------------------------------------------------------------------------------
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -47,7 +35,7 @@ using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
-using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWorker;
 
 // Shorthand for the per-node-override vararg type (needed at call sites because
 // std::optional<T> can't be brace-init from an initializer-list of T's elements).
@@ -458,8 +446,8 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     spec.program_id = "multi_node_program";
 
     // Kernels span both nodes
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
+    auto producer = MakeMinimalDMKernel("producer", all_nodes);
+    auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.runtime_arguments_schema.num_runtime_varargs = 2;
@@ -468,14 +456,14 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     // consumer has no varargs (defaults)
 
     // Single DFB spanning all nodes
-    auto dfb = MakeMinimalDFB("dfb");
+    auto dfb = MakeMinimalDFB("dfb", all_nodes);
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"}, {"dfb"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -504,22 +492,22 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     ProgramSpec spec;
     spec.program_id = "multi_node_program";
 
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
+    auto producer = MakeMinimalDMKernel("producer", all_nodes);
+    auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.runtime_arguments_schema.num_runtime_varargs = 2;
     // consumer has no varargs (defaults)
 
     // Single DFB spanning all nodes
-    auto dfb = MakeMinimalDFB("dfb");
+    auto dfb = MakeMinimalDFB("dfb", all_nodes);
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", all_nodes, {"producer", "consumer"}, {"dfb"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -671,10 +659,10 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
 
     ProgramSpec spec;
     spec.program_id = "vararg_differing_counts";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -700,12 +688,12 @@ TEST_F(ProgramRunParamsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds)
 
     ProgramSpec spec;
     spec.program_id = "vararg_mixed_entry_types";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalDMKernel("dm_kernel", all_nodes);
     // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
     // Node c has count 5 (declared via a NodeCoord entry).
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node = NumVarargsPerNode{{ab, 3}, {node_c, 5}};
     spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", all_nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -729,12 +717,12 @@ TEST_F(ProgramRunParamsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds
 
     ProgramSpec spec;
     spec.program_id = "vararg_scalar_with_sparse_override";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalDMKernel("dm_kernel", all_nodes);
     kernel.runtime_arguments_schema.num_runtime_varargs = 2;  // default for unlisted nodes
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
         NumVarargsPerNode{{node_c, 5}};  // node_c is the exception
     spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", all_nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;
@@ -761,12 +749,12 @@ TEST_F(ProgramRunParamsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) 
 
     ProgramSpec spec;
     spec.program_id = "vararg_zero_override";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalDMKernel("dm_kernel", both);
     kernel.runtime_arguments_schema.num_runtime_varargs = 3;
     kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
         NumVarargsPerNode{{node_b, 0}};  // node_b: no varargs despite scalar default
     spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", both, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
 
     // node_b is treated as having no varargs — run-params needs no entry for it.
@@ -804,10 +792,10 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
 
     ProgramSpec spec;
     spec.program_id = "vararg_missing_node";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalDMKernel("dm_kernel", nodes);
     kernel.runtime_arguments_schema.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(spec);
 
     ProgramRunParams params;

@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -73,7 +73,8 @@ def test_roll(device, input_tensor, shifts, dim, layout, dtype, memory_config):
     ttnn_out = ttnn.roll(ttnn_tensor, shifts, dim)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
 
-    assert_equal(pytorch_out, ttnn_result_torch)
+    assert_with_pcc(pytorch_out, ttnn_result_torch)
+    assert torch.allclose(pytorch_out, ttnn_result_torch)
 
 
 @pytest.mark.parametrize(
@@ -114,7 +115,8 @@ def test_roll_without_dim(device, input_tensor, shifts):
     pytorch_out = torch.roll(tensor, shifts)
     ttnn_out = ttnn.roll(ttnn_tensor, shifts)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
-    assert_equal(pytorch_out, ttnn_result_torch)
+    assert_with_pcc(pytorch_out, ttnn_result_torch)
+    assert torch.allclose(pytorch_out, ttnn_result_torch)
 
 
 @pytest.mark.parametrize(
@@ -189,7 +191,8 @@ def test_roll_tile_padding(device, input_tensor, shifts, dim, layout, dtype):
     ttnn_out = ttnn.roll(ttnn_tensor, shifts, dim)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
 
-    assert_equal(pytorch_out, ttnn_result_torch)
+    assert_with_pcc(pytorch_out, ttnn_result_torch)
+    assert torch.allclose(pytorch_out, ttnn_result_torch)
 
 
 @pytest.mark.parametrize(

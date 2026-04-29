@@ -498,9 +498,10 @@ class ModelArgs:
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
         self.prefetcher = prefetcher
-        self.device_name = determine_device_name(self.mesh_device) if mesh_device is not None else "CPU"
+        self.device_name = determine_device_name(self.mesh_device)
 
         logger.info(f"Inferring device name: {self.device_name}")
+        device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
         self.is_galaxy = self.num_devices == 32
 
@@ -508,7 +509,7 @@ class ModelArgs:
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.max_batch_size // list(mesh_device.shape)[1], 1)
+            self.batch_size_per_device_group = max(self.max_batch_size // list(device.shape)[1], 1)
         else:
             self.batch_size_per_device_group = self.max_batch_size
 
@@ -633,7 +634,7 @@ class ModelArgs:
         if self.prefetcher is not None:
             self.use_qk_fused = False
 
-        if self.mesh_device is not None:  # Avoid issue with test_torch.py not having a device
+        if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
             # Parameter initialization
             # ============================================================================
@@ -665,7 +666,7 @@ class ModelArgs:
             # Core Grid Configurations for DRAM weight sharding, LM Head and MLP
             # ============================================================================
             # DRAM weight grid specs for dram sharding matmuls
-            grid = self.mesh_device.compute_with_storage_grid_size()
+            grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
             self.dram_weight_grid = ttnn.CoreRangeSet(
                 {
@@ -4430,7 +4431,7 @@ def num_to_coregrid(x):
         return ttnn.CoreGrid(y=4, x=5)
 
 
-def determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
+def determine_device_name(mesh_device):
     """
     Determine device name based on number of devices and architecture.
 
@@ -4443,11 +4444,14 @@ def determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
     Raises:
         ValueError: If architecture or device count is unsupported
     """
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
 
-    num_devices = mesh_device.get_num_devices()
-    dram_grid_size = mesh_device.dram_grid_size()  # CoreCoord with (x, y)
+    if num_devices == 0:
+        return "CPU"
 
-    if ttnn.device.is_blackhole(mesh_device):
+    if is_blackhole():
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
@@ -4455,7 +4459,7 @@ def determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
             8: "P150x8",
             32: "BHGLX",
         }
-    elif ttnn.device.is_wormhole_b0(mesh_device):
+    elif is_wormhole_b0():
         dict_device_names = {
             1: "N150",
             2: "N300",
@@ -4464,9 +4468,9 @@ def determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
             32: "TG",
         }
     else:
-        raise ValueError(f"Unsupported architecture: {ttnn.get_arch_name()}")
+        raise ValueError(f"Unsupported architecture: {arch_name}")
 
     if num_devices in dict_device_names:
         return dict_device_names[num_devices]
     else:
-        raise ValueError(f"Unsupported number of devices: {num_devices} for {ttnn.get_arch_name()}")
+        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")

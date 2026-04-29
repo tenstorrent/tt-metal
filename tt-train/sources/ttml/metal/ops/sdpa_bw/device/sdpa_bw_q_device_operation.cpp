@@ -28,18 +28,12 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
     const auto value_shape = value.logical_shape();
 
     TT_FATAL(
-        grad_output_shape[0] == query_shape[0] && grad_output_shape[1] == query_shape[1] &&
-            grad_output_shape[2] == query_shape[2] && grad_output_shape[3] == value_shape[3],
-        "Grad output must match query in B, H, S and value in D. Got grad_output={}, query={}, value={}",
+        grad_output_shape == query_shape,
+        "Grad output shape {} must match query shape {}",
         grad_output_shape,
-        query_shape,
-        value_shape);
+        query_shape);
 
-    TT_FATAL(
-        key_shape[0] == value_shape[0] && key_shape[1] == value_shape[1] && key_shape[2] == value_shape[2],
-        "Key and Value must have matching B, H, S (inner dim can differ). Got Key={}, Value={}",
-        key_shape,
-        value_shape);
+    TT_FATAL(key_shape == value_shape, "Key shape {} must match value shape {}", key_shape, value_shape);
 
     TT_FATAL(
         query_shape[0] == key_shape[0] && query_shape[2] == key_shape[2],
@@ -77,18 +71,13 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(kH == vH, "Key and Value must have the same number of heads. Got key_heads={}, value_heads={}", kH, vH);
 
-    TT_FATAL(qE == kE, "Query and Key must have the same embedding dimension. Got qEmbd={}, kEmbd={}", qE, kE);
-
-    // Validate attn_output shape: must match grad_output (B, H, S, vE)
-    const auto attn_output_shape = tensor_args.attn_output.logical_shape();
+    // Validate embedding dimensions match
     TT_FATAL(
-        attn_output_shape[0] == grad_output_shape[0] && attn_output_shape[1] == grad_output_shape[1] &&
-            attn_output_shape[2] == grad_output_shape[2] && attn_output_shape[3] == vE,
-        "attn_output must match grad_output shape (B, H, S) and value in D. "
-        "Got attn_output={}, grad_output={}, value={}",
-        attn_output_shape,
-        grad_output_shape,
-        value_shape);
+        qE == kE && qE == vE,
+        "Embedding dimensions of Q, K, V must be the same. Got qEmbd={}, kEmbd={}, vEmbd={}",
+        qE,
+        kE,
+        vE);
 
     // Validate tensors have tile layout
     TT_FATAL(
@@ -184,7 +173,6 @@ ttsl::hash::hash_t SDPABackwardQDeviceOperation::compute_program_hash(
         operation_attributes,
         tensor_args.query.logical_shape(),
         tensor_args.key.logical_shape(),
-        tensor_args.value.logical_shape(),
         tensor_args.intermediates.logical_shape(),
         tensor_args.query.dtype(),
         operation_attributes.mask_type);

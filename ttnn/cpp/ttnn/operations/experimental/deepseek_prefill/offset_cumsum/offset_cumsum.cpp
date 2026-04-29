@@ -11,11 +11,10 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum {
 
-std::array<ttnn::Tensor, 3> offset_cumsum(
+std::array<ttnn::Tensor, 2> offset_cumsum(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
     uint32_t num_links,
-    uint32_t experts_per_chip,
     const ttnn::MemoryConfig& memory_config) {
     const auto& shape = input_tensor.logical_shape();
     uint32_t n_routed_experts = shape[-1];
@@ -33,7 +32,7 @@ std::array<ttnn::Tensor, 3> offset_cumsum(
 
     auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);
 
-    return ttnn::prim::offset_cumsum(row_major, cluster_axis, experts_per_chip);
+    return ttnn::prim::offset_cumsum(row_major, cluster_axis);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum
