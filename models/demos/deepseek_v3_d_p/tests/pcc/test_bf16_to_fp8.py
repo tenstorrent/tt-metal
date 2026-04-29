@@ -48,16 +48,18 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     "mesh_device, device_params",
     [
         pytest.param(
-            (1, 1),
+            (8, 1),
             {},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
-            id="single",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="8x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 def test_bf16_to_fp8(mesh_device, rows, cols):
     torch.manual_seed(42)
+
+    num_devices = mesh_device.get_num_devices()
 
     # Mix of "easy" values (representable exactly in fp8_e4m3) and random values, so
     # we exercise both the bit-exact path and the rounded path.
@@ -76,20 +78,25 @@ def test_bf16_to_fp8(mesh_device, rows, cols):
 
     tt_out = ttnn.experimental.deepseek_prefill.bf16_to_fp8(tt_in)
 
-    out_uint8 = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    out_uint8 = out_uint8.reshape(rows, cols)
-    assert out_uint8.dtype == torch.uint8, f"expected uint8 output, got {out_uint8.dtype}"
+    # Replicated input means each device produces the same output; concat stacks all
+    # `num_devices` copies along dim 0 — reshape to (num_devices, rows, cols) and verify
+    # each replica independently.
+    out_all = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    out_all = out_all.reshape(num_devices, rows, cols)
+    assert out_all.dtype == torch.uint8, f"expected uint8 output, got {out_all.dtype}"
 
-    # Decode device fp8 bytes -> float32 for numeric-domain comparison against the
-    # original bf16 input (also widened to float32). PCC here measures fp8 quantization
-    # noise relative to the lossless input, not packer-vs-torch rounding agreement.
-    out_fp32 = out_uint8.view(torch.float8_e4m3fn).to(torch.float32)
     ref_fp32 = x.to(torch.float32)
 
-    pcc = _pcc(out_fp32, ref_fp32)
-    max_abs_err = (out_fp32 - ref_fp32).abs().max().item()
+    for dev_idx in range(num_devices):
+        # Decode device fp8 bytes -> float32 for numeric-domain comparison against the
+        # original bf16 input (also widened to float32). PCC here measures fp8 quantization
+        # noise relative to the lossless input, not packer-vs-torch rounding agreement.
+        out_fp32 = out_all[dev_idx].view(torch.float8_e4m3fn).to(torch.float32)
 
-    logger.info(f"PCC={pcc:.6f}  max_abs_err={max_abs_err:.6f}")
+        pcc = _pcc(out_fp32, ref_fp32)
+        max_abs_err = (out_fp32 - ref_fp32).abs().max().item()
 
-    # ~0.99 reflects fp8_e4m3's ~3-bit mantissa precision against float32 reference.
-    assert pcc > 0.99, f"PCC too low: {pcc}"
+        logger.info(f"device={dev_idx} PCC={pcc:.6f}  max_abs_err={max_abs_err:.6f}")
+
+        # ~0.99 reflects fp8_e4m3's ~3-bit mantissa precision against float32 reference.
+        assert pcc > 0.99, f"device {dev_idx} PCC too low: {pcc}"
