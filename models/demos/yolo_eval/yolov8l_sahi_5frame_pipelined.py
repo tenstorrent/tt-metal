@@ -65,7 +65,7 @@ TILES_PER_STREAM = 4  # 2x2 grid of 640x640 over 1280x1280
 TOTAL_TILES = N_STREAMS * TILES_PER_STREAM  # 32
 MESH_ROWS = 8
 MESH_COLS = 4
-TAG = "[sahi-640-multi]"
+TAG = "[tt-640-multi]"
 
 
 def _write_init_stage(port: int, stage: str) -> None:
@@ -811,6 +811,8 @@ def run_sahi_5frame_pipelined(args):
     t_qput_sum = 0.0
     t_d2h_sum = 0.0
     t_compose_start_sum = 0.0
+    # Most recent live device-compute measurement (Option 4 in performant_runner).
+    last_compute_ms: float | None = None
 
     try:
         go_event.set()
@@ -911,6 +913,16 @@ def run_sahi_5frame_pipelined(args):
                 tt_inputs_host = _prepare_future.result()
                 runner.enqueue_frame(tt_inputs_host)
                 _prepare_future = None
+                _ct = runner.last_timing.get("compute_ms")
+                if _ct is not None:
+                    new_compute_ms = float(_ct)
+                    if last_compute_ms is None or new_compute_ms != last_compute_ms:
+                        # Publish to /tmp file for supervisor's /api/status.
+                        try:
+                            Path(f"/tmp/sahi-compute-{int(args.port)}.txt").write_text(f"{new_compute_ms:.3f}")
+                        except Exception:
+                            pass
+                    last_compute_ms = new_compute_ms
             t_after_compose_start = time.perf_counter()
 
             dt_batch = t_after_compose_start - t_batch_start
@@ -936,14 +948,20 @@ def run_sahi_5frame_pipelined(args):
                 n = LOG_INTERVAL
                 avg_ms = t_batch_total_sum / n * 1000
                 fps = n / t_batch_total_sum
+                if last_compute_ms is not None and last_compute_ms > 0:
+                    per_dev_fps = 1000.0 / last_compute_ms
+                    aggr_fps = TOTAL_TILES * per_dev_fps
+                    fps_field = f"{fps:.1f} FPS, {TOTAL_TILES}×{per_dev_fps:.0f}={aggr_fps:.0f} fps(aggr)"
+                    dev_field = f"compute={last_compute_ms:.1f}"
+                else:
+                    fps_field = f"{fps:.1f} FPS"
+                    dev_field = "compute=?"
                 print(
-                    f"{TAG} avg {n}f: {avg_ms:.1f}ms/f ({fps:.1f} FPS)  drops={drop_count} | "
-                    f"wait={t_wait_sum / n * 1000:.2f} "
-                    f"submit={t_submit_sum / n * 1000:.2f} "
-                    f"cwait={t_compose_wait_sum / n * 1000:.2f} "
-                    f"qput={t_qput_sum / n * 1000:.2f} "
-                    f"d2h={t_d2h_sum / n * 1000:.2f} "
-                    f"cstart={t_compose_start_sum / n * 1000:.2f}",
+                    f"{TAG} avg {n}f: {avg_ms:.1f}ms/f ({fps_field}) drops={drop_count}  ||  "
+                    f"PRE: wait={t_wait_sum / n * 1000:.2f} submit={t_submit_sum / n * 1000:.2f}"
+                    f"  ||  DEV: {dev_field}  ||  "
+                    f"POST: d2h={t_d2h_sum / n * 1000:.2f} cwait={t_compose_wait_sum / n * 1000:.2f} "
+                    f"qput={t_qput_sum / n * 1000:.2f} cstart={t_compose_start_sum / n * 1000:.2f}  (ms)",
                     flush=True,
                 )
                 t_batch_total_sum = 0.0

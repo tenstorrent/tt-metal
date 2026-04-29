@@ -204,6 +204,11 @@ class YOLOv8lPerformantRunner:
         self._last_read_idx = -1  # most recent slot read by pcie_d2h
         self._pipeline_frame = 0
         self._compose_timing = 0.0
+        # Periodic device-compute measurement (Option 4 — event-based).
+        # Set _compute_measure_every <= 0 to disable.  At 100-frame cadence
+        # avg overhead is ~0.3 ms/frame (one ~30ms host-block per 100 frames).
+        self._compute_measure_every = 100
+        self._last_compute_ms: float | None = None
         if K > 1:
             print(f"[runner] staging_ring=K={K} (CQ0/CQ1 decoupled)", flush=True)
 
@@ -379,7 +384,22 @@ class YOLOv8lPerformantRunner:
             self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         t5 = time.perf_counter()
         self.op_event = ttnn.record_event(self.device, 0)
+
+        # Periodic device-compute timing (Option 4): record events around the
+        # trace, host-block on both, diff = on-chip trace runtime.  Adds
+        # ~queue_drain + compute_time of host wait every Nth frame; net
+        # impact <0.2ms/frame at MEASURE_EVERY=100.
+        measure_compute = self._pipeline_frame % self._compute_measure_every == 0
+        compute_start_evt = ttnn.record_event(self.device, 0) if measure_compute else None
+
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+
+        if measure_compute:
+            compute_end_evt = ttnn.record_event(self.device, 0)
+            ttnn.event_synchronize(compute_start_evt)
+            t_compute_start = time.perf_counter()
+            ttnn.event_synchronize(compute_end_evt)
+            self._last_compute_ms = (time.perf_counter() - t_compute_start) * 1000
 
         t_queue = (time.perf_counter() - t0) * 1000
         self._pipeline_frame += 1
@@ -392,6 +412,8 @@ class YOLOv8lPerformantRunner:
             "staging_ms": (t4 - t3) * 1000,
             "reshard_ms": (t5 - t4) * 1000,
         }
+        if self._last_compute_ms is not None:
+            self.last_timing["compute_ms"] = self._last_compute_ms
 
     def submit(self, torch_input_tensor):
         """Host-prep + queue H2D + reshard-to-staging + compute.  Non-blocking.

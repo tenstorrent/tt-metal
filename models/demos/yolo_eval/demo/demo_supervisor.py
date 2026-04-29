@@ -107,6 +107,28 @@ def _clear_stage(port: int) -> None:
         pass
 
 
+def _compute_file_path(port: int) -> Path:
+    """Where the pipeline writes its most recent device-compute measurement
+    (Option 4 in the runner).  Plain float in ms.  The supervisor reads
+    this on each /api/status call so the launch UI can show aggregate
+    FPS = (1000/compute_ms) × n_active_chips."""
+    return Path(f"/tmp/sahi-compute-{port}.txt")
+
+
+def _read_compute_ms(port: int) -> float:
+    try:
+        return float(_compute_file_path(port).read_text().strip())
+    except Exception:
+        return 0.0
+
+
+def _clear_compute(port: int) -> None:
+    try:
+        _compute_file_path(port).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _grid_for(w: int, h: int) -> dict:
     cols = max(1, math.ceil(w / TILE))
     rows = max(1, math.ceil(h / TILE))
@@ -471,6 +493,11 @@ class Supervisor:
             "kind": "webrtc",
             # Legacy "ok" field; older callers checked status.ok rather than state.
             "ok": self.state == "ready",
+            # Live device-compute time (Option 4 — periodic event-based
+            # measurement, written by the pipeline to /tmp/sahi-compute-<port>.txt).
+            # Browser uses this for the Aggr FPS row: aggregate =
+            # (1000/compute_ms) × n_active_chips.  0.0 means "not yet measured".
+            "compute_ms": _read_compute_ms(self.pipeline_port),
         }
 
     async def request_restart(self, transport: str, width: int, height: int) -> dict:
@@ -542,6 +569,9 @@ class Supervisor:
             # Clear the stage marker on terminal outcome — pipeline is either
             # serving (no longer initializing) or dead (file is meaningless).
             _clear_stage(self.pipeline_port)
+            # Clear stale device-compute measurement so the UI doesn't show a
+            # bogus aggr-FPS from the previous transport.
+            _clear_compute(self.pipeline_port)
 
         if ok:
             self.state = "ready"

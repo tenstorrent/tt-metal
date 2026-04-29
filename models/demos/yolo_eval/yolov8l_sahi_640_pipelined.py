@@ -1554,7 +1554,7 @@ def run_sahi_640_pipelined(args):
     except OSError:
         pass
 
-    TAG = "[sahi-640]"
+    TAG = "[tt-640]"
     l1_small = yolov8l_l1_small_size_for_res(_TILE_SIZE_640, _TILE_SIZE_640)
     trace_region = 6_434_816  # tuned for 640x640
 
@@ -1974,6 +1974,9 @@ def run_sahi_640_pipelined(args):
     t_prep_read_sum = t_prep_sp_sum = t_prep_total_sum = 0.0
     t_staging_wait_sum = t_pcie_d2h_sum = t_compose_sum = 0.0
     t_wait_op_sum = t_h2d_sum = t_wait_h2d_sum = t_stg_copy_sum = t_reshard_sum = 0.0
+    # Aggregate FPS uses the most recent live device-compute measurement
+    # (Option 4 in performant_runner — recorded events around the trace).
+    last_compute_ms: float | None = None
     try:
         # --- Request first frame from prep ---------------------------------
         go_event.set()
@@ -2097,6 +2100,16 @@ def run_sahi_640_pipelined(args):
                 t_wait_h2d = _lt.get("wait_h2d_ms", 0)
                 t_stg_copy = _lt.get("staging_ms", 0)
                 t_reshard = _lt.get("reshard_ms", 0)
+                if "compute_ms" in _lt:
+                    new_compute_ms = float(_lt["compute_ms"])
+                    if last_compute_ms is None or new_compute_ms != last_compute_ms:
+                        # Publish to /tmp file so the supervisor's /api/status
+                        # can surface it to the launch UI for Aggr FPS.
+                        try:
+                            Path(f"/tmp/sahi-compute-{int(args.port)}.txt").write_text(f"{new_compute_ms:.3f}")
+                        except Exception:
+                            pass
+                    last_compute_ms = new_compute_ms
                 prev_meta = (next_shifts[:tiles_per_frame], next_ring_slot)
             else:
                 t_host_prep = t_wait_op = t_h2d = t_wait_h2d = t_stg_copy = t_reshard = 0
@@ -2205,16 +2218,28 @@ def run_sahi_640_pipelined(args):
                 n = LOG_INTERVAL
                 avg_ms = t_batch_total_sum / n * 1000
                 fps = n / t_batch_total_sum
+                # Aggregate FPS: each of `tiles_per_frame` devices runs one
+                # tile-inference per chip-trace.  Per-device throughput is
+                # 1/compute_ms; aggregate = num_devices × per-device.
+                if last_compute_ms is not None and last_compute_ms > 0:
+                    per_dev_fps = 1000.0 / last_compute_ms
+                    aggr_fps = tiles_per_frame * per_dev_fps
+                    fps_field = f"{fps:.1f} FPS, {tiles_per_frame}×{per_dev_fps:.0f}={aggr_fps:.0f} fps(aggr)"
+                    dev_field = f"compute={last_compute_ms:.1f}"
+                else:
+                    fps_field = f"{fps:.1f} FPS"
+                    dev_field = "compute=?"
                 print(
-                    f"{TAG} avg {n}f: {avg_ms:.1f}ms/f ({fps:.1f} FPS)  |  "
-                    f"prep(proc)={t_prep_total_sum / n:.1f}"
-                    f"[read={t_prep_read_sum / n:.1f} "
-                    f"sp={t_prep_sp_sum / n:.1f}]  "
-                    f"prep_wait={t_prep_wait_sum / n:.1f}  "
-                    f"bf16={t_convert_sum / n:.1f}  host_prep={t_host_prep_sum / n:.1f}  "
-                    f"submit={t_queue_sum / n:.1f}(wait_op={t_wait_op_sum / n:.1f}+h2d={t_h2d_sum / n:.1f}+wait_h2d={t_wait_h2d_sum / n:.1f}+stg={t_stg_copy_sum / n:.1f}+reshard={t_reshard_sum / n:.1f})  "
-                    f"d2h={t_d2h_sum / n:.1f}(wait={t_staging_wait_sum / n:.1f}+pcie={t_pcie_d2h_sum / n:.1f}+compose={t_compose_sum / n:.1f})  "
-                    f"drops={drop_count}  (ms)",
+                    f"{TAG} avg {n}f: {avg_ms:.1f}ms/f ({fps_field}) drops={drop_count}  ||  "
+                    f"PRE: prep={t_prep_total_sum / n:.1f}"
+                    f"[read={t_prep_read_sum / n:.1f}+slice_pre={t_prep_sp_sum / n:.1f}] "
+                    f"wait_prep={t_prep_wait_sum / n:.1f} "
+                    f"host_setup={t_host_prep_sum / n:.1f} "
+                    f"h2d={t_queue_sum / n:.1f}"
+                    f"[h2d.pcie={t_h2d_sum / n:.1f}+reshard={t_reshard_sum / n:.1f}+stg={t_stg_copy_sum / n:.1f}+wait_prev={t_wait_op_sum / n:.1f}+wait_pcie={t_wait_h2d_sum / n:.1f}]"
+                    f"  ||  DEV: {dev_field}  ||  "
+                    f"POST: d2h={t_d2h_sum / n:.1f}"
+                    f"[d2h.pcie={t_pcie_d2h_sum / n:.1f}+compose={t_compose_sum / n:.1f}+wait_compute={t_staging_wait_sum / n:.1f}]  (ms)",
                     flush=True,
                 )
                 t_prep_wait_sum = t_convert_sum = 0.0

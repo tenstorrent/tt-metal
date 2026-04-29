@@ -703,6 +703,10 @@ buildGalaxy();
 
 // Cached for the Aggregate-FPS computation in _updateFpsCap.
 let _activeChipCount = 0;
+// Most recent device-compute time (ms) read from /api/status. Aggregate FPS
+// is computed as (1000 / compute_ms) × _activeChipCount — the same number
+// the pipeline log prints as "fps(aggr)". 0 = not yet measured.
+let _computeMs = 0;
 
 function updateGalaxyActive(nTiles) {
   const n = Math.max(0, Math.min(N_GALAXY_CHIPS, nTiles | 0));
@@ -980,10 +984,27 @@ function _updateFpsCap() {
   const live = !stalled && _fpsCapDisplay > 0.5;
   e2eVal.textContent = live ? _fpsCapDisplay.toFixed(1) : "—.—";
   if (aggVal) {
-    const agg = live ? _fpsCapDisplay * _activeChipCount : 0;
-    aggVal.textContent = (live && _activeChipCount > 0) ? agg.toFixed(1) : "—.—";
+    // Aggregate compute capacity = (1000 / compute_ms) × n_active_chips.
+    // Matches the pipeline log's "fps(aggr)" field. Falls back to "—.—"
+    // until the first compute measurement is published.
+    const haveCompute = _computeMs > 0 && _activeChipCount > 0 && live;
+    const agg = haveCompute ? (1000 / _computeMs) * _activeChipCount : 0;
+    aggVal.textContent = haveCompute ? agg.toFixed(1) : "—.—";
   }
 }
+
+// Periodic /api/status poll that refreshes the device-compute time used
+// by the Aggr FPS row.  Cheap (1 small JSON every 2s) and fully decoupled
+// from the mode-switch path, which only updates compute_ms on transition.
+setInterval(async () => {
+  try {
+    const r = await fetch(`${SUPERVISOR}/api/status`, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    const c = +(j.compute_ms || 0);
+    if (c > 0) _computeMs = c;
+  } catch (_) { /* transient — keep last value */ }
+}, 2000);
 
 function rafLoop() {
   drawTilePreview();
