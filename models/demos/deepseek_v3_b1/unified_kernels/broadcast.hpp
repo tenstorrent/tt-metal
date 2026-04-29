@@ -137,6 +137,13 @@ struct Broadcast {
                     PacketHeaderPool::reset();
                 }
 
+                dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
+                for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    sem_nocs[link_idx] =
+                        safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
+                    sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
+                }
+
                 size_t arg_idx = args.per_core_rta_arg_idx_offset;
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
@@ -148,16 +155,13 @@ struct Broadcast {
                                 arg_idx);
                         connections[connection_idx].open_start();
                         headers[connection_idx] = PacketHeaderPool::allocate_header();
-                        fabric_set_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                        fabric_set_single_hop_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                        headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                                dst_noc_base, sem_nocs[link_idx], 1, false},
+                            CTArgs::chunk_size_bytes);
                         connections[connection_idx].open_finish();
                     }
-                }
-
-                dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
-                for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
-                    sem_nocs[link_idx] =
-                        safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
-                    sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
             }
 #endif
@@ -204,15 +208,17 @@ struct Broadcast {
             // ================================================================
             if constexpr (IsWorkerCore) {
                 auto send_chunk = [&](uint32_t connection_idx,
-                                      uint32_t link_idx,
                                       uint32_t src_base_addr,
                                       uint32_t chunk_idx,
                                       uint32_t size) {
                     uint32_t chunk_offset = chunk_idx * CTArgs::chunk_size_bytes;
-                    headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            dst_noc_base + chunk_offset, sem_nocs[link_idx], 1, false},
-                        size);
+                    if constexpr (CTArgs::last_chunk_size_bytes != CTArgs::chunk_size_bytes) {
+                        if (size != CTArgs::chunk_size_bytes) {
+                            headers[connection_idx]->set_payload_size_bytes(size);
+                        }
+                    }
+                    headers[connection_idx]->set_fused_unicast_write_atomic_inc_write_noc_address(
+                        dst_noc_base + chunk_offset);
                     connections[connection_idx].wait_for_empty_write_slot();
                     connections[connection_idx].send_payload_without_header_non_blocking_from_address(
                         src_base_addr + chunk_offset, size);
@@ -234,7 +240,7 @@ struct Broadcast {
 
                         for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                             const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + current_link;
-                            send_chunk(connection_idx, current_link, src_base_addr, chunk_idx, chunk_size);
+                            send_chunk(connection_idx, src_base_addr, chunk_idx, chunk_size);
                         }
 
                         if (++current_link == CTArgs::num_links) {
