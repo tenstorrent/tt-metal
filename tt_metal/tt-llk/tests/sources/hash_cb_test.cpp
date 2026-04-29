@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Standalone LLK test for the experimental SFPU-backed CB hash (23-bit FNV
-// variant). See tt_llk_blackhole/llk_lib/experimental/llk_math_hash_cb.h for
-// the algorithm. The kernel reads TILE_CNT input tiles (INT32 format) from
-// buffer_A, accumulates a per-lane hash in SFPU LReg state, reduces to lane 0,
-// and packs a single output tile to buffer_Res[0] where byte[0..3] == hash.
+// variant). See tt_llk_{blackhole,wormhole_b0}/llk_lib/experimental/llk_math_hash_cb.h
+// for the architecture-specific implementations. The kernel reads TILE_CNT input
+// tiles (INT32 format) from buffer_A, accumulates a per-lane hash in SFPU LReg
+// state, reduces to lane 0, and packs a single output tile to buffer_Res[0]
+// where byte[0..3] == hash.
 //
-// STATUS: draft. This test has not been run on hardware. The matching pytest
-// is tests/python_tests/test_hash_cb.py with the NumPy golden.
+// STATUS: draft. BH and WH implementations have not been run on hardware.
+// The matching pytest is tests/python_tests/test_hash_cb.py with the NumPy golden.
 
 #include <cstdint>
 
@@ -75,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    // Initialise SFPU accumulator (LReg2) and prime constant (LReg1).
+    // Initialise SFPU accumulator and mask constants.
     _llk_math_hash_cb_init_();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)

@@ -57,7 +57,8 @@ namespace ckernel {
 // clang-format on
 ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t out_cb, uint32_t label) {
 #ifdef DEBUG_CB_HASH
-#ifdef ARCH_BLACKHOLE
+    // Supported on Blackhole and Wormhole B0. The WH variant uses shift-and-add
+    // for the FNV23 multiply (SFPMUL24 is BH-only) but produces the same hash value.
     // MATH: set up the per-lane accumulator once for the probe.
     MATH((llk_math_hash_cb_init()));
 
@@ -79,9 +80,7 @@ ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t out_cb, uint
     PACK((llk_pack<false, false>(/*dst_tile_idx=*/0, out_cb)));
     PACK((llk_push_tiles<false, false>(out_cb, 1)));
 
-    // UNPACK: read the first u32 of the packed output tile out of L1 and DPRINT it
-    // using the same line format as the scalar variant so both hash streams diff
-    // the same way.
+    // UNPACK: read the first u32 of the packed output tile out of L1 and DPRINT it.
     UNPACK((llk_wait_tiles(out_cb, 1)));
     UNPACK({
         const uint32_t hash_bytes_addr = get_local_cb_interface(out_cb).fifo_rd_ptr << cb_addr_shift;
@@ -91,18 +90,11 @@ ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t out_cb, uint
     });
     UNPACK((llk_pop_tiles(out_cb, 1)));
 #else
-    // SFPU variant is Blackhole-only in this PR -- fall through to nothing on WH.
     (void)in_cb;
     (void)num_tiles;
     (void)out_cb;
     (void)label;
-#endif
-#else
-    (void)in_cb;
-    (void)num_tiles;
-    (void)out_cb;
-    (void)label;
-#endif
+#endif  // DEBUG_CB_HASH
 }
 
 }  // namespace ckernel
