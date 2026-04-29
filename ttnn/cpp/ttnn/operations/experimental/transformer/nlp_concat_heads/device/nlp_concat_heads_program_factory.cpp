@@ -129,7 +129,13 @@ NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::cre
     tt::tt_metal::CBHandle cb_src0 = 0, cb_out = 0;
     uint32_t cb_src0_num_tiles = per_tensor_tiles;
     if (!in_sharded) {
-        cb_src0_num_tiles *= 2;  // double buffer
+        // Double-buffer only when the doubled allocation fits within L1.
+        // For large models (e.g. num_heads=128, head_dim=128) the doubled CB
+        // exceeds the 1.5 MB L1 limit; fall back to single-buffer in that case.
+        const uint32_t l1_size = a.device()->l1_size_per_core();
+        if (per_tensor_tiles * 2 * single_tile_size <= l1_size) {
+            cb_src0_num_tiles *= 2;  // double buffer
+        }
     }
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(cb_src0_num_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
