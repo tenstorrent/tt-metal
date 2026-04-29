@@ -352,20 +352,10 @@ ttnn::Tensor reshape_tiled(
         sub_core_grid);
 
     // Fill implicit tile padding while still in bfloat16 for BFLOAT8_B inputs; otherwise in native dtype.
-    // Skip when the output is tile-aligned. Tensors here are rank-3, so fill_implicit_tile_padding
-    // stays on its non-recursive path and cannot loop back into ttnn::reshape.
+    // Symmetric with the direct sharded path: skip the dispatch when the output is tile-aligned.
+    // Tensors here are rank-3, so fill_implicit_tile_padding stays on its non-recursive path.
     if (!skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-        if (output_tensor_3d.memory_config().is_sharded()) {
-            // TODO(#43090): drop this s2i/i2s detour once prim::fill_pad supports sharded buffers
-            // without overflowing fill_pad_writer's per-core runtime-arg cap (341).
-            const auto sharded_mem_config = output_tensor_3d.memory_config();
-            MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
-            auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
-            interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
-            output_tensor_3d = ttnn::interleaved_to_sharded(interleaved, sharded_mem_config, std::nullopt);
-        } else {
-            output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
-        }
+        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {

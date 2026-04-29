@@ -178,8 +178,8 @@ def test_reshape_tiled_default_pad_is_zero(device):
 )
 @pytest.mark.parametrize(
     "strategy",
-    [ttnn.ShardStrategy.HEIGHT],
-    ids=["height"],
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK],
+    ids=["height", "block"],
 )
 @pytest.mark.parametrize("pad_value", [0.0, 1.0, -2.5], ids=["pad_0", "pad_1", "pad_neg"])
 def test_reshape_tiled_pad_value_sharded(device, input_shape, output_shape, strategy, pad_value):
