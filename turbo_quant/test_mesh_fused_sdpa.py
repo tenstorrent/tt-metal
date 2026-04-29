@@ -47,10 +47,9 @@ def main():
     bits = 3
     scale = head_dim**-0.5
     seq_len = 2048
-    # Need valid_k_chunks ≥ K so every worker has at least one chunk (otherwise
-    # matmul_reduce in the post-loop hangs on an empty alias_prev_sum CB).
-    # For K=14: need valid_k_chunks=14, i.e. cur_pos in [13*128, 14*128-1] = [1664, 1791].
-    cur_pos = 1791
+    # cur_pos is now read from env so we can sweep across (cur_pos, K) combinations
+    # — empty-slice workers are now handled (push neutral tiles, sema_inc as usual).
+    cur_pos = int(os.environ.get("TQ_CUR_POS", "1791"))
     block_size = 32
     max_blocks = 1024
 

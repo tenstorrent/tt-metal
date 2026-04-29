@@ -763,6 +763,76 @@ void kernel_main() {
                 // ── Final: row-reduce partial sum, recip, normalize output ──
                 {
                     DeviceZoneScopedN("TQ_FINAL_NORMALIZE");
+
+                    // ── Tier 2A: empty-slice worker fast path ──
+                    // When chunks_per_worker doesn't divide valid_k_chunks evenly
+                    // (or valid_k_chunks < cores_per_head_arg), one or more workers
+                    // see [chunk_start, chunk_end) = [N, N) — an empty slice. The
+                    // chunk loop iterated 0 times so alias_prev_max/sum/out CBs are
+                    // empty; calling matmul_reduce here would block forever on
+                    // cb_wait_front(alias_prev_sum, Sq_chunk_t).
+                    //
+                    // Solution: detect empty slice on the worker side, skip
+                    // matmul_reduce, and push *neutral* tiles to cb_partial_*:
+                    //   peer_max = -10000.0  → exp((peer_max - new_max) * scale) ≈ 0
+                    //   peer_sum = 0
+                    //   peer_out = 0
+                    // The writer still NoC-sends these and sema_inc's the reducer,
+                    // so the reducer's wait completes and its merge for this peer
+                    // becomes a no-op (peer_diff ≈ 0 zeroes out the contribution
+                    // regardless of peer_sum/out).
+                    //
+                    // The reducer (idx == 0) always has slot 0 = chunks
+                    // [0, chunks_per_worker) which is non-empty when valid_k_chunks
+                    // ≥ 1 (always true), so this branch never fires there.
+                    const bool has_local_data = (k_chunk_start_for_core < k_chunk_end_for_core);
+                    if (cores_per_head_arg > 1 && !is_reducer && !has_local_data) {
+                        // peer_max ← -10000 (large-negative sentinel)
+                        cb_reserve_back(cb_partial_max, Sq_chunk_t);
+                        for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+                            tile_regs_acquire();
+                            fill_tile_init();
+                            fill_tile(0, -10000.0f);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_partial_max);
+                            pack_tile(0, cb_partial_max);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_partial_max, Sq_chunk_t);
+
+                        // peer_sum ← 0
+                        cb_reserve_back(cb_partial_sum, Sq_chunk_t);
+                        for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+                            tile_regs_acquire();
+                            fill_tile_init();
+                            fill_tile(0, 0.0f);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_partial_sum);
+                            pack_tile(0, cb_partial_sum);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_partial_sum, Sq_chunk_t);
+
+                        // peer_out ← 0 (out_chunk_tiles tiles)
+                        cb_reserve_back(cb_partial_out, out_chunk_tiles);
+                        for (uint32_t i = 0; i < out_chunk_tiles; ++i) {
+                            tile_regs_acquire();
+                            fill_tile_init();
+                            fill_tile(0, 0.0f);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_partial_out);
+                            pack_tile(0, cb_partial_out);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_partial_out, out_chunk_tiles);
+
+                        cb_pop_front(cb_q_in, q_chunk_tiles);
+                        continue;  // empty slice — done with this (nb, nq)
+                    }
+
                     matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
 
                     // ── Tier 2A Phase 2.3 step 2c: worker pack-and-skip path ──
