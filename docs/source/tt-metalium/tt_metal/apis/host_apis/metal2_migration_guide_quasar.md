@@ -512,7 +512,7 @@ Vararg indices are stable across schema changes: if you later promote a named RT
 
 ## Complete Migration Example
 
-Reader kernel reads from DRAM into a DFB; writer kernel pulls from the DFB and writes to DRAM. Single-threaded kernels on a single Quasar cluster, no semaphores. End-to-end host code.
+Reader kernel reads from DRAM into a DFB; writer kernel pulls from the DFB and writes to DRAM. Multi-threaded kernels (3 producer threads, 3 consumer threads — at Metal 2.0's 6-DM-thread cap) on a single Quasar cluster, no semaphores. End-to-end host code.
 
 **Legacy:**
 
@@ -523,29 +523,31 @@ const CoreCoord cluster{0, 0};
 
 Program program = CreateProgram();
 
-// Reader kernel
+// Reader kernel — 3 threads
 experimental::quasar::QuasarDataMovementConfig reader_config{
-    .num_threads_per_cluster = 1,
+    .num_threads_per_cluster = 3,
     .compile_args = {page_size},
 };
 KernelHandle reader_h = experimental::quasar::CreateKernel(
     program, "kernels/reader.cpp", cluster, reader_config);
 
-// Writer kernel
+// Writer kernel — 3 threads
 experimental::quasar::QuasarDataMovementConfig writer_config{
-    .num_threads_per_cluster = 1,
+    .num_threads_per_cluster = 3,
     .compile_args = {page_size},
 };
 KernelHandle writer_h = experimental::quasar::CreateKernel(
     program, "kernels/writer.cpp", cluster, writer_config);
 
-// DFB
+// DFB — multi-threaded producer (DM0-DM2) and consumer (DM3-DM5)
 experimental::dfb::DataflowBufferConfig dfb_config{
     .entry_size = page_size,
     .num_entries = num_pages,
-    .producer_risc_mask = 0x01,  // DM0
-    .consumer_risc_mask = 0x02,  // DM1
+    .producer_risc_mask = 0x07,  // DM0 | DM1 | DM2
+    .num_producers = 3,
     .pap = experimental::dfb::AccessPattern::STRIDED,
+    .consumer_risc_mask = 0x38,  // DM3 | DM4 | DM5
+    .num_consumers = 3,
     .cap = experimental::dfb::AccessPattern::STRIDED,
     .data_format = tt::DataFormat::Float16_b,
 };
@@ -574,7 +576,7 @@ const NodeCoord node{0, 0};
 KernelSpec reader{
     .unique_id = READER,
     .source = KernelSpec::SourceFilePath{"kernels/reader.cpp"},
-    .num_threads = 1,
+    .num_threads = 3,  // 3 producer threads
     .compile_time_arg_bindings = {{"page_size", page_size}},
     .runtime_arguments_schema = {.named_runtime_args = {"src_addr", "num_pages"}},
     .dfb_bindings = {{
@@ -591,7 +593,7 @@ KernelSpec reader{
 KernelSpec writer{
     .unique_id = WRITER,
     .source = KernelSpec::SourceFilePath{"kernels/writer.cpp"},
-    .num_threads = 1,
+    .num_threads = 3,  // 3 consumer threads
     .compile_time_arg_bindings = {{"page_size", page_size}},
     .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "num_pages"}},
     .dfb_bindings = {{
