@@ -23,8 +23,7 @@ import os
 import sys
 
 import torch
-from dit import consteval  # run_const_evals, CONSTEVAL_MAP
-from dit import model_pt
+from dit import consteval, model_pt
 
 import ttnn
 
@@ -133,9 +132,8 @@ def load_static_inputs(mesh_device, transformer):
     with open(config_path) as f:
         config = json.load(f)
     state_dict = transformer.state_dict()
-    inputs = [None] * 529
+    weights = {}
     for param_name, cfg in config.items():
-        arg_idx = cfg["arg_idx"]
         pt = state_dict.get(param_name)
         if pt is None:
             raise KeyError(f"Parameter '{param_name}' not found in state_dict.")
@@ -145,17 +143,15 @@ def load_static_inputs(mesh_device, transformer):
             pt = _pad_col(pt)
         elif stype == "row_par_attn_out" and pt.shape[1] == ORIGINAL_HEADS * HEAD_DIM:
             pt = _pad_row(pt)
-        inputs[arg_idx] = _to_ttnn(pt, cfg["layout"], cfg["dtype"], stype, mesh_device, cfg["on_device"])
-    inputs[330] = _make_const_device(torch.tensor(1.0), mesh_device)
-    inputs[331] = _make_const_device(torch.tensor(0.0), mesh_device)
+        weights[param_name] = _to_ttnn(pt, cfg["layout"], cfg["dtype"], stype, mesh_device, cfg["on_device"])
     from diffusers.models.transformers.transformer_z_image import RopeEmbedder
 
     rope = transformer.rope_embedder
     freqs = RopeEmbedder.precompute_freqs_cis(rope.axes_dims, rope.axes_lens, getattr(rope, "theta", 256.0))
-    inputs[334] = _make_const_device(freqs[0], mesh_device, dtype=ttnn.DataType.FLOAT32)
-    inputs[332] = _make_const_device(freqs[1], mesh_device, dtype=ttnn.DataType.FLOAT32)
-    inputs[333] = _make_const_device(freqs[2], mesh_device, dtype=ttnn.DataType.FLOAT32)
-    return inputs
+    weights["__rope_freqs_F__"] = _make_const_device(freqs[0], mesh_device, dtype=ttnn.DataType.FLOAT32)
+    weights["__rope_freqs_H__"] = _make_const_device(freqs[1], mesh_device, dtype=ttnn.DataType.FLOAT32)
+    weights["__rope_freqs_W__"] = _make_const_device(freqs[2], mesh_device, dtype=ttnn.DataType.FLOAT32)
+    return weights
 
 
 # ── Main model class ───────────────────────────────────────────────────────────
@@ -173,25 +169,11 @@ class ZImageTransformerTTNN(LightweightModule):
 
         # ── Load weights ───────────────────────────────────────────────────────
         print("  Loading static inputs ...")
-        self._static_inputs = load_static_inputs(mesh_device, tr_pt)
+        self.weights = load_static_inputs(mesh_device, tr_pt)
         del tr_pt
         print("  Running consteval ...")
-        self._cached = consteval.run_const_evals(self._static_inputs, mesh_device)
+        consteval.run_const_evals(self.weights, mesh_device)
         print("  Consteval complete.")
-
-        config_path = os.path.join(HERE, "tensor_load_config.json")
-        with open(config_path) as f:
-            _config = json.load(f)
-        _arg_to_ce = {arg_idx: ce_idx for ce_idx, (arg_idx, _) in consteval.CONSTEVAL_MAP.items()}
-        self.weights = {}
-        for param_name, cfg in _config.items():
-            arg_idx = cfg["arg_idx"]
-            if not cfg["on_device"]:
-                ce_key = f"main_const_eval_{_arg_to_ce[arg_idx]}"
-                t = self._cached[ce_key][0]
-            else:
-                t = self._static_inputs[arg_idx]
-            self.weights[param_name] = t
 
         # RoPE tables
         def _to_bf16_rm(t):
@@ -211,27 +193,11 @@ class ZImageTransformerTTNN(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
-        self.weights["_freqs_F"] = _to_bf16_rm(self._static_inputs[334])
-        self.weights["_freqs_H"] = _to_bf16_rm(self._static_inputs[332])
-        self.weights["_freqs_W"] = _to_bf16_rm(self._static_inputs[333])
-
-        # Position IDs, consteval scalars
-        self.weights["_img_f_ids"] = self._cached["main_const_eval_158"][0]
-        self.weights["_img_h_ids"] = self._cached["main_const_eval_158"][1]
-        self.weights["_img_w_ids"] = self._cached["main_const_eval_158"][2]
-        self.weights["_cap_hw_ids"] = self._cached["main_const_eval_158"][3]
-        self.weights["_cap_f_ids"] = self._cached["main_const_eval_96"][0]
-        self.weights["_t_freqs"] = self._cached["main_const_eval_219"][0]
-        self.weights["_t_scale"] = self._cached["main_const_eval_367"][0]
-        self.weights["_eps_hidden"] = self._cached["main_const_eval_208"][0]
-        self.weights["_eps_cap"] = self._cached["main_const_eval_208"][1]
-        self.weights["_eps_qk"] = self._cached["main_const_eval_208"][2]
-        self.weights["_scale_hidden"] = self._cached["main_const_eval_230"][0]
-        self.weights["_scale_head"] = self._cached["main_const_eval_408"][0]
-        self.weights["_one"] = self._cached["main_const_eval_454"][0]
-        self.weights["_scale_cap"] = self._cached["main_const_eval_88"][0]
-        self.weights["_x_pad_token"] = self._static_inputs[368]
-        self.weights["_cap_pad_token"] = self._static_inputs[329]
+        self.weights["_freqs_F"] = _to_bf16_rm(self.weights["__rope_freqs_F__"])
+        self.weights["_freqs_H"] = _to_bf16_rm(self.weights["__rope_freqs_H__"])
+        self.weights["_freqs_W"] = _to_bf16_rm(self.weights["__rope_freqs_W__"])
+        self.weights["_x_pad_token"] = self.weights["x_pad_token"]
+        self.weights["_cap_pad_token"] = self.weights["cap_pad_token"]
 
         # ── Detect compute grid ────────────────────────────────────────────────
         try:
