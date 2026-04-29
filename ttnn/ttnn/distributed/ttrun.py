@@ -258,8 +258,7 @@ def run_mpi_with_signal_forwarding(mpi_cmd: List[str]) -> int:
 
     tt-run runs as PID 1 in the MPIJob launcher pod; without forwarding, a SIGTERM from
     kubelet kills the Python process and orphans mpirun, leaving remote workers on the
-    cards (MINFRA-297). A second signal escalates to SIGKILL so interactive callers can
-    still bail out fast.
+    cards.
     """
     proc = subprocess.Popen(mpi_cmd)
 
