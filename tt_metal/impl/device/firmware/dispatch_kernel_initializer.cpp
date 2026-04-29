@@ -302,6 +302,37 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
                 e.what());
             rescue_stuck_dispatch_cores(dev);
         }
+        // FIX PF (GAP-57): Clear fw_launch_addr for ALL dispatch ETH cores on MMIO devices
+        // after teardown, regardless of whether they completed normally or were rescued.
+        //
+        // Root cause: ERISC firmware does not self-clear fw_launch_addr on dispatch terminate.
+        // After dispatch teardown, ETH dispatch cores have fw_launch_addr != 0 in L1.
+        // FIX PB only clears fw_launch_addr in the hard-reset rescue path.
+        // For devices where dispatch cores complete normally (no rescue), fw_launch_addr is
+        // never cleared → next test's reset_cores() sees non-zero flag → 500ms cascade
+        // (observed: 136 occurrences in run 25113312511 on all 4 MMIO devices).
+        //
+        // Fix: after wait_for_dispatch_cores(), zero fw_launch_addr for every dispatch ETH
+        // core on MMIO devices (non-MMIO devices are excluded to prevent relay hang).
+        // This is idempotent with FIX PB (writing 0 again is harmless for rescued cores).
+        if (dev->is_mmio_capable()) {
+            const auto dispatch_core_infos = dispatch_topology_->get_logical_dispatch_cores_for_rescue(dev->id());
+            const auto aeth_idx = hal_.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+            const uint32_t fw_launch_addr_val = hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+            for (const auto& [logical_core, core_type] : dispatch_core_infos) {
+                if (core_type != CoreType::ETH) {
+                    continue;
+                }
+                try {
+                    const auto virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        dev->id(), logical_core, CoreType::ETH);
+                    cluster_.write_core_immediate(
+                        dev->id(), virtual_core, std::vector<uint32_t>{0}, fw_launch_addr_val);
+                } catch (...) {
+                    // Best-effort — MMIO devices should always succeed via PCIe.
+                }
+            }
+        }
         log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} done", dev->id());
     }
 }
