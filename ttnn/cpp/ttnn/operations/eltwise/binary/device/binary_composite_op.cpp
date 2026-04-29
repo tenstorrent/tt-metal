@@ -60,10 +60,9 @@ Tensor isclose(
     // Note: INT32 magnitudes greater than 2^24 may lose precision in FLOAT32.
     const bool a_is_int = input_a.dtype() == DataType::INT32;
     const bool b_is_int = input_b.dtype() == DataType::INT32;
-    const bool any_int = a_is_int || b_is_int;
 
-    Tensor value1 = any_int ? typecast(input_a, DataType::FLOAT32, output_mem_config) : input_a;
-    Tensor value2 = any_int ? typecast(input_b, DataType::FLOAT32, output_mem_config) : input_b;
+    Tensor value1 = (a_is_int || b_is_int) ? typecast(input_a, DataType::FLOAT32, output_mem_config) : input_a;
+    Tensor value2 = (a_is_int || b_is_int) ? typecast(input_b, DataType::FLOAT32, output_mem_config) : input_b;
 
     Tensor abs_diff = ttnn::abs(ttnn::subtract(value1, value2, std::nullopt, output_mem_config), output_mem_config);
     Tensor tol = ttnn::add(
@@ -80,23 +79,36 @@ Tensor isclose(
     // fix-up explicitly:
     //   1. Force result=0 wherever EITHER input is NaN.
     //   2. If equal_nan=true, then force result=1 wherever BOTH inputs are NaN.
-    // INT32 inputs (already promoted to FLOAT32) cannot contain NaN, so this
-    // is skipped entirely when both inputs were originally INT32.
-    if (!a_is_int || !b_is_int) {
-        Tensor a_nan = ttnn::isnan(value1, output_mem_config);
-        Tensor b_nan = ttnn::isnan(value2, output_mem_config);
+    // INT32 inputs (already promoted to FLOAT32) cannot contain NaN, so:
+    //   - both_int: skip entirely.
+    //   - mixed (one INT32, one float): only the float side can be NaN, so
+    //     any_nan == float_isnan and both_nan is always false — skip isnan on
+    //     the int side, the logical_or, and the equal_nan branch entirely.
+    const bool both_int = a_is_int && b_is_int;
+    if (!both_int) {
+        if (a_is_int || b_is_int) {
+            // Mixed-dtype: only the float side can produce NaN.
+            // both_nan is always false, so equal_nan has no effect.
+            Tensor float_nan =
+                a_is_int ? ttnn::isnan(value2, output_mem_config) : ttnn::isnan(value1, output_mem_config);
+            result = ttnn::where(float_nan, 0.f, result);
+            float_nan.deallocate();
+        } else {
+            Tensor a_nan = ttnn::isnan(value1, output_mem_config);
+            Tensor b_nan = ttnn::isnan(value2, output_mem_config);
 
-        Tensor any_nan = ttnn::logical_or(a_nan, b_nan, std::nullopt, output_mem_config);
-        result = ttnn::where(any_nan, 0.f, result);
-        any_nan.deallocate();
+            Tensor any_nan = ttnn::logical_or(a_nan, b_nan, std::nullopt, output_mem_config);
+            result = ttnn::where(any_nan, 0.f, result);
+            any_nan.deallocate();
 
-        if (equal_nan) {
-            Tensor both_nan = ttnn::logical_and(a_nan, b_nan, std::nullopt, output_mem_config);
-            result = ttnn::where(both_nan, 1.f, result);
-            both_nan.deallocate();
+            if (equal_nan) {
+                Tensor both_nan = ttnn::logical_and(a_nan, b_nan, std::nullopt, output_mem_config);
+                result = ttnn::where(both_nan, 1.f, result);
+                both_nan.deallocate();
+            }
+            a_nan.deallocate();
+            b_nan.deallocate();
         }
-        a_nan.deallocate();
-        b_nan.deallocate();
     }
     return result;
 }

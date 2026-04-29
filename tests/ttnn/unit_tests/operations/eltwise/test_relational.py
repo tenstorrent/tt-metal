@@ -281,11 +281,7 @@ def test_isclose(device, h, w, atol, rtol):
 
 @pytest.mark.parametrize(
     "rtol, atol",
-    [
-        (1e-05, 1e-08),
-        (0.01, 5),
-        (0.05, 10),
-    ],
+    [(1e-05, 1e-08), (0.01, 5), (0.05, 10), (1e-04, 0)],
 )
 @pytest.mark.parametrize(
     "input_shapes",
@@ -298,7 +294,7 @@ def test_isclose_int32(device, input_shapes, rtol, atol):
     torch.manual_seed(0)
 
     x_torch = torch.randint(-2_000_000, 2_000_000, input_shapes, dtype=torch.int32)
-    delta = torch.randint(-15, 15, input_shapes, dtype=torch.int32)
+    delta = torch.randint(-200, 200, input_shapes, dtype=torch.int32)
     y_torch = x_torch + delta
 
     z_torch = torch.isclose(x_torch.float(), y_torch.float(), rtol=rtol, atol=atol)
@@ -336,9 +332,9 @@ def test_isclose_int32_mixed_dtype(device, input_shapes, rtol, atol, a_dtype, b_
     y_int = x_int + delta
 
     if a_dtype == ttnn.int32:
-        a_torch, b_torch = x_int, y_int.to(torch.bfloat16).to(torch.float32).to(torch.bfloat16)
+        a_torch, b_torch = x_int, y_int.to(torch.bfloat16).to(torch.bfloat16)
     else:
-        a_torch, b_torch = x_int.to(torch.bfloat16).to(torch.float32).to(torch.bfloat16), y_int
+        a_torch, b_torch = x_int.to(torch.bfloat16).to(torch.bfloat16), y_int
 
     a_ref = a_torch.float()
     b_ref = b_torch.float()
