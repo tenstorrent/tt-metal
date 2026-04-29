@@ -173,15 +173,15 @@ registry:
     loaded_at: '2026-04-17'
     notes: ''
 
-  - trace_id: 15
-    status: active
+  - trace_id: 10
+    status: superseded
     models: [gpt_oss]
     hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
-    trace_uid: 1d3eeadb-ae5a-4364-b9ba-0aef89fb1160
-    tt_metal_sha: 6a06f99b3689765310a5d3d16694bc8db74cd451
+    trace_uid: 39637819-20dc-4fc4-a168-b1d3bdf0495f
+    tt_metal_sha: bf8cdac63c32c5a1a04fa1de699af55e26851624
     config_count: 130
-    loaded_at: '2026-04-28'
-    notes: ''
+    loaded_at: '2026-04-17'
+    notes: 'contains configs that fail when sweep is run; superseded by trace 15'
 
   - trace_id: 13
     status: draft
@@ -191,4 +191,14 @@ registry:
     tt_metal_sha: 1a6fb7d120edfbf67f43be3e83f83095cff794c4
     config_count: 331
     loaded_at: '2026-04-17'
+    notes: ''
+
+  - trace_id: 15
+    status: active
+    models: [gpt_oss]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 1d3eeadb-ae5a-4364-b9ba-0aef89fb1160
+    tt_metal_sha: 6a06f99b3689765310a5d3d16694bc8db74cd451
+    config_count: 130
+    loaded_at: '2026-04-28'
     notes: ''
