@@ -13,7 +13,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.common.utility_functions import skip_for_n_or_less_dev, skip_for_n_dev
 
 from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
-    num_cores_to_rectangle_grid,
     round_up,
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import (
