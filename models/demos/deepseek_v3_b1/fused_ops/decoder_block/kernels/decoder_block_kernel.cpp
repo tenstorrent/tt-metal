@@ -3040,6 +3040,8 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
+        // MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
+        // PACK((llk_pack_dest_init<fp32_dest_acc_en, false>(0)));
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {

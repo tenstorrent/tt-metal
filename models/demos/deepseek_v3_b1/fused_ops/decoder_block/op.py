@@ -422,7 +422,7 @@ class DecoderBlock:
                     math_fidelity=ttnn.MathFidelity.LoFi,
                     math_approx_mode=False,
                     fp32_dest_acc_en=fp32_dest_acc_en,
-                    dst_full_sync_en=fp32_dest_acc_en,
+                    dst_full_sync_en=fp32_dest_acc_en,  # Change to true for full dest
                 ),
                 unified_compile_time_core_descriptors=merged_ucd,
                 per_core_compile_time_descriptors=merged_pcd,
