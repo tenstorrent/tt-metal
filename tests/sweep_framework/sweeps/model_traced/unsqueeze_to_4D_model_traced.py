@@ -19,6 +19,13 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
+import ast as _ast_mod
+
+
+def _ast_literal_eval(s):
+    return _ast_mod.literal_eval(s)
+
+
 TIMEOUT = 300
 
 loader = MasterConfigLoader()
@@ -69,6 +76,23 @@ def run(
             storage_type = kwargs["input_a_storage_type"]
         elif "storage_type" in kwargs:
             storage_type = kwargs["storage_type"]
+
+    # Some master configs were traced under a different mesh_device_shape than the
+    # fixture's (e.g. cfg 361 was traced on [1, 32] while the rest of gpt_oss is
+    # [4, 8]). config_hash bakes in mesh_device_shape, so we reshape the live mesh
+    # to the placement's target shape, run the op, then reshape back.
+    _saved_mesh_shape = None
+    if is_mesh_device and isinstance(input_a_tensor_placement, dict):
+        _target_str = input_a_tensor_placement.get("mesh_device_shape")
+        if isinstance(_target_str, str):
+            try:
+                _target = list(_ast_literal_eval(_target_str))
+            except Exception:
+                _target = None
+            _current = list(device.shape) if hasattr(device, "shape") else None
+            if _target and _current and _target != _current:
+                _saved_mesh_shape = _current
+                device.reshape(ttnn.MeshShape(*_target))
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config
     )  # op_kwargs available but op does not accept extra kwargs
@@ -135,11 +159,16 @@ def run(
             input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.unsqueeze_to_4D(input_tensor_a)
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
-    e2e_perf = stop_measuring_time(start_time)
-
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    try:
+        output_tensor = ttnn.unsqueeze_to_4D(input_tensor_a)
+        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
+        )
+        e2e_perf = stop_measuring_time(start_time)
+        pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    finally:
+        if _saved_mesh_shape is not None:
+            device.reshape(ttnn.MeshShape(*_saved_mesh_shape))
 
     return [pcc, e2e_perf]
