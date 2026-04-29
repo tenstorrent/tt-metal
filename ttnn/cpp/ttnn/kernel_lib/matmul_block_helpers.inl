@@ -20,6 +20,75 @@
 
 namespace compute_kernel_lib {
 
+/**
+ * Pack a (h × w) DST sub-block to absolute row-major positions in the output CB.
+ * Uses one pack_tile_block per row, manipulating fifo_wr_ptr (and the LLK packer's
+ * running fifo_wr_tile_ptr) to stride between rows. h pack_tile_block calls instead
+ * of h*w per-tile pack_tile<true> calls — order-of-magnitude fewer LLK pack
+ * invocations on the row-major output path when w > 1. (For w == 1 it collapses
+ * to one pack per tile, equivalent overhead to per-tile pack_tile<true>.)
+ *
+ * LLK detail: pack_tile_block writes each tile at fifo_wr_ptr + fifo_wr_tile_ptr,
+ * then increments fifo_wr_tile_ptr by page_size. The running offset persists across
+ * pack calls until cb_push_back resets it. Striding fifo_wr_ptr without also
+ * resetting fifo_wr_tile_ptr would land tiles at the wrong address — so we reset
+ * both per row, and restore both at the end so the caller's push_back advances
+ * cleanly from the row-group base.
+ *
+ * dst_start_idx     Start position in DST. Tiles DST[dst_start_idx..+h*w-1] are
+ *                   packed in row-major order (DST iterates row-first within the
+ *                   subblock).
+ * pack_target_id    Output CB id.
+ * col_base          Column offset within the row group (in tiles).
+ * row_stride        Row stride in tiles (= out_row_width).
+ *
+ * PRECONDITION: caller has reserved at least h * row_stride tiles in pack_target_id
+ * (one M-row-group). Caller is responsible for cb_push_back.
+ *
+ * The per-row wrap check handles the rare case where the row-group reserve crosses
+ * the CB FIFO end-of-region boundary.
+ */
+ALWI void pack_subblock_row_major_strided(
+    uint32_t dst_start_idx,
+    uint32_t pack_target_id,
+    uint32_t col_base,
+    uint32_t row_stride,
+    uint32_t h,
+    uint32_t w) {
+    uint32_t base_wr = 0;
+    uint32_t page_size = 0;
+    uint32_t fifo_size_local = 0;
+    uint32_t fifo_limit_local = 0;
+    uint32_t base_tile_ptr = 0;
+    PACK({
+        auto& intf = get_local_cb_interface(pack_target_id);
+        base_wr = intf.fifo_wr_ptr;
+        page_size = intf.fifo_page_size;
+        fifo_size_local = intf.fifo_size;
+        fifo_limit_local = intf.fifo_limit;
+        base_tile_ptr = intf.fifo_wr_tile_ptr;
+    });
+
+    for (uint32_t r = 0; r < h; r++) {
+        PACK({
+            auto& intf = get_local_cb_interface(pack_target_id);
+            uint32_t target = base_wr + (r * row_stride + col_base) * page_size;
+            if (target >= fifo_limit_local) {
+                target -= fifo_size_local;
+            }
+            intf.fifo_wr_ptr = target;
+            intf.fifo_wr_tile_ptr = 0;
+        });
+        pack_tile_block(dst_start_idx + r * w, pack_target_id, w);
+    }
+
+    PACK({
+        auto& intf = get_local_cb_interface(pack_target_id);
+        intf.fifo_wr_ptr = base_wr;
+        intf.fifo_wr_tile_ptr = base_tile_ptr;
+    });
+}
+
 template <
     bool transpose,
     bool packer_l1_acc,
@@ -226,28 +295,15 @@ ALWI void matmul_block(
                         }
 
                         if constexpr (layout == OutputLayout::RowMajor) {
-                            // Single-row subblock: DST tiles are already contiguous in
-                            // row-major order and consecutive in1_subblock iterations land
-                            // at adjacent CB positions, so pack_tile_block produces the
-                            // correct layout with fewer per-tile LLK calls than the
-                            // absolute-offset path below. Multi-row subblocks need the
-                            // absolute-offset pack because DST tiles are packed column-first
-                            // within a subblock while row-major output wants row-first.
-                            if (out_subblock_h == 1) {
-                                pack_tile_block(0, pack_target_id, out_subblock_w);
-                            } else {
-                                uint32_t dst_idx = 0;
-                                uint32_t col_base = in1_subblock * out_subblock_w;
-                                for (uint32_t r = 0; r < out_subblock_h; r++) {
-                                    // Row stride uses out_row_width (padded output-pack width),
-                                    // not in1_per_core_w — those differ for DRAM-sharded.
-                                    uint32_t row_pos = r * out_row_width;
-                                    for (uint32_t c = 0; c < out_subblock_w; c++) {
-                                        pack_tile<true>(dst_idx, pack_target_id, row_pos + col_base + c);
-                                        dst_idx++;
-                                    }
-                                }
-                            }
+                            // Strided block-pack: one pack_tile_block per row instead of
+                            // h*w per-tile pack_tile<true> calls. For h=1 this collapses to
+                            // a single pack_tile_block at col_base offset (cheaper than
+                            // out-of-order absolute-offset packing). Row stride uses
+                            // out_row_width (padded output-pack width on DRAM-sharded;
+                            // equal to in1_per_core_w on most factories).
+                            const uint32_t col_base = in1_subblock * out_subblock_w;
+                            pack_subblock_row_major_strided(
+                                0, pack_target_id, col_base, out_row_width, out_subblock_h, out_subblock_w);
                         } else {
                             pack_tile_block(0, pack_target_id, out_num_tiles);
                         }
@@ -274,19 +330,9 @@ ALWI void matmul_block(
                         }
 
                         if constexpr (spill_row_major) {
-                            if (out_subblock_h == 1) {
-                                pack_tile_block(0, interm_cb_id, out_subblock_w);
-                            } else {
-                                uint32_t dst_idx = 0;
-                                uint32_t col_base = in1_subblock * out_subblock_w;
-                                for (uint32_t r = 0; r < out_subblock_h; r++) {
-                                    uint32_t row_pos = r * out_row_width;
-                                    for (uint32_t c = 0; c < out_subblock_w; c++) {
-                                        pack_tile<true>(dst_idx, interm_cb_id, row_pos + col_base + c);
-                                        dst_idx++;
-                                    }
-                                }
-                            }
+                            const uint32_t col_base = in1_subblock * out_subblock_w;
+                            pack_subblock_row_major_strided(
+                                0, interm_cb_id, col_base, out_row_width, out_subblock_h, out_subblock_w);
                         } else {
                             pack_tile_block(0, interm_cb_id, out_num_tiles);
                         }

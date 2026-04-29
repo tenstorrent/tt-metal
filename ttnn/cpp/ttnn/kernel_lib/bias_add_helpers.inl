@@ -112,23 +112,11 @@ ALWI void add_bias_bcast_rows(
                 tile_regs_commit();
                 tile_regs_wait();
 
-                // Pack DST back to out_buf at the same row-major positions. For h=1 the
-                // absolute-offset form collapses to a sequential column run within the
-                // row-group.
-                if (out_subblock_h == 1) {
-                    for (uint32_t c = 0; c < out_subblock_w; c++) {
-                        pack_tile<true>(c, out_cb_id, col_base + c);
-                    }
-                } else {
-                    uint32_t dst_idx = 0;
-                    for (uint32_t r = 0; r < out_subblock_h; r++) {
-                        const uint32_t pack_row_pos = r * out_row_width + col_base;
-                        for (uint32_t c = 0; c < out_subblock_w; c++) {
-                            pack_tile<true>(dst_idx, out_cb_id, pack_row_pos + c);
-                            dst_idx++;
-                        }
-                    }
-                }
+                // Pack DST back to out_buf at the same row-major positions, via strided
+                // pack_tile_block (one call per row instead of per tile). h=1 is a single
+                // contiguous block at col_base offset.
+                pack_subblock_row_major_strided(
+                    0, out_cb_id, col_base, out_row_width, out_subblock_h, out_subblock_w);
                 tile_regs_release();
             }
 
