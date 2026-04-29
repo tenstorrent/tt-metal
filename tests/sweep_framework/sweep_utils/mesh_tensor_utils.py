@@ -606,6 +606,22 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
     is_mesh = device is not None and hasattr(device, "get_num_devices")
 
     if not is_mesh:
+        # Host tensor brought back from a mesh device (e.g. via from_device on a
+        # replicated multi-device tensor) keeps multiple per-device buffers but
+        # reports device()==None.  Plain ttnn.to_torch then asserts buffers==1.
+        # Mirror the on-mesh non-shard path: take the first replica.
+        try:
+            topology = ttnn_tensor.tensor_topology()
+            placements = list(topology.placements())
+        except Exception:
+            placements = []
+        if placements and not any(type(p).__name__ == "PlacementShard" for p in placements):
+            try:
+                device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+            except Exception:
+                device_tensors = []
+            if len(device_tensors) > 1:
+                return _to_torch_safe(device_tensors[0])
         return _to_torch_safe(ttnn_tensor)
 
     if mesh_composer is not None:
