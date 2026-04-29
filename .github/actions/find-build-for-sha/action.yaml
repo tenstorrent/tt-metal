@@ -14,6 +14,13 @@ inputs:
       tracy input so the correct artifact variant is selected.
     required: false
     default: 'false'
+  check-wheel:
+    description: >
+      Also check for a matching wheel artifact in the prior run.
+      When 'true', outputs wheel-found and wheel-run-id independently
+      of the C++ build artifact search.
+    required: false
+    default: 'false'
   github-token:
     description: GitHub token for API access (needs actions:read)
     required: false
@@ -24,8 +31,14 @@ outputs:
     description: The run ID of the prior build, or empty string if not found
     value: ${{ steps.find.outputs.run-id }}
   found:
-    description: '''true'' if a reusable artifact was found, ''false'' otherwise'
+    description: '''true'' if a reusable C++ build artifact was found, ''false'' otherwise'
     value: ${{ steps.find.outputs.found }}
+  wheel-found:
+    description: '''true'' if a reusable wheel artifact was also found, ''false'' otherwise'
+    value: ${{ steps.find.outputs.wheel-found }}
+  wheel-run-id:
+    description: Run ID where the wheel artifact was found (empty if not found)
+    value: ${{ steps.find.outputs.wheel-run-id }}
 
 runs:
   using: composite
@@ -38,17 +51,21 @@ runs:
         script: |
           const sha = context.sha;
           const tracy = '${{ inputs.tracy }}' === 'true';
+          const checkWheel = '${{ inputs.check-wheel }}' === 'true';
 
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
-          console.log(`Config: tracy=${tracy}`);
+          console.log(`Config: tracy=${tracy}, check-wheel=${checkWheel}`);
 
           // Artifact names follow the pattern:
           //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{SHA}_{RUN_ID}
+          // Wheel artifact names follow the pattern:
+          //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
           // The SHA in the name is the full commit SHA (or sanitized ref).
           // We search all recent repo artifacts for names containing our SHA.
 
           const MAX_PAGES = 5; // Search up to 500 recent artifacts
-          let found = null;
+          let foundBuild = null;
+          let foundWheel = null;
 
           try {
             for (let page = 1; page <= MAX_PAGES; page++) {
@@ -74,21 +91,31 @@ runs:
                 // Skip artifacts from the current run
                 if (artifact.workflow_run && artifact.workflow_run.id === context.runId) continue;
 
-                // Must be a TTMetal build artifact
-                if (!artifact.name.startsWith('TTMetal_build_any')) continue;
-
                 // Must contain our commit SHA
                 if (!artifact.name.includes(sha)) continue;
 
-                // Match profiler variant
-                const hasProfiler = artifact.name.includes('_profiler');
-                if (tracy !== hasProfiler) continue;
+                // Check for C++ build artifact
+                if (!foundBuild && artifact.name.startsWith('TTMetal_build_any')) {
+                  const hasProfiler = artifact.name.includes('_profiler');
+                  if (tracy === hasProfiler) {
+                    foundBuild = artifact;
+                  }
+                }
 
-                found = artifact;
-                break;
+                // Check for wheel artifact (only if requested)
+                if (checkWheel && !foundWheel && artifact.name.startsWith('ttnn-dist-cp')) {
+                  // Match profiler variant: wheel names use '-profiler-' when tracy is enabled
+                  const wheelHasProfiler = artifact.name.includes('-profiler-');
+                  if (tracy === wheelHasProfiler) {
+                    foundWheel = artifact;
+                  }
+                }
+
+                // Early exit if we found everything we need
+                if (foundBuild && (!checkWheel || foundWheel)) break;
               }
 
-              if (found) break;
+              if (foundBuild && (!checkWheel || foundWheel)) break;
             }
           } catch (err) {
             // If we lack actions:read permission, the API returns 403.
@@ -97,16 +124,31 @@ runs:
             console.log('Hint: ensure the calling job has "actions: read" permission');
             core.setOutput('run-id', '');
             core.setOutput('found', 'false');
+            core.setOutput('wheel-found', 'false');
+            core.setOutput('wheel-run-id', '');
             return;
           }
 
-          if (found) {
-            const runId = found.workflow_run ? found.workflow_run.id : '';
-            console.log(`✅ Found reusable build artifact "${found.name}" from run ${runId}`);
+          if (foundBuild) {
+            const runId = foundBuild.workflow_run ? foundBuild.workflow_run.id : '';
+            console.log(`✅ Found reusable build artifact "${foundBuild.name}" from run ${runId}`);
             core.setOutput('run-id', runId.toString());
             core.setOutput('found', 'true');
           } else {
-            console.log('No reusable artifacts found — will build fresh');
+            console.log('No reusable C++ build artifacts found — will build fresh');
             core.setOutput('run-id', '');
             core.setOutput('found', 'false');
+          }
+
+          if (foundWheel) {
+            const wheelRunId = foundWheel.workflow_run ? foundWheel.workflow_run.id : '';
+            console.log(`✅ Found reusable wheel artifact "${foundWheel.name}" from run ${wheelRunId}`);
+            core.setOutput('wheel-found', 'true');
+            core.setOutput('wheel-run-id', wheelRunId.toString());
+          } else {
+            if (checkWheel) {
+              console.log('No reusable wheel artifact found — will build wheel fresh');
+            }
+            core.setOutput('wheel-found', 'false');
+            core.setOutput('wheel-run-id', '');
           }
