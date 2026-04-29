@@ -34,8 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 _TT_DIT_PATH = os.path.normpath(
     os.path.join(
         HERE,
-        "../..",
-        "models",
+        "../../..",
     )
 )
 if _TT_DIT_PATH not in sys.path:
