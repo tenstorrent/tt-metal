@@ -1,10 +1,8 @@
 name: Find existing build for SHA
 description: >
-  Searches the repository's artifact list for a prior build artifact matching
-  the current commit SHA and requested configuration (tracy, distributed).
-  Works across ALL workflow types — direct workflow_dispatch, workflow_call
-  from Sanity, Merge Gate, etc. — because it searches artifacts by name
-  rather than querying workflow runs by workflow ID.
+  Searches for a prior build artifact matching the current commit SHA and
+  requested configuration (tracy, distributed). Works across ALL workflow
+  types by finding runs for the same head_sha and checking their artifacts.
 
 inputs:
   tracy:
@@ -64,78 +62,94 @@ runs:
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
           console.log(`Config: tracy=${tracy}, distributed=${distributed}, check-wheel=${checkWheel}`);
 
-          // Artifact names follow the pattern:
+          // Strategy: find all workflow runs for this commit SHA, then check
+          // each run's artifacts. This is O(runs * artifacts_per_run) instead
+          // of scanning ALL repo artifacts (5M+) which can't be paginated
+          // deep enough.
+          //
+          // Artifact name patterns:
           //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{SHA}_{RUN_ID}
-          // Wheel artifact names follow the pattern:
           //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
-          // The SHA in the name is the full commit SHA (or sanitized ref).
-          // We match on: SHA (exact), profiler/tracy variant, and distributed variant.
-          // Platform/arch/toolchain are not matched because >99% of builds use the
-          // same defaults, and the SHA already ensures code identity.
 
-          const MAX_PAGES = 5; // Search up to 500 recent artifacts
           let foundBuild = null;
           let foundWheel = null;
 
+          function matchBuild(artifact) {
+            if (!artifact.name.startsWith('TTMetal_build_any')) return false;
+            if (!artifact.name.includes(sha)) return false;
+            const hasProfiler = artifact.name.includes('_profiler');
+            if (tracy && !hasProfiler) return false;
+            if (!tracy && hasProfiler) return false;
+            const hasNoDistributed = artifact.name.includes('_no_distributed');
+            if (distributed === hasNoDistributed) return false;
+            return true;
+          }
+
+          function matchWheel(artifact) {
+            if (!artifact.name.startsWith('ttnn-dist-cp')) return false;
+            if (!artifact.name.includes(sha)) return false;
+            const wheelHasProfiler = artifact.name.includes('-profiler-');
+            if (tracy && !wheelHasProfiler) return false;
+            if (!tracy && wheelHasProfiler) return false;
+            return true;
+          }
+
           try {
-            for (let page = 1; page <= MAX_PAGES; page++) {
-              const resp = await github.rest.actions.listArtifactsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                per_page: 100,
-                page
-              });
+            // Step 1: Find all workflow runs for this SHA
+            const runsResp = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: sha,
+              per_page: 100
+            });
 
-              const artifacts = resp.data.artifacts;
-              if (artifacts.length === 0) {
-                console.log(`Page ${page}: no more artifacts`);
-                break;
-              }
+            const runs = runsResp.data.workflow_runs.filter(r =>
+              r.id !== context.runId &&
+              r.status === 'completed' &&
+              r.conclusion === 'success'
+            );
 
-              console.log(`Page ${page}: checking ${artifacts.length} artifacts...`);
+            console.log(`Found ${runsResp.data.workflow_runs.length} runs for SHA, ${runs.length} completed successfully (excluding current)`);
 
-              for (const artifact of artifacts) {
-                // Skip expired artifacts
-                if (artifact.expired) continue;
-
-                // Skip artifacts from the current run
-                if (artifact.workflow_run && artifact.workflow_run.id === context.runId) continue;
-
-                // Must contain our commit SHA
-                if (!artifact.name.includes(sha)) continue;
-
-                // Check for C++ build artifact
-                if (!foundBuild && artifact.name.startsWith('TTMetal_build_any')) {
-                  // Match tracy/profiler variant
-                  const hasProfiler = artifact.name.includes('_profiler');
-                  if (tracy !== hasProfiler) continue;
-
-                  // Match distributed variant
-                  const hasNoDistributed = artifact.name.includes('_no_distributed');
-                  if (distributed === hasNoDistributed) continue;
-
-                  foundBuild = artifact;
-                }
-
-                // Check for wheel artifact (only if requested)
-                if (checkWheel && !foundWheel && artifact.name.startsWith('ttnn-dist-cp')) {
-                  // Match profiler variant: wheel names use '-profiler-' when tracy is enabled
-                  const wheelHasProfiler = artifact.name.includes('-profiler-');
-                  if (tracy === wheelHasProfiler) {
-                    foundWheel = artifact;
-                  }
-                }
-
-                // Early exit if we found everything we need
-                if (foundBuild && (!checkWheel || foundWheel)) break;
-              }
-
+            // Step 2: Check artifacts for each completed run
+            for (const run of runs) {
               if (foundBuild && (!checkWheel || foundWheel)) break;
+
+              // List artifacts for this run (paginate in case of many test_report artifacts)
+              let page = 1;
+              while (true) {
+                const artResp = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                  page
+                });
+
+                const artifacts = artResp.data.artifacts;
+                if (artifacts.length === 0) break;
+
+                for (const artifact of artifacts) {
+                  if (artifact.expired) continue;
+
+                  if (!foundBuild && matchBuild(artifact)) {
+                    foundBuild = artifact;
+                    foundBuild._runId = run.id;
+                  }
+                  if (checkWheel && !foundWheel && matchWheel(artifact)) {
+                    foundWheel = artifact;
+                    foundWheel._runId = run.id;
+                  }
+                  if (foundBuild && (!checkWheel || foundWheel)) break;
+                }
+
+                if (foundBuild && (!checkWheel || foundWheel)) break;
+                if (artifacts.length < 100) break;
+                page++;
+              }
             }
           } catch (err) {
-            // If we lack actions:read permission, the API returns 403.
-            // Gracefully fall through to building from scratch.
-            console.log(`⚠️ Could not list artifacts (${err.status || err.message}) — will build fresh`);
+            console.log(`⚠️ Could not search artifacts (${err.status || err.message}) — will build fresh`);
             console.log('Hint: ensure the calling job has "actions: read" permission');
             core.setOutput('run-id', '');
             core.setOutput('found', 'false');
@@ -145,7 +159,7 @@ runs:
           }
 
           if (foundBuild) {
-            const runId = foundBuild.workflow_run ? foundBuild.workflow_run.id : '';
+            const runId = foundBuild._runId || '';
             console.log(`✅ Found reusable build artifact "${foundBuild.name}" from run ${runId}`);
             core.setOutput('run-id', runId.toString());
             core.setOutput('found', 'true');
@@ -156,7 +170,7 @@ runs:
           }
 
           if (foundWheel) {
-            const wheelRunId = foundWheel.workflow_run ? foundWheel.workflow_run.id : '';
+            const wheelRunId = foundWheel._runId || '';
             console.log(`✅ Found reusable wheel artifact "${foundWheel.name}" from run ${wheelRunId}`);
             core.setOutput('wheel-found', 'true');
             core.setOutput('wheel-run-id', wheelRunId.toString());
