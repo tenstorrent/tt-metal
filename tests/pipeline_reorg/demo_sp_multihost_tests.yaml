@@ -98,15 +98,10 @@
     for attempt in $(seq 1 "$MAX_RETRIES"); do
       echo "=== Recovery attempt $attempt of $MAX_RETRIES ==="
 
-      echo "--- Running cluster validation ---"
-      if mpirun --pernode --tag-output \
-        /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-        --send-traffic \
-        --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-        --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-        --num-iterations 100 \
-        --hard-fail; then
-          echo "SUCCESS: Cluster validation passed on attempt $attempt"
+      echo "--- Running system health check ---"
+      if mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+        /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health; then
+          echo "SUCCESS: System health check passed on attempt $attempt"
           validation_succeeded=true
           break
       fi
