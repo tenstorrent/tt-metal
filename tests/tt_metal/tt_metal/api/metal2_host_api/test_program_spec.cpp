@@ -1592,7 +1592,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
         .dfb_spec_name = "my_dfb",
         .local_accessor_name = "accessor",
         .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
-        .access_pattern = DFBAccessPattern::BLOCKED,
+        .access_pattern = DFBAccessPattern::ALL,
     };
     EXPECT_EQ(binding.dfb_spec_name, "my_dfb");
 
