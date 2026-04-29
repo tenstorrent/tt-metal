@@ -47,7 +47,6 @@ LM_HEAD_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_new_all_reduce import run_all_reduce_impl
 
 
-@skip_for_n_dev(8)
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("output_shape", [[1, 1, 32, 1280]])
 @pytest.mark.parametrize("cluster_axis", [0])

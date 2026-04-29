@@ -12,7 +12,6 @@ from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_dev
 
 @skip_for_n_or_less_dev(1)
 @skip_for_wormhole_b0()
-@skip_for_n_dev(8)
 @pytest.mark.parametrize(
     "num_links, output_shape, layout, input_dtype",
     [

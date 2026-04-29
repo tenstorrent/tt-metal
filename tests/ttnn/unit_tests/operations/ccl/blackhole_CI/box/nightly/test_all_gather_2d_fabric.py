@@ -11,7 +11,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 
 
 @skip_for_wormhole_b0()
-@skip_for_n_dev(8)
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("ag_output_shape", [[1, 1, 256, 256]])

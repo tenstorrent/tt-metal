@@ -56,7 +56,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_
 )
 
 
-@skip_for_n_dev(8)
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
