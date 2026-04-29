@@ -364,7 +364,14 @@ void kernel_main() {
                 }
 
                 // K: either read locally (injector or not participant) or receive from chain
-                cb_reserve_back(cb_k_in, k_chunk_tiles);
+                if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
+                    // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
+                    // the next K chunk for mcast.
+                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                    cb_reserve_back(cb_k_in, reserve_tiles);
+                } else {
+                    cb_reserve_back(cb_k_in, k_chunk_tiles);
+                }
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (k_chain.should_receive(nb, nq)) {
                     k_chain.receive();
