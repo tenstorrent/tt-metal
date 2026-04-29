@@ -1,37 +1,61 @@
 # TurboQuant KV Cache Quantization
 
-## 🚀 RESUME HERE — Tier 2A cross-core merge LIVE (2026-04-28 evening)
+## 🚀 RESUME HERE — Tier 2A DONE, now starting 128K plan (2026-04-29)
 
-Phase 2.3 of Tier 2A landed end-to-end. Spot result on T3K mesh:
+Tier 2A is complete. Pivoting to the **TurboQuant 128K — Two-Track
+Comparison** plan (see `/home/mtairum/.claude/plans/rustling-wiggling-lagoon.md`):
 
-| K  | per-call SDPA latency | speedup |
-|----|----------------------:|--------:|
-| 1  | 3.86 ms               | 1.00×   |
-| 14 | **0.36 ms**           | **10.7×** |
+- **Track A** — Fix the fused TQ SDPA kernel: add chunked online softmax
+  (Flash Attention style) so it streams K/V one chunk at a time. Today
+  the kernel pre-fills *all* BF16 K/V into L1 (34 MB at 4 K vs 1.5 MB
+  L1 limit) and so cannot run at 4K+ when cur_pos is also large.
+- **Track B** — Validation: BFP4 paged cache + *standard* SDPA decode
+  (no custom kernel). Simpler; loses TQ-specific kernel control.
 
-Both at `cur_pos = 1791` (so valid_k_chunks = 14). K=1, 2, 4, 8, 14 all
-match cosine vs masked reference — the merge is correct, the chunk
-split is correct, the cross-core NoC + semaphore handshake works.
+Execution order:
+1. Track B Step 1 — synthetic BFP4 test (`test_bfp4_paged_sdpa.py`).
+   Quick — < 1 hr. Validates BFP4-paged-SDPA viability before
+   investing in Track A kernel work.
+2. Track A — implement chunked fused kernel.
+3. Track B Steps 2-3 — e2e + comparison sweep.
 
-### Open issues (next session)
+### Tier 2A — DONE (commits e74354b → e6aa928)
 
-1. **Empty-slice deadlock** is the gate to running this everywhere.
-   Workers whose `[chunk_start, chunk_end)` range is empty (because
-   `valid_k_chunks < K` or doesn't divide evenly) hang at
-   `matmul_reduce` on an empty `alias_prev_sum` CB. Workaround so
-   far: pick cur_pos so `valid_k_chunks ≥ K` exactly. Fix: detect
-   empty slice, skip matmul_reduce, push neutral tiles
-   (max=-1e30, sum=0, out=0) to cb_partial_*, sema_inc as usual so
-   the reducer's merge becomes a no-op for that peer. Plan in
-   `TIER_2A_DESIGN.md` § "Open issues / Pickup for tomorrow".
-2. **bench_seqlen_sweep at K=14 across all power-of-2 seqlens** —
-   blocked on #1 (small seqs hit empty-slice).
-3. **E2E `--tq-full-dequant` with K=14** — needs `attention.py` to
-   forward `num_cores_per_head` to `tq_cache.fused_sdpa_decode(...)`
-   plus a CLI flag in `eval_e2e.py`.
-4. **N150 single-device** stays at K=1 (max_cores_per_head =
-   num_cores / (B * NQH) = 56/32 = 1). Tier 2A is a multi-device
-   win only.
+Phase 2.3 (cross-core split) landed end-to-end on T3K. Full bench
+(`bench_seqlen_sweep.py`, `cur_pos = 1791` across all seqs):
+
+| seq    | K=1 ms | K=14 ms | speedup |
+|-------:|-------:|--------:|--------:|
+| 1 024  |  2.24  |  0.37   |  6.05×  |
+| 2 048  |  4.43  |  0.64   |  6.92×  |
+| 4 096  |  8.84  |  0.92   |  9.61×  |
+| 8 192  | 17.71  |  1.51   | 11.7×   |
+| 16 384 | 35.38  |  2.88   | 12.3×   |
+| 32 768 | 70.57  |  5.37   | 13.1×   |
+| 65 536 | 141.11 | 10.35   | 13.6×   |
+| 131 072| 282.07 | 20.56   | 13.7×   |
+
+Approaches the theoretical 14× as work-per-core dominates the merge
+cost. Cosine vs masked reference: K = 1, 2, 4, 8, 14 all PASS at
+cur_pos ∈ {41, 200, 1791} (empty-slice fast path verified for the
+12-13 idle workers at small cur_pos).
+
+**Empty-slice fix (Phase 2.3 step 5, commit e6aa928bd27)**: workers
+whose `[chunk_start, chunk_end)` range is empty push neutral tiles
+(max = -10000.0f, sum = 0, out = 0) to cb_partial_* and sema_inc
+as usual, so the reducer's merge becomes a no-op for that peer.
+This is what unlocks the small-cur_pos rows of the table above.
+
+### Tier 2A — deferred follow-ups (not blocking 128K plan)
+
+- **E2E with K=14** — plumb `num_cores_per_head` through
+  `models/tt_transformers/tt/attention.py` `tq_cache.fused_sdpa_decode`
+  call + CLI flag in `eval_e2e.py`. The fused kernel is already
+  generic; just needs the host wiring. Table speedups are per-call;
+  e2e with K=14 should land close to the BFP8 baseline at long context.
+- **N150 single-device** stays at K=1 (max_cores_per_head =
+  num_cores / (B · NQH) = 56/32 = 1). Tier 2A is a multi-device
+  win only.
 
 ### Files touched in Phase 2.3 (commits a6d2903 → 51c7ed3)
 
