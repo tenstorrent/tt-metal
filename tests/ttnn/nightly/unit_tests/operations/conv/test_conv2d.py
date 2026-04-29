@@ -63,24 +63,40 @@ def torch_tensor_map(request):
     return torch_tensor_map
 
 
+# Creates a tensor with specified mode:
+# - "random": fills tensor with random values using torch.randn
+# - "stick": each stick has same values starting from 0 and increasing
+# - "single": fills entire tensor with the provided value
 def randomize_torch_tensor(
     torch_tensor_map,
     tensor_shape,
     generate_positive_numbers=False,
     dtype=torch.bfloat16,
+    mode="random",
+    fill_value=None,
 ):
-    if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
-        torch_tensor = torch.abs(torch_tensor)
-        return torch_tensor
-    else:
-        cache_key = (tensor_shape, dtype)
-        if cache_key in torch_tensor_map.keys():
-            torch_tensor = torch_tensor_map[cache_key]
-        else:
-            torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
-            torch_tensor_map[cache_key] = torch_tensor
+    tensor_shape = tuple(tensor_shape)
+    cache_key = (tensor_shape, generate_positive_numbers, dtype, mode, fill_value)
 
+    if cache_key in torch_tensor_map.keys():
+        return torch_tensor_map[cache_key]
+
+    if mode == "random":
+        torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
+        if generate_positive_numbers:
+            torch_tensor = torch.abs(torch_tensor)
+    elif mode == "stick":
+        h, w = tensor_shape[2], tensor_shape[3]
+        stick = torch.arange(h * w, dtype=dtype).reshape(1, 1, h, w)
+        torch_tensor = stick.expand(tensor_shape).float()
+    elif mode == "single":
+        if fill_value is None:
+            raise ValueError("fill_value must be provided when mode is 'single'")
+        torch_tensor = torch.full(tensor_shape, fill_value, dtype=dtype).float()
+    else:
+        raise ValueError(f"Unsupported mode: {mode}. Use 'random', 'stick', or 'single'")
+
+    torch_tensor_map[cache_key] = torch_tensor
     return torch_tensor
 
 
