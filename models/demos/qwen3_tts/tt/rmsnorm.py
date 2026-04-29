@@ -77,6 +77,7 @@ class RMSNorm(LightweightModule):
             epsilon=self.eps,
             weight=self.weight,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
 
