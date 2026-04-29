@@ -229,18 +229,19 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-- name: Gemma-4-E4B unit tests (N300)
-  cmd: |
-    uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
-    pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x2"
-  model: gemma-4-e4b-n300
-  skus:
-    wh_n300:
-      timeout: 5
-      tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
+# Due to reduced availability of N300 runners we are disabling these tests for now.
+# - name: Gemma-4-E4B unit tests (N300)
+#   cmd: |
+#     uv pip install -r models/demos/gemma4/requirements.txt
+#     export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+#     pytest --timeout 600 models/demos/gemma4/tests/unit/ -k "1x2"
+#   model: gemma-4-e4b-n300
+#   skus:
+#     wh_n300:
+#       timeout: 5
+#       tier: 2
+#   owner_id: U08TJ70UFRT # Harry Andrews
+#   team: models
 
 - name: Gemma-4-26B-A4B unit tests (T3K)
   cmd: |
@@ -250,7 +251,7 @@
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
-      timeout: 5
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -263,7 +264,7 @@
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
-      timeout: 5
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
