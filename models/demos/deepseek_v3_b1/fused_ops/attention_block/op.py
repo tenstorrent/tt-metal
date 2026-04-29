@@ -591,7 +591,7 @@ class AttentionBlock:
 
         # TP4 outer-dim: each device produces [1, per_device_out_w]
         num_sp = mesh_shape[0]
-        per_device_out_w = input_shape[1] // num_sp
+        per_device_out_w = 7168 // num_sp
         per_device_out_tiles = per_device_out_w // tile_width
 
         # Full grid (union of all cores for semaphore allocation)
@@ -2677,6 +2677,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
         input_running_offset += mla_out_o_cb_descriptor.total_size
+        print(f"INPUT_RUNNING_OFFSET: {input_running_offset}, mla_out_o_cb_descriptor size : {mla_out_o_cb_descriptor.total_size}")
         mla_cb_descriptors.append(mla_out_o_cb_descriptor)
         # Uncomment to debug local FlashMLA output
         # mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_o_cb, output_tensor_device)
@@ -2700,6 +2701,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_interm_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
         input_running_offset += mla_out_ms_cb_descriptor.total_size
+        print(f"INPUT_RUNNING_OFFSET: {input_running_offset}, mla_out_ms_cb_descriptor size : {mla_out_ms_cb_descriptor.total_size}")
         mla_cb_descriptors.append(mla_out_ms_cb_descriptor)
 
         # Post SDPA
@@ -2760,6 +2762,7 @@ class AttentionBlock:
         )
         matmul4_out_cb_descriptor.format_descriptors = [matmul4_out_cb_format]
         input_running_offset += matmul4_out_cb_descriptor.total_size
+        print(f"INPUT_RUNNING_OFFSET: {input_running_offset}, matmul4_out_cb_descriptor size : {matmul4_out_cb_descriptor.total_size}")
 
         # CB 3: Gather2 output = Mcast3 source (from sharded tensor, gather core)
         gather2_dst_cb_format = ttnn.CBFormatDescriptor(

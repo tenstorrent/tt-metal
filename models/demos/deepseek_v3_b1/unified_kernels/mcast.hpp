@@ -346,7 +346,6 @@ struct Mcast {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
         static void sender_impl(const SenderArgs& s) {
             cb_wait_front(s.src_cb, s.src_num_pages);
-
             mcast_send_with_state<
                 CTArgsT::mcast_num_cores,
                 CTArgsT::loopback,

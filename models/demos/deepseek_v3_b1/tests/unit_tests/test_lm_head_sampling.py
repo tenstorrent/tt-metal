@@ -14,8 +14,10 @@ Output stays width-sharded across matmul cores.
 In single-device mode (skip_ccl=True): CCL is skipped and the input is used directly.
 """
 import os
+import random
 import re
 import statistics
+import time
 from pathlib import Path
 
 import pytest
@@ -50,6 +52,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     _build_synthetic_mtp_state_dict,
 )
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
+from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
@@ -58,6 +61,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     create_fabric_router_config,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     DeepSeekV3EmbeddingLayerWeights,
@@ -778,19 +782,21 @@ def create_single_pod_passthrough_pipeline_configuration(
     )
 
 
-# Golden helper: same deterministic formula as SyntheticWeightProvider (one-hot embedding, winner_per_row).
+# Golden helper: same deterministic formula as SyntheticWeightProvider (randn LM head, one-hot embedding).
 def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor:
     """Compute expected output indices for synthetic weights. Same math as SyntheticWeightProvider."""
     K = 7168
-    n_total = 101 * 160
+    V = _VOCAB_SIZE
     torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
     row_indices = torch.arange(iterations, dtype=torch.int64) % K
     torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
     torch_embedding_table[torch.arange(iterations), row_indices] = 1
-    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
-    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
-    torch_b[torch.arange(K), winner_per_row] = 1
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+    # Use a diagonal matrix for the LM head (same logic as weight_provider.py SyntheticWeightProvider)
+    lm_w = torch.full((V, K), -1.0, dtype=torch.bfloat16)
+    lm_w[torch.arange(K, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(K)] = 1
+    lm_w_bf8 = ttnn.from_torch(lm_w.T.contiguous(), dtype=ttnn.bfloat8_b)
+    torch_b = ttnn.to_torch(lm_w_bf8).to(torch.bfloat16)
+    torch_indices_flat = torch.arange(V, dtype=torch.int32).reshape(1, V)
     torch_expected_indices = torch.stack(
         [
             LMHeadSampling.golden(
@@ -968,6 +974,24 @@ def _format_real_weights_topk_mismatch_report(
     return "\n".join(lines)
 
 
+def _per_shard_quantize(tensor: torch.Tensor, *, num_shards: int, shard_dim: int, dtype) -> torch.Tensor:
+    """Quantize a tensor by splitting into shards first, matching ShardTensorToMesh.
+
+    The pipeline's EphemeralTensorCache uses ``ShardTensorToMesh`` which splits the
+    bf16 tensor into ``num_shards`` pieces along ``shard_dim`` and converts each
+    shard to the target block-float dtype independently.  A single HOST round-trip
+    on the full tensor can produce different shared exponents than per-shard
+    conversion, so this helper replicates the per-shard path entirely on the HOST.
+    """
+    shards = tensor.chunk(num_shards, dim=shard_dim)
+    quantized_shards = []
+    for shard in shards:
+        shard_c = shard.contiguous()
+        tt = ttnn.from_torch(shard_c, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32)))
+        quantized_shards.append(ttnn.to_torch(tt).to(torch.bfloat16))
+    return torch.cat(quantized_shards, dim=shard_dim)
+
+
 def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     """Compute expected (base_token, spec_token) pairs for the 4-stage MTP pipeline.
 
@@ -979,8 +1003,8 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
     Weights match SyntheticWeightProvider from weight_provider.py:
       - Embedding: one-hot (emb[i, i % K] = 1)
-      - LM head: one-hot (lm_w[i % n_total, i] = 1, rest -1), bfloat8_b quantized
-      - MTP norms: ones; MTP eh_proj: randn (from _build_synthetic_mtp_state_dict)
+      - LM head: randn (seed=42), bfloat8_b quantized
+      - MTP norms: randn (abs + 0.1); MTP eh_proj: randn (from _build_synthetic_mtp_state_dict)
     """
     K = _EMBED_HIDDEN
     n_total = _LM_HEAD_N_SYNTHETIC
@@ -989,29 +1013,44 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     base_embed_w = torch.zeros(_VOCAB_SIZE, K, dtype=torch.bfloat16)
     base_embed_w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % K] = 1
 
-    # One-hot LM head (same as SyntheticWeightProvider.load_lm_head)
-    lm_w = torch.full((_VOCAB_SIZE, K), -1.0, dtype=torch.bfloat16)
-    lm_w[torch.arange(K, dtype=torch.int64) % n_total, torch.arange(K)] = 1
-    norm_w = torch.ones(K, dtype=torch.bfloat16)
+    # Random LM head (same as SyntheticWeightProvider.load_lm_head)
+    g = torch.Generator().manual_seed(42)
+    lm_w = torch.randn(_VOCAB_SIZE, K, generator=g, dtype=torch.bfloat16)
+    lm_w_eye = torch.eye(K, K, dtype=torch.bfloat16)
+    lm_w_eye = 100 * lm_w_eye
+    lm_w[:7168,:] = lm_w_eye
+    norm_w = torch.randn(K, generator=g, dtype=torch.bfloat16).abs() + 0.1
 
-    # Round-trip through bfloat8_b to match device quantization (prepare_weights stores as bfloat8_b)
-    lm_w_bf8 = ttnn.from_torch(lm_w.T.contiguous(), dtype=ttnn.bfloat8_b)
-    lm_w_quantized = ttnn.to_torch(lm_w_bf8).to(torch.bfloat16)
+    lm_w_folded = lm_w * norm_w
+    lm_w_folded_T = lm_w_folded.T.contiguous()
+    lm_w_quantized = _per_shard_quantize(lm_w_folded_T, num_shards=8, shard_dim=1, dtype=ttnn.bfloat8_b)
 
-    torch_gamma = norm_w.unsqueeze(0)
+    torch_gamma = None
     torch_b = lm_w_quantized
     torch_indices_flat = torch.arange(_VOCAB_SIZE, dtype=torch.int32).reshape(1, _VOCAB_SIZE)
 
     # MTP weights (same as SyntheticWeightProvider.load_mtp via _build_synthetic_mtp_state_dict)
     mtp_sd = _build_synthetic_mtp_state_dict()
-    torch_h_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.hnorm.weight"].unsqueeze(0)
-    torch_e_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.enorm.weight"].unsqueeze(0)
+    raw_h_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.hnorm.weight"]
+    raw_e_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.enorm.weight"]
     torch_eh_proj = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.eh_proj.weight"].T.contiguous()
+
     # MTP embedding reuses the main one-hot embedding table
     torch_embedding = base_embed_w
 
-    torch_eh_proj_bf8 = ttnn.from_torch(torch_eh_proj, dtype=ttnn.bfloat8_b)
-    torch_eh_proj = ttnn.to_torch(torch_eh_proj_bf8).to(torch.bfloat16)
+
+    gamma_eh = torch.cat([raw_e_gamma, raw_h_gamma], dim=0).unsqueeze(1)
+    torch_eh_proj_folded = torch_eh_proj * gamma_eh
+    torch_eh_proj = _per_shard_quantize(torch_eh_proj_folded, num_shards=8, shard_dim=0, dtype=ttnn.bfloat4_b)
+
+    torch_h_gamma = None
+    torch_e_gamma = None
+
+    spec_lm_w = mtp_sd["lm_head.weight"]
+    spec_norm_w = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.shared_head.norm.weight"]
+    spec_lm_w_folded = spec_lm_w * spec_norm_w
+    spec_lm_w_folded_T = spec_lm_w_folded.T.contiguous()
+    spec_b = _per_shard_quantize(spec_lm_w_folded_T, num_shards=8, shard_dim=1, dtype=ttnn.bfloat8_b)
 
     results = []
     for iteration in range(iterations):
@@ -1020,24 +1059,25 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
         base_token_tensor, mtp_logits = LMHeadSampling.golden(
             torch_input.float(),
-            torch_gamma.float(),
+            torch_gamma,
             torch_b.float().unsqueeze(0),
             indices=torch_indices_flat,
             k=1,
             p=1.0,
+            temperature=0.6,
             fuse_mtp=True,
             embedding_tensor=torch_embedding.float(),
-            h_gamma_tensor=torch_h_gamma.float(),
-            e_gamma_tensor=torch_e_gamma.float(),
+            h_gamma_tensor=torch_h_gamma,
+            e_gamma_tensor=torch_e_gamma,
             eh_projection_tensor=torch_eh_proj.float(),
         )
         base_token = base_token_tensor.to(torch.uint32).item()
 
         _h_var = torch_input.float().pow(2).mean(-1, keepdim=True)
-        _h_norm = torch_input.float() * torch.rsqrt(_h_var + 1e-6) * torch_h_gamma.float()
+        _h_norm = torch_input.float() * torch.rsqrt(_h_var + 1e-6)
         _tok_emb = torch_embedding[iteration, :].unsqueeze(0).float()
         _e_var = _tok_emb.pow(2).mean(-1, keepdim=True)
-        _e_norm = _tok_emb * torch.rsqrt(_e_var + 1e-6) * torch_e_gamma.float()
+        _e_norm = _tok_emb * torch.rsqrt(_e_var + 1e-6)
         _concat = torch.cat([_e_norm, _h_norm], dim=-1)
         _concat_bf16 = _concat.to(torch.bfloat16).to(torch.float32)
 
@@ -1094,11 +1134,12 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
         spec_token_tensor, _ = LMHeadSampling.golden(
             _reduced_logits,
-            torch_gamma.float(),
-            torch_b.float().unsqueeze(0),
+            None,
+            spec_b.float().unsqueeze(0),
             indices=torch_indices_flat,
             k=1,
             p=1.0,
+            temperature=0.6,
         )
         spec_token = spec_token_tensor.to(torch.uint32).item()
 
@@ -1932,7 +1973,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -1963,7 +2004,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
-            output_mtp_tensor=ttnn_mtp_output,
+            eh_mm_fused_buffer=ttnn_mtp_output,
             embedding_tensor=ttnn_embedding,
             h_gamma_tensor=ttnn_h_gamma,
             e_gamma_tensor=ttnn_e_gamma,
@@ -1994,7 +2035,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
-            output_mtp_tensor=ttnn_mtp_output,
+            eh_mm_fused_buffer=ttnn_mtp_output,
             embedding_tensor=ttnn_embedding,
             h_gamma_tensor=ttnn_h_gamma,
             e_gamma_tensor=ttnn_e_gamma,
@@ -2442,7 +2483,7 @@ def test_single_device_mtp(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -2656,7 +2697,7 @@ def test_single_device_mtp_verification(
     )
     torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
     ttnn_eh_proj = to_device(
-        torch_eh_proj_shuffled, eh_proj_mem_config, layout=ttnn.TILE_LAYOUT, tile=b_tile, dtype=ttnn.bfloat8_b
+        torch_eh_proj_shuffled, eh_proj_mem_config, layout=ttnn.TILE_LAYOUT, tile=b_tile, dtype=ttnn.bfloat4_b
     )
     ttnn_mtp_output = to_device(
         torch.zeros((M, mtp_padded_dim), dtype=torch.bfloat16),
@@ -2682,7 +2723,7 @@ def test_single_device_mtp_verification(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -2807,7 +2848,7 @@ def test_single_device_d2h(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    d2h_page_size_bytes = 64
+    d2h_page_size_bytes = 256
 
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
@@ -3480,7 +3521,7 @@ def test_multidevice_mtp(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -3564,7 +3605,7 @@ def test_d2h(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    d2h_page_size_bytes = 64
+    d2h_page_size_bytes = 256
 
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
@@ -3798,7 +3839,7 @@ def test_d2d_to_d2h_pipeline(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    socket_page_size_bytes = 64
+    socket_page_size_bytes = 256
     socket_fifo_size = 256
 
     a_tile = ttnn.Tile([1, 32])
@@ -4106,7 +4147,7 @@ def test_4stage_galaxy_1_iteration(
     n_total = num_matmul_cores * n_per_core
     activation_page_size_bytes = K * 2  # bf16 [1, 7168]
     activation_fifo_size = activation_page_size_bytes * 2
-    socket_page_size_bytes = 64
+    socket_page_size_bytes = 256
     socket_fifo_size = 512
     assert activation_page_size_bytes == 14336
     assert socket_fifo_size == 8 * socket_page_size_bytes
@@ -4602,6 +4643,14 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
     )
     pid = pipeline.my_mesh_id
     logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
+
+    golden = None
+    golden_debug = None
+    if run_golden and pid == 0:
+        logger.debug(f"[TEST] computing golden...")
+        golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
+        logger.debug(f"[TEST] golden computed")
+
     try:
         pipeline.setup_and_run()
         logger.debug(f"[TEST P{pid}] setup_and_run complete")
@@ -4609,12 +4658,6 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
-            if run_golden:
-                logger.debug(f"[TEST] computing golden...")
-                golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
-                logger.debug(f"[TEST] golden computed, creating config")
-            else:
-                logger.debug(f"[TEST] skipping golden computation")
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
@@ -4872,7 +4915,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1485568,
+            "worker_l1_size": 1451000,
         }
     ],
     indirect=True,
@@ -4901,12 +4944,12 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     num_procs = int(ttnn.distributed_context_get_size())
     if num_procs == 4:
         config = create_single_pod_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
+            SyntheticWeightProvider(fold_rmsnorm_weights=True),
             fp32_dest_acc_en=use_fp32,
         )
     elif num_procs == 16:
         config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
+            SyntheticWeightProvider(fold_rmsnorm_weights=True),
             fp32_dest_acc_en=use_fp32,
         )
     else:
@@ -4924,7 +4967,14 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
 
     pos_id = 0
-    slot_id = 23
+    slot_id = 0
+
+    golden = None
+    golden_debug = None
+    if run_golden and pid == 0:
+        logger.debug(f"[TEST] computing golden...")
+        golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
+        logger.debug(f"[TEST] golden computed")
 
     pipeline.setup_and_run()
     logger.debug(f"[TEST P{pid}] setup_and_run complete")
@@ -4972,11 +5022,11 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
             tok1_type = raw[4].item()
             tok1_pos = raw[5].item()
 
-            if run_golden:
-                expected_base, expected_spec = golden[iteration]
-            else:
-                expected_base = None
-                expected_spec = None
+        if run_golden:
+            expected_base, expected_spec = golden[iteration]
+        else:
+            expected_base = None
+            expected_spec = None
 
             type_name = {0: "BASE", 1: "SPEC"}
             logger.debug(

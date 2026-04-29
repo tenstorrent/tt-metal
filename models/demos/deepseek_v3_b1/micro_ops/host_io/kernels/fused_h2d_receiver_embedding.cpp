@@ -228,8 +228,9 @@ void kernel_main() {
             metadata_wr_ptr[md_idx] = metadata_rd_ptr[md_idx];
         }
 
+        
         noc_async_read_barrier();
-
+        
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(

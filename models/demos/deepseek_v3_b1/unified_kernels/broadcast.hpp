@@ -184,6 +184,10 @@ struct Broadcast {
                             args.socket_page_size,
                             1 - noc_index);
                         noc_async_read_barrier(1 - noc_index);
+                        // DPRINT some logits from the read data
+                        for (uint32_t i = 0; i < 10; i++) {
+                            DPRINT << "Logit " << i << ": " << BF16(reinterpret_cast<uint16_t*>(get_write_ptr(CTArgs::cb0_id))[i]) << ENDL();
+                        }
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);

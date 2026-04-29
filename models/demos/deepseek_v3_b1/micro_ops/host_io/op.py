@@ -32,6 +32,7 @@ blocking on socket_wait_for_pages() and cb_wait_front() operations.
 """
 
 import ttnn
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_tensor_accessor_args
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
@@ -170,9 +171,13 @@ class HostInterface:
 
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:
-            # For now, we assume that tokens will be passed in as 64 bytes packets to embedding.
-            # This allows us to add more information in the input packet as needed.
-            assert self.h2d_page_size == 64
+            # The fused H2D+embedding kernel reads `metadata_size_bytes` worth of bytes
+            # from each H2D socket page (after the token id) and forwards them downstream
+            # alongside the embedding lookup. To keep the read in-bounds, the H2D socket
+            # page must be at least the full DeepseekMetadata struct.
+            assert (
+                self.h2d_page_size == DeepseekMetadata.aligned_size_bytes()
+            ), f"H2D page size ({self.h2d_page_size}) must equal DeepseekMetadata.aligned_size_bytes() ({DeepseekMetadata.aligned_size_bytes()}) for the fused embedding path"
             assert (
                 self.embedding_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
                 and self.embedding_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
