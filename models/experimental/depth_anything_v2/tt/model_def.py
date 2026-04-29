@@ -833,12 +833,17 @@ def custom_preprocessor(torch_model, name):
                 )
             ),
             # Position embeddings: original (1, 1370, 1024) [1 CLS + 1369 patches].
-            # Pre-pad to (1, 1408, 1024) to match seqL_padded.
+            # Our sequence layout: [CLS(32 tokens), patches(1369), pad(7)] = 1408.
+            # HF layout: [CLS(1), patches(1369)] = 1370.
+            # Must rearrange: CLS pos -> slot 0 (pad 31 zeros to fill 32),
+            # then patch positions -> slots 32-1400, then pad to 1408.
             "position_embeddings": _rm(
-                torch.nn.functional.pad(
-                    torch_model.backbone.embeddings.position_embeddings,
-                    (0, 0, 0, 1408 - torch_model.backbone.embeddings.position_embeddings.shape[1]),
-                )
+                torch.cat([
+                    torch_model.backbone.embeddings.position_embeddings[:, :1, :],  # CLS pos (1, 1, 1024)
+                    torch.zeros(1, 31, 1024),  # pad CLS region to 32 tokens
+                    torch_model.backbone.embeddings.position_embeddings[:, 1:, :],  # patch positions (1, 1369, 1024)
+                    torch.zeros(1, 1408 - 32 - 1369, 1024),  # pad to seqL_padded
+                ], dim=1)
             ),
         },
         "encoder": {"layer": []},
