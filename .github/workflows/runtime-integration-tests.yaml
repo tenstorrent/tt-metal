@@ -1,6 +1,10 @@
 name: "(Runtime) Integration Tests"
 
+# Nightly schedule restores coverage previously run via L2 Nightly; staggered to reduce runner contention.
+# Manual validation completed before enabling (see PR #40962 discussion).
 on:
+  schedule:
+    - cron: "0 5 * * *" # 05:00 UTC daily
   workflow_dispatch:
     inputs:
       wormhole:

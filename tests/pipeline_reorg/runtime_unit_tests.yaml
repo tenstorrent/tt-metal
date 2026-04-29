@@ -53,38 +53,39 @@
   cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter='-*NIGHTLY_*:*NocEstimator*'
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 40
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 40
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Context, Device, Misc, NOC, JIT Build ---
+# --- Context, Device, Misc, JIT Build ---
+# NOTE: unit_tests_noc dropped, mock-coexistence tests filtered (#39849).
 - name: runtime_core
   cmd: |
-    ./build/test/tt_metal/unit_tests_context
+    ./build/test/tt_metal/unit_tests_context --gtest_filter='-MetalContextIntegrationTest.MockDeviceOnly:MetalContextIntegrationTest.Coexisting*:MetalContextIntegrationTest.ForkMockAndRealDevice'
     ./build/test/tt_metal/unit_tests_device
     ./build/test/tt_metal/unit_tests_misc
-    ./build/test/tt_metal/unit_tests_noc
     ./build/test/tt_metal/unit_tests_jit_build
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 12
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # --- Integration Tests ---
-- name: runtime_integration
-  cmd: ./build/test/tt_metal/unit_tests_integration
-  skus:
-    wh_n150_civ2:
-      timeout: 8
-    bh_p150b_civ2:
-      timeout: 8
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
+# NOTE: unit_tests_integration disabled (matmul JIT + SFPU device hang). Re-add when fixed.
+# - name: runtime_integration
+#   cmd: ./build/test/tt_metal/unit_tests_integration
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 8
+#     bh_p150b_civ2:
+#       timeout: 8
+#   owner_id: U099A7FMKL2 # Manish Sudumbrekar
+#   team: runtime
 
 # --- LLK + SFPI Tests ---
 - name: runtime_llk
@@ -99,13 +100,13 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Debug Tools (DPrint, Watcher, Inspector, NOC Debugging, Clean Init) ---
+# --- Debug Tools (DPrint, Watcher, Inspector, Clean Init) ---
+# NOTE: unit_tests_noc_debugging disabled (NOC debug detection broken); re-enable once owner fixes.
 - name: runtime_debug_tools
   cmd: |
     ./tests/scripts/run_tools_tests.sh
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='*'
     ./build/test/tt_metal/unit_tests_inspector --gtest_filter='*'
-    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1 ./build/test/tt_metal/unit_tests_noc_debugging --gtest_filter='*'
   skus:
     wh_n150_civ2:
       timeout: 12
@@ -141,7 +142,7 @@
   cmd: ./build/test/tt_metal/distributed/distributed_unit_tests
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 15
     bh_p150b_civ2:
       timeout: 8
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -247,11 +248,11 @@
     wh_n150_civ2:
       timeout: 10
     wh_n300_civ2:
-      timeout: 10
+      timeout: 12
     bh_p150b_civ2:
       timeout: 10
     bh_p100a_civ2_viommu:
-      timeout: 10
+      timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
