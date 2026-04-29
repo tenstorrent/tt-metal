@@ -232,7 +232,9 @@ def main():
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=model_args.cluster_shape)
     page_table_cpu = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).unsqueeze(0)
 
-    # Warmup + trace capture.
+    # Warmup + trace capture (trace is incompatible with sliding-window's
+    # host-side ring_pos read — disable trace when --tq-recent-window > 0).
+    use_trace = args.tq_recent_window == 0
     print("\nWarmup (compile decode programs)...")
     tokens_torch = torch.tensor([int(reference_tokens[0].item())], dtype=torch.int64)
     pos_torch = torch.tensor([0], dtype=torch.int64)
@@ -243,12 +245,18 @@ def main():
     ttnn.deallocate(tt_out_w)
     print(f"  Compile time: {time.perf_counter() - t_compile:.1f}s")
 
-    print("Capturing trace...")
-    trace_inputs = copy_host_to_device(host_inputs_0, mesh_device=mesh_device)
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    tt_out_trace, _ = tt_model.ttnn_decode_forward(*trace_inputs)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    print("  Trace captured.")
+    if use_trace:
+        print("Capturing trace...")
+        trace_inputs = copy_host_to_device(host_inputs_0, mesh_device=mesh_device)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_out_trace, _ = tt_model.ttnn_decode_forward(*trace_inputs)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        print("  Trace captured.")
+    else:
+        print("Trace disabled (sliding-window mode requires host-side ring_pos read).")
+        trace_id = None
+        trace_inputs = None
+        tt_out_trace = None
 
     # Teacher-force through all 1023 positions, record top-5 at each.
     print(f"\nRunning teacher-forced decode over {num_tokens - 1} positions...")
@@ -264,18 +272,27 @@ def main():
         tokens_torch = torch.tensor([tok], dtype=torch.int64)
         pos_torch = torch.tensor([pos], dtype=torch.int64)
         host_inputs_step = tt_model.prepare_decode_inputs_host(tokens_torch, pos_torch, page_table=page_table_cpu)
-        copy_host_to_device(host_inputs_step, device_tensors=trace_inputs)
 
-        t0 = time.perf_counter()
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-        times.append(time.perf_counter() - t0)
+        if use_trace:
+            copy_host_to_device(host_inputs_step, device_tensors=trace_inputs)
+            t0 = time.perf_counter()
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            times.append(time.perf_counter() - t0)
+            out_tensor = tt_out_trace
+        else:
+            device_inputs_step = copy_host_to_device(host_inputs_step, mesh_device=mesh_device)
+            t0 = time.perf_counter()
+            out_tensor, _ = tt_model.ttnn_decode_forward(*device_inputs_step)
+            times.append(time.perf_counter() - t0)
 
         # Extract logits [1, 1, batch*tile, vocab] → [batch, 1, vocab]
         logits = (
-            ttnn.to_torch(tt_out_trace, mesh_composer=mesh_composer)
+            ttnn.to_torch(out_tensor, mesh_composer=mesh_composer)
             .permute(2, 1, 0, 3)
             .squeeze(2)[:1, 0:1, : model_args.vocab_size]
         )
+        if not use_trace:
+            ttnn.deallocate(out_tensor)
 
         # Top-5 predicted tokens at this position.
         logits_flat = logits.squeeze()  # [vocab]
@@ -327,7 +344,8 @@ def main():
     print(f"  Total eval time: {elapsed_total:.1f}s")
     print(f"{'='*60}")
 
-    ttnn.release_trace(mesh_device, trace_id)
+    if use_trace:
+        ttnn.release_trace(mesh_device, trace_id)
     if use_tq:
         # Single shared TQ cache — only deallocate once (all layers point to the same one).
         shared_tq.deallocate()

@@ -804,21 +804,28 @@ class Attention(LightweightModule):
             # Pre-rotate Q for rotated-space SDPA.
             q_heads_1BQD = turbo_quant_cache.pre_rotate_query(q_heads_1BQD)
 
-            # Sliding-window hybrid: when recent_window > 0, run standard SDPA over
-            # the BFP8 ring (last W tokens, full precision) instead of the fused TQ
-            # kernel. First-cut "ring-only" mode: ignores TQ cache contributions
-            # from older positions. Tests whether Llama tolerates W-window attention.
+            # Sliding-window hybrid: when recent_window > 0, the proper LSE-aware
+            # combine attends to ALL positions but with two-tier storage precision
+            # (recent W tokens BFP8, older tokens TQ-quantized). Mathematically
+            # equivalent to one big SDPA. See LSE_COMBINE_DESIGN.md.
             _tq_recent_window = getattr(turbo_quant_cache, "recent_window", 0)
             if _tq_recent_window > 0:
-                # Standard paged SDPA decode wants Q in [1, B, NQH, DH] — exactly
-                # what pre_rotate_query already returned, so no permute needed.
-                attn_output_1G4D = turbo_quant_cache.sliding_window_sdpa_decode(
-                    q_heads_1BQD,
+                # Permute pre-rotated Q from [1, B, NQH, DH] → [B, NQH, 1, DH]
+                # which is what the fused TQ kernel (used internally for both
+                # halves of the hybrid) expects.
+                q_bqhd_h = ttnn.permute(q_heads_1BQD, (1, 2, 0, 3))
+                ttnn.deallocate(q_heads_1BQD)
+                attn_out_bqhd = turbo_quant_cache.hybrid_sdpa_decode(
+                    q_bqhd_h,
                     layer_idx=_tq_layer_idx,
                     current_pos=current_pos,
                     scale=self.scale,
+                    page_table=_tq_page_table,
                 )
-                ttnn.deallocate(q_heads_1BQD)
+                ttnn.deallocate(q_bqhd_h)
+                # Permute output [B, NQH, 1, DH] → [1, B, NQH, DH] to match downstream.
+                attn_output_1G4D = ttnn.permute(attn_out_bqhd, (2, 0, 1, 3))
+                ttnn.deallocate(attn_out_bqhd)
             else:
                 # Fused TQ SDPA expects Q shape [B, NQH, 1, DH]. pre_rotate_query returned
                 # DRAM-interleaved [1, B, NQH, DH]; permute directly.
