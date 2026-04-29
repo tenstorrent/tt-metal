@@ -60,6 +60,14 @@ def build_parser():
     p.add_argument(
         "--bfp4-baseline", action="store_true", help="Baseline with BFP4 cache (no TQ) — isolate storage vs TQ loss"
     )
+    p.add_argument(
+        "--tq-num-cores-per-head",
+        type=int,
+        default=1,
+        help="Tier 2A K — split each (B, NQH) work item across K cores. 1 = no split. "
+        "14 is the validated T3K perf path. Only the non-hybrid SDPA call honours this; "
+        "the hybrid combine forces K=1 internally.",
+    )
     p.add_argument("--max-seq-len", type=int, default=1024, help="Must be >= 1024 for full reference")
     p.add_argument(
         "--num-eval-tokens",
@@ -232,6 +240,9 @@ def main():
         if args.tq_recent_window > 0:
             tt_model.tq_ring_W = shared_tq.recent_window
             tt_model.tq_ring_W_padded = shared_tq.ring_W_padded
+
+        # Tier 2A K split (only honoured by the non-hybrid SDPA path).
+        shared_tq.num_cores_per_head = args.tq_num_cores_per_head
 
     # ------------------------------------------------------------------ #
     # Teacher-forced decode: feed ref tokens one at a time, get top-5    #

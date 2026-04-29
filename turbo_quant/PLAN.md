@@ -74,6 +74,46 @@ The combine is **not** a uniform 50/50 blend — it adaptively re-weights per
 head and per step based on actual attention scores. That's why W=128 (88.9%)
 beats the truncated-disjoint variant from earlier (which gave 0% top-1).
 
+### Long-context smoke (`test_hybrid_long_context.py`)
+
+Single-layer hybrid SDPA call at the end of a populated cache, 32 KV heads,
+W=128, all on N150. Output finiteness + magnitude check only — no accuracy
+metric (would need a longer reference text):
+
+| Context | hybrid_sdpa_decode latency | Output max_abs | Result |
+|---:|---:|---:|---|
+| 4 K  | 4050 ms (first JIT) | 0.094 | PASS |
+| 16 K | 2256 ms             | 0.044 | PASS |
+| 32 K | 2233 ms             | 0.031 | PASS |
+| 128 K | 2485 ms            | 0.029 | PASS |
+
+The kernel scales to Llama's full 128 K window. Latencies are first-call
+(JIT compile dominates ~2 s); steady-state per-call latency would be much
+lower. No L1 overflow, no NaN propagation through the chunked online
+softmax. Output magnitudes shrink at longer context as expected (more
+positions to softmax over → narrower per-position weight).
+
+Real per-token decode at 128 K would be 32× this (32 layers), but with
+program-cache warm and trace capture the 2 s first-call dominates only
+once.
+
+### T3K validation: blocked on disk
+
+`run_t3k_w_sweep.sh` ran with TT_NUM_DEVICES=8 but failed:
+`TT_FATAL: Failed to write tensor data... No space left on device` while
+sharding Llama-3.1-8B for T3K (ran out at layer 20/32 of `feed_forward.w1`).
+`/localdev` is at 100% (3.3 T / 3.5 T). Big space hogs:
+
+- 91 GB — `hf/ttnn_cache/meta-llama/Llama-3.3-70B-Instruct/`
+- 17 GB — `hf/ttnn_cache/{N150,T3K}/` (orphan top-level, not used by current
+  TT_CACHE_PATH)
+- 16 GB — `hf/ttnn_cache/meta-llama/Llama-3.1-8B-Instruct/N150/` (the cache
+  we used for the W-sweep)
+
+T3K 8B cache needs ~25 GB. **Resolution requires user input** — either free
+70B or orphan caches. Once unblocked, just re-run
+`turbo_quant/run_t3k_w_sweep.sh`.
+
 ## 🚀 RESUME HERE — TurboQuant 128K plan complete (2026-04-29)
 
 Status of the **TurboQuant 128K — Two-Track Comparison** plan:
