@@ -98,16 +98,16 @@ parallelism cannot close it. Long-context (e.g. 32K+) might
 narrow the relative gap somewhat as SDPA grows, but Track B
 should hold its lead because BFP8 SDPA also stays fast there.
 
-### Final recommendation
+### Current recommendation
 
-Adopt **Track B (`--tq-rescaled-bfp4`)** as the production TQ
-path. Keep Track A's fused kernel + Tier 2A code in tree (it's a
-research artifact and may matter for future workloads), but mark
-it deprecated for production e2e use.
+Track B (`--tq-rescaled-bfp4`) is the leading candidate for the
+production TQ path on the strength of the T3K numbers above.
 
-Remaining open follow-ups:
-- Long-context Track B quality test (4K / 8K / 16K).
-- Add `--tq-rescaled-bfp4` row to `bench_seqlen_sweep.py`.
+Track A's fused kernel + Tier 2A code stays in tree — the per-call
+SDPA wins from K=14 may still matter for workloads we haven't
+profiled yet (very long context, much larger batch, different
+head counts), so it's worth keeping the option live until the
+broader perf surface is mapped.
 
 ### Tier 2A — DONE (commits e74354b → e6aa928)
 
