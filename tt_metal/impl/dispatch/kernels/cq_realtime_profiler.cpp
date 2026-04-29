@@ -36,10 +36,10 @@ volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfile
 
 // Read timestamps from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a) {
-    // Heartbeat: _pad[12] counts ring-full spins. Host post-mortems can pair it with
-    // NCRISC's _pad[9]/[10] to localize wedges between BRISC and NCRISC.
+    // Heartbeat: ring_full_wait_count increments once per enqueue blocked on a full ring.
+    // Host post-mortems can pair it with ncrisc_debug.socket_reserve_pages_{enter,exit}_count.
     if (rt_ring_full(ring_buffer)) {
-        ring_buffer->_pad[12]++;
+        ring_buffer->ring_full_wait_count++;
         while (rt_ring_full(ring_buffer)) {
             invalidate_l1_cache();
         }
