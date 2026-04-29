@@ -960,11 +960,12 @@ def custom_preprocessor(torch_model, name):
         # fusion projection: (256, 256, 1, 1) -> permute -> (256, 256)
         fproj_w = layer.projection.weight.permute(1, 2, 3, 0).reshape(-1, 256)
 
+        nc_bias = torch_model.neck.convs[i].bias
         fp = {
             # Channel normalizer: neck_hidden_sizes[i] -> 256 (3x3 conv)
             "neck_conv": {
                 "weight": _rm(nc_w, dtype=ttnn.bfloat16),
-                "bias": _rm(torch_model.neck.convs[i].bias),
+                "bias": _rm(nc_bias) if nc_bias is not None else None,
             },
             # Fusion projection: 256 -> 256
             "projection": {
