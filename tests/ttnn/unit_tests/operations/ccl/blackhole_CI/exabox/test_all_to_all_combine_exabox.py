@@ -14,15 +14,16 @@ Tests cover:
 - bfloat16 dtype
 - MoE-specific parameters (experts, batches, select_k, local_reduce)
 
-The underlying op + golden helper (run_all_to_all_combine_test) is reused from
-tests/nightly/t3000/ccl/test_all_to_all_combine.py — it already seeds torch and
-random internally so multi-host MPI ranks generate consistent goldens.
+The underlying op + golden helper (run_all_to_all_combine_test) is vendored in
+the sibling _a2a_moe_helpers.py so this folder is self-contained and does not
+depend on tests/nightly/t3000/... It seeds torch and random internally so
+multi-host MPI ranks generate consistent goldens.
 """
 
 import pytest
 
 import ttnn
-from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox._a2a_moe_helpers import run_all_to_all_combine_test
 
 # ---------------------------------------------------------------------------
 # Fabric / topology parametrize combos (reused by multiple tests)

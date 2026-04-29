@@ -15,16 +15,15 @@ Tests cover:
 - bfloat16 dtype
 - MoE-specific parameters (experts, batches, select_k)
 
-The underlying op + golden helper (run_all_to_all_dispatch_test) is reused from
-tests/nightly/t3000/ccl/test_all_to_all_dispatch.py — it uses ShardTensor2dMesh
-for input and ConcatMeshToTensor for verification, so it composes correctly
-across MPI ranks when the test calls it with the full mesh.
+The underlying op + golden helper (run_all_to_all_dispatch_test) is vendored in
+the sibling _a2a_moe_helpers.py so this folder is self-contained and does not
+depend on tests/nightly/t3000/...
 """
 
 import pytest
 
 import ttnn
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import run_all_to_all_dispatch_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox._a2a_moe_helpers import run_all_to_all_dispatch_test
 
 # ---------------------------------------------------------------------------
 # Fabric / topology parametrize combos (reused by multiple tests)
