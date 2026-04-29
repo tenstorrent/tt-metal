@@ -16,7 +16,6 @@ from typing import List, Optional
 import torch
 import ttnn
 
-from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import TracedRun
@@ -32,8 +31,7 @@ from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRV
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWAllReduced
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-from models.experimental.tt_symbiote.utils.device_management import DeviceInit
-
+from models.experimental.tt_symbiote.utils.device_management import timed_call
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -210,7 +208,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         # Set device and preprocess weights
         pipeline._set_device_and_preprocess(device)
-
+        pipeline.prefill = timed_call(pipeline.prefill, "prefill", "TTNNDotsOCRPipelinePrefill")
+        pipeline.decode_step = timed_call(pipeline.decode_step, "decode", "TTNNDotsOCRPipelineDecode")
         return pipeline
 
     # ------------------------------------------------------------------
@@ -221,11 +220,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         """Recursively set device/device_state on all children, then preprocess weights."""
         from models.experimental.tt_symbiote.utils.device_management import set_device
 
-        TracedRun.configure(device=device)
-
-        # set_device recursively propagates device, device_state, and
-        # _bypass_tensor_wrapping to every TTNNModule reachable from self.
-        set_device(self, device, device_init=DeviceInit, register_forward_hook=False, dump_visualization=False)
+        set_device(self, device, register_forward_hook=False, dump_visualization=False)
 
         # Preprocess and move weights for every leaf TTNNModule.
         for module in self._collect_ttnn_modules():
@@ -504,48 +499,43 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tt = self.vision_tower.forward(pixel_values, image_grid_thw)
 
         # =====================================================================
-        # Step B: Build vision table on host, re-upload as col-sharded.
-        # Download col-sharded vision_tt, reassemble full H on host,
-        # prepend zero row, re-upload with ShardTensor2dMesh so the
-        # embedding table is col-sharded [N_vision+1, H/num_devices]
-        # per device.
+        # Step B: Build vision table ON DEVICE (no host round-trip).
+        # Convert TILE -> ROW_MAJOR, reshape to 2D, prepend a tiny
+        # zero row, so the embedding table is [N_vision+1, H/num_devices]
+        # per device, col-sharded.
         # =====================================================================
         N_vision = int(vision_tt.shape[2])
+        H_per_device = int(vision_tt.shape[3])
 
-        if num_devices > 1:
-            # Col-sharded: concat on last dim to reassemble full H
-            composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
-        else:
-            composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
-        vision_host = ttnn.to_torch(vision_tt, mesh_composer=composer).to(torch.bfloat16)
+        # B.1: TILE -> ROW_MAJOR on device (needed by ttnn.embedding)
+        vision_rm = ttnn.to_layout(vision_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(vision_tt)
 
-        if num_devices <= 1 and vision_host.shape[0] > 1:
-            per = vision_host.shape[0] // max(num_devices, 1)
-            vision_host = vision_host[:per]
+        # B.2: Reshape [1, 1, N_vision, H_per_device] -> [N_vision, H_per_device]
+        vision_2d = ttnn.reshape(vision_rm, (N_vision, H_per_device))
 
-        vision_host = vision_host.squeeze(0).squeeze(0)  # [N_vision, H]
-
-        zero_row = torch.zeros(1, H, dtype=torch.bfloat16)
-        vision_table_host = torch.cat([zero_row, vision_host], dim=0)  # [N_vision+1, H]
-
+        # B.3: Create zero row (tiny: ~3 KB upload, not a bottleneck)
         if num_devices > 1:
-            # Upload as col-sharded so embedding gather produces col-sharded output
-            table_mapper = ttnn.ShardTensor2dMesh(
+            zero_row_mapper = ttnn.ShardTensor2dMesh(
                 self.device,
                 dims=(None, -1),
                 mesh_shape=list(self.device.shape),
             )
         else:
-            table_mapper = ttnn.ReplicateTensorToMesh(self.device)
+            zero_row_mapper = ttnn.ReplicateTensorToMesh(self.device)
 
-        vision_table = ttnn.from_torch(
-            vision_table_host,
+        zero_row_tt = ttnn.from_torch(
+            torch.zeros(1, H, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            mesh_mapper=table_mapper,
+            mesh_mapper=zero_row_mapper,
         )
+
+        # B.4: Concat zero row + vision embeddings -> vision table
+        vision_table = ttnn.concat([zero_row_tt, vision_2d], dim=0)
+        ttnn.deallocate(zero_row_tt)
+        ttnn.deallocate(vision_2d)
 
         # =====================================================================
         # Step C: Build gather index on host (tiny: ~19 KB) and upload
@@ -652,136 +642,3 @@ class TTNNDotsOCRPipeline(TTNNModule):
         """Release all traced runs and deallocate pre-allocated buffers."""
         TracedRun.release_all()
         self._decode_cache_position = None
-
-
-# ---------------------------------------------------------------------------
-# HF-compatible model wrapper (used by HF model.generate() path)
-# ---------------------------------------------------------------------------
-
-
-class TTNNDotsOCRModel(TTNNModule):
-    @staticmethod
-    def from_torch(model):
-        new_model = TTNNDotsOCRModel()
-        new_model.model = model
-        new_model._decode_cache_position = None
-
-        for layer in model.layers:
-            if isinstance(layer, TTNNModule):
-                layer._bypass_tensor_wrapping = True
-        if isinstance(model.norm, TTNNModule):
-            model.norm._bypass_tensor_wrapping = True
-
-        ttnn_layers = [l for l in model.layers if isinstance(l, TTNNModule)]
-        new_model.layer_stack = TTNNDotsOCRLayerStack(ttnn_layers)
-        new_model.layer_stack._bypass_tensor_wrapping = True
-
-        return new_model
-
-    def to_device(self, device):
-        super().to_device(device)
-        self.layer_stack.to_device(device)
-        return self
-
-    def __getattr__(self, name):
-        try:
-            return self.__dict__[name]
-        except KeyError:
-            pass
-        return getattr(self.__dict__["model"], name)
-
-    def call(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        position_ids=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        cache_position=None,
-        **kwargs,
-    ):
-        ttnn_self = self
-        hf_model = self.model
-        use_cache = use_cache if use_cache is not None else hf_model.config.use_cache
-
-        if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-
-        if inputs_embeds is None:
-            inputs_embeds = hf_model.embed_tokens(input_ids)
-        elif isinstance(inputs_embeds, torch.Tensor) and type(inputs_embeds) is torch.Tensor:
-            inputs_embeds = ttnn.from_torch(
-                inputs_embeds,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=ttnn_self.device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    ttnn_self.device,
-                    dims=(None, -1),
-                    mesh_shape=list(ttnn_self.device.shape),
-                ),
-            )
-
-        if use_cache and past_key_values is None:
-            from transformers import DynamicCache
-
-            past_key_values = DynamicCache()
-
-        if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], dtype=torch.int32
-            )
-
-        if not isinstance(cache_position, ttnn.Tensor):
-            cp = cache_position
-            if hasattr(cp, "cpu"):
-                cp = cp.cpu()
-            if isinstance(cp, torch.Tensor):
-                cp = cp.to(torch.int32)
-            else:
-                cp = torch.tensor(cp, dtype=torch.int32)
-            mesh_mapper = (
-                ttnn.ReplicateTensorToMesh(ttnn_self.device) if ttnn_self.device.get_num_devices() > 1 else None
-            )
-            is_decode = inputs_embeds.shape[1] == 1
-            if is_decode and ttnn_self._decode_cache_position is not None:
-                cp_temp = ttnn.from_torch(
-                    cp,
-                    device=ttnn_self.device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=mesh_mapper,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                ttnn.copy(cp_temp, ttnn_self._decode_cache_position)
-                cache_position = ttnn_self._decode_cache_position
-            else:
-                cache_position = ttnn.from_torch(
-                    cp,
-                    device=ttnn_self.device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=mesh_mapper,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                if is_decode:
-                    ttnn_self._decode_cache_position = cache_position
-
-        hidden_states = inputs_embeds
-
-        hidden_states = ttnn_self.layer_stack(
-            hidden_states,
-            past_key_value=past_key_values,
-            cache_position=cache_position,
-        )
-
-        hidden_states = hf_model.norm(hidden_states)
-
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=past_key_values if use_cache else None,
-        )
