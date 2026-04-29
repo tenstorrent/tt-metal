@@ -38,8 +38,8 @@ constexpr tt::tt_metal::mx::FormatParams kMxFp8E5M2Params = {
     .sat_supported = true,
     .elem_sat_pos_bits = 0x7B,  // 0_11110_11 = +max normal
     .elem_sat_neg_bits = 0xFB,  // 1_11110_11 = -max normal
-    .inf_rep = tt::tt_metal::mx::InfNanRep::ExpAllOnesManZero,
-    .nan_rep = tt::tt_metal::mx::InfNanRep::ExpAllOnesManNonZero,
+    .inf_rep = tt::tt_metal::mx::InfNanRepresentation::ExpAllOnesManZero,
+    .nan_rep = tt::tt_metal::mx::InfNanRepresentation::ExpAllOnesManNonZero,
 };
 
 // MXFP8 E4M3FN (a.k.a. MXFP8P): 1 sign / 4 exp / 3 mantissa, finite-only — no
@@ -60,8 +60,8 @@ constexpr tt::tt_metal::mx::FormatParams kMxFp8E4M3Params = {
     .sat_supported = true,
     .elem_sat_pos_bits = 0x7E,  // 0_1111_110 = +max normal
     .elem_sat_neg_bits = 0xFE,  // 1_1111_110 = -max normal
-    .inf_rep = tt::tt_metal::mx::InfNanRep::NotRepresentable,
-    .nan_rep = tt::tt_metal::mx::InfNanRep::ExpAllOnesManAllOnes,
+    .inf_rep = tt::tt_metal::mx::InfNanRepresentation::NotRepresentable,
+    .nan_rep = tt::tt_metal::mx::InfNanRepresentation::ExpAllOnesManAllOnes,
 };
 
 template <typename T>
@@ -128,10 +128,10 @@ std::vector<uint32_t> pack_as_mxfp8_tiles_impl(
                 params);
             exps.push_back(block_scale.shared_exp_biased);
 
-            float scale = block_scale.scale;
+            int scale_exp = block_scale.shared_exp_adj;
             for (uint32_t i = 0; i < params.block_size; ++i) {
                 float v = tile_values[blk_idx * params.block_size + i];
-                float scaled = v / scale;
+                float scaled = std::ldexp(v, -scale_exp);
                 elems.push_back(static_cast<uint8_t>(tt::tt_metal::mx::convert_to_mx_elem_bits(scaled, params)));
             }
         }
