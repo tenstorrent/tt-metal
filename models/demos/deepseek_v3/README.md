@@ -197,11 +197,12 @@ Generate a compatible multi-prompt reference file with:
 
 Run the DeepSeek-V3 demo with teacher forcing:
 
-- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --max-new-tokens 256`
+- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --prompts-file <prompts.json> --num-prompts 256 --max-new-tokens 128`
 
 Notes:
 
 - `--token-accuracy` is not compatible with `--random-weights` and requires tokenizer files in `--model-path`.
+- Use the same prompts JSON and prompt count that were used to generate the API results converted into the reference file.
 - The demo decodes one sequence per reference entry in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens per entry.
 - If `top5_tokens` is present in the reference, the demo reports both top-1 and top-5 accuracies; otherwise, only top-1.
 
