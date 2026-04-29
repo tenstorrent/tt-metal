@@ -19,6 +19,8 @@
 #endif
 #include "internal/debug/stack_usage.h"
 
+#include "ckernel.h"
+
 // Global vars
 uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
@@ -63,7 +65,9 @@ uint32_t _start() {
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
-    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+    volatile std::uint32_t* debug_feature_disable_reg =
+        reinterpret_cast<volatile std::uint32_t*>(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    store_blocking(debug_feature_disable_reg, 0);
 #endif
 #if !defined(UCK_CHLKC_MATH) and defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
