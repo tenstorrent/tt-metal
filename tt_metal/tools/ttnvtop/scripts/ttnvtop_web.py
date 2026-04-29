@@ -214,7 +214,7 @@ header h1 { margin:0; font-size:15px; }
 .status { color:var(--fg-dim); font-size:12px; }
 .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#3fb950; margin-right:5px; vertical-align:middle; }
 .dot.disconnected { background:#f85149; }
-main { padding:12px; display:grid; grid-template-columns: 1fr 380px; grid-template-rows: auto auto 1fr; gap:12px; height:calc(100vh - 50px); }
+main { padding:12px; display:grid; grid-template-columns: minmax(0, 1fr) minmax(560px, 1fr); grid-template-rows: auto auto 1fr; gap:12px; height:calc(100vh - 50px); }
 .panel { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; }
 .panel h2 { margin:0 0 8px 0; font-size:11px; color:var(--fg-dim); text-transform:uppercase; letter-spacing:0.5px; }
 #chips { grid-column:1; grid-row:1/3; min-height:0; }
