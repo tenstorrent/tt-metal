@@ -992,10 +992,12 @@ def _build_prefill_seq_major_device_program(
 ):
     """ProgramDescriptor for the seq-major GDN prefill variant.
 
-    Identical to _build_prefill_device_program except the compute kernel
-    path is COMPUTE_PREFILL_WITH_NORM_PATH (which folds in per-head RMSNorm
-    on the kernel's output before push to cb_out) and the writer path will
-    move to WRITER_PREFILL_SEQ_MAJOR_PATH in a later task.
+    Identical to _build_prefill_device_program except:
+      1. The compute kernel uses COMPUTE_PREFILL_WITH_NORM_PATH, which folds
+         per-head RMSNorm into the kernel before pushing to cb_out.
+      2. The writer uses WRITER_PREFILL_SEQ_MAJOR_PATH, which emits
+         [1, 1, num_tokens, num_pairs*Dv] dense seq-major output (writer
+         L1-buffers 32 tokens of cb_out into Vt dense tiles per block).
     """
     max_cores = grid.x * grid.y
     num_cores = min(num_cores, num_pairs_total, max_cores)
@@ -1073,6 +1075,7 @@ def _build_prefill_seq_major_device_program(
         _make_cb(31, 1, core_ranges),  # cb_rms_scale
         _make_cb(19, 1, core_ranges),  # cb_reduce_scaler
         _make_cb(20, 1, core_ranges),  # cb_rms_eps
+        _make_cb(30, Vt, core_ranges),  # cb_scratch (writer L1 repacking, seq-major variant)
     ]
 
     state_l1_flag = 1 if state_in_l1 else 0
@@ -1111,9 +1114,14 @@ def _build_prefill_seq_major_device_program(
             conv_tiles_per_row,
             ab_tiles_per_row,
         ]
-        # Writer compile-time args still match the OLD writer's layout for now.
-        # Task 4 swaps in the seq-major writer with its own compile-time args.
-        writer_ct = [Kt, Vt, BF16_TILE_BYTES, state_l1_flag, num_tokens]
+        writer_ct = [
+            Kt,
+            Vt,
+            BF16_TILE_BYTES,
+            state_l1_flag,
+            num_tokens,
+            num_pairs_total,
+        ]
 
         reader_kd = ttnn.KernelDescriptor(
             kernel_source=READER_PREFILL_PATH,
@@ -1124,7 +1132,7 @@ def _build_prefill_seq_major_device_program(
             config=ttnn.ReaderConfigDescriptor(),
         )
         writer_kd = ttnn.KernelDescriptor(
-            kernel_source=WRITER_PREFILL_PATH,  # OLD writer for Task 2-3; swapped in Task 4
+            kernel_source=WRITER_PREFILL_SEQ_MAJOR_PATH,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=group_ranges,
             compile_time_args=writer_ct,
