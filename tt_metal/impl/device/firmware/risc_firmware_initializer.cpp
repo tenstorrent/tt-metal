@@ -1026,7 +1026,32 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         }
     }
 
-    cluster_.l1_barrier(device_id);
+    // FIX PL (#42429): l1_barrier() routes through the ERISC relay on non-MMIO chips.
+    // If the relay is dead (stale from a prior process) and FIX AF has added the
+    // read_non_mmio() timeout, the barrier will throw instead of hanging forever.
+    // This call is in run_async_build_phase(), before reset_cores() has established
+    // relay health — catch and warn so init can continue.
+    const bool is_mmio_dev = cluster_.mmio_chip_ids().count(device_id);
+    if (is_mmio_dev) {
+        cluster_.l1_barrier(device_id);
+    } else {
+        try {
+            cluster_.l1_barrier(device_id);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogAlways,
+                "clear_l1_state: l1_barrier timed out on non-MMIO device {} (dead ERISC relay): {}. "
+                "L1 clear writes may not have flushed — proceeding with init.",
+                device_id,
+                e.what());
+        } catch (...) {
+            log_warning(
+                tt::LogAlways,
+                "clear_l1_state: l1_barrier timed out on non-MMIO device {} (dead ERISC relay, unknown exception). "
+                "L1 clear writes may not have flushed — proceeding with init.",
+                device_id);
+        }
+    }
 }
 
 void RiscFirmwareInitializer::clear_dram_state(tt::ChipId device_id) {
@@ -1035,9 +1060,35 @@ void RiscFirmwareInitializer::clear_dram_state(tt::ChipId device_id) {
     auto num_dram_channels = cluster_.get_soc_desc(device_id).get_num_dram_views();
     constexpr uint32_t start_address = 0;
     std::vector<uint8_t> zero_vec(dram_size_per_channel, 0);
+    const bool is_mmio_dev = cluster_.mmio_chip_ids().count(device_id);
     for (int channel = 0; channel < num_dram_channels; ++channel) {
         cluster_.write_dram_vec(zero_vec.data(), zero_vec.size(), device_id, channel, start_address);
-        cluster_.dram_barrier(device_id);
+        // FIX PL (#42429): dram_barrier() routes through the ERISC relay on non-MMIO chips.
+        // Same race as l1_barrier in clear_l1_state() — guard for dead relay.
+        if (is_mmio_dev) {
+            cluster_.dram_barrier(device_id);
+        } else {
+            try {
+                cluster_.dram_barrier(device_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "clear_dram_state: dram_barrier timed out on non-MMIO device {} channel {} "
+                    "(dead ERISC relay): {}. DRAM clear writes may not have flushed — proceeding with init.",
+                    device_id,
+                    channel,
+                    e.what());
+                break;  // relay is dead; subsequent channels will also fail
+            } catch (...) {
+                log_warning(
+                    tt::LogAlways,
+                    "clear_dram_state: dram_barrier timed out on non-MMIO device {} channel {} "
+                    "(dead ERISC relay, unknown exception). Proceeding with init.",
+                    device_id,
+                    channel);
+                break;
+            }
+        }
     }
 }
 
@@ -1146,7 +1197,30 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
             cluster_.write_core(
                 launch_msg_buf.data(), launch_msg_buf.size(), tt_cxy_pair(chip_id, virtual_core), launch_slot_addr);
         }
-        cluster_.l1_barrier(chip_id);
+        // FIX PL (#42429): l1_barrier() routes through the ERISC relay on non-MMIO BH chips.
+        // terminate_active_ethernet_cores_on_all_chips() runs in run_launch_phase() before
+        // reset_cores() has confirmed relay health. Guard for dead relay.
+        const bool chip_is_mmio = cluster_.mmio_chip_ids().count(chip_id);
+        if (chip_is_mmio) {
+            cluster_.l1_barrier(chip_id);
+        } else {
+            try {
+                cluster_.l1_barrier(chip_id);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogAlways,
+                    "terminate_active_ethernet_cores_on_all_chips: l1_barrier timed out on non-MMIO device {} "
+                    "(dead ERISC relay): {}. ETH terminate writes may not have flushed.",
+                    chip_id,
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogAlways,
+                    "terminate_active_ethernet_cores_on_all_chips: l1_barrier timed out on non-MMIO device {} "
+                    "(dead ERISC relay, unknown exception).",
+                    chip_id);
+            }
+        }
     }
 }
 
