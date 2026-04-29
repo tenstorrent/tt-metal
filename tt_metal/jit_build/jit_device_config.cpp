@@ -78,7 +78,7 @@ std::vector<bool> routing_fw_configs_for_product(tt::ARCH arch, std::string_view
 
 std::vector<uint32_t> dram_harvesting_configs_for_product(tt::ARCH arch, std::string_view product_name) {
     // TODO(#39462): Hand-curated precompile coverage. For Blackhole, "2xharvested" covers both 0- and 1-DRAM-harvested
-    // variants: typical P150/P300 present at runtime as product "2xharvested" (tensix_harvest=2 typical) with 0 DRAM
+    // variants: typical P150/P300 present at runtime as product "2xharvested" (when tensix_harvest=2) with 0 DRAM
     // harvested, while P100 has 1 DRAM harvested.
     if (arch == tt::ARCH::BLACKHOLE && product_name == "2xharvested") {
         return {0, 1};
@@ -96,7 +96,9 @@ CoreCoord pcie_core_for_arch(tt::ARCH arch) {
     return pcie_core_map.at(arch);
 }
 
-// FIXME: use DispatchMemMap::get_dispatch_message_addr_start() once it is decoupled from global MetalContext
+// TODO: use DispatchMemMap::get_dispatch_message_addr_start() as the single
+// source of truth. Blocked today because constructing a DispatchMemMap for one
+// address requires the full DispatchSettings + L1 layout machinery.
 uint32_t dispatch_message_addr(const Hal& hal, DispatchCoreType dispatch_core_type) {
     uint32_t stream_index = 0;
     if (dispatch_core_type == DispatchCoreType::WORKER) {
@@ -120,11 +122,13 @@ void enumerate_jit_device_configs(
     const std::string& core_descriptor_path,
     const std::string& soc_descriptor_path,
     const std::function<void(const JitDeviceConfig&)>& callback) {
-    // FIXME: hardcoded values
+    // NOTE: precompile policy, not missing wiring. Precompile intentionally targets:
+    //   - profiler disabled (profiler_dram_bank_size_per_risc_bytes = 0),
+    //   - 2-ERISC mode enabled on Blackhole only,
+    //   - DRAM-backed command queue disabled.
+    // These choices define the set of build keys the firmware precompile step produces.
     constexpr uint32_t profiler_dram_bank_size_per_risc_bytes = 0;
-    // Only support compiling 2-ERISC mode for Blackhole.
     const bool enable_2_erisc_mode = (arch == tt::ARCH::BLACKHOLE);
-
     const bool enable_dram_backed_cq = false;
 
     const CoreCoord pcie_core = pcie_core_for_arch(arch);
@@ -149,8 +153,9 @@ void enumerate_jit_device_configs(
                 auto num_hw_cqs = config_node.first.as<uint8_t>();
                 const auto& config = config_node.second;
 
-                // FIXME: hardcoded logic adopted from core_descriptor.cpp
-                // tg_compute_with_storage_grid_range is not to be supported.
+                // NOTE: precompile deliberately does not produce TG-specific binaries, so we
+                // read only `compute_with_storage_grid_range` and ignore `tg_compute_with_storage_grid_range`
+                // even though the runtime path in core_descriptor.cpp honors it for nebula_x1 on galaxy clusters.
                 auto compute_with_storage_start = config["compute_with_storage_grid_range"]["start"];
                 auto compute_with_storage_end = config["compute_with_storage_grid_range"]["end"];
                 size_t end_x = compute_with_storage_end[0].as<size_t>();
