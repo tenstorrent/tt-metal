@@ -5,8 +5,8 @@
 """Regression tests for optimizer ``get_state_dict`` / ``set_state_dict`` round-trip from Python.
 
 These tests pin behaviour around a subtle nanobind variant-routing issue
-discovered while implementing checkpoint resume for the TinyLlama pretraining
-example (``tt-train/sources/examples/nano_gpt/pretraining/pretrain_tinyllama.py``).
+discovered while implementing checkpoint resume for a TinyLlama pretraining
+example.
 
 # Background: the variant-routing issue
 
