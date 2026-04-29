@@ -271,66 +271,57 @@ class TtGazeLLE:
             .contiguous()
         )
 
-    @torch.no_grad()
-    def __call__(self, images: torch.Tensor, bboxes: List[Sequence[float]], captures=None):
-        """Run forward. If ``captures`` is a mutable dict, intermediate tt tensors
-        are downloaded to torch and stored under named stage keys for PCC testing.
-        Captures inflict many ``to_torch`` syncs, so only use them in PCC tests."""
-        ref = self.ref
-        b = images.shape[0]
-        assert b == 1, "TtGazeLLE currently supports B=1 only"
+    def _encode_scene(self, images: torch.Tensor, capture_fn=None):
+        """Run the scene-level portion of the forward once per image.
 
-        def _capture(key, tt_tensor):
-            if captures is not None:
-                captures[key] = ttnn.to_torch(tt_tensor).to(torch.float32)
+        Covers: host-reshape → upload → patch-embed matmul → add patch pos_embed
+        → concat [CLS+pos_cls, REG] prefix → 12 DINOv2 blocks → final LayerNorm
+        → slice off CLS+REG → gaze decoder projection (768→256) → add gaze
+        pos_embed. Returns the device tensor holding projected scene features
+        of shape ``(1, num_patches, dim)``. Caller owns the deallocate.
+        """
+        def _cap(key, tt):
+            if capture_fn is not None:
+                capture_fn(key, tt)
 
-        # ---- 1. Upload pre-patched image. A single pure-layout permute+reshape on host
-        # turns the (B, 3, H, W) image into (B, num_patches, ps*ps*3) so the device side
-        # is a clean matmul with no fold / layout-conversion overhead.
         patches_host = self._reshape_image_for_matmul(images, self.num_patches_side, self.patch_size)
         patches_tt = _to_device(patches_host, self.device)
-
-        # ---- 2. Patch embed (on device): (B, N, 588) @ (588, 768) + bias.
         patches_tt = ttnn.linear(
-            patches_tt,
-            self.patch_embed_w,
-            bias=self.patch_embed_b,
-            core_grid=_CORE_GRID,
-            compute_kernel_config=_LOFI,
+            patches_tt, self.patch_embed_w, bias=self.patch_embed_b,
+            core_grid=_CORE_GRID, compute_kernel_config=_LOFI,
         )
-        _capture("patch_embed", patches_tt)
+        _cap("patch_embed", patches_tt)
 
-        # ---- 3. Add DINOv2 pos_embed for patch tokens, then prepend [CLS+pos_cls, REG].
         patches_tt = ttnn.add(patches_tt, self.pos_patches_tt)
         x_tt = ttnn.concat([self.prefix_tt, patches_tt], dim=1)
         ttnn.deallocate(patches_tt)
-        _capture("after_prefix", x_tt)
+        _cap("after_prefix", x_tt)
 
-        # ---- 4. DINOv2 backbone.
-        capture_blocks = {0, 5, 11} if captures is not None else set()
+        capture_blocks = {0, 5, 11} if capture_fn is not None else set()
         for i, bp in enumerate(self.block_params):
             x_tt = _dinov2_block(x_tt, bp, self.num_heads)
             if i in capture_blocks:
-                _capture(f"after_block_{i}", x_tt)
+                _cap(f"after_block_{i}", x_tt)
         x_tt = ttnn.layer_norm(x_tt, weight=self.final_norm_w, bias=self.final_norm_b, epsilon=1e-6)
-        _capture("after_final_norm", x_tt)
+        _cap("after_final_norm", x_tt)
 
-        # ---- 5. Drop CLS + register tokens on device.
         total_prefix = 1 + self.num_reg_tokens
         shp = x_tt.shape
         feat_tt = ttnn.slice(x_tt, [0, total_prefix, 0], [shp[0], shp[1], shp[2]])
         ttnn.deallocate(x_tt)
-        _capture("after_slice", feat_tt)
+        _cap("after_slice", feat_tt)
 
-        # ---- 6. Gaze decoder: project 768→256, add pos_embed, multiply head_map by head_token.
-        x_tt = ttnn.linear(feat_tt, self.proj_w, bias=self.proj_b, core_grid=_CORE_GRID)
+        scene_tt = ttnn.linear(feat_tt, self.proj_w, bias=self.proj_b, core_grid=_CORE_GRID)
         ttnn.deallocate(feat_tt)
-        x_tt = ttnn.add(x_tt, self.gaze_pos_embed_tt)
-        _capture("after_gaze_proj_pos", x_tt)
+        scene_tt = ttnn.add(scene_tt, self.gaze_pos_embed_tt)
+        _cap("after_gaze_proj_pos", scene_tt)
+        return scene_tt
 
-        # ---- Build head-map on device from a 4-scalar bbox. Eliminates the
-        # mid-pipeline upload of the pre-computed (1024,) mask.
-        bbox = bboxes[0]
+    def _build_head_contrib(self, bbox, capture_fn=None):
+        """Build the ``head_map × head_token`` conditioning tensor for one bbox.
+
+        Returns a (1, num_patches, dim) device tensor. Caller owns deallocate.
+        """
         fh, fw = self.featmap_h, self.featmap_w
         xmin_pix = round(bbox[0] * fw)
         ymin_pix = round(bbox[1] * fh)
@@ -339,53 +330,122 @@ class TtGazeLLE:
         h_mask = ttnn.mul(
             ttnn.ge(self.idx_h_tt, float(ymin_pix)),
             ttnn.lt(self.idx_h_tt, float(ymax_pix)),
-        )  # (1, fh, 1)
+        )
         w_mask = ttnn.mul(
             ttnn.ge(self.idx_w_tt, float(xmin_pix)),
             ttnn.lt(self.idx_w_tt, float(xmax_pix)),
-        )  # (1, 1, fw)
-        mask_2d = ttnn.mul(h_mask, w_mask)  # broadcast → (1, fh, fw)
+        )
+        mask_2d = ttnn.mul(h_mask, w_mask)
         ttnn.deallocate(h_mask)
         ttnn.deallocate(w_mask)
-        head_map_tt = ttnn.reshape(mask_2d, (b, fh * fw, 1))
-        _capture("head_map", head_map_tt)
-        head_contrib = ttnn.mul(head_map_tt, self.head_token_tt)  # (B, 1024, 256)
+        head_map_tt = ttnn.reshape(mask_2d, (1, fh * fw, 1))
+        if capture_fn is not None:
+            capture_fn("head_map", head_map_tt)
+        head_contrib = ttnn.mul(head_map_tt, self.head_token_tt)  # broadcast → (1, N, dim)
         ttnn.deallocate(head_map_tt)
-        x_tt = ttnn.add(x_tt, head_contrib)
-        ttnn.deallocate(head_contrib)
-        _capture("after_head_conditioning", x_tt)
+        return head_contrib
 
-        # ---- 7. Prepend in/out token, run 3 gaze blocks, split outputs.
+    def _decode_head(self, scene_tt, bbox, capture_fn=None):
+        """Per-head decoder: take the shared scene features, condition on the head
+        bbox, run the 3 gaze blocks, and pull the two outputs back to torch.
+
+        ``scene_tt`` is NOT consumed — it is read-only and safe to reuse across
+        multiple heads. Returns (heatmap_64x64 torch, inout_scalar torch or None).
+        """
+        head_contrib = self._build_head_contrib(bbox, capture_fn=capture_fn)
+        x_tt = ttnn.add(scene_tt, head_contrib)
+        ttnn.deallocate(head_contrib)
+        if capture_fn is not None:
+            capture_fn("after_head_conditioning", x_tt)
+
         if self.inout:
             x_tt = ttnn.concat([self.inout_token, x_tt], dim=1)
 
-        for i, gp in enumerate(self.gaze_block_params):
+        for gp in self.gaze_block_params:
             x_tt = _gaze_block(x_tt, gp, num_heads=8)
-        _capture("after_gaze_blocks", x_tt)
+        if capture_fn is not None:
+            capture_fn("after_gaze_blocks", x_tt)
 
         inout_preds_tt = None
         if self.inout:
             seq = x_tt.shape[1]
-            inout_tok = ttnn.slice(x_tt, [0, 0, 0], [b, 1, self.dim])
-            patch_out = ttnn.slice(x_tt, [0, 1, 0], [b, seq, self.dim])
+            inout_tok = ttnn.slice(x_tt, [0, 0, 0], [1, 1, self.dim])
+            patch_out = ttnn.slice(x_tt, [0, 1, 0], [1, seq, self.dim])
             ttnn.deallocate(x_tt)
-
-            # ---- 8a. In/out head on device: Linear+ReLU → Linear → Sigmoid.
-            h = ttnn.linear(
-                inout_tok, self.inout_fc1_w, bias=self.inout_fc1_b, activation="relu"
-            )
+            h = ttnn.linear(inout_tok, self.inout_fc1_w, bias=self.inout_fc1_b, activation="relu")
             ttnn.deallocate(inout_tok)
             h = ttnn.linear(h, self.inout_fc2_w, bias=self.inout_fc2_b)
             inout_preds_tt = ttnn.sigmoid(h)
         else:
             patch_out = x_tt
 
-        # ---- 8b. Fused heatmap head: (B,1024,256) @ (256,4) + scalar bias + sigmoid.
         hm = ttnn.linear(patch_out, self.heatmap_w, bias=None, core_grid=_CORE_GRID)
         ttnn.deallocate(patch_out)
         hm = ttnn.add(hm, self.heatmap_b_tt)
         hm = ttnn.sigmoid(hm)
-        _capture("heatmap_compact", hm)
+        if capture_fn is not None:
+            capture_fn("heatmap_compact", hm)
+        return hm, inout_preds_tt
+
+    @torch.no_grad()
+    def __call__(self, images: torch.Tensor, bboxes: List[Sequence[float]], captures=None):
+        """Run forward for one image with ``N = len(bboxes)`` head bounding boxes.
+
+        The DINOv2 backbone + gaze projection run ONCE; only the bbox-dependent
+        tail (``head_map``, 3 gaze blocks, in/out + heatmap heads) runs per head.
+
+        Returns ``{"heatmap": (N, out_h, out_w) torch, "inout": (N,) torch or None}``.
+        When ``N == 1`` the shape matches the old single-person contract.
+
+        If ``captures`` is a dict it collects intermediates for the first head;
+        scene-level captures cover the shared backbone pass.
+        """
+        b = images.shape[0]
+        assert b == 1, "TtGazeLLE currently supports one image per forward (B=1)"
+        assert len(bboxes) >= 1, "need at least one head bbox"
+
+        def _capture(key, tt_tensor):
+            if captures is not None:
+                captures[key] = ttnn.to_torch(tt_tensor).to(torch.float32)
+
+        scene_tt = self._encode_scene(images, capture_fn=_capture)
+
+        heatmaps_compact = []
+        inout_scalars = []
+        try:
+            for i, bbox in enumerate(bboxes):
+                head_capture = _capture if (captures is not None and i == 0) else None
+                hm_tt, inout_tt = self._decode_head(scene_tt, bbox, capture_fn=head_capture)
+                heatmaps_compact.append(ttnn.to_torch(hm_tt).to(torch.float32))
+                ttnn.deallocate(hm_tt)
+                if self.inout and inout_tt is not None:
+                    inout_scalars.append(ttnn.to_torch(inout_tt).to(torch.float32).reshape(1))
+                    ttnn.deallocate(inout_tt)
+        finally:
+            ttnn.deallocate(scene_tt)
+
+        # Shape (1, num_patches, 4) per head → fold into (N, featmap_h*2, featmap_w*2).
+        stacked = torch.stack([hc[0] for hc in heatmaps_compact], dim=0)  # (N, 1024, 4)
+        heatmap = (
+            stacked.reshape(-1, self.featmap_h, self.featmap_w, 2, 2)
+            .permute(0, 1, 3, 2, 4)
+            .reshape(-1, self.featmap_h * 2, self.featmap_w * 2)
+        )
+        if (self.featmap_h * 2, self.featmap_w * 2) != self.out_size:
+            heatmap = F.interpolate(
+                heatmap.unsqueeze(1), size=self.out_size, mode="bilinear", align_corners=False
+            ).squeeze(1)
+
+        inout_preds = None
+        if self.inout and inout_scalars:
+            inout_preds = torch.cat(inout_scalars, dim=0)  # (N,)
+
+        if captures is not None:
+            captures["heatmap"] = heatmap[:1] if heatmap.shape[0] > 0 else heatmap
+            if inout_preds is not None:
+                captures["inout_scalar"] = inout_preds[:1]
+
+        return {"heatmap": heatmap, "inout": inout_preds}
 
         # ---- 9. Download the small outputs.
         heatmap_compact = ttnn.to_torch(hm).to(torch.float32)
