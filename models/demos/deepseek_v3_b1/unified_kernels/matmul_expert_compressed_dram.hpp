@@ -650,8 +650,7 @@ struct MatmulExpertCompressedDRAM {
                     }
                 }
 
-                // Gather receiver: pin PACK's local wr_ptr (on cb_internal_acc — the
-                // per-expert accumulation CB that aliases cb_out's L1 region) to slot 1.
+                // Gather receiver: pin PACK's local wr_ptr (on cb_out) to slot 1.
                 // After each per-expert cb_push_back of the full cb size
                 // (cb_out_num_pages = cores_per_bank * per_core_n), fifo_wr_ptr wraps
                 // back to base + per_core_n_bytes (= slot 1). Sender's NOC lands at
@@ -659,10 +658,9 @@ struct MatmulExpertCompressedDRAM {
                 // shared L1.
                 if constexpr (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary) {
                     PACK(({
-                        uint32_t base = unified_kernels::get_cb_buf_addr(CTArgs::cb_internal_acc);
-                        uint32_t page_size = unified_kernels::get_cb_page_size(CTArgs::cb_internal_acc);
-                        unified_kernels::override_cb_wr_ptr(
-                            CTArgs::cb_internal_acc, base + CTArgs::per_core_n * page_size);
+                        uint32_t base = unified_kernels::get_cb_buf_addr(CTArgs::cb_out);
+                        uint32_t page_size = unified_kernels::get_cb_page_size(CTArgs::cb_out);
+                        unified_kernels::override_cb_wr_ptr(CTArgs::cb_out, base + CTArgs::per_core_n * page_size);
                     }));
                 }
 
@@ -681,7 +679,7 @@ struct MatmulExpertCompressedDRAM {
                         continue;
                     }
 
-                    cb_reserve_back(CTArgs::cb_internal_acc, cb_out_num_pages);
+                    cb_reserve_back(CTArgs::cb_out, cb_out_num_pages);
 
                     if (dram_idx == 0) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -734,7 +732,7 @@ struct MatmulExpertCompressedDRAM {
                         tile_regs_commit();
                         tile_regs_wait();
                         for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                            pack_tile(sn, CTArgs::cb_internal_acc);
+                            pack_tile(sn, CTArgs::cb_out);
                         }
                         tile_regs_release();
                     }
@@ -743,14 +741,17 @@ struct MatmulExpertCompressedDRAM {
                     MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
                     fmt_slot ^= 1;
 
-                    // Push/pop on cb_internal_acc — keeps PACK's wr_ptr pinned via the
-                    // wraparound trick AND keeps the per-expert bookkeeping invisible to
-                    // cb_out's consumers (eltwise_add). Push and pop EVERY expert (even
-                    // the last) so cb_internal_acc ends balanced; the consumer-facing
+                    // Per-expert push/pop on cb_out — required for packer state
+                    // correctness (cb_push_back flushes the pack DMA queue) AND keeps
+                    // PACK's wr_ptr pinned via the wraparound trick (push full size →
+                    // wr_ptr wraps back to slot 1 base). Push and pop EVERY expert so
+                    // cb_out's fifo ends balanced (0 in flight); the consumer-facing
                     // signal is the single cb_push_back(cb_out, …) after the gather sync.
-                    cb_push_back(CTArgs::cb_internal_acc, cb_out_num_pages);
-                    cb_wait_front(CTArgs::cb_internal_acc, cb_out_num_pages);
-                    cb_pop_front(CTArgs::cb_internal_acc, cb_out_num_pages);
+                    // Eltwise_add hasn't started yet (sequential after down_proj on the
+                    // same core), so the transient push/pop is invisible to it.
+                    cb_push_back(CTArgs::cb_out, cb_out_num_pages);
+                    cb_wait_front(CTArgs::cb_out, cb_out_num_pages);
+                    cb_pop_front(CTArgs::cb_out, cb_out_num_pages);
                     ++dram_idx;
                 }
 
@@ -783,8 +784,8 @@ struct MatmulExpertCompressedDRAM {
                 // Single consumer-facing push on cb_out. For gather receivers this lands
                 // AFTER PACK's partial_sem dec above, so cb_wait_front(cb_out) on the
                 // consumer side (eltwise_add) only unblocks once both slot 1 (receiver's
-                // PACK accum on cb_internal_acc) AND slot 0 (sender's NOC write) have
-                // landed in cb_out's shared L1.
+                // PACK accum, written directly to cb_out's L1 via the override-pinned
+                // wr_ptr) AND slot 0 (sender's NOC write) have landed in cb_out's L1.
                 if (num_dram_experts > 0) {
                     cb_push_back(CTArgs::cb_out, cb_out_num_pages);
                 }

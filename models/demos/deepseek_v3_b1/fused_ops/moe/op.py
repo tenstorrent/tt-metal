@@ -1173,13 +1173,13 @@ class MoeRoutedExpertOp:
         down_proj_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         down_proj_cb_out = cb_id_context.get_cb_id(data_format, TD_1x32)
         residual_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
-        # down_proj internal accumulation CB. Aliases down_proj_cb_out's L1 region;
-        # the kernel routes per-expert push/pop through it so cb_out's metadata only
-        # updates once at the end (after the gather sync). Eltwise_add waits on
-        # cb_out → cannot observe transient per-expert state. Gate/up don't accum so
-        # they reuse their cb_out for the kernel template's cb_internal_acc CT arg
-        # slot (constexpr-eliminated, never accessed).
-        down_proj_cb_internal_acc = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # down_proj_cb_internal_acc: kept as a CT arg slot for kernel API compatibility,
+        # but now aliased to cb_out (same CB ID). The kernel writes per-expert pack_tile
+        # directly to cb_out's L1 via the override-pinned wr_ptr, with NO per-expert
+        # cb_push_back — so cb_out's fifo metadata stays at 0 until the single
+        # consumer-facing push at end of all experts. Eltwise_add never observes
+        # transient state. This saves 1 CB ID slot vs an independent allocation.
+        down_proj_cb_internal_acc = down_proj_cb_out
 
         # EltwiseMul uses 1x32 CBs directly (no 16x16 alias needed).
         # mul_cb_in0/in1 reuse the existing up_proj/gate_proj output CBs so their
@@ -2464,7 +2464,6 @@ class MoeRoutedExpertOp:
             ctx.down_proj_mcast_params["dst_cb_descriptor"],
             ctx.down_proj_params["cb_in1_descriptor"],
             ctx.down_proj_params["cb_out_descriptor"],
-            ctx.down_proj_params["cb_internal_acc_descriptor"],
             ctx.add_params["cb_in0_descriptor"],
             ctx.add_params["cb_in1_descriptor"],
             ctx.add_params["cb_out_descriptor"],
@@ -4203,24 +4202,9 @@ class MoeOp:
         routed_ctx.down_proj_params["cb_out_descriptor"] = cb19_desc
         kv_offset += cb19_total_size
 
-        # down_proj_cb_internal_acc: aliases CB 19's L1 region (no offset advance —
-        # same physical L1 as down_proj_cb_out). The kernel routes per-expert
-        # push/pop bookkeeping through this CB so cb_out's metadata only updates
-        # once at the end (after the gather sync), eliminating the eltwise_add race.
-        cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            routed_ctx.down_proj_cb_internal_acc,
-            kv_buf,
-            address_offset=cb19_offset,
-            total_size=cb19_total_size,
-        )
-        cb_internal_acc_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=routed_ctx.down_proj_cb_internal_acc,
-            data_format=ttnn.bfloat16,
-            page_size=64,
-            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
-        )
-        cb_internal_acc_desc.format_descriptors = [cb_internal_acc_fmt]
-        routed_ctx.down_proj_params["cb_internal_acc_descriptor"] = cb_internal_acc_desc
+        # cb_internal_acc shares cb_out's CB ID (down_proj_cb_internal_acc ==
+        # down_proj_cb_out), so we don't build a separate descriptor — cb19_desc above
+        # already covers the same L1 region with the same format.
 
         # Routing-only CBs (expert_scale, scalar working buffer)
         if routed_ctx.enable_routing:
