@@ -60,7 +60,7 @@ from ttml.common.utils import (
     get_tt_metal_runtime_root,
     create_optimizer,
     summary,
-    get_allocatable_device_memory_in_bytes,
+    get_available_device_memory_in_bytes,
 )
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
@@ -1528,6 +1528,10 @@ def main():
             peak_tflops = get_device_peak_tflops_bf16()
             print(f"  - Device peak: {peak_tflops:.1f} TFLOPS (bf16)")
 
+        # Get the available device DRAM
+        available_dram = get_available_device_memory_in_bytes()
+        print(f"  - Available Device Memory: {available_dram/(1024*1024):.2f} MB")
+
         # Training loop
         start_time = time.time()
         # Cache values used in hot path
@@ -1622,8 +1626,6 @@ def main():
                         MemoryUsageTracker.clear()
                         if memory_guard:
                             memory_guard.release()
-                        allocatable_dram = get_allocatable_device_memory_in_bytes()
-                        print(f"Allocatable Device Memory: {allocatable_dram:.2f} bytes")
 
                     profiler_marker(None, f"iteration_{global_step}", dump_results=True)
                     if global_step == start_step + 1:

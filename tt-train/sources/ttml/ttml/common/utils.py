@@ -107,7 +107,8 @@ def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.
     return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)  # [1,1,1,T], bfloat16
 
 
-def get_allocatable_device_memory_in_bytes() -> float:
+def get_available_device_memory_in_bytes() -> float:
+    """Get the total amount of device DRAM available on the system."""
     device = ttml.autograd.AutoContext.get_instance().get_device()
     dram_view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
     total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * ttnn.get_num_devices()
