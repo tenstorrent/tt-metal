@@ -28,23 +28,38 @@ void kernel_main() {
 
     acquire_dst();
     topk_xl_init();
-    const bool ascending = false;
+    const bool ascending = true;
+    const bool descending = false;
 
-    uint64_t topk_local_sort_wall_clock_cycles_total = 0;
+    uint64_t topk_local_sort_wall_clock_cycles = 0;
+    uint64_t topk_merge_wall_clock_cycles = 0;
+    uint64_t topk_rebuild_wall_clock_cycles = 0;
 
-    // one input takes 2 tiles
-    for (uint32_t t = 0; t < num_in_tiles; t += 2) {
+    // first input tile pair
+    cb0.wait_front(2);
+    copy_tile(tt::CBIndex::c_0, 0, 0);
+    copy_tile(tt::CBIndex::c_0, 1, 1);
+    topk_xl_local_sort(0, descending);
+    cb0.pop_front(2);
+
+    // subsequent input tile pairs
+    for (uint32_t t = 2; t < num_in_tiles; t += 2) {
         cb0.wait_front(2);
 
-        copy_tile(tt::CBIndex::c_0, 0, 0);
-        copy_tile(tt::CBIndex::c_0, 1, 1);
+        copy_tile(tt::CBIndex::c_0, 0, 2);
+        copy_tile(tt::CBIndex::c_0, 1, 3);
 
         const uint64_t wall_t0 = ckernel::read_wall_clock();
-        topk_xl_local_sort(0, ascending);
+        topk_xl_local_sort(2, ascending);
         const uint64_t wall_t1 = ckernel::read_wall_clock();
-        topk_local_sort_wall_clock_cycles_total += (wall_t1 - wall_t0);
-        // topk_xl_merge(0);
-        // topk_xl_rebuild(0, ascending);
+        topk_xl_merge(0);
+        const uint64_t wall_t2 = ckernel::read_wall_clock();
+        topk_xl_rebuild(0, descending);
+        const uint64_t wall_t3 = ckernel::read_wall_clock();
+
+        topk_local_sort_wall_clock_cycles += (wall_t1 - wall_t0);
+        topk_merge_wall_clock_cycles += (wall_t2 - wall_t1);
+        topk_rebuild_wall_clock_cycles += (wall_t3 - wall_t2);
 
         cb0.pop_front(2);
     }
@@ -75,9 +90,11 @@ void kernel_main() {
     cb16.push_back(k_output_tiles);
 
     DEVICE_PRINT(
-        "topk_xl_local_sort wall_clock cycles (total over {} input-tile pairs): {}\n",
-        num_in_tiles / 2,
-        topk_local_sort_wall_clock_cycles_total);
+        "topk_xl_local_sort wall_clock cycles: {} topk_xl_merge wall_clock cycles: {} topk_xl_rebuild wall_clock "
+        "cycles: {}\n",
+        topk_local_sort_wall_clock_cycles,
+        topk_merge_wall_clock_cycles,
+        topk_rebuild_wall_clock_cycles);
 
     release_dst();
 }

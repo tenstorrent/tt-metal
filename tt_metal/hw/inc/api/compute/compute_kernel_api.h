@@ -659,6 +659,7 @@ ALWI void topk_xl_merge(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_topk_
  */
 // clang-format on
 ALWI void topk_xl_rebuild(uint32_t idst, bool ascending) {
+    UNPACK((llk_unpack_set_srcb_dummy_valid()));
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_rebuild<true>(idst, ascending)));
 }
 

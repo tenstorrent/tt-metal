@@ -37,8 +37,8 @@ constexpr uint32_t kTopK = 2048;
 constexpr uint32_t kOutputTiles = 2;
 
 // Total elements to sort (valid keys). Default one full pass of two tiles; optional 4 tiles:
-constexpr uint32_t N = 2048;
-// constexpr uint32_t N = 4096;
+// constexpr uint32_t N = 2048;
+constexpr uint32_t N = 4096;
 
 enum class InputMode { Random, NiceRounds };
 constexpr InputMode kInputMode = InputMode::Random;
