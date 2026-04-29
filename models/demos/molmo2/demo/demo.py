@@ -3545,12 +3545,20 @@ class Molmo2Generator:
             f"  next_token_logits stats: mean={next_token_logits.mean().item():.4f}, std={next_token_logits.std().item():.4f}, min={next_token_logits.min().item():.4f}, max={next_token_logits.max().item():.4f}"
         )
 
-        # Get top 5 predictions
+        # Get top 5 predictions (also returned in perf_metrics for eval JSON)
         top5_values, top5_indices = torch.topk(next_token_logits, 5)
+        first_token_top5 = []
+        for rank, (val, idx) in enumerate(zip(top5_values.tolist(), top5_indices.tolist()), start=1):
+            tid = int(idx)
+            logit_f = float(val)
+            decoded = self.tokenizer.decode([tid])
+            first_token_top5.append({"rank": rank, "token_id": tid, "logit": logit_f, "decoded": decoded})
         logger.info(f"  Top 5 predictions:")
-        for i, (val, idx) in enumerate(zip(top5_values.tolist(), top5_indices.tolist())):
-            decoded = self.tokenizer.decode([idx])
-            logger.info(f"    {i+1}. token={idx}, logit={val:.2f}, decoded='{decoded}'")
+        for pred in first_token_top5:
+            logger.info(
+                f"    {pred['rank']}. token={pred['token_id']}, "
+                f"logit={pred['logit']:.2f}, decoded='{pred['decoded']}'"
+            )
 
         next_token = torch.argmax(next_token_logits).item()
         logger.info(f"  Selected first token: {next_token} -> '{self.tokenizer.decode([next_token])}'")
@@ -3621,6 +3629,7 @@ class Molmo2Generator:
             "generated_tokens": len(generated_tokens),
             "tokens_per_sec": tokens_per_sec,
             "output_text": output_text,
+            "first_token_top5": first_token_top5,
         }
 
         logger.info(f"Video: {n_frames} frames processed")
