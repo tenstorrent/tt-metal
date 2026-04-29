@@ -7,6 +7,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "sfpi.h"
 
 namespace ckernel
 {
@@ -25,7 +26,7 @@ inline void _calculate_relu_sfp_rows_()
 }
 
 // Implements standard relu which does max(0, x)
-inline void _calculate_relu_(const int iterations)
+inline void _calculate_relu_(const int iterations = SFPU_ITERATIONS)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
@@ -51,9 +52,9 @@ inline void _calculate_lrelu_sfp_rows_()
 }
 
 // Implements leaky relu which return x when x > 0 and x*slope when x < 0
-inline void _calculate_lrelu_(const int iterations, const std::uint32_t slope)
+inline void _calculate_lrelu_(const std::uint32_t slope, const int iterations = SFPU_ITERATIONS)
 {
-    TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (slope >> 16)); // store slope in LREG2
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                           // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
@@ -72,12 +73,12 @@ inline void _calculate_relu_min_sfp_rows_()
     // where lreg0 < threshold, load 0 into LREG0[x]
     TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG2, 0x1 /*cc mode*/);
 
-    TTI_SFPLOADI(p_sfpu::LREG0, 0, 0); // Load 0 into lreg0[x]
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0); // Load 0 into lreg0[x]
 
     TTI_SFPENCC(0, 0); // clear cc result reg
 
     // Store from lreg0 into dest register
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, ADDR_MOD_7, 0, 0);
 }
 
 // Implements relu min which returns x when x > threshold, otherwise return 0
@@ -117,7 +118,7 @@ inline void _calculate_relu_max_sfp_rows_()
 }
 
 // Implements relu max
-inline void _relu_max_(const int iterations, const std::uint32_t threshold)
+inline void _relu_max_(const std::uint32_t threshold, const int iterations = SFPU_ITERATIONS)
 {
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                               // enable cc
