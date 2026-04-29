@@ -530,10 +530,13 @@ class QwenImagePipeline:
             txt_seq_lens = [prompt_sequence_length] * transformer_batch_size
             spatial_rope, prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
 
-            spatial_rope_cos = spatial_rope.real.repeat_interleave(2, dim=-1)
-            spatial_rope_sin = spatial_rope.imag.repeat_interleave(2, dim=-1)
-            prompt_rope_cos = prompt_rope.real.repeat_interleave(2, dim=-1)
-            prompt_rope_sin = prompt_rope.imag.repeat_interleave(2, dim=-1)
+            # Upload half-dim cos/sin tensors; the per-axis repeat_interleave doubling
+            # happens on device via rope_double_last_dim_device to save host compute
+            # and halve the upload bandwidth.
+            spatial_rope_cos_half = spatial_rope.real
+            spatial_rope_sin_half = spatial_rope.imag
+            prompt_rope_cos_half = prompt_rope.real
+            prompt_rope_sin_half = prompt_rope.imag
 
             tt_prompt_embeds_device_list = []
             tt_prompt_embeds_list = []
@@ -558,30 +561,34 @@ class QwenImagePipeline:
                     latents, device=submesh_device, on_host=traced, mesh_axes=[None, sp_axis, None]
                 )
 
-                tt_spatial_rope_cos = tensor.from_torch(
-                    spatial_rope_cos, device=submesh_device, on_host=traced, mesh_axes=[sp_axis, None]
+                tt_spatial_rope_cos = tensor.rope_double_last_dim_device(
+                    tensor.from_torch(
+                        spatial_rope_cos_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
+                    )
                 )
-                tt_spatial_rope_sin = tensor.from_torch(
-                    spatial_rope_sin, device=submesh_device, on_host=traced, mesh_axes=[sp_axis, None]
+                tt_spatial_rope_sin = tensor.rope_double_last_dim_device(
+                    tensor.from_torch(
+                        spatial_rope_sin_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
+                    )
                 )
-                tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=submesh_device, on_host=traced)
-                tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=submesh_device, on_host=traced)
+                tt_prompt_rope_cos = tensor.rope_double_last_dim_device(
+                    tensor.from_torch(prompt_rope_cos_half, device=submesh_device, on_host=False)
+                )
+                tt_prompt_rope_sin = tensor.rope_double_last_dim_device(
+                    tensor.from_torch(prompt_rope_sin_half, device=submesh_device, on_host=False)
+                )
 
                 if traced:
                     if self._traces is None:
                         tt_initial_latents = tt_initial_latents.to(submesh_device)
                         tt_prompt_embeds_device = tt_prompt_embeds_device.to(submesh_device)
-                        tt_spatial_rope_cos = tt_spatial_rope_cos.to(submesh_device)
-                        tt_spatial_rope_sin = tt_spatial_rope_sin.to(submesh_device)
-                        tt_prompt_rope_cos = tt_prompt_rope_cos.to(submesh_device)
-                        tt_prompt_rope_sin = tt_prompt_rope_sin.to(submesh_device)
                     else:
                         ttnn.copy_host_to_device_tensor(tt_initial_latents, self._traces[i].spatial_input)
                         ttnn.copy_host_to_device_tensor(tt_prompt_embeds_device, self._traces[i].prompt_input)
-                        ttnn.copy_host_to_device_tensor(tt_spatial_rope_cos, self._traces[i].spatial_rope_cos)
-                        ttnn.copy_host_to_device_tensor(tt_spatial_rope_sin, self._traces[i].spatial_rope_sin)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_rope_cos, self._traces[i].prompt_rope_cos)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_rope_sin, self._traces[i].prompt_rope_sin)
+                        ttnn.copy(tt_spatial_rope_cos, self._traces[i].spatial_rope_cos)
+                        ttnn.copy(tt_spatial_rope_sin, self._traces[i].spatial_rope_sin)
+                        ttnn.copy(tt_prompt_rope_cos, self._traces[i].prompt_rope_cos)
+                        ttnn.copy(tt_prompt_rope_sin, self._traces[i].prompt_rope_sin)
 
                         tt_initial_latents = self._traces[i].spatial_input
                         tt_prompt_embeds_device = self._traces[i].prompt_input
