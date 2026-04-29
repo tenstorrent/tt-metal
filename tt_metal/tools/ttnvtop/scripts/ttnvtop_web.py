@@ -214,13 +214,13 @@ header h1 { margin:0; font-size:15px; }
 .status { color:var(--fg-dim); font-size:12px; }
 .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#3fb950; margin-right:5px; vertical-align:middle; }
 .dot.disconnected { background:#f85149; }
-main { padding:12px; display:grid; grid-template-columns: minmax(0, 1fr) minmax(560px, 1fr); grid-template-rows: auto auto 1fr; gap:12px; height:calc(100vh - 50px); }
+main { padding:12px; display:grid; grid-template-columns: 1.4fr 1fr 1fr; grid-template-rows: 1fr auto; gap:12px; height:calc(100vh - 50px); }
 .panel { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; }
 .panel h2 { margin:0 0 8px 0; font-size:11px; color:var(--fg-dim); text-transform:uppercase; letter-spacing:0.5px; }
-#chips { grid-column:1; grid-row:1/3; min-height:0; }
-#programs { grid-column:2; grid-row:1; min-height:200px; }
-#history { grid-column:2; grid-row:2/4; min-height:200px; }
-#timeline { grid-column:1; grid-row:3; min-height:120px; }
+#chips    { grid-column:1; grid-row:1; min-height:0; }
+#programs { grid-column:2; grid-row:1; min-height:0; }
+#history  { grid-column:3; grid-row:1; min-height:0; }
+#timeline { grid-column:1/-1; grid-row:2; min-height:240px; max-height:60vh; }
 .chip-grid { margin-bottom:16px; }
 .chip-grid .title { font-weight:bold; margin-bottom:4px; }
 .chip-grid .title .meta { color:var(--fg-dim); font-weight:normal; margin-left:8px; }
@@ -250,10 +250,10 @@ table.data th { color:var(--fg-dim); font-weight:normal; cursor:pointer; user-se
 table.data th:hover { color:var(--accent); }
 table.data tr:hover td { background:rgba(88,166,255,0.06); }
 .num { text-align:right; font-variant-numeric:tabular-nums; }
-.tl-row { display:flex; align-items:center; margin-bottom:1px; }
-.tl-label { width:200px; flex-shrink:0; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px; }
-.tl-cells { display:flex; gap:1px; }
-.tl-cell { width:6px; height:14px; background:var(--idle); }
+.tl-row { display:flex; align-items:center; margin-bottom:1px; flex-wrap:nowrap; }
+.tl-label { width:280px; flex-shrink:0; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px; position:sticky; left:0; background:var(--panel); z-index:2; }
+.tl-cells { display:flex; gap:1px; flex-wrap:nowrap; }
+.tl-cell { width:5px; height:12px; background:var(--idle); flex-shrink:0; }
 .tl-cell.on { background:var(--prog-color); }
 </style>
 </head>
@@ -290,9 +290,17 @@ table.data tr:hover td { background:rgba(88,166,255,0.06); }
 const tooltip = document.getElementById("tooltip");
 const state = {
   paused: false,
-  // Per-chip ring buffer of program-id sets for the timeline.
-  timeline: new Map(), // chipIdx -> [Set, Set, ...]
-  TIMELINE_MAX: 80,
+  // Session-wide timeline state. Stored client-side so a full history
+  // is preserved even if the server restarts or the SSE reconnects.
+  // Capped at TIMELINE_MAX frames (default ~30 min at 10 Hz) to bound
+  // memory; oldest frames drop off the left.
+  timeline: new Map(),         // chipIdx -> [Set<prog_id>, ...]
+  TIMELINE_MAX: 18000,         // 18000 frames at 10 Hz = 30 minutes
+  // Map prog_id -> first-seen frame index (within the per-chip arrays
+  // they appear in). Used to draw the bar from the program's debut to
+  // the right edge, instead of zero-padding from the start.
+  progFirstSeen: new Map(),    // prog_id -> {chip: frameIdx}
+  framesSeen: 0,               // total frames received this session
   sortHistory: { col: "last_s", desc: true },
 };
 
@@ -439,7 +447,8 @@ function renderPrograms(chips) {
     return;
   }
   let html = `<table class="data"><thead><tr><th>id</th><th>name</th><th class="num">cores</th><th class="num">F%</th><th class="num">S%</th><th class="num">D%</th></tr></thead><tbody>`;
-  for (const r of rows.slice(0, 30)) {
+  // No row cap — let the panel scroll. Long names wrap.
+  for (const r of rows) {
     html += `<tr>
       <td><span style="color:${progColor(r.prog)}">#${r.prog}</span></td>
       <td>${escapeHtml(r.name) || "<i style='color:#888'>—</i>"}</td>
@@ -449,37 +458,71 @@ function renderPrograms(chips) {
       <td class="num" style="color:${pct2color(r.sumD/r.cores)}">${(r.sumD/r.cores).toFixed(1)}</td>
     </tr>`;
   }
-  if (rows.length > 30) html += `<tr><td colspan="6" style="color:var(--fg-dim)">(${rows.length-30} more)</td></tr>`;
   html += `</tbody></table>`;
   document.getElementById("programs-content").innerHTML = html;
 }
 
 function renderTimeline(chips) {
+  // Append the latest frame's program set per chip to the timeline.
   for (const ch of chips) {
     const set = new Set();
     for (const c of ch.cores) if (c.prog && c.d > 0) set.add(c.prog);
     if (!state.timeline.has(ch.idx)) state.timeline.set(ch.idx, []);
     const buf = state.timeline.get(ch.idx);
+    const frameIdx = buf.length;
     buf.push(set);
-    while (buf.length > state.TIMELINE_MAX) buf.shift();
+    if (buf.length > state.TIMELINE_MAX) buf.shift();
+    // Track first-seen frame index per program (per chip) so we draw the
+    // bar from program debut, not from frame 0.
+    for (const p of set) {
+      const key = ch.idx + ":" + p;
+      if (!state.progFirstSeen.has(key)) state.progFirstSeen.set(key, frameIdx);
+    }
   }
-  // Render: rows = top programs by presence frequency
-  let html = "";
+  state.framesSeen++;
+
+  // Layout: a vertical list of programs (one row per (chip, prog)) with a
+  // horizontal bar showing every frame this program was active. The bar
+  // spans the full timeline width so older activity stays visible — scroll
+  // the timeline pane to look back.
+  let html = `<div style="display:flex; gap:12px; align-items:center; color:var(--fg-dim); font-size:11px; margin-bottom:6px;">
+    <span>frames: ${state.framesSeen}</span>
+    <span>~${(state.framesSeen / 10).toFixed(1)}s recorded</span>
+    <span>scroll vertically for more programs · scroll horizontally for older activity</span>
+  </div>`;
   for (const [ci, buf] of state.timeline) {
     if (!buf.length) continue;
-    const counts = new Map();
-    for (const s of buf) for (const p of s) counts.set(p, (counts.get(p)||0) + 1);
-    const top = [...counts.entries()].sort((a,b) => b[1] - a[1]).slice(0, 10);
-    if (!top.length) continue;
-    html += `<div style="font-weight:bold; margin:8px 0 4px 0;">chip ${ci}</div>`;
-    for (const [pid, _] of top) {
+    // Sort programs: first-seen ascending (oldest at top so newer programs
+    // appear below them).
+    const seenInChip = new Map();
+    for (let f = 0; f < buf.length; f++) {
+      for (const p of buf[f]) {
+        if (!seenInChip.has(p)) seenInChip.set(p, f);
+      }
+    }
+    const ordered = [...seenInChip.entries()].sort((a, b) => a[1] - b[1]);
+    if (!ordered.length) continue;
+    html += `<div style="font-weight:bold; margin:8px 0 4px 0;">chip ${ci} <span style="color:var(--fg-dim); font-weight:normal; font-size:11px;">(${ordered.length} programs)</span></div>`;
+    for (const [pid, firstIdx] of ordered) {
       const pc = progColor(pid);
+      const name = (function() {
+        // Reuse the name from any cell that has it in the latest frame.
+        for (const ch of chips) {
+          if (ch.idx !== ci) continue;
+          for (const c of ch.cores) if (c.prog === pid && c.name) return c.name;
+        }
+        return "";
+      })();
+      const namePart = name ? ` <span style="color:var(--fg-dim);">${escapeHtml(name).slice(0, 60)}</span>` : "";
       html += `<div class="tl-row" style="--prog-color:${pc}">
-        <span class="tl-label" style="color:${pc}">#${pid}</span>
+        <span class="tl-label" style="color:${pc}; width:280px;">#${pid}${namePart}</span>
         <span class="tl-cells">`;
-      const pad = state.TIMELINE_MAX - buf.length;
-      for (let i = 0; i < pad; i++) html += `<span class="tl-cell"></span>`;
-      for (const s of buf) html += `<span class="tl-cell${s.has(pid)?" on":""}"></span>`;
+      // No left padding — start the bar at firstIdx so all programs left-align.
+      // Empty cells before debut are dim.
+      for (let i = 0; i < firstIdx; i++) html += `<span class="tl-cell"></span>`;
+      for (let i = firstIdx; i < buf.length; i++) {
+        html += `<span class="tl-cell${buf[i].has(pid) ? " on" : ""}"></span>`;
+      }
       html += `</span></div>`;
     }
   }
