@@ -154,12 +154,20 @@ def run(
     torch_weight = torch.randn(w_shape, dtype=torch.float32)
 
     # PyTorch golden: RMS norm = x * weight / sqrt(mean(x^2) + eps)
-    # Need 1D weight matching input's last dim for broadcasting
-    if len(w_shape) > 1:
-        weight_size = input_shape[-1]
-        torch_weight_1d = torch_weight.flatten()[:weight_size]
+    # Need 1D weight matching input's last dim for broadcasting. When weight
+    # is replicated across a mesh and input is sharded along the feature dim,
+    # each chip uses its full weight on its per-chip slice; globally, repeat
+    # the weight by mesh_factor along the feature dim to match input_shape[-1].
+    flat_weight = torch_weight.flatten()
+    feature_dim = input_shape[-1]
+    if flat_weight.numel() == feature_dim:
+        torch_weight_1d = flat_weight
+    elif flat_weight.numel() < feature_dim and feature_dim % flat_weight.numel() == 0:
+        torch_weight_1d = flat_weight.repeat(feature_dim // flat_weight.numel())
+    elif flat_weight.numel() > feature_dim:
+        torch_weight_1d = flat_weight[:feature_dim]
     else:
-        torch_weight_1d = torch_weight
+        torch_weight_1d = flat_weight
 
     eps = float(op_kwargs.get("epsilon", 1e-5))
     rms = torch.sqrt(torch.mean(torch_input**2, dim=-1, keepdim=True) + eps)

@@ -20,6 +20,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    mesh_tensor_to_torch,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -166,10 +167,12 @@ def run(
     for dim in dims:
         output_shape[dim] = 1
 
-    # Convert to torch, unpad from tile, then compare
+    # Convert to torch, unpad from tile, then compare. On a mesh device the
+    # output is sharded across chips and must be reassembled with
+    # mesh_tensor_to_torch (taking just device_tensors[0] returns only the
+    # chip-0 slice and leaves the rest of the global tensor empty).
     if is_mesh_device:
-        device_tensors = ttnn.get_device_tensors(output_tensor)
-        output_tensor = device_tensors[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
+        output_tensor = mesh_tensor_to_torch(output_tensor, device)
     else:
         output_tensor = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
     e2e_perf = stop_measuring_time(start_time)

@@ -47,6 +47,73 @@ def mesh_device_fixture():
     ttnn.close_mesh_device(device)
 
 
+def _input_shard_axis_and_factor(placement_dict):
+    """Return (axis, factor) for the input's shard dim. axis may be negative.
+
+    Handles placement entries from the trace which may be either a list of
+    strings (post-parse) or a string repr like
+    "['PlacementReplicate', 'PlacementShard(-1)']". Returns (None, 1) when
+    the input is fully replicated.
+    """
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            # Combine multiple shard axes by multiplying factors. Prefer the
+            # last (innermost) shard axis as the "axis" anchor.
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _scale_per_chip_to_global(shape, axis, factor):
+    """Scale shape's `axis` dim by factor; fall back to last positive dim."""
+    if factor == 1 or shape is None:
+        return shape
+    out = list(shape)
+    n = len(out)
+    if n == 0:
+        return shape
+    target = None
+    if axis is not None:
+        a = axis if axis >= 0 else axis + n
+        if 0 <= a < n and out[a] > 0:
+            target = a
+    if target is None:
+        for i in range(n - 1, -1, -1):
+            if out[i] > 0:
+                target = i
+                break
+    if target is None:
+        return shape
+    out[target] = out[target] * factor
+    return tuple(out) if isinstance(shape, tuple) else out
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -130,15 +197,41 @@ def run(
 
     import math
 
-    input_numel = math.prod(in_shape)
-    tgt_numel = math.prod(tgt_shape)
-    has_padded_shape = tgt_numel != input_numel and arg2 is not None and math.prod(arg2) == input_numel
-    if has_padded_shape:
-        torch_output = torch.reshape(torch_input, arg2)
-        slices = tuple(slice(0, s) for s in tgt_shape)
-        torch_output = torch_output[slices]
+    # The framework expands input_a_shape to the GLOBAL shape (mesh-shard
+    # factor already applied along the shard axis). The trace records arg1/
+    # arg2 as PER-CHIP target shapes, so torch.reshape would fail on numel.
+    # Scale the target shapes by the input's shard factor along the matching
+    # dim so the torch reference matches the kernel's reassembled output.
+    # The framework expands input_a_shape to GLOBAL but the trace records
+    # tgt_shape/arg2 as PER-CHIP. The kernel reshapes per-chip then the
+    # reassembler concats along the output shard axis. Faithfully reproducing
+    # that here (split → per-chip reshape → concat) is required because
+    # torch.reshape on the global tensor produces a different elementwise
+    # ordering when the per-chip reshape mixes the shard axis with other dims.
+    _shard_axis, _shard_factor = _input_shard_axis_and_factor(input_a_tensor_placement)
+
+    def _per_chip_reshape(per_chip_input):
+        per_chip_numel = per_chip_input.numel()
+        per_chip_tgt_numel = math.prod(tgt_shape)
+        per_chip_has_padded = (
+            per_chip_tgt_numel != per_chip_numel and arg2 is not None and math.prod(arg2) == per_chip_numel
+        )
+        if per_chip_has_padded:
+            out = torch.reshape(per_chip_input, arg2)
+            slices = tuple(slice(0, sz) for sz in tgt_shape)
+            return out[slices]
+        return torch.reshape(per_chip_input, tgt_shape)
+
+    if _shard_factor > 1 and _shard_axis is not None:
+        n_in = torch_input.ndim
+        in_axis = _shard_axis if _shard_axis >= 0 else _shard_axis + n_in
+        chunks = torch.chunk(torch_input, _shard_factor, dim=in_axis)
+        per_chip_outs = [_per_chip_reshape(c) for c in chunks]
+        # Output preserves the same negative-index shard axis as the input
+        # (typical for ttnn.reshape; e.g. Shard(-1) → Shard(-1)).
+        torch_output = torch.cat(per_chip_outs, dim=_shard_axis)
     else:
-        torch_output = torch.reshape(torch_input, tgt_shape)
+        torch_output = _per_chip_reshape(torch_input)
 
     is_host = storage_type and "HOST" in str(storage_type)
 

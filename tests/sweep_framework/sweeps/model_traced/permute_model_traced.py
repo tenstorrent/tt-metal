@@ -48,6 +48,41 @@ def mesh_device_fixture():
     ttnn.close_mesh_device(device)
 
 
+def _permute_input_shard_axis_and_factor(placement_dict):
+    """Return (axis, factor) for the input's shard dim from a placement dict."""
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -87,7 +122,19 @@ def run(
         shape
     )
 
-    torch_output = torch.permute(torch_input, dims)
+    # Kernel-faithful torch reference: permute is applied per-chip and the
+    # reassembler concats along the same negative shard axis as the input.
+    # That differs from torch.permute on the global tensor when the input's
+    # shard dim is moved to a non-trailing position by the permutation.
+    _shard_axis, _shard_factor = _permute_input_shard_axis_and_factor(input_a_tensor_placement)
+    if _shard_factor > 1 and _shard_axis is not None:
+        n_in = torch_input.ndim
+        in_axis = _shard_axis if _shard_axis >= 0 else _shard_axis + n_in
+        chunks = torch.chunk(torch_input, _shard_factor, dim=in_axis)
+        per_chip_outs = [torch.permute(c, dims) for c in chunks]
+        torch_output = torch.cat(per_chip_outs, dim=_shard_axis)
+    else:
+        torch_output = torch.permute(torch_input, dims)
 
     is_host = storage_type and "HOST" in str(storage_type)
 

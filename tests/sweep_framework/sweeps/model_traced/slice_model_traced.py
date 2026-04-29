@@ -60,6 +60,40 @@ def mesh_device_fixture():
         del device
 
 
+def _slice_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -111,7 +145,18 @@ def run(
             slices.append(slice(start, end))
         else:
             slices.append(slice(start, end, step))
-    torch_output_tensor = torch_input_tensor_a[tuple(slices)]
+    # Per-chip slice + concat along the input shard axis. The trace records
+    # slice_start/end as per-chip values; the kernel slices each chip
+    # independently and the mesh assembler concats along the shard axis.
+    _slc_shard_axis, _slc_shard_factor = _slice_input_shard_axis_and_factor(input_a_tensor_placement)
+    if _slc_shard_factor > 1 and _slc_shard_axis is not None:
+        n_in = torch_input_tensor_a.ndim
+        chunk_axis = _slc_shard_axis if _slc_shard_axis >= 0 else _slc_shard_axis + n_in
+        chunks = torch.chunk(torch_input_tensor_a, _slc_shard_factor, dim=chunk_axis)
+        per_chip = [c[tuple(slices)] for c in chunks]
+        torch_output_tensor = torch.cat(per_chip, dim=_slc_shard_axis)
+    else:
+        torch_output_tensor = torch_input_tensor_a[tuple(slices)]
 
     is_host = storage_type and "HOST" in str(storage_type)
 

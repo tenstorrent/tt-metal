@@ -68,6 +68,51 @@ def mesh_device_fixture():
         del device
 
 
+def _qkv_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _qkv_per_chip_q(per_chip_input, num_q_heads, num_kv_heads):
+    b, _, s, hd = per_chip_input.shape
+    head_dim = hd // (num_q_heads + 2 * num_kv_heads)
+    (q, _k, _v) = torch.split(
+        per_chip_input,
+        [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
+        dim=-1,
+    )
+    return torch.reshape(q, [b, s, num_q_heads, head_dim]).transpose(-3, -2)
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -131,18 +176,25 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Compute proper torch reference (from test_nlp_create_qkv_heads.py)
-    # Split input into Q, K, V components
-    (ref_q, _, _) = torch.split(
-        torch_input_tensor_a, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
-    )
-
-    # Reshape and transpose to get proper head dimensions
-    # [B, 1, S, heads*head_dim] -> [B, S, heads, head_dim] -> [B, heads, S, head_dim]
-    ref_q = torch.reshape(ref_q, [batch_size, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
-
-    # Use Q heads as reference for PCC check (operation returns tuple of Q, K, V)
-    torch_output_tensor = ref_q
+    # Sharded-aware torch reference: when input's last dim is sharded, the kernel
+    # splits Q/K/V using the per-chip head_dim and the mesh assembler concats
+    # the per-chip Q tensors along the last axis. Run per-chip and concat to
+    # match.
+    _qkv_shard_axis, _qkv_shard_factor = _qkv_input_shard_axis_and_factor(input_a_tensor_placement)
+    if _qkv_shard_factor > 1 and _qkv_shard_axis is not None:
+        n_in = torch_input_tensor_a.ndim
+        chunk_axis = _qkv_shard_axis if _qkv_shard_axis >= 0 else _qkv_shard_axis + n_in
+        chunks = torch.chunk(torch_input_tensor_a, _qkv_shard_factor, dim=chunk_axis)
+        per_chip_q = [_qkv_per_chip_q(c, num_q_heads, num_kv_heads) for c in chunks]
+        torch_output_tensor = torch.cat(per_chip_q, dim=_qkv_shard_axis)
+    else:
+        (ref_q, _, _) = torch.split(
+            torch_input_tensor_a,
+            [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
+            dim=-1,
+        )
+        ref_q = torch.reshape(ref_q, [batch_size, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+        torch_output_tensor = ref_q
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)

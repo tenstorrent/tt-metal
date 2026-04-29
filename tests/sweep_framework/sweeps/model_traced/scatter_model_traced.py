@@ -16,7 +16,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_positional_args,
+    extract_named_tensor_kwargs,
+)
 
 TIMEOUT = 300
 
@@ -59,6 +63,40 @@ def mesh_device_fixture():
         yield (device, device_name)
         ttnn.close_device(device)
         del device
+
+
+def _scatter_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
 
 
 def run(
@@ -118,29 +156,88 @@ def run(
         src_shape = input_a_shape.get("src", shape)
     else:
         shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
-        index_shape = (index_info["shape"] if index_info and index_info["shape"] else None) or kwargs.get("index_shape", shape)
+        index_shape = (index_info["shape"] if index_info and index_info["shape"] else None) or kwargs.get(
+            "index_shape", shape
+        )
         src_shape = (src_info["shape"] if src_info and src_info["shape"] else None) or kwargs.get("src_shape", shape)
 
     # Use traced dtypes for index and src tensors (don't hardcode int32)
     index_dtype = (index_info["dtype"] if index_info and index_info.get("dtype") else None) or ttnn.int32
     index_layout = (index_info["layout"] if index_info and index_info.get("layout") else None) or input_a_layout
-    index_mem = (index_info["memory_config"] if index_info and index_info.get("memory_config") else None) or input_a_memory_config
-    index_placement = (index_info["tensor_placement"] if index_info else None)
+    index_mem = (
+        index_info["memory_config"] if index_info and index_info.get("memory_config") else None
+    ) or input_a_memory_config
+    index_placement = index_info["tensor_placement"] if index_info else None
 
     src_dtype = (src_info["dtype"] if src_info and src_info.get("dtype") else None) or input_a_dtype
     src_layout = (src_info["layout"] if src_info and src_info.get("layout") else None) or input_a_layout
-    src_mem = (src_info["memory_config"] if src_info and src_info.get("memory_config") else None) or input_a_memory_config
-    src_placement = (src_info["tensor_placement"] if src_info else None)
+    src_mem = (
+        src_info["memory_config"] if src_info and src_info.get("memory_config") else None
+    ) or input_a_memory_config
+    src_placement = src_info["tensor_placement"] if src_info else None
 
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
-    torch_index_tensor = torch.randint(0, shape[dim], index_shape, dtype=torch.int64)
-    torch_src_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), src_dtype
-    )(src_shape)
 
-    torch_output_tensor = torch.scatter(torch_input_tensor, dim, torch_index_tensor, torch_src_tensor)
+    # Sharded-aware scatter: when dim coincides with the input's shard axis,
+    # the kernel sees per-chip slices of input/index/src. Generate index in
+    # [0, per_chip_dim_size), chunk each tensor along its own shard axis
+    # (input/index/src all may be Sharded), scatter per-chip, then concat
+    # along the input shard axis.
+    _scat_in_axis, _scat_in_factor = _scatter_input_shard_axis_and_factor(input_a_tensor_placement)
+    _scat_idx_axis, _scat_idx_factor = _scatter_input_shard_axis_and_factor(
+        index_info.get("tensor_placement") if index_info else None
+    )
+    _scat_src_axis, _scat_src_factor = _scatter_input_shard_axis_and_factor(
+        src_info.get("tensor_placement") if src_info else None
+    )
+    n_in = len(shape)
+    _dim_norm = dim if dim >= 0 else dim + n_in
+    _scat_in_axis_norm = (
+        (_scat_in_axis if _scat_in_axis >= 0 else _scat_in_axis + n_in) if _scat_in_axis is not None else None
+    )
+    _per_chip_dim_size = (
+        shape[dim] // _scat_in_factor if _scat_in_factor > 1 and _scat_in_axis_norm == _dim_norm else shape[dim]
+    )
+    torch_index_tensor = torch.randint(0, _per_chip_dim_size, index_shape, dtype=torch.int64)
+    torch_src_tensor = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), src_dtype)(
+        src_shape
+    )
+    torch_src_tensor_for_golden = torch_src_tensor.to(torch_input_tensor.dtype)
+
+    def _chunk_or_replicate(t, factor, axis, factor_dim_norm):
+        if factor <= 1 or axis is None or factor_dim_norm is None:
+            return [t] * max(factor, 1)
+        return list(torch.chunk(t, factor, dim=factor_dim_norm))
+
+    if _scat_in_factor > 1 and _scat_in_axis_norm is not None and _dim_norm == _scat_in_axis_norm:
+        n_chips = _scat_in_factor
+        in_chunks = list(torch.chunk(torch_input_tensor, n_chips, dim=_scat_in_axis_norm))
+        idx_axis_norm = (
+            (_scat_idx_axis if _scat_idx_axis >= 0 else _scat_idx_axis + torch_index_tensor.ndim)
+            if _scat_idx_axis is not None
+            else None
+        )
+        src_axis_norm = (
+            (_scat_src_axis if _scat_src_axis >= 0 else _scat_src_axis + torch_src_tensor_for_golden.ndim)
+            if _scat_src_axis is not None
+            else None
+        )
+        idx_chunks = (
+            list(torch.chunk(torch_index_tensor, n_chips, dim=idx_axis_norm))
+            if _scat_idx_factor == n_chips and idx_axis_norm is not None
+            else [torch_index_tensor] * n_chips
+        )
+        src_chunks = (
+            list(torch.chunk(torch_src_tensor_for_golden, n_chips, dim=src_axis_norm))
+            if _scat_src_factor == n_chips and src_axis_norm is not None
+            else [torch_src_tensor_for_golden] * n_chips
+        )
+        per_chip = [torch.scatter(in_c, dim, ix_c, sr_c) for in_c, ix_c, sr_c in zip(in_chunks, idx_chunks, src_chunks)]
+        torch_output_tensor = torch.cat(per_chip, dim=_scat_in_axis_norm)
+    else:
+        torch_output_tensor = torch.scatter(torch_input_tensor, dim, torch_index_tensor, torch_src_tensor_for_golden)
 
     is_host = storage_type and "HOST" in str(storage_type)
 

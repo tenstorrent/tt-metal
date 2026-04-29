@@ -303,6 +303,40 @@ def extract_rope_parameters(traced_source: str = None) -> dict:
     return rope_params
 
 
+def _rel_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape=None,
     input_a_dtype=None,
@@ -391,10 +425,40 @@ def run(
         shape_c = input_shape["input_c"]  # sin_cache: [1, n_heads_or_1, cache_size, head_dim]
     else:
         shape_a = list(input_shape)
-        batch, n_heads, seq_len, head_dim = shape_a
+        # Defer dim unpack until after potential shard-axis shrink.
         # Use explicit shapes from V2 vectors if available, otherwise derive
-        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(seq_len, 1024), head_dim]))
-        shape_c = list(_kwargs.get("input_c_shape", [1, 1, max(seq_len, 1024), head_dim]))
+        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(shape_a[2], 1024), shape_a[3]]))
+        shape_c = list(_kwargs.get("input_c_shape", [1, 1, max(shape_a[2], 1024), shape_a[3]]))
+
+    # Decode mode (HEIGHT_SHARDED) uses replicate-with-topology to put the
+    # SAME per-chip tensor on every chip; V2 expanded the head_dim axis to
+    # global, so we must shrink shape_a back to per-chip there. Prefill mode
+    # (INTERLEAVED) uses create_tensor_on_mesh, which actually shards the
+    # global tensor across chips — so we MUST keep the global shape and skip
+    # the shrink.
+    def _is_height_sharded(mc):
+        if hasattr(mc, "memory_layout"):
+            return "HEIGHT_SHARDED" in str(mc.memory_layout)
+        if isinstance(mc, dict):
+            return mc.get("data", {}).get("memory_layout") == "HEIGHT_SHARDED"
+        return False
+
+    _rel_a_axis, _rel_a_factor = _rel_input_shard_axis_and_factor(input_a_tensor_placement)
+    if _rel_a_factor > 1 and _rel_a_axis is not None and _is_height_sharded(input_a_memory_config):
+        _shape_a_list = list(shape_a)
+        _ax = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + len(_shape_a_list)
+        if 0 <= _ax < len(_shape_a_list) and _shape_a_list[_ax] % _rel_a_factor == 0:
+            _shape_a_list[_ax] = _shape_a_list[_ax] // _rel_a_factor
+            shape_a = type(shape_a)(_shape_a_list) if isinstance(shape_a, tuple) else _shape_a_list
+    if not is_traced_config:
+        # If shape_b/shape_c were derived from the (now-shrunk) shape_a, keep them
+        # consistent with the per-chip head_dim.
+        _hdim_per_chip = shape_a[3] if len(shape_a) >= 4 else None
+        if _hdim_per_chip is not None and "input_b_shape" not in _kwargs:
+            shape_b = [shape_b[0], shape_b[1], shape_b[2], _hdim_per_chip]
+        if _hdim_per_chip is not None and "input_c_shape" not in _kwargs:
+            shape_c = [shape_c[0], shape_c[1], shape_c[2], _hdim_per_chip]
+        batch, n_heads, seq_len, head_dim = shape_a
 
     # Detect decode mode from memory config
     # Decode mode uses HEIGHT_SHARDED memory layout
@@ -462,9 +526,13 @@ def run(
     else:
         # For sample configs, generate based on cache_size
         cache_size = shape_b[2]
+        # In Shard(-1) prefill, input_a stays global so create_tensor_on_mesh
+        # can shard it; cos/sin are Replicated and need to be sized per-chip.
+        # Use shape_b[3] when present — that's the per-chip cos head_dim.
+        _cache_head_dim = shape_b[3] if len(shape_b) >= 4 else head_dim
         cos_cache, sin_cache = generate_cos_sin_for_prefill(
             cache_size,
-            head_dim,
+            _cache_head_dim,
             theta=rope_params["theta"],
             scale_factor=rope_params["scale_factor"],
             orig_context_len=rope_params["orig_context_len"],
@@ -509,13 +577,33 @@ def run(
 
         # Interleave back to original format
         torch_output_tensor = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(torch.bfloat16)
+
+        # Decode shrinks shape_a to per-chip on the input shard axis, so the
+        # per-chip golden above is per-chip. mesh_tensor_to_torch later
+        # reassembles outputs by concatenating along that same shard axis.
+        # Tile to match the reassembled global shape.
+        if _rel_a_factor > 1 and _rel_a_axis is not None:
+            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
+            if 0 <= _ax_g < torch_output_tensor.ndim:
+                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
     else:
-        # For prefill mode
-        torch_output_tensor = apply_rotary_emb_golden(
-            torch_input_tensor.float(),  # Use float for golden computation
-            torch_cos_cache.float(),
-            torch_sin_cache.float(),
-        ).to(torch.bfloat16)
+        # For prefill mode. torch_input_tensor is GLOBAL (shape_a is unshrunk),
+        # while torch_cos_cache / torch_sin_cache were generated at the per-chip
+        # head_dim because cos/sin are Replicated and create_tensor_on_mesh
+        # shards Q along the shard axis. Run rope per-chunk with the replicated
+        # cos/sin and concat along the shard axis to produce the global golden
+        # that matches what mesh_tensor_to_torch reassembles.
+        if _rel_a_factor > 1 and _rel_a_axis is not None:
+            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_input_tensor.ndim
+            chunks = torch.chunk(torch_input_tensor.float(), _rel_a_factor, dim=_ax_g)
+            per_chip = [apply_rotary_emb_golden(c, torch_cos_cache.float(), torch_sin_cache.float()) for c in chunks]
+            torch_output_tensor = torch.cat(per_chip, dim=_ax_g).to(torch.bfloat16)
+        else:
+            torch_output_tensor = apply_rotary_emb_golden(
+                torch_input_tensor.float(),  # Use float for golden computation
+                torch_cos_cache.float(),
+                torch_sin_cache.float(),
+            ).to(torch.bfloat16)
 
     # --- Create TTNN Tensors ---
     if is_decode_mode:

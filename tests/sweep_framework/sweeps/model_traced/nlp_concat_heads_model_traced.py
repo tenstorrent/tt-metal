@@ -52,6 +52,47 @@ def mesh_device_fixture():
     ttnn.close_mesh_device(device)
 
 
+def _nch_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _nch_per_chip_concat_heads(per_chip_input):
+    if per_chip_input.ndim != 4:
+        return per_chip_input.clone()
+    b, h, s, d = per_chip_input.shape
+    return per_chip_input.permute(0, 2, 1, 3).contiguous().view(b, s, h * d).unsqueeze(1)
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -88,19 +129,20 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # nlp_concat_heads concatenates heads: [B, H, S, D] -> [B, 1, S, H*D]
-    # Compute the expected output and reshape
-    if len(shape) == 4:
-        batch, num_heads, seq_len, head_dim = shape
-        # Reshape input to match expected output for comparison
-        torch_output_tensor = (
-            torch_input_tensor_a.permute(0, 2, 1, 3)
-            .contiguous()
-            .view(batch, seq_len, num_heads * head_dim)
-            .unsqueeze(1)
-        )
+    # nlp_concat_heads: [B, H, S, D] -> [B, 1, S, H*D]. With a sharded input
+    # the kernel runs this per-chip and the mesh assembler concats along the
+    # input shard axis; concat-of-per-chip differs element-wise from the
+    # global op, so we mirror the kernel.
+    _nch_shard_axis, _nch_shard_factor = _nch_input_shard_axis_and_factor(input_a_tensor_placement)
+    if len(shape) == 4 and _nch_shard_factor > 1 and _nch_shard_axis is not None:
+        n_in = torch_input_tensor_a.ndim
+        chunk_axis = _nch_shard_axis if _nch_shard_axis >= 0 else _nch_shard_axis + n_in
+        chunks = torch.chunk(torch_input_tensor_a, _nch_shard_factor, dim=chunk_axis)
+        per_chip = [_nch_per_chip_concat_heads(c) for c in chunks]
+        torch_output_tensor = torch.cat(per_chip, dim=_nch_shard_axis)
+    elif len(shape) == 4:
+        torch_output_tensor = _nch_per_chip_concat_heads(torch_input_tensor_a)
     else:
-        # Fallback: just clone the input
         torch_output_tensor = torch_input_tensor_a.clone()
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

@@ -50,6 +50,40 @@ def mesh_device_fixture():
     ttnn.close_mesh_device(device)
 
 
+def _nchd_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -92,20 +126,42 @@ def run(
     if len(shape) == 4 and num_heads is not None and shape[2] != num_heads:
         shape = (shape[0], shape[1], num_heads, shape[3])
 
+    # When input is sharded on a non-head axis (typically dim -1 / hidden),
+    # V2 has expanded that dim to the GLOBAL value but the master trace and
+    # shard_spec are per-chip. replicate_with_topology puts the same tensor
+    # on every chip — so we must shrink the shape on the shard axis to
+    # per-chip first, otherwise the per-chip tensor width disagrees with
+    # shard_spec and the kernel rejects it.
+    _nchd_axis, _nchd_factor = _nchd_input_shard_axis_and_factor(input_a_tensor_placement)
+    n_in = len(shape)
+    _nchd_axis_norm = (_nchd_axis if _nchd_axis >= 0 else _nchd_axis + n_in) if _nchd_axis is not None else None
+    if (
+        _nchd_factor > 1
+        and _nchd_axis_norm is not None
+        and _nchd_axis_norm != 2  # dim 2 is the heads axis; do not shrink it
+        and shape[_nchd_axis_norm] % _nchd_factor == 0
+    ):
+        shape = tuple((s_ // _nchd_factor) if i == _nchd_axis_norm else s_ for i, s_ in enumerate(shape))
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
     # Proper torch reference from test_nlp_concat_heads_decode.py (line 95)
-    # Input shape: [1, batch, padded_heads, head_dim]
-    # Output shape: [1, 1, batch, head_dim * num_heads]
-    # The operation takes first num_heads from padded_heads dimension and concatenates them
-
+    # Per-chip: Input (1, batch, padded_heads, head_dim) -> Output (1, 1, batch, head_dim*num_heads)
+    # mesh_tensor_to_torch then concats per-chip outputs on the input shard axis,
+    # so tile the per-chip golden by _nchd_factor on that axis to match.
     if len(shape) == 4:
         _, batch, padded_heads, head_dim = shape
-        # Take first num_heads from the padded_heads dimension and reshape
-        # Input: (1, batch, padded_heads, head_dim) -> Output: (1, 1, batch, head_dim * num_heads)
-        torch_output_tensor = torch_input_tensor_a[:, :, :num_heads, :].reshape(1, 1, batch, head_dim * num_heads)
+        per_chip_out = torch_input_tensor_a[:, :, :num_heads, :].reshape(1, 1, batch, head_dim * num_heads)
+        if _nchd_factor > 1 and _nchd_axis_norm is not None:
+            # Output dim-3 is head_dim*num_heads. mesh_tensor_to_torch concats
+            # along the recorded input shard axis. For Shard(-1) on the input
+            # hidden, the corresponding output axis is also dim -1.
+            out_axis = _nchd_axis_norm if _nchd_axis_norm < per_chip_out.ndim else per_chip_out.ndim - 1
+            torch_output_tensor = torch.cat([per_chip_out] * _nchd_factor, dim=out_axis)
+        else:
+            torch_output_tensor = per_chip_out
     else:
         torch_output_tensor = torch_input_tensor_a.clone()
 

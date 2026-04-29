@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    broadcast_torch_inputs_to_global,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -125,7 +126,13 @@ def run(
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)
-        torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+        ref_a, ref_b = broadcast_torch_inputs_to_global(
+            torch_input_tensor_a,
+            input_a_tensor_placement,
+            torch_input_tensor_b,
+            input_b_tensor_placement,
+        )
+        torch_output_tensor = torch.add(ref_a, ref_b)
         is_scalar_add = False
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

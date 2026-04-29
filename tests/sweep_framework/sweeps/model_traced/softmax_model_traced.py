@@ -54,6 +54,40 @@ def mesh_device_fixture():
     ttnn.close_mesh_device(device)
 
 
+def _softmax_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -84,7 +118,21 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
     dim = op_kwargs.pop("dim", dim)
 
-    torch_output_tensor = torch.nn.functional.softmax(torch_input_tensor_a, dim=dim)
+    # Per-chip softmax + concat when softmax's dim == input shard axis. The
+    # kernel does no cross-chip reduce in this case, so each chip normalises
+    # within its own slice. A plain global softmax would not match.
+    _sm_shard_axis, _sm_shard_factor = _softmax_input_shard_axis_and_factor(input_a_tensor_placement)
+    _n_in = torch_input_tensor_a.ndim
+    _dim_norm = dim if dim >= 0 else dim + _n_in
+    _sa_norm = (
+        (_sm_shard_axis if _sm_shard_axis >= 0 else _sm_shard_axis + _n_in) if _sm_shard_axis is not None else None
+    )
+    if _sm_shard_factor > 1 and _sa_norm is not None and _dim_norm == _sa_norm:
+        chunks = torch.chunk(torch_input_tensor_a, _sm_shard_factor, dim=_sa_norm)
+        per_chip = [torch.nn.functional.softmax(c, dim=dim) for c in chunks]
+        torch_output_tensor = torch.cat(per_chip, dim=_sa_norm)
+    else:
+        torch_output_tensor = torch.nn.functional.softmax(torch_input_tensor_a, dim=dim)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)

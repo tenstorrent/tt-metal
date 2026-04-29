@@ -405,15 +405,8 @@ def create_tensor_on_mesh(
                     dims.append(None)
             dims_tuple = tuple(dims)
 
-            # Traced shapes are per-device (post-shard). ShardTensor2dMesh expects
-            # global (pre-shard) shapes. Expand by tiling shard dims by mesh sizes.
-            repeat_factors = [1] * torch_tensor.ndim
-            if dims_tuple[0] is not None:
-                repeat_factors[dims_tuple[0]] = mesh_shape_tuple[0]
-            if dims_tuple[1] is not None:
-                repeat_factors[dims_tuple[1]] = mesh_shape_tuple[1]
-            torch_tensor = torch_tensor.repeat(*repeat_factors)
-
+            # Traced shapes are global (pre-shard); ShardTensor2dMesh splits
+            # them across the mesh internally.
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
         elif len(entries) == 1:
             shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entries[0])
@@ -421,10 +414,8 @@ def create_tensor_on_mesh(
                 dim = int(shard_match.group(1))
                 dims_tuple = (None, dim)
 
-                repeat_factors = [1] * torch_tensor.ndim
-                repeat_factors[dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
-                torch_tensor = torch_tensor.repeat(*repeat_factors)
-
+                # Traced shapes are global; ShardTensor2dMesh splits the
+                # tensor across the mesh internally.
                 mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
             else:
                 if is_2d_distribution:
@@ -537,28 +528,15 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
 
 
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
-    """
-    Convert a TTNN tensor (mesh or single device) to torch tensor.
+    """Convert a TTNN mesh tensor back to torch, reassembling shards by topology.
 
-    For replicated mesh tensors, extracts device 0's copy.
-    For sharded mesh tensors, uses the provided mesh_composer to reassemble
-    all device shards into the original full tensor.
-
-    Args:
-        ttnn_tensor: TTNN tensor (mesh or single device)
-        mesh_device: Optional mesh device reference (can be None)
-        mesh_composer: Optional mesh composer for reassembling sharded tensors.
-                       If None, falls back to extracting device 0 only.
-
-    Returns:
-        torch.Tensor: Converted tensor
+    Replicated tensors return device 0. Sharded tensors are reassembled
+    according to the tensor's TensorTopology placements. Mixed
+    [Replicate, Shard(d)] cases concatenate only the unique row/col of devices
+    along the shard dim. A caller-supplied mesh_composer overrides this.
     """
 
-    # ttnn.to_torch() converts uint16 tensors to int16 by default, which
-    # causes sign-extension corruption for values > 32767.  Pass torch_dtype
-    # to prevent this.
     def _get_torch_dtype(t):
-        """Return explicit torch dtype for integer TTNN dtypes to avoid sign-extension."""
         try:
             dt = t.dtype
             if dt == ttnn.uint16:
@@ -566,7 +544,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             if dt == ttnn.uint32:
                 return torch.int64
         except Exception:
-            pass  # dtype access may fail for host-side or freed tensors
+            pass
         return None
 
     def _to_torch_safe(t):
@@ -575,25 +553,219 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             return ttnn.to_torch(t).to(torch_dtype)
         return ttnn.to_torch(t)
 
-    # Check if this is a mesh tensor by checking the device attribute
     try:
         device = ttnn_tensor.device()
-        # If device is a mesh device, handle appropriately
-        if device is not None and hasattr(device, "get_num_devices"):
-            # If a mesh_composer is provided, use it to reassemble shards
-            if mesh_composer is not None:
-                result = ttnn.to_torch(ttnn_tensor, mesh_composer=mesh_composer)
-                torch_dtype = _get_torch_dtype(ttnn_tensor)
-                return result.to(torch_dtype) if torch_dtype is not None else result
-            # Default: extract device 0 only (works for replicated tensors)
-            device_tensors = ttnn.get_device_tensors(ttnn_tensor)
-            if device_tensors and len(device_tensors) > 0:
-                return _to_torch_safe(device_tensors[0])
-            # Fallback if get_device_tensors doesn't work
-            return _to_torch_safe(ttnn_tensor)
-        else:
-            # Single device tensor - direct conversion
-            return _to_torch_safe(ttnn_tensor)
     except Exception:
-        # Fallback: direct conversion for host tensors or when device() is unavailable
+        device = None
+
+    is_mesh = device is not None and hasattr(device, "get_num_devices")
+
+    if not is_mesh:
         return _to_torch_safe(ttnn_tensor)
+
+    if mesh_composer is not None:
+        result = ttnn.to_torch(ttnn_tensor, mesh_composer=mesh_composer)
+        torch_dtype = _get_torch_dtype(ttnn_tensor)
+        return result.to(torch_dtype) if torch_dtype is not None else result
+
+    try:
+        topology = ttnn_tensor.tensor_topology()
+        placements = list(topology.placements())
+        dist_shape = topology.distribution_shape()
+        dist_dims = [int(d) for d in list(dist_shape)]
+        mesh_coords = list(topology.mesh_coords())
+    except Exception:
+        placements = []
+        dist_dims = []
+        mesh_coords = []
+
+    def _is_shard(p):
+        return type(p).__name__ == "PlacementShard"
+
+    has_shard = any(_is_shard(p) for p in placements)
+
+    if not has_shard:
+        device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+        if device_tensors:
+            return _to_torch_safe(device_tensors[0])
+        return _to_torch_safe(ttnn_tensor)
+
+    if len(placements) == 2 and len(dist_dims) == 2 and all(_is_shard(p) for p in placements):
+        try:
+            d0 = placements[0].dim
+            d1 = placements[1].dim
+            comp = ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(dist_dims), dims=(d0, d1))
+            result = ttnn.to_torch(ttnn_tensor, mesh_composer=comp)
+            torch_dtype = _get_torch_dtype(ttnn_tensor)
+            return result.to(torch_dtype) if torch_dtype is not None else result
+        except Exception:
+            pass
+
+    device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+    if len(placements) == 2 and len(dist_dims) == 2:
+        rows, cols = dist_dims[0], dist_dims[1]
+        if _is_shard(placements[0]) and not _is_shard(placements[1]):
+            shard_dim = placements[0].dim
+            picks = []
+            for r in range(rows):
+                for i, mc in enumerate(mesh_coords):
+                    coord = list(mc)
+                    if len(coord) == 2 and coord[0] == r and coord[1] == 0:
+                        picks.append(i)
+                        break
+            shards = [_to_torch_safe(device_tensors[i]) for i in picks]
+            return torch.cat(shards, dim=shard_dim)
+        elif _is_shard(placements[1]) and not _is_shard(placements[0]):
+            shard_dim = placements[1].dim
+            picks = []
+            for c in range(cols):
+                for i, mc in enumerate(mesh_coords):
+                    coord = list(mc)
+                    if len(coord) == 2 and coord[0] == 0 and coord[1] == c:
+                        picks.append(i)
+                        break
+            shards = [_to_torch_safe(device_tensors[i]) for i in picks]
+            return torch.cat(shards, dim=shard_dim)
+
+    shard_p = next((p for p in placements if _is_shard(p)), None)
+    if shard_p is not None:
+        try:
+            comp = ttnn.ConcatMeshToTensor(device, dim=shard_p.dim)
+            result = ttnn.to_torch(ttnn_tensor, mesh_composer=comp)
+            torch_dtype = _get_torch_dtype(ttnn_tensor)
+            return result.to(torch_dtype) if torch_dtype is not None else result
+        except Exception:
+            pass
+
+    if device_tensors:
+        return _to_torch_safe(device_tensors[0])
+    return _to_torch_safe(ttnn_tensor)
+
+
+def broadcast_torch_inputs_to_global(
+    torch_a: torch.Tensor,
+    placement_a: Optional[Dict],
+    torch_b: torch.Tensor,
+    placement_b: Optional[Dict],
+):
+    """Reconcile torch shapes for elementwise ops with mismatched global shapes.
+
+    Uses placement (Replicate/Shard) and distribution_shape to derive per-chip
+    sizes for each tensor dim. Per-dim expansion rules when shapes mismatch:
+      - per-chip sizes equal: smaller operand is "replicated full"; tile by mesh
+        factor of the larger side using torch.repeat.
+      - smaller operand has per-chip size 1 along this dim: it broadcasts within
+        each chip; expand using torch.repeat_interleave by the per-chip size of
+        the larger side (so each per-chip element of the smaller side is
+        replicated to fill its corresponding chunk of the larger side).
+    Falls back to plain torch.repeat (legacy behavior) when placement info is
+    missing, when ndims differ, or when no clean integer-ratio expansion exists.
+    """
+    if torch_a.shape == torch_b.shape:
+        return torch_a, torch_b
+    if torch_a.ndim != torch_b.ndim:
+        return torch_a, torch_b
+
+    def _parse_placement_str(plac_val):
+        if plac_val is None:
+            return None
+        if isinstance(plac_val, (list, tuple)):
+            parts = [str(x).strip().strip("'") for x in plac_val]
+        else:
+            s_inner = str(plac_val).strip()
+            if s_inner.startswith("[") and s_inner.endswith("]"):
+                s_inner = s_inner[1:-1]
+            parts = [x.strip().strip("'") for x in s_inner.split(",")]
+        out = []
+        for x in parts:
+            if not x:
+                continue
+            if x.startswith("PlacementShard("):
+                d = int(x[len("PlacementShard(") : -1])
+                out.append(("S", d))
+            elif x.startswith("PlacementReplicate"):
+                out.append(("R", None))
+            else:
+                out.append(("?", None))
+        return out
+
+    def _parse_dist_str(dist_val):
+        if dist_val is None:
+            return None
+        if isinstance(dist_val, (list, tuple)):
+            return [int(x) for x in dist_val]
+        s_inner = str(dist_val).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        return [int(x.strip()) for x in s_inner.split(",") if x.strip()]
+
+    def _factors(p, ndim):
+        if not isinstance(p, dict):
+            return [1] * ndim
+        plac = _parse_placement_str(p.get("placement"))
+        dist = _parse_dist_str(p.get("distribution_shape"))
+        if plac is None or dist is None:
+            return [1] * ndim
+        f = [1] * ndim
+        for (kind, dim), n in zip(plac, dist):
+            if kind == "S" and dim is not None:
+                d = dim if dim >= 0 else dim + ndim
+                if 0 <= d < ndim:
+                    f[d] *= n
+        return f
+
+    def _tile(t, dim, n):
+        if n == 1:
+            return t
+        repeats = [1] * t.ndim
+        repeats[dim] = n
+        return t.repeat(*repeats)
+
+    fa = _factors(placement_a, torch_a.ndim)
+    fb = _factors(placement_b, torch_b.ndim)
+
+    new_a, new_b = torch_a, torch_b
+    for d in range(torch_a.ndim):
+        sa = new_a.shape[d]
+        sb = new_b.shape[d]
+        if sa == sb:
+            continue
+        # Per-chip sizes derived from current shape and placement factor.
+        per_chip_a = sa // fa[d] if fa[d] > 0 and sa % fa[d] == 0 else None
+        per_chip_b = sb // fb[d] if fb[d] > 0 and sb % fb[d] == 0 else None
+        if per_chip_a is None or per_chip_b is None:
+            # Fall back to a single tile attempt below.
+            per_chip_a = sa
+            per_chip_b = sb
+
+        if per_chip_a == per_chip_b:
+            # Both operands carry the same per-chip slice; the smaller is
+            # replicated across the mesh while the larger is sharded. Tile the
+            # smaller by the larger side's mesh factor.
+            if sa < sb and sb % sa == 0:
+                new_a = _tile(new_a, d, sb // sa)
+            elif sb < sa and sa % sb == 0:
+                new_b = _tile(new_b, d, sa // sb)
+            else:
+                return torch_a, torch_b
+        elif per_chip_a == 1 and per_chip_b > 1:
+            # a's per-chip element broadcasts to all per_chip_b elements on
+            # each chip; globally that is repeat_interleave.
+            if sb % sa == 0:
+                new_a = new_a.repeat_interleave(per_chip_b, dim=d)
+            else:
+                return torch_a, torch_b
+        elif per_chip_b == 1 and per_chip_a > 1:
+            if sa % sb == 0:
+                new_b = new_b.repeat_interleave(per_chip_a, dim=d)
+            else:
+                return torch_a, torch_b
+        else:
+            # Mixed per-chip sizes neither equal nor singleton: try plain tile.
+            if sa < sb and sb % sa == 0:
+                new_a = _tile(new_a, d, sb // sa)
+            elif sb < sa and sa % sb == 0:
+                new_b = _tile(new_b, d, sa // sb)
+            else:
+                return torch_a, torch_b
+    return new_a, new_b
