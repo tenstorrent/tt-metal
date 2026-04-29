@@ -696,7 +696,7 @@ class TtDepthAnythingV2:
 
         # ---- 2. ViT-Large encoder (24 layers) --------------------------
         features = []
-        out_indices = {5, 11, 17, 23}
+        out_indices = {4, 11, 17, 23}  # HF out_indices=[5,12,18,24] are 1-indexed (include embedding)
 
         for i in range(24):
             hidden_states = vit_layer(
