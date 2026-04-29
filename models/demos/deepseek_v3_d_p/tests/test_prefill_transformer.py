@@ -57,7 +57,6 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.99
-MAX_PAYLOAD_SIZE = 4096
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
