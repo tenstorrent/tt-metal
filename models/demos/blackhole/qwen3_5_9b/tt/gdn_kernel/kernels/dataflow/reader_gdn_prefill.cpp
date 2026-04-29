@@ -136,10 +136,11 @@ void kernel_main() {
     uint32_t rms_eps_addr = get_arg_val<uint32_t>(9);    // [1 tile]
     uint32_t pair_start = get_arg_val<uint32_t>(10);
     uint32_t num_pairs = get_arg_val<uint32_t>(11);
+    uint32_t v_shard_idx = get_arg_val<uint32_t>(12);  // which V-shard this core owns
 
     // Compile-time args
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
-    constexpr uint32_t Vt = get_compile_time_arg_val(1);
+    constexpr uint32_t Vt = get_compile_time_arg_val(1);  // per-shard V-tile count (Vt_global / v_split)
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t STATE_IN_L1 = get_compile_time_arg_val(3);
     constexpr uint32_t reduce_scaler = get_compile_time_arg_val(4);
@@ -151,7 +152,10 @@ void kernel_main() {
     constexpr uint32_t num_tokens = get_compile_time_arg_val(10);          // N
     constexpr uint32_t conv_tiles_per_row = get_compile_time_arg_val(11);  // qkv_dim_tp / 32
     constexpr uint32_t ab_tiles_per_row = get_compile_time_arg_val(12);    // ceil(Nv_TP / 32)
-    constexpr uint32_t state_tiles = Kt * Vt;
+    constexpr uint32_t Vt_global = get_compile_time_arg_val(13);           // global V-tile count per pair
+    constexpr uint32_t state_tiles = Kt * Vt;                              // per-shard state tile count
+    constexpr uint32_t state_tiles_global = Kt * Vt_global;                // global state tile count per pair
+    const uint32_t vt_start = v_shard_idx * Vt;  // first V-tile this shard owns (global index)
 
     // Scratch layout: whole tiles for Q/K/V/a/b (loaded once per 32-token tile-row),
     // plus per-pair scalar stubs for neg_exp_A/dt_bias (loaded once per pair).
@@ -215,9 +219,10 @@ void kernel_main() {
     cb_reserve_back(cb_rms_scale, 1);
     cb_reserve_back(cb_rms_eps, 1);
 
+    // Per V-shard: only read the Vt tiles for this shard's V-slice.
     uint32_t wp = get_write_ptr(cb_norm_w);
-    for (uint32_t vt = 0; vt < Vt; vt++) {
-        noc_async_read_tile(vt, norm_w_rd, wp);
+    for (uint32_t vt_local = 0; vt_local < Vt; vt_local++) {
+        noc_async_read_tile(vt_start + vt_local, norm_w_rd, wp);
         wp += tile_bytes;
     }
     noc_async_read_tile(0, scale_rd, get_write_ptr(cb_scale));
@@ -245,11 +250,19 @@ void kernel_main() {
         issue_scalar_read(neg_exp_A_rd, 0, 0, v_head, scratch_l1 + SCRATCH_SCALAR + 128);
         issue_scalar_read(dt_bias_rd, 0, 0, v_head, scratch_l1 + SCRATCH_SCALAR + 192);
 
-        // Load state ONCE for this pair (stays in cb_state for all tokens)
+        // Load state ONCE for this pair-shard (stays in cb_state for all tokens).
+        // State is laid out as [num_pairs, Kt, Vt_global] tiles (kt-major within a pair).
+        // For shard with v_shard_idx=vsi, we read tiles at global index
+        //   p * (Kt * Vt_global) + kt * Vt_global + (vt_start + vt_local)
+        // and pack them locally as kt * Vt + vt_local.
         cb_reserve_back(cb_state, state_tiles);
         uint32_t wp_st = get_write_ptr(cb_state);
-        for (uint32_t s = 0; s < state_tiles; s++) {
-            noc_async_read_tile(p * state_tiles + s, state_rd, wp_st + s * tile_bytes);
+        for (uint32_t kt = 0; kt < Kt; kt++) {
+            for (uint32_t vt_local = 0; vt_local < Vt; vt_local++) {
+                uint32_t s_global = kt * Vt_global + (vt_start + vt_local);
+                uint32_t s_local = kt * Vt + vt_local;
+                noc_async_read_tile(p * state_tiles_global + s_global, state_rd, wp_st + s_local * tile_bytes);
+            }
         }
 
         noc_async_read_barrier();
@@ -277,9 +290,10 @@ void kernel_main() {
                 uint32_t k_tile = tr * conv_tiles_per_row + key_tile_offset + k_head * Kt + kt;
                 noc_async_read_tile(k_tile, conv_rd, scratch_l1 + SCRATCH_K + kt * TILE_BYTES);
             }
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                uint32_t v_tile = tr * conv_tiles_per_row + v_tile_offset + v_head * Vt + vt;
-                noc_async_read_tile(v_tile, conv_rd, scratch_l1 + SCRATCH_V + vt * TILE_BYTES);
+            // V-shard slice: read Vt local tiles starting at vt_start within this v_head.
+            for (uint32_t vt_local = 0; vt_local < Vt; vt_local++) {
+                uint32_t v_tile = tr * conv_tiles_per_row + v_tile_offset + v_head * Vt_global + (vt_start + vt_local);
+                noc_async_read_tile(v_tile, conv_rd, scratch_l1 + SCRATCH_V + vt_local * TILE_BYTES);
             }
             // a, b: [1, N, Nv_TP] tiles — one tile per tile-row when Nv_TP <= 32.
             uint32_t ab_tile = tr * ab_tiles_per_row;
