@@ -309,8 +309,9 @@ class TtDPTFusionStage:
             )
 
             # Step 2: fusion projection  256 -> 256 (1x1 conv as linear)
+            # ttnn_conv2d returns (B, 256, H, W) -- must permute to BHWC before linear
+            feat_i = ttnn.permute(feat_i, (0, 2, 3, 1))  # (B, H, W, 256)
             feat_i = _dram_tile(feat_i)  # ensure TILE layout for linear
-            # Reshape from conv output (B*H*W, 256) to (B, H*W, 256)
             feat_i = ttnn.reshape(feat_i, (batch_size, h_i * w_i, 256))
             feat_i = ttnn.linear(
                 feat_i,
