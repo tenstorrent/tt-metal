@@ -7,8 +7,8 @@ Compute-kernel and activation-memory policy for the BGE-M3 encoder on TTNN.
 - **Matmul / SDPA:** HiFi2 on archs that are not Blackhole or Wormhole; **HiFi4** with FP32 dest acc on
   Blackhole and Wormhole (Wormhole previously used HiFi2, which drifts on long sequence).
 - **LayerNorm:** HiFi4 + FP32 on all archs (aligned with ttnn layer_norm in Metal).
-- **Activations:** ``bge_m3_linear_activation_memory_config`` (and MLP ``Wi`` via
-  ``bge_m3_mlp_wi_output_memory_config`` for tuned exact-shape paths) pick L1 vs DRAM from ``max_seq_len`` and
+- **Activations:** ``bge_m3_linear_activation_memory_config`` (and MLP ``Wi`` / ``Wo`` via
+  output-memory helpers for tuned exact-shape paths) pick L1 vs DRAM from ``max_seq_len`` and
   ``max_batch_size * max_seq_len``. Do not use mixed L1/DRAM envelopes across matmul, SDPA, LayerNorm, MLP,
   and attention WO, or Wormhole can OOM or fail circular-buffer validation. MLP fuses GELU with
   ``ttnn.linear(..., activation="gelu")`` on Wi.
@@ -124,6 +124,18 @@ def bge_m3_mlp_wi_output_memory_config(
     ):
         return ttnn.DRAM_MEMORY_CONFIG
     return base
+
+
+def bge_m3_mlp_wo_output_memory_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    mesh_device: ttnn.MeshDevice | None,
+) -> ttnn.MemoryConfig:
+    """Output memory for MLP ``Wo``, with exact-shape overrides from the MLP->LN chain sweep."""
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return ttnn.L1_MEMORY_CONFIG
+    return bge_m3_linear_activation_memory_config(max_seq_len, max_batch_size)
 
 
 def bge_m3_matmul_core_grid(
