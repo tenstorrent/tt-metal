@@ -55,8 +55,24 @@ def build_parser():
         "Same memory as BFP8 baseline (no compression) but tests TQ accuracy with no "
         "dequant pass at SDPA time — measures the latency floor.",
     )
+    p.add_argument(
+        "--tq-rescaled-bfp4",
+        action="store_true",
+        help="Track B: TQ rotation + BFP4 paged layer_past + standard SDPA decode. "
+        "Same flow as --tq-rescaled-bfp8 but stores centroid×norm as BFP4 (0.5 bytes/elem). "
+        "Halves KV memory vs BFP8 baseline; BFP4 round-trip on rescaled values preserved "
+        "cosine ≥ 0.9995 in test_bfp4_paged_sdpa.py.",
+    )
     p.add_argument("--batch-size", type=int, default=1, help="Batch size (number of parallel sequences)")
     p.add_argument("--no-trace", action="store_true", help="Disable TTNN trace (slower, useful for debugging)")
+    p.add_argument(
+        "--tq-num-cores-per-head",
+        type=int,
+        default=1,
+        help="Tier 2A: split each (B, NQH) tuple's chunk loop across K cores (K = "
+        "num_cores_per_head). Only effective with --tq-full-dequant on multi-device "
+        "(T3K: max K=14, N150: max K=1). K=1 disables the cross-core split.",
+    )
     return p
 
 
@@ -89,7 +105,7 @@ def main():
         from models.tt_transformers.tt.model_config import TensorGroup, PrecisionSetting
 
         opts = DecodersPrecision.accuracy(ma.n_layers, ma.model_name)
-        if args.bfp4_cache:
+        if args.bfp4_cache or args.tq_rescaled_bfp4:
             for decoder_id, dec_conf in opts.decoder_optimizations.items():
                 dec_conf.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BFP4
         return opts
@@ -223,6 +239,11 @@ def main():
         )
         if absorb_rotation:
             shared_tq.rotation_absorbed = True
+        # Tier 2A: forward num_cores_per_head to fused_sdpa_decode via the
+        # tq_cache attribute (read by attention.py per-layer).
+        shared_tq.num_cores_per_head = args.tq_num_cores_per_head
+        if args.tq_num_cores_per_head > 1:
+            print(f"  Tier 2A: num_cores_per_head = {args.tq_num_cores_per_head}")
         for layer_idx, layer in enumerate(tt_model.layers):
             attn = layer.attention
             attn.tq_cache = shared_tq
@@ -230,13 +251,13 @@ def main():
     elif args.bfp4_cache:
         # KV_CACHE already allocated as BFP4 at model init (via make_optimizations override).
         print("  Using BFP4 paged cache (allocated at model init via optimization override)")
-    elif args.tq_rescaled_bfp8:
-        # TQ Performance mode but keep the model's BFP8 layer_past (no BF16 swap).
-        # Pre-rescaled centroid×norm values get written into the standard BFP8 paged
-        # cache, then standard SDPA decode reads them — no fused kernel, no dequant
-        # at read time. Memory parity with the BFP8 baseline; tests how close TQ can
-        # get to baseline latency once dequant is amortised at write time.
-        print("  Using TQ Pre-Rescaled BFP8 mode: centroid×norm → BFP8 layer_past + standard SDPA")
+    elif args.tq_rescaled_bfp8 or args.tq_rescaled_bfp4:
+        # TQ Performance mode but keep the model's standard layer_past (no BF16 swap).
+        # Pre-rescaled centroid×norm values get written into the standard paged cache
+        # (BFP8 or BFP4), then standard SDPA decode reads them — no fused kernel, no
+        # dequant at read time. BFP4 storage halves KV memory vs BFP8.
+        cache_dtype = "BFP4" if args.tq_rescaled_bfp4 else "BFP8"
+        print(f"  Using TQ Pre-Rescaled {cache_dtype} mode: centroid×norm → {cache_dtype} layer_past + standard SDPA")
         for layer in tt_model.layers:
             attn = layer.attention
             tq = TTNNTurboQuantCache(
@@ -421,7 +442,13 @@ def main():
         if args.no_turbo_quant:
             mode_label = "baseline BFP8"
         elif args.bfp4_cache:
-            mode_label = f"{args.bits}-bit TurboQuant BFP4 paged"
+            mode_label = "BFP4 paged (no TQ)"
+        elif args.tq_rescaled_bfp4:
+            mode_label = f"{args.bits}-bit TQ rescaled BFP4 paged"
+        elif args.tq_rescaled_bfp8:
+            mode_label = f"{args.bits}-bit TQ rescaled BFP8 paged"
+        elif args.tq_full_dequant:
+            mode_label = f"{args.bits}-bit TQ full dequant (fused kernel)"
         else:
             mode_label = f"{args.bits}-bit TurboQuant BF16 paged"
         if use_trace:

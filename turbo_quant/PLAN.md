@@ -1,23 +1,57 @@
 # TurboQuant KV Cache Quantization
 
-## 🚀 RESUME HERE — Tier 2A DONE, now starting 128K plan (2026-04-29)
+## 🚀 RESUME HERE — Track A already done, focus on Track B + Tier 2A E2E (2026-04-29)
 
-Tier 2A is complete. Pivoting to the **TurboQuant 128K — Two-Track
-Comparison** plan (see `/home/mtairum/.claude/plans/rustling-wiggling-lagoon.md`):
+The **TurboQuant 128K** plan posited Track A (chunked online softmax
+in fused TQ kernel) as the main effort. Investigation today showed:
 
-- **Track A** — Fix the fused TQ SDPA kernel: add chunked online softmax
-  (Flash Attention style) so it streams K/V one chunk at a time. Today
-  the kernel pre-fills *all* BF16 K/V into L1 (34 MB at 4 K vs 1.5 MB
-  L1 limit) and so cannot run at 4K+ when cur_pos is also large.
-- **Track B** — Validation: BFP4 paged cache + *standard* SDPA decode
-  (no custom kernel). Simpler; loses TQ-specific kernel control.
+- **Track A is already done.** The fused TQ kernel
+  (`sdpa_tq_decode.cpp` lines 599-760) has Flash-Attention online
+  softmax with kv_cb_chunks=2 and an explicit comment "scales to
+  128K+ context without L1 blow-up." N150 bench at cur_pos=seq-1
+  ran clean across 128 → 131072: 8.85 ms at 4K, 282.37 ms at 131K.
+- **Track B Step 1 is done.** `test_bfp4_paged_sdpa.py` shows
+  cosine ≥ 0.9995 at every seqlen 128 → 131072.
 
-Execution order:
-1. Track B Step 1 — synthetic BFP4 test (`test_bfp4_paged_sdpa.py`).
-   Quick — < 1 hr. Validates BFP4-paged-SDPA viability before
-   investing in Track A kernel work.
-2. Track A — implement chunked fused kernel.
-3. Track B Steps 2-3 — e2e + comparison sweep.
+So the actual remaining work:
+
+1. **Track B Steps 2-3 (in progress)** — `--tq-rescaled-bfp4` mode
+   in `eval_e2e.py`: TQ rotation + BFP4 paged layer_past + standard
+   SDPA decode. Currently has a smoke-test in flight. Then run
+   comparison sweep (BFP8 / TQ FD / TQ-rescaled-BFP4) at all seqlens.
+2. **Tier 2A E2E plumbing** (deferred from Phase 2.3) — wire
+   `num_cores_per_head` through `models/tt_transformers/tt/attention.py`
+   so e2e on T3K can use K=14.
+
+### Comparison snapshot (N150 K=1, cur_pos=seq-1, single SDPA call)
+
+| seq    | TQ FD ms (fused) | BFP8 ms (std) | speedup |
+|-------:|-----------------:|--------------:|--------:|
+|   1024 |      2.25        |  0.06         |  0.03×  |
+|   8192 |     17.69        |  0.15         |  0.01×  |
+|  32768 |     70.65        |  0.41         |  0.01×  |
+| 131072 |    282.37        |  1.45         |  0.01×  |
+
+Per-call: BFP8 standard SDPA is ~195× faster than fused TQ at K=1
+on N150. Tier 2A K=14 gives ~14× boost on T3K (so ~14× slower than
+BFP8 at K=14). BFP4 paged + standard SDPA (Track B) should
+match BFP8 latency while keeping 0.5× memory.
+
+### Track B e2e validated (2026-04-29 N150 single device)
+
+`--tq-rescaled-bfp4` quality + perf measured. Same prompt
+("What is the capital of France?"), 32-layer Llama-3.1-8B,
+30 generated tokens, traced execution:
+
+| Mode                        | Answer                          | ms/tok | tok/s |
+|-----------------------------|---------------------------------|-------:|------:|
+| `--no-turbo-quant` (BFP8)   | "The capital of France is Paris." | 37.0  | 27.1  |
+| `--tq-rescaled-bfp4`        | "The capital of France is Paris." | 42.7  | 23.4  |
+| Δ                           | identical answer                | +5.7  | -3.7  |
+
+Track B costs ~15 % e2e latency vs BFP8 baseline, gains 0.5×
+KV memory. Quality preserved (correct, coherent answer; the
+divergence at later tokens is the usual sampling sensitivity).
 
 ### Tier 2A — DONE (commits e74354b → e6aa928)
 

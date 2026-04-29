@@ -810,12 +810,16 @@ class Attention(LightweightModule):
             ttnn.deallocate(q_heads_1BQD)
 
             # Fused SDPA: reads directly from BFP4 index + BF16 norms caches.
+            # num_cores_per_head: Tier 2A cross-core split (K). The cache may stash
+            # a value via setattr; default 1 keeps single-core behavior.
+            _tq_num_cores_per_head = getattr(turbo_quant_cache, "num_cores_per_head", 1)
             attn_out_bqhd = turbo_quant_cache.fused_sdpa_decode(
                 q_bqhd,
                 layer_idx=_tq_layer_idx,
                 current_pos=current_pos,
                 scale=self.scale,
                 page_table=_tq_page_table,
+                num_cores_per_head=_tq_num_cores_per_head,
             )
             ttnn.deallocate(q_bqhd)
 

@@ -21,9 +21,9 @@ def main():
     device = ttnn.open_device(device_id=0)
     nqh, nkh, head_dim, bits = 32, 8, 128, 3
     scale = head_dim**-0.5
-    seq_len = 256
+    seq_len = 1024  # 32 chunks → meaningful work for K=2, 4
     block_size = 32
-    cur_pos_target = 41
+    cur_pos_target = 511  # 4 K-chunks worth, large enough to split across K workers
 
     paged_cfg = PagedAttentionConfig(block_size=block_size, max_num_blocks=seq_len // block_size)
     tq = TTNNTurboQuantCache(
@@ -89,7 +89,12 @@ def main():
         )
         outs[K] = ttnn.to_torch(out).float()
         ttnn.deallocate(out)
-        print(f"K={K}: out_max={outs[K].abs().max().item():.4f}")
+        flat = outs[K].flatten()
+        print(
+            f"K={K}: out_max={flat.abs().max().item():.4f} "
+            f"first5={[round(v.item(), 4) for v in flat[:5]]} "
+            f"middle5={[round(v.item(), 4) for v in flat[5000:5005]]}"
+        )
 
     # Compare K=2, K=4 to K=1
     for K in [2, 4]:
