@@ -67,8 +67,18 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     // Per-expert forward: slice grouped once per expert, run gate+up matmuls
     // directly against the per-expert weight tensors (no slicing of weights),
     // silu·multiply on the chunk, then down matmul. One concat at the end.
-    // gate_proj_e and up_proj_e are saved per-expert for backward; activated_e is
-    // recomputed in backward.
+    // gate_proj_e and up_proj_e are saved per-expert for backward; activated_e
+    // is recomputed in backward.
+    //
+    // Fused activation for the silu·multiply step: ttnn::multiply with a unary
+    // activation on lhs computes silu(lhs) * rhs in one ttnn op (one read of
+    // each input, one write — half the DRAM traffic of a separate silu + mul
+    // pair).
+    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+    const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
+    const ttsl::Span<const EltwiseUnary> no_acts;
+    const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
+
     std::vector<ttnn::Tensor> down_proj_parts;
     std::vector<ttnn::Tensor> gate_proj_parts;
     std::vector<ttnn::Tensor> up_proj_parts;
@@ -92,9 +102,16 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         const auto& w_up_e = w_up[e]->get_value();
         const auto& w_down_e = w_down[e]->get_value();
 
-        auto gate_proj_e = ttnn_fixed::matmul(X_e, w_gate_e, false, false);          // [1,1,len,intermediate_dim]
-        auto up_proj_e = ttnn_fixed::matmul(X_e, w_up_e, false, false);              // [1,1,len,intermediate_dim]
-        auto activated_e = ttnn::multiply(ttnn::silu(gate_proj_e), up_proj_e);       // [1,1,len,intermediate_dim]
+        auto gate_proj_e = ttnn_fixed::matmul(X_e, w_gate_e, false, false);  // [1,1,len,intermediate_dim]
+        auto up_proj_e = ttnn_fixed::matmul(X_e, w_up_e, false, false);      // [1,1,len,intermediate_dim]
+        auto activated_e = ttnn::multiply(
+            gate_proj_e,
+            up_proj_e,
+            /*output_dtype=*/std::nullopt,
+            /*memory_config=*/std::nullopt,
+            /*output_tensor=*/std::nullopt,
+            /*post_op_activations=*/no_acts,
+            /*input_a_activations=*/silu_lhs);  // silu(gate_proj_e) * up_proj_e in one op
         auto down_proj_e = ttnn_fixed::matmul(activated_e, w_down_e, false, false);  // [1,1,len,hidden_dim]
         activated_e.deallocate();
 
@@ -143,11 +160,24 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             const auto& w_up_e = w_up[e]->get_value();
             const auto& w_down_e = w_down[e]->get_value();
 
-            // Recompute activated_e from saved gate_proj_e, up_proj_e
+            // Recompute activated_e from saved gate_proj_e, up_proj_e using
+            // the same fused silu·multiply pattern as the forward.
+            using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+            const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
+            const ttsl::Span<const EltwiseUnary> no_acts;
+            const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
+
             auto& gate_proj_e = gate_proj_parts[nonempty_idx];
             auto& up_proj_e = up_proj_parts[nonempty_idx];
             ++nonempty_idx;
-            auto activated_e = ttnn::multiply(ttnn::silu(gate_proj_e), up_proj_e);
+            auto activated_e = ttnn::multiply(
+                gate_proj_e,
+                up_proj_e,
+                /*output_dtype=*/std::nullopt,
+                /*memory_config=*/std::nullopt,
+                /*output_tensor=*/std::nullopt,
+                /*post_op_activations=*/no_acts,
+                /*input_a_activations=*/silu_lhs);
 
             // Down branch:  d_activated_e = dY_e @ w_down_e^T,  dW_down_e = activated_e^T @ dY_e
             auto d_activated_e = ttnn_fixed::matmul(dY_e, w_down_e, /*transpose_a=*/false, /*transpose_b=*/true);
@@ -189,7 +219,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     };
 
     // Pack the runtime-sized input set (grouped + 3 weight lists) into one
-    // span and register the backward node via the runtime-arity overload.
+    // vector and register the backward node via the runtime-arity overload.
     std::vector<autograd::TensorPtr> inputs;
     inputs.reserve(1U + 3U * num_experts);
     inputs.push_back(grouped);
