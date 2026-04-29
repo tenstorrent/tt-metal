@@ -728,12 +728,12 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     }
 
     // cb_ex_external holds packed cb_ex_external_slot_pitch_bytes-sized partial-reduction
-    // scalars gathered from every core in the mcast group, for every out_block.  The
+    // scalars gathered from every core in the mcast group, for every out_block. The
     // reader kernel (reader_mcast_sender_unary_gn) and compute kernel (groupnorm) both
     // reserve / wait-for cb_ex_external_tiles_required tiles at once, where
     //   cb_ex_external_tiles_required =
     //       ceil(num_out_blocks_padded * num_mcast_cores * cb_ex_external_slot_pitch_bytes / tile_size)
-    // so the CB must be at least that large.  Mirror the kernel's
+    // so the CB must be at least that large. Mirror the kernel's
     // num_out_blocks_padded calculation to get the exact count.
     // Note that Welford does not use cb_ex_external.
     if (!use_welford) {

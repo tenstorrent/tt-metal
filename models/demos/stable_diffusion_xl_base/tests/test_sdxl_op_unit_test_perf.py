@@ -13,10 +13,12 @@ USE_PERF_TEST_MODE = True
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("specify_grid", [True, False])
-def test_dram_group_norm_welford_reciprocal_vae(device, specify_grid):
+def test_dram_group_norm_welford_reciprocal_vae(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import test_group_norm_DRAM
 
+    # Pin to specify_grid=True to preserve the pre-branch perf measurement, which
+    # always passed an explicit core_grid. The auto-grid path (specify_grid=False)
+    # is exercised by the corresponding unit tests.
     test_group_norm_DRAM(
         device,
         1,
@@ -28,28 +30,32 @@ def test_dram_group_norm_welford_reciprocal_vae(device, specify_grid):
         8,
         8,
         "welford_reciprocal",
-        specify_grid=specify_grid,
+        specify_grid=True,
         perf_test_mode=USE_PERF_TEST_MODE,
     )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("specify_grid", [True, False])
-def test_block_sharded_group_norm_sdxl(device, specify_grid):
+def test_block_sharded_group_norm_sdxl(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm
 
+    # Pin to specify_grid=True to preserve the pre-branch perf measurement, which
+    # always passed an explicit core_grid. The auto-grid path (specify_grid=False)
+    # is exercised by the corresponding unit tests.
     test_sdxl_base_group_norm(
-        device, (1, 1920, 32, 32), use_welford=False, specify_grid=specify_grid, perf_test_mode=USE_PERF_TEST_MODE
+        device, (1, 1920, 32, 32), use_welford=False, specify_grid=True, perf_test_mode=USE_PERF_TEST_MODE
     )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
-@pytest.mark.parametrize("specify_grid", [True, False])
-def test_block_sharded_group_norm_negative_mask_sdxl(device, specify_grid):
+def test_block_sharded_group_norm_negative_mask_sdxl(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm_negative_mask
 
+    # Pin to specify_grid=True to preserve the pre-branch perf measurement, which
+    # always passed an explicit core_grid. The auto-grid path (specify_grid=False)
+    # is exercised by the corresponding unit tests.
     test_sdxl_base_group_norm_negative_mask(
-        device, (1, 640, 128, 128), specify_grid=specify_grid, perf_test_mode=USE_PERF_TEST_MODE
+        device, (1, 640, 128, 128), specify_grid=True, perf_test_mode=USE_PERF_TEST_MODE
     )
 
 

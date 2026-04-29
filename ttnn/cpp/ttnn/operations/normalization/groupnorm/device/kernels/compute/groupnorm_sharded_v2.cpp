@@ -377,7 +377,7 @@ void kernel_main() {
             cb_ex2pe.push_back(1);
 
             // If modifying this code, see the long comment at the first REDUCE_SCALAR
-            // pack into cb_ex_partialearlier in this kernel.
+            // pack into cb_ex_partial earlier in this kernel.
             // The sharded reader's "single-tile-overwrite trick" depends on
             // this pack also clearing every non-result datum of cb_ex_partial
             // to exact zero (documented packer behavior for REDUCE_SCALAR).

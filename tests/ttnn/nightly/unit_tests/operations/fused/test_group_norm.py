@@ -85,8 +85,18 @@ def test_group_norm_sharded_ex_external_cb_gap(device, specify_grid):
           full-tile SELF read described below, so it does not contribute
           an intra-slot gap.
       (B) Trailing tile gap: with num_mcast_cores == grid.y == 4 the
-          per-core slots occupy 4 * 16 == 64 of 2048 bytes per tile; the
-          remaining 1984 bytes are also not covered by the per-slot writes.
+          per-core slots occupy 4 * 16 == 64 bytes of the 2048-byte tile
+          (bf16 single-tile size, which is what cb_ex_external currently
+          uses because the host op hard-codes program_config.im_data_format
+          to BFLOAT16 in groupnorm.cpp). The remaining 1984 bytes are also
+          not covered by the per-slot writes. If im_data_format ever
+          changes (e.g. to a wider intermediate dtype), single_tile_size
+          and therefore the trailing-gap byte count change with it, so
+          the specific 64-of-2048 numbers here are tied to today's
+          hard-coded bf16 intermediate format. The test also forces
+          use_welford=False because welford skips cb_ex_external entirely
+          (see the matching guard in groupnorm_mcast_program_factory.cpp)
+          and would not exercise this gap at all.
 
     The sharded reader currently relies on the documented packer-zeroing
     contract of `reduce<…, REDUCE_SCALAR>` (see reduce.h's reduce_init doc)

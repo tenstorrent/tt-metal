@@ -79,9 +79,9 @@ void kernel_main() {
     constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
     // Per-core slots in cb_ex_external are hardcoded to a cb_ex_external_slot_pitch_bytes
     // pitch (see the `l1_write_addr_external += cb_ex_external_slot_pitch_bytes`
-    // increments below).  Each NOC read writes datum_size_bytes into its slot, so
+    // increments below). Each NOC read writes datum_size_bytes into its slot, so
     // datum_size_bytes > cb_ex_external_slot_pitch_bytes would overflow into the next
-    // core's slot and silently corrupt the reduction.  Zero-fill does not fix this; the
+    // core's slot and silently corrupt the reduction. Zero-fill does not fix this; the
     // slot pitch itself would need to grow.
     static_assert(datum_size_bytes <= cb_ex_external_slot_pitch_bytes,
                   "cb_ex_external slot pitch is hardcoded; "
