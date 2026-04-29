@@ -399,6 +399,7 @@ class TTNNTurboQuantCache:
         max_batch_size: int = 1,
         memory_efficient: bool = True,
         paged_config=None,
+        recent_window: int = 0,
     ):
         _require_ttnn()
 
@@ -521,6 +522,70 @@ class TTNNTurboQuantCache:
             for _ in range(num_layers)
         ]
         del zero_norms
+
+        # ── Sliding-window hybrid: BFP8 ring buffer for recent W tokens ──
+        #
+        # When recent_window > 0, allocate a small BFP8-paged cache of W tokens
+        # per layer. update_cache writes to slot = cur_pos % W_padded, so the
+        # ring naturally evicts the oldest position. At SDPA time, standard
+        # paged SDPA decode runs over the ring (recent W positions in BFP8) and
+        # the fused TQ kernel runs over [0, cur_pos - W] (older positions still
+        # 3-bit lossy). The two outputs combine via online softmax — see
+        # `hybrid_sdpa_decode` and `SLIDING_WINDOW_DESIGN.md`.
+        #
+        # Memory cost is constant in seqlen (W is small, e.g. 64 → ~4 MB total
+        # at 32 layers / 8 KV heads / 128 dim).
+        self.recent_window = recent_window
+        self.ring_page_table_torch = None
+        self.k_ring_dev = None
+        self.v_ring_dev = None
+        if recent_window > 0:
+            assert paged_config is not None, "recent_window requires paged_config (ring uses paged-cache layout)"
+            block_size = paged_config.block_size
+            ring_blocks = (recent_window + block_size - 1) // block_size
+            ring_W_padded = ring_blocks * block_size
+            self.ring_blocks = ring_blocks
+            self.ring_W_padded = ring_W_padded
+            ring_shape = (ring_blocks, num_kv_heads, block_size, head_dim)
+            zero_ring = torch.zeros(ring_shape, dtype=torch.bfloat16)
+            self.k_ring_dev = [
+                ttnn.from_torch(
+                    zero_ring,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mesh_mapper,
+                )
+                for _ in range(num_layers)
+            ]
+            self.v_ring_dev = [
+                ttnn.from_torch(
+                    zero_ring,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mesh_mapper,
+                )
+                for _ in range(num_layers)
+            ]
+            del zero_ring
+            # Identity page table for the ring: logical block i → physical block i.
+            # paged_update_cache enforces page_table length ≤ cache blocks, so we
+            # CANNOT use a cyclic page_table. Instead we wrap cur_pos host-side
+            # before each update (see _ring_pos_for_update). Trade-off: per-step
+            # host sync, breaks trace capture for the ring write — fine for
+            # accuracy testing; future kernel-side modulo would restore tracing.
+            ring_pt_torch = torch.arange(ring_blocks, dtype=torch.int32).reshape(1, -1)
+            self.ring_page_table_dev = ttnn.from_torch(
+                ring_pt_torch,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
 
     def quantize(self, x: "ttnn.Tensor", skip_rotation: bool = False) -> tuple["ttnn.Tensor", "ttnn.Tensor"]:
         """Quantize a KV tensor on device.
@@ -718,6 +783,67 @@ class TTNNTurboQuantCache:
             pos_tt = current_pos
             _own_pos_tt = False
 
+        # ── Sliding-window dual-write (must run BEFORE quantize) ──
+        #
+        # turbo_quant_quantize() with skip_rotation=True aliases the input as
+        # `y` and then deallocates `y` at end of normalisation (line ~168) —
+        # so v_heads gets freed by the quantize call below. Compute the ring
+        # writes UPFRONT while v_heads is still alive. K isn't aliased
+        # (skip_rotation=False does an explicit matmul) but we keep the same
+        # pattern for symmetry.
+        if self.recent_window > 0:
+            rotation_absorbed = getattr(self, "rotation_absorbed", False)
+            k_rotated = ttnn.matmul(k_heads, self.setup.rotation, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if rotation_absorbed:
+                v_for_ring = v_heads  # already V @ Π from W_v absorption
+                _own_v_ring = False
+            else:
+                v_for_ring = ttnn.matmul(v_heads, self.setup.rotation, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _own_v_ring = True
+
+            # Permute [B, NKH, 1, DH] → [1, B, NKH, DH] (paged_update_cache layout).
+            k_ring_perm = ttnn.permute(k_rotated, (2, 0, 1, 3))
+            v_ring_perm = ttnn.permute(v_for_ring, (2, 0, 1, 3))
+            ttnn.deallocate(k_rotated)
+            if _own_v_ring:
+                ttnn.deallocate(v_for_ring)
+
+            _shard_grid_ring = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+            _shard_spec_ring = ttnn.ShardSpec(_shard_grid_ring, [32, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+            _shard_mem_ring = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec_ring
+            )
+            k_ring_sharded = ttnn.to_memory_config(k_ring_perm, _shard_mem_ring)
+            v_ring_sharded = ttnn.to_memory_config(v_ring_perm, _shard_mem_ring)
+            ttnn.deallocate(k_ring_perm)
+            ttnn.deallocate(v_ring_perm)
+
+            # paged_update_cache requires update_idx within [0, cache_size). For
+            # the ring, that's cur_pos % ring_W_padded. Compute on host (sync).
+            cur_pos_host = ttnn.to_torch(pos_tt).flatten()[0].item()
+            ring_idx_host = int(cur_pos_host) % self.ring_W_padded
+            ring_pos_tt = ttnn.from_torch(
+                torch.tensor([ring_idx_host], dtype=torch.int32),
+                device=self.device,
+                dtype=ttnn.int32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.experimental.paged_update_cache(
+                self.k_ring_dev[layer_idx],
+                k_ring_sharded,
+                update_idxs_tensor=ring_pos_tt,
+                page_table=self.ring_page_table_dev,
+            )
+            ttnn.experimental.paged_update_cache(
+                self.v_ring_dev[layer_idx],
+                v_ring_sharded,
+                update_idxs_tensor=ring_pos_tt,
+                page_table=self.ring_page_table_dev,
+            )
+            ttnn.deallocate(ring_pos_tt)
+            ttnn.deallocate(k_ring_sharded)
+            ttnn.deallocate(v_ring_sharded)
+
         # When rotation is absorbed into W_v, V already comes pre-rotated from
         # the QKV projection — skip the in-quantize Π matmul to avoid double-
         # rotation (V @ Π @ Π). K is not absorbed (RoPE dependency), so it
@@ -772,6 +898,9 @@ class TTNNTurboQuantCache:
         )
         ttnn.deallocate(k_norms_sharded)
         ttnn.deallocate(v_norms_sharded)
+
+        # (Sliding-window ring writes happen at the top of update_cache — see
+        # the block above, before quantize() can deallocate v_heads.)
 
         if _own_pos_tt:
             ttnn.deallocate(pos_tt)
@@ -836,6 +965,57 @@ class TTNNTurboQuantCache:
         )
         if _own_pt:
             ttnn.deallocate(_pt)
+        return out
+
+    def sliding_window_sdpa_decode(
+        self,
+        q: "ttnn.Tensor",
+        layer_idx: int,
+        current_pos: "ttnn.Tensor",
+        scale: float,
+    ) -> "ttnn.Tensor":
+        """Run standard paged SDPA decode over the BFP8 sliding-window ring only.
+
+        First-cut sliding-window mode: attend ONLY to the most recent W tokens
+        (BFP8, full precision in rotated space). Older positions in the TQ cache
+        are ignored at this layer/step. Tests the "does Llama tolerate W-window
+        attention?" hypothesis. Full hybrid (combining old TQ contributions via
+        online softmax) is a follow-up.
+
+        Q must already be pre-rotated by Π (the caller does this once per step
+        for both Track A and the hybrid path). W_o's absorbed Π^T un-rotates
+        the output downstream.
+
+        Args:
+            q: BF16 query [1, B, NQH, DH] on device, pre-rotated.
+            layer_idx: Transformer layer index.
+            current_pos: Int32 device tensor [B] holding the actual position.
+                Internally clamped to (W_padded - 1) so the kernel doesn't read
+                beyond the ring.
+            scale: Attention scale factor (1/sqrt(head_dim)).
+
+        Returns:
+            BF16 attention output in pre-rotated space, shape [1, B, NQH, DH].
+        """
+        _require_ttnn()
+        assert self.recent_window > 0, "sliding_window_sdpa_decode requires recent_window > 0"
+
+        # Clamp cur_pos to W_padded - 1 so the kernel only attends within the ring.
+        # Cyclic page_table maps any cur_pos to a real ring slot, but reading
+        # beyond W_padded would alias positions and give wrong scores.
+        # ttnn.minimum supports broadcast vs an int via clamp.
+        clamp_const = self.ring_W_padded - 1
+        cur_pos_clamped = ttnn.clamp(current_pos, max=clamp_const)
+
+        out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            self.k_ring_dev[layer_idx],
+            self.v_ring_dev[layer_idx],
+            page_table_tensor=self.ring_page_table_dev,
+            cur_pos_tensor=cur_pos_clamped,
+            scale=scale,
+        )
+        ttnn.deallocate(cur_pos_clamped)
         return out
 
     def update_and_dequantize_rotated(
@@ -1009,6 +1189,10 @@ class TTNNTurboQuantCache:
         self.setup.deallocate()
         for t in self.k_indices_dev + self.v_indices_dev + self.k_norms_dev + self.v_norms_dev:
             ttnn.deallocate(t)
+        if self.recent_window > 0:
+            for t in self.k_ring_dev + self.v_ring_dev:
+                ttnn.deallocate(t)
+            ttnn.deallocate(self.ring_page_table_dev)
 
 
 def absorb_rotation_into_state_dict(state_dict, rotation_cpu, n_layers=32, n_q_heads=32, n_kv_heads=8, head_dim=128):

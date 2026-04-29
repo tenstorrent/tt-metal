@@ -73,6 +73,14 @@ def build_parser():
         "num_cores_per_head). Only effective with --tq-full-dequant on multi-device "
         "(T3K: max K=14, N150: max K=1). K=1 disables the cross-core split.",
     )
+    p.add_argument(
+        "--tq-recent-window",
+        type=int,
+        default=0,
+        help="Sliding-window hybrid: keep the most recent W tokens in a BFP8 ring "
+        "and ignore TQ for those positions. Only effective with --tq-full-dequant. "
+        "0 = disabled (pure Track A). Recommended starting point: 64.",
+    )
     return p
 
 
@@ -236,6 +244,7 @@ def main():
             memory_efficient=True,  # paged BFP4 indices + BF16 norms
             paged_config=paged_attention_config,
             max_batch_size=args.batch_size,
+            recent_window=args.tq_recent_window,
         )
         if absorb_rotation:
             shared_tq.rotation_absorbed = True
@@ -244,6 +253,8 @@ def main():
         shared_tq.num_cores_per_head = args.tq_num_cores_per_head
         if args.tq_num_cores_per_head > 1:
             print(f"  Tier 2A: num_cores_per_head = {args.tq_num_cores_per_head}")
+        if args.tq_recent_window > 0:
+            print(f"  Sliding-window hybrid: recent_window = {args.tq_recent_window}")
         for layer_idx, layer in enumerate(tt_model.layers):
             attn = layer.attention
             attn.tq_cache = shared_tq

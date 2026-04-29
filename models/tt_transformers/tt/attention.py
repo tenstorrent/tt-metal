@@ -804,28 +804,44 @@ class Attention(LightweightModule):
             # Pre-rotate Q for rotated-space SDPA.
             q_heads_1BQD = turbo_quant_cache.pre_rotate_query(q_heads_1BQD)
 
-            # Fused TQ SDPA expects Q shape [B, NQH, 1, DH]. pre_rotate_query returned
-            # DRAM-interleaved [1, B, NQH, DH]; permute directly.
-            q_bqhd = ttnn.permute(q_heads_1BQD, (1, 2, 0, 3))
-            ttnn.deallocate(q_heads_1BQD)
+            # Sliding-window hybrid: when recent_window > 0, run standard SDPA over
+            # the BFP8 ring (last W tokens, full precision) instead of the fused TQ
+            # kernel. First-cut "ring-only" mode: ignores TQ cache contributions
+            # from older positions. Tests whether Llama tolerates W-window attention.
+            _tq_recent_window = getattr(turbo_quant_cache, "recent_window", 0)
+            if _tq_recent_window > 0:
+                # Standard paged SDPA decode wants Q in [1, B, NQH, DH] — exactly
+                # what pre_rotate_query already returned, so no permute needed.
+                attn_output_1G4D = turbo_quant_cache.sliding_window_sdpa_decode(
+                    q_heads_1BQD,
+                    layer_idx=_tq_layer_idx,
+                    current_pos=current_pos,
+                    scale=self.scale,
+                )
+                ttnn.deallocate(q_heads_1BQD)
+            else:
+                # Fused TQ SDPA expects Q shape [B, NQH, 1, DH]. pre_rotate_query returned
+                # DRAM-interleaved [1, B, NQH, DH]; permute directly.
+                q_bqhd = ttnn.permute(q_heads_1BQD, (1, 2, 0, 3))
+                ttnn.deallocate(q_heads_1BQD)
 
-            # Fused SDPA: reads directly from BFP4 index + BF16 norms caches.
-            # num_cores_per_head: Tier 2A cross-core split (K). The cache may stash
-            # a value via setattr; default 1 keeps single-core behavior.
-            _tq_num_cores_per_head = getattr(turbo_quant_cache, "num_cores_per_head", 1)
-            attn_out_bqhd = turbo_quant_cache.fused_sdpa_decode(
-                q_bqhd,
-                layer_idx=_tq_layer_idx,
-                current_pos=current_pos,
-                scale=self.scale,
-                page_table=_tq_page_table,
-                num_cores_per_head=_tq_num_cores_per_head,
-            )
-            ttnn.deallocate(q_bqhd)
+                # Fused SDPA: reads directly from BFP4 index + BF16 norms caches.
+                # num_cores_per_head: Tier 2A cross-core split (K). The cache may stash
+                # a value via setattr; default 1 keeps single-core behavior.
+                _tq_num_cores_per_head = getattr(turbo_quant_cache, "num_cores_per_head", 1)
+                attn_out_bqhd = turbo_quant_cache.fused_sdpa_decode(
+                    q_bqhd,
+                    layer_idx=_tq_layer_idx,
+                    current_pos=current_pos,
+                    scale=self.scale,
+                    page_table=_tq_page_table,
+                    num_cores_per_head=_tq_num_cores_per_head,
+                )
+                ttnn.deallocate(q_bqhd)
 
-            # Permute output [B, NQH, 1, DH] → [1, B, NQH, DH] to match downstream.
-            attn_output_1G4D = ttnn.permute(attn_out_bqhd, (2, 0, 1, 3))
-            ttnn.deallocate(attn_out_bqhd)
+                # Permute output [B, NQH, 1, DH] → [1, B, NQH, DH] to match downstream.
+                attn_output_1G4D = ttnn.permute(attn_out_bqhd, (2, 0, 1, 3))
+                ttnn.deallocate(attn_out_bqhd)
 
         if not _use_fused_tq_sdpa:
             # Standard scatter + SDPA path (paged or non-paged).

@@ -51,6 +51,13 @@ def build_parser():
         "needs the fused kernel and the multi-device Tier 2A K=14 split for perf.",
     )
     p.add_argument(
+        "--tq-recent-window",
+        type=int,
+        default=0,
+        help="Sliding-window hybrid: keep the most recent W tokens in a BFP8 ring. "
+        "Only effective with --tq-full-dequant. 0 = disabled (pure Track A).",
+    )
+    p.add_argument(
         "--bfp4-baseline", action="store_true", help="Baseline with BFP4 cache (no TQ) — isolate storage vs TQ loss"
     )
     p.add_argument("--max-seq-len", type=int, default=1024, help="Must be >= 1024 for full reference")
@@ -198,6 +205,7 @@ def main():
                 paged_config=paged_attention_config,
                 max_batch_size=1,
                 seed=args.seed,
+                recent_window=args.tq_recent_window,
             )
         else:
             # Track B / pre-rescaled mode: TQ object only carries the rotation matrix
