@@ -185,8 +185,12 @@ def bench_fused_tq(mesh, num_devices, seq_len, warmup=2, iters=5):
     return elapsed_ms, cache_bytes_per_layer_per_dev, idx_bytes, norm_bytes
 
 
-def bench_baseline_bfp8(mesh, num_devices, seq_len, warmup=2, iters=5):
-    """Per-call latency of paged BFP8 SDPA decode at cur_pos = seq_len - 1.
+def _bench_paged_sdpa(mesh, num_devices, seq_len, dtype, warmup, iters):
+    """Per-call latency of paged standard SDPA decode at cur_pos = seq_len - 1.
+
+    `dtype` selects the K/V storage format on device (ttnn.bfloat8_b or
+    ttnn.bfloat4_b). The math is the same — we feed BF16 random K/V, ttnn
+    handles the BFP packing on transfer.
 
     Returns (elapsed_ms, cache_bytes_per_device_per_layer).
     """
@@ -203,7 +207,7 @@ def bench_baseline_bfp8(mesh, num_devices, seq_len, warmup=2, iters=5):
     v_data = torch.randn(cache_shape, dtype=torch.bfloat16)
     keys = ttnn.from_torch(
         k_data,
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -211,7 +215,7 @@ def bench_baseline_bfp8(mesh, num_devices, seq_len, warmup=2, iters=5):
     )
     values = ttnn.from_torch(
         v_data,
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -297,6 +301,22 @@ def bench_baseline_bfp8(mesh, num_devices, seq_len, warmup=2, iters=5):
     return elapsed_ms, cache_bytes_per_layer_per_dev
 
 
+def bench_baseline_bfp8(mesh, num_devices, seq_len, warmup=2, iters=5):
+    """Per-call latency of paged BFP8 SDPA decode."""
+    return _bench_paged_sdpa(mesh, num_devices, seq_len, ttnn.bfloat8_b, warmup, iters)
+
+
+def bench_rescaled_bfp4(mesh, num_devices, seq_len, warmup=2, iters=5):
+    """Per-call latency of paged BFP4 SDPA decode (Track B storage format).
+
+    With --tq-rescaled-bfp4 the layer_past is allocated as BFP4 and the SDPA
+    decode kernel reads it natively. The TQ rotation is amortised at write
+    time (update_cache), so per-call SDPA latency is the same as plain BFP4
+    storage. This row tells us where Track B's per-call latency lands.
+    """
+    return _bench_paged_sdpa(mesh, num_devices, seq_len, ttnn.bfloat4_b, warmup, iters)
+
+
 def main():
     num_devices = int(os.environ.get("TT_NUM_DEVICES", 1))
     if num_devices > 1:
@@ -312,18 +332,18 @@ def main():
 
     seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-    print(f"\n{'='*132}")
+    print(f"\n{'='*148}")
     print(
-        f"{'seq_len':>8} | {'TQ FD ms':>10} | {'BFP8 ms':>10} | {'speedup':>8} | "
-        f"{'TQ KV total':>14} | {'BFP8 total':>14} | {'TQ/BFP8':>8} | "
-        f"{'TQ idx':>11} | {'TQ norms':>11}"
+        f"{'seq_len':>8} | {'TQ FD ms':>10} | {'BFP4 ms':>10} | {'BFP8 ms':>10} | "
+        f"{'TQ KV total':>14} | {'BFP4 total':>14} | {'BFP8 total':>14} | "
+        f"{'TQ/BFP8':>8} | {'BFP4/BFP8':>10}"
     )
     print(
-        f"{'':>8} | {'(per call)':>10} | {'(per call)':>10} | {'BFP8/TQ':>8} | "
-        f"{'(32L, all)':>14} | {'(32L, all)':>14} | {'ratio':>8} | "
-        f"{'(BFP4)':>11} | {'(BF16, pad)':>11}"
+        f"{'':>8} | {'(per call)':>10} | {'(per call)':>10} | {'(per call)':>10} | "
+        f"{'(32L, all)':>14} | {'(32L, all)':>14} | {'(32L, all)':>14} | "
+        f"{'ratio':>8} | {'ratio':>10}"
     )
-    print("-" * 132)
+    print("-" * 148)
 
     for seq_len in seq_lens:
         if seq_len <= 4096:
@@ -333,7 +353,7 @@ def main():
         else:
             w, n = 1, 2
 
-        # Fused TQ
+        # Fused TQ (Track A)
         tq_ms, tq_bytes_per_layer, tq_idx_per_layer, tq_norm_per_layer = float("nan"), 0, 0, 0
         try:
             tq_ms, tq_bytes_per_layer, tq_idx_per_layer, tq_norm_per_layer = bench_fused_tq(
@@ -341,6 +361,14 @@ def main():
             )
         except Exception as e:
             print(f"  [TQ FD seq={seq_len} failed: {type(e).__name__}: {str(e)[:80]}]")
+        gc.collect()
+
+        # Track B: paged BFP4 + standard SDPA
+        bfp4_ms, bfp4_bytes_per_layer = float("nan"), 0
+        try:
+            bfp4_ms, bfp4_bytes_per_layer = bench_rescaled_bfp4(mesh, num_devices, seq_len, warmup=w, iters=n)
+        except Exception as e:
+            print(f"  [BFP4 seq={seq_len} failed: {type(e).__name__}: {str(e)[:80]}]")
         gc.collect()
 
         # Baseline BFP8
@@ -352,19 +380,18 @@ def main():
         gc.collect()
 
         tq_total = tq_bytes_per_layer * N_LAYERS * num_devices
+        bfp4_total = bfp4_bytes_per_layer * N_LAYERS * num_devices
         bf_total = bf_bytes_per_layer * N_LAYERS * num_devices
-        tq_idx_total = tq_idx_per_layer * N_LAYERS * num_devices
-        tq_norm_total = tq_norm_per_layer * N_LAYERS * num_devices
-        kv_ratio = tq_total / bf_total if bf_total > 0 else float("nan")
-        speedup = bf_ms / tq_ms if tq_ms > 0 and tq_ms == tq_ms else float("nan")
+        tq_ratio = tq_total / bf_total if bf_total > 0 else float("nan")
+        bfp4_ratio = bfp4_total / bf_total if bf_total > 0 else float("nan")
 
         print(
-            f"{seq_len:>8} | {tq_ms:>10.2f} | {bf_ms:>10.2f} | {speedup:>7.2f}x | "
-            f"{fmt_bytes(tq_total):>14} | {fmt_bytes(bf_total):>14} | {kv_ratio:>7.2f}x | "
-            f"{fmt_bytes(tq_idx_total):>11} | {fmt_bytes(tq_norm_total):>11}"
+            f"{seq_len:>8} | {tq_ms:>10.2f} | {bfp4_ms:>10.2f} | {bf_ms:>10.2f} | "
+            f"{fmt_bytes(tq_total):>14} | {fmt_bytes(bfp4_total):>14} | {fmt_bytes(bf_total):>14} | "
+            f"{tq_ratio:>7.2f}x | {bfp4_ratio:>9.2f}x"
         )
 
-    print("=" * 132)
+    print("=" * 148)
     ttnn.close_mesh_device(mesh)
 
 

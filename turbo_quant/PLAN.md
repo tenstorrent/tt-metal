@@ -109,6 +109,27 @@ profiled yet (very long context, much larger batch, different
 head counts), so it's worth keeping the option live until the
 broader perf surface is mapped.
 
+### N150 per-call SDPA latency sweep (2026-04-29, K=1)
+
+Three-way per-call SDPA latency at `cur_pos = seq - 1`
+(`bench_seqlen_sweep.py` now reports all three columns):
+
+| seq    | TQ FD ms | BFP4 ms | BFP8 ms | TQ/BFP8 | BFP4/BFP8 |
+|-------:|---------:|--------:|--------:|--------:|----------:|
+|    128 |   0.30   |  0.04   |  0.04   |  0.75×  |   0.50×   |
+|   1024 |   2.23   |  0.05   |  0.06   |  0.75×  |   0.50×   |
+|   8192 |  17.76   |  0.12   |  0.15   |  0.75×  |   0.50×   |
+|  16384 |  35.37   |  0.18   |  0.24   |  0.75×  |   0.50×   |
+|  32768 |  70.68   |  0.30   |  0.42   |  0.75×  |   0.50×   |
+|  65536 | 141.24   |  0.53   |  0.78   |  0.75×  |   0.50×   |
+| 131072 | 282.31   |  0.92   |  1.46   |  0.75×  |   0.50×   |
+
+**Track B (BFP4) is actually faster than BFP8** at long context
+(the SDPA decode op is memory-bound — half the bytes to read
+beats slightly slower compute). At 131 K: BFP4 = 0.92 ms vs
+BFP8 = 1.46 ms (1.59× faster) vs Track A K=1 = 282 ms (~307×
+faster than Track A).
+
 ### Tier 2A — DONE (commits e74354b → e6aa928)
 
 Phase 2.3 (cross-core split) landed end-to-end on T3K. Full bench

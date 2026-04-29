@@ -34,7 +34,15 @@ def build_parser():
     p.add_argument("--bits", type=int, default=3, choices=[1, 2, 3, 4])
     p.add_argument("--seed", type=int, default=42, help="TurboQuant rotation seed")
     p.add_argument("--no-turbo-quant", action="store_true", help="Baseline BFP8 KV cache")
-    p.add_argument("--bfp4-cache", action="store_true", help="TurboQuant BFP4 paged cache")
+    p.add_argument(
+        "--tq-rescaled-bfp4",
+        "--bfp4-cache",
+        dest="tq_rescaled_bfp4",
+        action="store_true",
+        help="Track B: TQ rotation + BFP4 paged layer_past + standard SDPA decode "
+        "(centroid×norm pre-rescaled, stored as BFP4). Halves KV memory vs BFP8 baseline. "
+        "(--bfp4-cache kept as alias for backwards compatibility.)",
+    )
     p.add_argument(
         "--bfp4-baseline", action="store_true", help="Baseline with BFP4 cache (no TQ) — isolate storage vs TQ loss"
     )
@@ -65,7 +73,7 @@ def main():
     # ------------------------------------------------------------------ #
     def make_optimizations(ma):
         opts = DecodersPrecision.accuracy(ma.n_layers, ma.model_name)
-        if args.bfp4_cache or args.bfp4_baseline:
+        if args.tq_rescaled_bfp4 or args.bfp4_baseline:
             for dec_id, dec_conf in opts.decoder_optimizations.items():
                 dec_conf.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BFP4
         return opts
@@ -254,8 +262,8 @@ def main():
         mode = "baseline BFP8"
     elif args.bfp4_baseline:
         mode = "baseline BFP4 (no TQ)"
-    elif args.bfp4_cache:
-        mode = f"TurboQuant {args.bits}-bit BFP4"
+    elif args.tq_rescaled_bfp4:
+        mode = f"TQ {args.bits}-bit rescaled BFP4 paged"
     else:
         mode = f"TurboQuant {args.bits}-bit BF16"
     print(f"\n{'='*60}")
