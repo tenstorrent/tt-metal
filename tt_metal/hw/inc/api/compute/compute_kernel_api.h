@@ -619,6 +619,7 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
  */
 // clang-format on
 ALWI void topk_xl_local_sort(uint32_t idst, bool ascending) {
+    UNPACK((llk_unpack_set_srcb_dummy_valid()));
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_local_sort<true>(idst, ascending)));
 }
 
