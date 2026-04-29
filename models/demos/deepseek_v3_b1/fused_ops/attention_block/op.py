@@ -595,7 +595,7 @@ class AttentionBlock:
 
         # TP4 outer-dim: each device produces [1, per_device_out_w]
         num_sp = mesh_shape[0]
-        per_device_out_w = input_shape[1] // num_sp
+        per_device_out_w = 7168 // num_sp
         per_device_out_tiles = per_device_out_w // tile_width
 
         # Full grid (union of all cores for semaphore allocation)
