@@ -116,6 +116,7 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
             tile_count_res=1,  # single hash tile
         ),
         dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
     res_from_L1 = configuration.run().result
@@ -167,6 +168,7 @@ def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
                 tile_count_res=1,
             ),
             dest_acc=dest_acc,
+            unpack_to_dest=formats.input_format.is_32_bit(),
         )
         res = configuration.run().result
         torch_dtype = format_dict[formats.output_format]
