@@ -295,6 +295,7 @@ jobs:
         uses: ./.github/actions/find-build-for-sha
         with:
           tracy: ${{ inputs.tracy }}
+          distributed: ${{ inputs.distributed }}
           check-wheel: ${{ inputs.build-wheel }}
 
   # =============================================================================
