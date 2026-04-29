@@ -2,25 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-import math
-from time import time
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 from models.common.utility_functions import skip_for_n_dev, skip_for_n_or_less_dev
 
-from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
-    num_cores_to_rectangle_grid,
-    round_up,
-)
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tracy import signpost
 
 
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(
@@ -100,7 +91,6 @@ def test_all_reduce_2d_fabric(
     function_level_defaults,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
-    cluster_axis_actual = 0
 
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
@@ -110,7 +100,7 @@ def test_all_reduce_2d_fabric(
     run_all_reduce_impl(
         bh_1d_mesh_device,
         output_shape,
-        cluster_axis_actual,
+        cluster_axis,
         input_dtype,
         num_links,
         input_num_cores,

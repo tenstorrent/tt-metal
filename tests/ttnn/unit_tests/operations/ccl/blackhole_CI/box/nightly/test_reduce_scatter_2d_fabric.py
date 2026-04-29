@@ -57,8 +57,6 @@ def test_reduce_scatter_2d_fabric(
     num_devices = bh_1d_mesh_device.shape[0]
     cluster_axis = 0
 
-    mesh_shape = (num_devices, 1)
-
     validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, cluster_axis)
 
     run_reduce_scatter_impl(

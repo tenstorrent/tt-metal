@@ -106,7 +106,6 @@ def test_all_reduce_2d_fabric(
     function_level_defaults,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
-    cluster_axis_actual = 0
 
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
@@ -116,7 +115,7 @@ def test_all_reduce_2d_fabric(
     run_all_reduce_impl(
         bh_1d_mesh_device,
         output_shape,
-        cluster_axis_actual,
+        cluster_axis,
         input_dtype,
         num_links,
         input_num_cores,
