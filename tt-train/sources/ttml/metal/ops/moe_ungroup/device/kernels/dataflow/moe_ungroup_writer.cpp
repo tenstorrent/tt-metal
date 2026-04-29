@@ -48,6 +48,7 @@ constexpr uint32_t md_aligned_page = decltype(metadata_args)::AlignedPageSize;
 constexpr uint32_t sc_aligned_page = decltype(scores_args)::AlignedPageSize;
 constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
+constexpr uint32_t ungrouped_aligned_page = decltype(ungrouped_args)::AlignedPageSize;
 
 constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t TILE_W = 32U;
@@ -80,7 +81,7 @@ void kernel_main() {
     const uint32_t leids_addr = get_arg_val<uint32_t>(5);
     const uint32_t my_core_idx = get_arg_val<uint32_t>(6);
 
-    const auto ungrouped_addrgen = TensorAccessor(ungrouped_args, ungrouped_addr, h * 2U);
+    const auto ungrouped_addrgen = TensorAccessor(ungrouped_args, ungrouped_addr, ungrouped_aligned_page);
     const auto plan_addrgen = TensorAccessor(plan_args, plan_addr);
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
     const auto md_addrgen = TensorAccessor(metadata_args, metadata_addr);
@@ -244,8 +245,13 @@ void kernel_main() {
 
                 // (2) Read existing rows from ungrouped DRAM into cb_existing_rm.
                 // CB has 32 pages per chunk (asymmetric, one page per row).
+                // For the last chunk, write_bytes < hidden_chunk_bytes when h
+                // isn't tile-aligned — zero-pad the L1 tail so tilize sees
+                // zeros in the partial last tile column (otherwise it'd read
+                // uninit bytes that round-trip into the writer's RMW).
                 cb_reserve_back(cb_existing_rm, TILE_H);
                 uint32_t existing_l1 = get_write_ptr(cb_existing_rm);
+                uint32_t pad_bytes = hidden_chunk_bytes - write_bytes;
                 for (uint32_t r = 0; r < TILE_H; ++r) {
                     uint32_t flat = plan_buf[r];
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
@@ -258,6 +264,23 @@ void kernel_main() {
                     noc_async_read(dst_noc, row_buf, write_bytes);
                 }
                 noc_async_read_barrier();
+                // Zero the partial-last-tile tail AFTER the reads complete:
+                // doing it before the barrier would race with NOC writes that
+                // can land slightly after their request size due to packet
+                // alignment, overwriting the pad with neighbour-row bytes.
+                if (pad_bytes > 0U) {
+                    for (uint32_t r = 0; r < TILE_H; ++r) {
+                        uint32_t flat = plan_buf[r];
+                        if (flat == SENTINEL) {
+                            continue;
+                        }
+                        volatile tt_l1_ptr uint16_t* tail = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                            existing_l1 + r * hidden_chunk_bytes + write_bytes);
+                        for (uint32_t i = 0; i < pad_bytes / sizeof(uint16_t); ++i) {
+                            tail[i] = 0U;
+                        }
+                    }
+                }
                 cb_push_back(cb_existing_rm, TILE_H);
 
                 // (3) Wait for compute's combined+untilized output.

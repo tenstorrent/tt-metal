@@ -49,7 +49,9 @@ constexpr auto offsets_args = TensorAccessorArgs<expert_out_args.next_compile_ti
 constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t TILE_W = 32U;
 constexpr uint32_t TILE_BYTES = TILE_H * TILE_W * 2U;  // bf16 tile
-constexpr uint32_t Wt = h / TILE_W;
+// ceil(h / TILE_W) — must match the program factory; reader needs to address
+// partial-last-tile cases when h isn't a TILE_W multiple.
+constexpr uint32_t Wt = round_up(h, TILE_W) / TILE_W;
 
 inline void barrier_fanin_mcast(uint32_t my_core_idx) {
     if (my_core_idx > 0) {
@@ -102,22 +104,26 @@ void kernel_main() {
     const auto expert_out_addrgen = TensorAccessor(expert_out_args, expert_out_addr, TILE_BYTES);
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
 
+    // L1 layout in cb_zero (sized by host as (e_local+1)*4 + 2*e_local*4):
+    //   [offsets_l1 (e_local+1) u32]
+    //   [tr_start_per_expert e_local u32]
+    //   [my_real_count_per_expert e_local u32]
+    // Backing the per-expert caches in L1 instead of NCRISC stack avoids
+    // blowing the small RISC stack for large e_local (e.g. 300+).
     cb_reserve_back(cb_zero, 1U);
     uint32_t scratch_l1 = get_write_ptr(cb_zero);
     volatile tt_l1_ptr uint32_t* offsets_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
+    volatile tt_l1_ptr uint32_t* tr_start_per_expert =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + (e_local + 1U) * sizeof(uint32_t));
+    volatile tt_l1_ptr uint32_t* my_real_count_per_expert =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + (2U * e_local + 1U) * sizeof(uint32_t));
     noc_async_read(get_noc_addr(0, offsets_addrgen), scratch_l1, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
     cb_push_back(cb_zero, 1U);
 
     // Walk offsets ONCE to compute this core's per-expert work bounds and
     // publish the total block count (steps × num_chunks) to compute via
-    // cb_ctrl. We cache:
-    //   tr_start_per_expert[e] = (offsets_l1[e] / TILE_H) + my_start_in_e
-    //   my_real_count_per_expert[e] = my_end_in_e - my_start_in_e
-    // so the per-expert loop below can derive tr_global directly from the
-    // cached start without redoing the expert_total_tr / my_count_e math.
-    uint32_t tr_start_per_expert[e_local];
-    uint32_t my_real_count_per_expert[e_local];
+    // cb_ctrl.
     uint32_t my_total_active_steps = 0U;
     for (uint32_t e = 0; e < e_local; ++e) {
         uint32_t expert_start_tr = offsets_l1[e] / TILE_H;

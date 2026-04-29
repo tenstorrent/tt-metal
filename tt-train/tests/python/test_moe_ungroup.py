@@ -22,6 +22,7 @@ Reference implementation in `moe_ungroup_torch_reference()` below.
 from __future__ import annotations
 
 import math
+import os
 from typing import Tuple
 
 import numpy as np
@@ -279,9 +280,10 @@ class TestMoeUngroupDevice:
         grouped_t, counts_t, offsets_t, plan_t = moe_group_torch_reference(
             dispatched, metadata, local_expert_ids, k=k, num_total_cores=num_total_cores
         )
-        # Push to device. grouped goes TILE bf16; index tensors are uint32 ROW_MAJOR.
-        grouped_rm = _to_device_tensor(grouped_t.float(), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
-        grouped_tt = ttnn.to_layout(grouped_rm, ttnn.TILE_LAYOUT)
+        # Push to device. grouped goes TILE bf16; for H not divisible by 32 the
+        # row-major → TILE conversion needs explicit padding, so use from_torch
+        # with TILE layout directly which pads with zeros internally.
+        grouped_tt = _to_device_tensor(grouped_t.float(), ttnn.TILE_LAYOUT, ttnn.bfloat16)
         counts_tt = _to_device_tensor(counts_t.to(torch.int32).reshape(1, 1, 1, -1), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
         offsets_tt = _to_device_tensor(
             offsets_t.to(torch.int32).reshape(1, 1, 1, -1), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32
@@ -446,6 +448,34 @@ class TestMoeUngroupDevice:
         scores = torch.rand(D, B, S, K) * 0.5
         self._check_correctness(dispatched, metadata, scores, local_expert_ids, K, "h128")
 
+    @pytest.mark.parametrize("H", [48, 80, 96, 144])
+    def test_non_tile_aligned_h(self, H):
+        """H not divisible by TILE_WIDTH=32 — last tile column is partial.
+        Reader must read only h*2 valid bytes per row and zero-pad the L1 tail
+        so tilize sees zeros in the partial last tile, otherwise the read
+        crosses into the next row in DRAM and ungrouped output is wrong."""
+        D, B, S = 2, 1, 32
+        E, K = 4, 2
+        local_expert_ids = torch.tensor([0, 1], dtype=torch.int32)
+        dispatched = _make_dispatched(D, B, S, H, seed=H)
+        metadata = _make_metadata(D, B, S, K, E, seed=H)
+        scores = torch.rand(D, B, S, K, generator=torch.Generator().manual_seed(H)) * 0.5
+        self._check_correctness(dispatched, metadata, scores, local_expert_ids, K, f"h{H}")
+
+    @pytest.mark.parametrize("E_local", [32, 64, 128, 300])
+    def test_large_e_local(self, E_local):
+        """E_local up to 300 — exercises dynamic sizing of cb_scratch (stage,
+        offsets_buf, leids_buf, etc.). Pre-fix layouts were sized for small
+        E_local and would overflow into adjacent fields for E_local > 16."""
+        D, B, S, H = 2, 1, 64, 64
+        E = max(E_local * 2, 64)
+        K = 4
+        local_expert_ids = torch.arange(E_local, dtype=torch.int32)
+        dispatched = _make_dispatched(D, B, S, H, seed=E_local)
+        metadata = _make_metadata(D, B, S, K, E, seed=E_local)
+        scores = torch.rand(D, B, S, K, generator=torch.Generator().manual_seed(E_local)) * 0.5
+        self._check_correctness(dispatched, metadata, scores, local_expert_ids, K, f"e_local{E_local}")
+
 
 # ---------------------------------------------------------------------------
 # Device-time profiling (Tracy). Mirrors test_moe_group.py.
@@ -453,12 +483,19 @@ class TestMoeUngroupDevice:
 
 
 @pytest.mark.skipif(not _TTML_AVAILABLE, reason="ttml / ttnn not importable")
+@pytest.mark.skipif(
+    os.environ.get("TTML_RUN_PROFILE_TESTS", "0") not in ("1", "true", "True"),
+    reason="Profile sweep is opt-in: set TTML_RUN_PROFILE_TESTS=1 to enable",
+)
 @pytest.mark.requires_device
 class TestMoeUngroupProfile:
     """Run moe_group → moe_ungroup back-to-back under Tracy.
 
     Reuses the same shape sweep as TestMoeGroupProfile so the two summary
     tables are directly comparable.
+
+    Opt-in to keep this out of the default CI run. Enable with
+    `TTML_RUN_PROFILE_TESTS=1`.
     """
 
     @staticmethod

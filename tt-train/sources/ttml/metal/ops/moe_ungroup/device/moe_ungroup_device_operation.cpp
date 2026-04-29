@@ -86,7 +86,7 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
     const auto& ls = args.local_expert_ids.logical_shape();
     TT_FATAL(ls.rank() == 1U && ls[0] == attrs.e_local, "moe_ungroup: local_expert_ids shape mismatch");
 
-    TT_FATAL(attrs.h % 32U == 0U, "moe_ungroup: H ({}) must be a multiple of 32", attrs.h);
+    TT_FATAL(attrs.h > 0U, "moe_ungroup: H must be > 0");
 }
 
 spec_return_value_t MoeUngroupDeviceOperation::compute_output_specs(

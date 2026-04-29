@@ -10,7 +10,7 @@
 
 namespace ttml::metal::ops::moe_ungroup::device {
 
-struct operation_attributes_t {
+struct MoeUngroupAttributes {
     uint32_t e_local{};
     uint32_t k{};
     uint32_t d{};
@@ -20,7 +20,7 @@ struct operation_attributes_t {
     uint32_t t_cap{};
 };
 
-struct tensor_args_t {
+struct MoeUngroupTensorArgs {
     ttnn::Tensor expert_out;        // [1, 1, T_cap, H]   TILE  bf16
     ttnn::Tensor plan;              // [1, 1, 1, T_cap]   ROW_MAJOR uint32
     ttnn::Tensor offsets;           // [1, 1, 1, E_local+1] ROW_MAJOR uint32
@@ -29,7 +29,13 @@ struct tensor_args_t {
     ttnn::Tensor local_expert_ids;  // [E_local]          ROW_MAJOR uint16
 };
 
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = ttnn::Tensor;
+using MoeUngroupSpecReturn = ttnn::TensorSpec;
+using MoeUngroupTensorReturn = ttnn::Tensor;
+
+// Aliases required by the ttnn::device_operation framework.
+using operation_attributes_t = MoeUngroupAttributes;
+using tensor_args_t = MoeUngroupTensorArgs;
+using spec_return_value_t = MoeUngroupSpecReturn;
+using tensor_return_value_t = MoeUngroupTensorReturn;
 
 }  // namespace ttml::metal::ops::moe_ungroup::device

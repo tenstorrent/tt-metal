@@ -45,7 +45,11 @@ constexpr uint32_t kTargetChunkBytes = 128U * 1024U;
 // Falls back to the smallest divisor that respects the cap; for prime Wt
 // that may be 1 (single chunk covering all of Wt).
 uint32_t pick_num_chunks(uint32_t h) {
-    uint32_t Wt = h / tt::constants::TILE_WIDTH;
+    // ceil(h / TILE_WIDTH) — last tile may be partial when h isn't tile-aligned.
+    uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
+    if (Wt == 0U) {
+        return 1U;
+    }
     uint32_t tile_row_bytes = 32U * tt::constants::TILE_WIDTH * 2U;  // = 2 KiB per tile-column
     uint32_t tpc_cap = kTargetChunkBytes / tile_row_bytes;
     if (tpc_cap == 0U) {
@@ -75,11 +79,16 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     const uint32_t total_rows = attrs.d * attrs.b * attrs.s;
 
     const uint32_t num_chunks = pick_num_chunks(h);
-    const uint32_t Wt = h / tt::constants::TILE_WIDTH;
-    const uint32_t tiles_per_chunk = (Wt + num_chunks - 1U) / num_chunks;
+    // ceil(h / TILE_WIDTH); the last tile is padded with zeros if h % 32 != 0.
+    const uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
+    const uint32_t tiles_per_chunk = tt::round_up(Wt, num_chunks) / num_chunks;
     const uint32_t hidden_chunk_bytes = tiles_per_chunk * tt::constants::TILE_WIDTH * 2U;
-    const uint32_t last_chunk_tiles = Wt - (num_chunks - 1U) * tiles_per_chunk;
-    const uint32_t last_chunk_bytes = last_chunk_tiles * tt::constants::TILE_WIDTH * 2U;
+    // Valid bytes in the last chunk reflect the actual H, not the tile-rounded
+    // width: ungrouped is row-major bf16 with stride h*2, so reading/writing
+    // more than (h - prior_chunks_width) * 2 bytes would cross into the next
+    // row in DRAM. Reader/writer pad the unused L1 tail with zeros.
+    const uint32_t prior_chunks_bytes = (num_chunks - 1U) * hidden_chunk_bytes;
+    const uint32_t last_chunk_bytes = h * 2U - prior_chunks_bytes;
 
     auto compute_grid = device->compute_with_storage_grid_size();
     tt::tt_metal::CoreCoord lead_coord{0, 0};
@@ -113,10 +122,13 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             .set_page_size(kCbOut, bf16_tile_bytes);
     CreateCircularBuffer(program, worker_all, cb_out_cfg);
 
-    // cb_zero: reader scratch for the offsets DMA. Sized from (E_local+1)*4
-    // bytes (the offsets payload), L1-aligned for the NOC read.
+    // cb_zero: reader scratch holding offsets DMA + per-expert caches:
+    //   offsets_l1 (e_local+1) u32  +  tr_start_per_expert e_local u32
+    //                              +  my_real_count_per_expert e_local u32
+    // Backing the caches in L1 keeps NCRISC stack usage bounded for large
+    // e_local (e.g. 300+) where stack arrays would otherwise overflow.
     const uint32_t kL1_ALIGN = tt::tt_metal::hal::get_l1_alignment();
-    uint32_t cb_zero_bytes = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
+    uint32_t cb_zero_bytes = tt::round_up((3U * e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
     tt::tt_metal::CircularBufferConfig cb_zero_cfg =
         tt::tt_metal::CircularBufferConfig(cb_zero_bytes, {{kCbZero, tt::DataFormat::UInt32}})
             .set_page_size(kCbZero, cb_zero_bytes);
