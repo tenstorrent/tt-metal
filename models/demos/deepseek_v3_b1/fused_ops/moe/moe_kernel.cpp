@@ -1378,29 +1378,14 @@ void kernel_main() {
                 gate_proj_mm;
             gate_proj_mm();
         }
-        // TEMP DPRINT: K-split hang localization.
-        // - NC/BR print once per active core when their thread reaches this point.
-        // - TRISC: scope to PACK (last sub-thread to finish — does the partial_sem wait
-        //   + pack-with-l1_acc on the reducer, the most likely K-split hang point).
-        //   Plus a UNPACK print so we can see if UNPACK got past cb_in1 reads while
-        //   PACK is stuck. MATH skipped (get_absolute_logical_x not safe there).
-        // #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        //         if constexpr (Core::Routed::is_gate_proj_streamer_core) {
-        //             DPRINT << "[GATE_DONE x=" << (uint32_t)get_absolute_logical_x()
-        //                    << " y=" << (uint32_t)get_absolute_logical_y() << "]" << ENDL();
-        //         }
-        // #elif defined(COMPILE_FOR_TRISC)
-        //         // No core coords on TRISC (get_absolute_logical_x is dataflow-only). Each TRISC
-        //         // sub-thread prints once per active core; the line count tells us how many cores
-        //         // reached this stage. The DPRINT prefix shows device:(coord):TR0/TR1/TR2.
-        //         if constexpr (Core::Routed::is_gate_proj_streamer_core) {
-        //             UNPACK(DPRINT << "[GATE_DONE_UNPACK]" << ENDL());
-        //             PACK(DPRINT << "[GATE_DONE_PACK]" << ENDL());
-        //         }
-        // #endif
 
         // 7. up_proj: DRAM Matmul Expert Compressed (PopIn0=true: last consumer of gate input; PopIndex=false).
         //    Same cb_in1 as gate_proj → use gate_proj_in1_buf_addr as CBIn1ResetAddr.
+        //    SkipNocTridReset=true: gate's leftover NCRISC writes (incl. atomic
+        //    sem_inc on dynamic NOC where atomic shares cmd buf with reads) carry
+        //    a non-zero trid; calling reset_noc_trid_barrier_counter at up's entry
+        //    would clear those counters mid-flight and the late ack would wrap them,
+        //    making up's read barriers hang. Skip the reset → counters drain naturally.
         {
             DeviceZoneScopedN("UP_PROJ");
             constexpr uint32_t up_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
@@ -1411,24 +1396,15 @@ void kernel_main() {
             deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
                 Moe::Routed::UpProjCTArgs,
                 Core::Routed::is_gate_proj_streamer_core,
-                true,
-                false,
-                true,
-                up_cb_in1_addr>
+                /*pop_in0=*/true,
+                /*pop_index=*/false,
+                /*ResetCBIn1=*/true,
+                up_cb_in1_addr,
+                /*pop_out=*/false,
+                /*SkipNocTridReset=*/true>
                 up_proj;
             up_proj();
         }
-        // #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        //         if constexpr (Core::Routed::is_gate_proj_streamer_core) {
-        //             DPRINT << "[UP_DONE x=" << (uint32_t)get_absolute_logical_x()
-        //                    << " y=" << (uint32_t)get_absolute_logical_y() << "]" << ENDL();
-        //         }
-        // #elif defined(COMPILE_FOR_TRISC)
-        //         if constexpr (Core::Routed::is_gate_proj_streamer_core) {
-        //             UNPACK(DPRINT << "[UP_DONE_UNPACK]" << ENDL());
-        //             PACK(DPRINT << "[UP_DONE_PACK]" << ENDL());
-        //         }
-        // #endif
 
         // 8. Mul: Element-wise multiply (up_proj * gate_proj * expert_scale)
         {
@@ -1436,17 +1412,6 @@ void kernel_main() {
             deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
             mul_op();
         }
-        // #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        //         if constexpr (Core::Routed::is_gate_proj_core) {
-        //             DPRINT << "[MUL_DONE x=" << (uint32_t)get_absolute_logical_x()
-        //                    << " y=" << (uint32_t)get_absolute_logical_y() << "]" << ENDL();
-        //         }
-        // #elif defined(COMPILE_FOR_TRISC)
-        //         if constexpr (Core::Routed::is_gate_proj_core) {
-        //             UNPACK(DPRINT << "[MUL_DONE_UNPACK]" << ENDL());
-        //             PACK(DPRINT << "[MUL_DONE_PACK]" << ENDL());
-        //         }
-        // #endif
 
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
@@ -1546,11 +1511,21 @@ void kernel_main() {
         //     Active on `is_down_proj_streamer_core` (16 cores when primary_at_last_offset=True,
         //     8 cores otherwise) so senders (= secondaries post-swap) NOC-write their
         //     accum onto the receiver/primary.
+        //     SkipNocTridReset=true: same rationale as up_proj — up's leftover NCRISC
+        //     writes (incl. atomic sem_inc) carry trid from earlier reads; resetting
+        //     trid counters here would wrap them when late acks arrive.
         {
             DeviceZoneScopedN("DOWN_PROJ");
-            deepseek_b1_ops::MatmulExpertCompressedDRAM::
-                Op<Moe::Routed::DownProjCTArgs, Core::Routed::is_down_proj_streamer_core, true, true>
-                    down_proj;
+            deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+                Moe::Routed::DownProjCTArgs,
+                Core::Routed::is_down_proj_streamer_core,
+                /*pop_in0=*/true,
+                /*pop_index=*/true,
+                /*ResetCBIn1=*/false,
+                /*CBIn1ResetAddr=*/0,
+                /*pop_out=*/false,
+                /*SkipNocTridReset=*/true>
+                down_proj;
             down_proj();
         }
 

@@ -1441,15 +1441,18 @@ class MoeRoutedExpertOp:
             else device
         )
         if isinstance(gate_proj_weights_tensor, list):
-            # 1-streamer config: each DRAM bank owns one core (no K-split, no gather).
+            # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
+            # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
+            # partial to primary's cb_out and primary PACKs with l1_acc to sum. Shares
+            # cb_in1 with up_proj — both must use the same cores_per_bank/subblock_k.
             gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=gate_proj_weights_tensor,
-                num_subblocks_k=8,
+                num_subblocks_k=4,
                 subblock_n=1,
-                cores_per_dram_bank=1,
-                k_parallel_per_bank=1,
-                primary_at_last_offset=False,
+                cores_per_dram_bank=2,
+                k_parallel_per_bank=2,
+                primary_at_last_offset=True,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )
@@ -1468,15 +1471,15 @@ class MoeRoutedExpertOp:
         # MatmulExpertCompressedDRAM: up_proj (Phase 1B)
         # ==================================================================
         if isinstance(up_proj_weights_tensor, list):
-            # 1-streamer config: matches gate_proj exactly (shared cb_in1, same 8-core grid).
+            # K-split: matches gate_proj's config exactly (shared cb_in1 + same 16-core grid).
             up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=up_proj_weights_tensor,
-                num_subblocks_k=8,
+                num_subblocks_k=4,
                 subblock_n=1,
-                cores_per_dram_bank=1,
-                k_parallel_per_bank=1,
-                primary_at_last_offset=False,
+                cores_per_dram_bank=2,
+                k_parallel_per_bank=2,
+                primary_at_last_offset=True,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )

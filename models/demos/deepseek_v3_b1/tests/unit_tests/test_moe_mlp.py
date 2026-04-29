@@ -395,8 +395,12 @@ def create_routed_expert_tensors(
             num_routed_experts=num_experts,
             move_to_device=True,
             compressed_tp8=compressed_tp8,
-            # Gather-mode down_proj: cores_per_dram_bank=2, subblock_n=7. DRAM tile
-            # layout must use the same subblock_n as the kernel reads.
+            # K-split gate/up: cores_per_dram_bank=2, k_parallel_per_bank=2.
+            # subblock_k = Kt // k_parallel = 224 // 2 = 112 so each K-slice's tiles are
+            # contiguous in DRAM (matches the kernel's K-slice-major read).
+            gate_proj_subblock_k=112,
+            up_proj_subblock_k=112,
+            # Gather-mode down_proj: cores_per_dram_bank=2, subblock_n=7.
             down_proj_subblock_n=7,
         )
         gate_proj_expert_tensors = routed_weights.routed_gate_proj

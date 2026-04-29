@@ -27,7 +27,6 @@
 
 #include "kernel_utils.hpp"
 #include "expert_index_encoding.hpp"
-#include "api/debug/dprint.h"  // TEMP debugging — gate K-split hang investigation
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -292,7 +291,15 @@ struct MatmulExpertCompressedDRAM {
         // end (cb_wait_front + cb_pop_front). Used for looping / chaining so the
         // next iteration's cb_reserve_back has free space. Default false preserves
         // single-invocation behavior where downstream consumes cb_out.
-        bool pop_out = false>
+        bool pop_out = false,
+        // When true, skip `reset_noc_trid_barrier_counter` at NCRISC entry. Used
+        // for back-to-back ops sharing the same NCRISC: in dynamic NOC mode the
+        // atomic cmd buffer is shared with reads, so leftover writes (incl.
+        // semaphore_inc atomics) carry the last read's trid. Clearing trid
+        // counters while those writes haven't ack'd wraps the counter and makes
+        // a subsequent barrier_with_trid hang. Skipping the reset on the second
+        // op preserves the in-flight counters → they decrement naturally.
+        bool SkipNocTridReset = false>
     class Op {
     public:
         void operator()() {
@@ -360,7 +367,9 @@ struct MatmulExpertCompressedDRAM {
             uint32_t block_trid_to_wait = 1;
             uint32_t num_dram_active = 0;
 
-            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+            if constexpr (!SkipNocTridReset) {
+                reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+            }
 
             // Wait for the index mcast to land in L1 before reading.
             // Without this, NCRISC races ahead of the index mcast and reads stale
@@ -508,6 +517,10 @@ struct MatmulExpertCompressedDRAM {
                     block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
                 }
             }
+
+            // Reset cmdbuf trid back to 0. This is important for correctness of subsequent NOC operations on this core
+            noc_async_write_set_trid(0);
+            noc_async_read_set_trid(0);
 
             // Phase-2 K-reduction. Sender (non-last K-slice) waits for its TRISC to finish
             // packing to cb_out, NOC-writes the whole cb_out to the reducer's cb_out L1,
