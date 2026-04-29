@@ -160,6 +160,14 @@ target_link_libraries(
         TTNN::TTNN
 )
 
+add_executable(moe_ffn_swiglu_benchmark benchmark/moe_ffn_swiglu_benchmark.cpp)
+target_link_libraries(
+    moe_ffn_swiglu_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
