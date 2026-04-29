@@ -37,11 +37,17 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     const uint32_t num_pages = src_buffer->num_pages();
     const uint32_t input_page_size = is_row_major ? src_buffer->page_size() : single_tile_size_input;
     const uint32_t output_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
-    // For RM: pad CB pages to 32-element alignment so the unpacker does not cross page boundaries.
+    // For RM: pad CB pages to 32-element AND DRAM-buffer alignment so (a) the unpacker does not cross
+    // page boundaries and (b) double-buffered CB pages share the same residue (mod buffer alignment)
+    // as their DRAM pages — required by the NOC: src_addr & (align-1) == dst_addr & (align-1). On
+    // Blackhole the DRAM alignment is 64B; without (b) an 8-bit input with a 32-element row yields a
+    // 32B page → mis-aligned second page → ttsim NOC alignment crash. (#41977)
     const uint32_t padded_input_page_size =
-        is_row_major ? tt::align(input_page_size, 32u * input.element_size()) : input_page_size;
+        is_row_major ? tt::align(tt::align(input_page_size, 32u * input.element_size()), src_buffer->alignment())
+                     : input_page_size;
     const uint32_t padded_output_page_size =
-        is_row_major ? tt::align(output_page_size, 32u * output.element_size()) : output_page_size;
+        is_row_major ? tt::align(tt::align(output_page_size, 32u * output.element_size()), dst_buffer->alignment())
+                     : output_page_size;
 
     // ── Core selection ───────────────────────────────────────────────────
     CoreRangeSet all_cores(std::vector<CoreRange>{});
