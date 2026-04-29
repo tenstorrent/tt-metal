@@ -32,11 +32,18 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
+        *,
+        prefill_wq_kv_a_issue_41501_compute_grid_override: bool = True,
     ) -> ModelPrefillConfig:
         mla_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
 
-        mla_config = cls.prefill_mla_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
+        mla_config = cls.prefill_mla_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+            prefill_wq_kv_a_issue_41501_compute_grid_override=prefill_wq_kv_a_issue_41501_compute_grid_override,
+        )
 
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
@@ -123,6 +130,8 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         batch_size_per_row: int,
+        *,
+        prefill_wq_kv_a_issue_41501_compute_grid_override: bool = True,
     ) -> ModelPrefillConfig:
         """
         Prefill configuration for the MLA component of the decoder layer.

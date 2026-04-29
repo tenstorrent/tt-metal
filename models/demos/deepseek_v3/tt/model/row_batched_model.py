@@ -109,6 +109,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         batch_size_per_row: int,
+        *,
+        prefill_wq_kv_a_issue_41501_compute_grid_override: bool = True,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
         model_cfg = {
@@ -119,6 +121,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     mesh_device,
                     get_fabric_config(),
                     batch_size_per_row=batch_size_per_row,
+                    prefill_wq_kv_a_issue_41501_compute_grid_override=prefill_wq_kv_a_issue_41501_compute_grid_override,
                 )
             ],
             "moe_decoder_block": [
@@ -127,6 +130,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     mesh_device,
                     get_fabric_config(),
                     batch_size_per_row=batch_size_per_row,
+                    prefill_wq_kv_a_issue_41501_compute_grid_override=prefill_wq_kv_a_issue_41501_compute_grid_override,
                 )
             ],
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
@@ -138,6 +142,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 mesh_device,
                 get_fabric_config(),
                 batch_size_per_row=batch_size_per_row,
+                prefill_wq_kv_a_issue_41501_compute_grid_override=prefill_wq_kv_a_issue_41501_compute_grid_override,
             )
         return model_cfg
 

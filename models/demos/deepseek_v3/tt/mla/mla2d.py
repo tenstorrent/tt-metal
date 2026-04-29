@@ -73,8 +73,15 @@ class MLA2D(MLA1D):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         batch_size_per_row: int,
+        *,
+        prefill_wq_kv_a_issue_41501_compute_grid_override: bool = True,
     ) -> ModelPrefillConfig:
-        super_cfg = super().prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
+        super_cfg = super().prefill_model_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+            prefill_wq_kv_a_issue_41501_compute_grid_override=prefill_wq_kv_a_issue_41501_compute_grid_override,
+        )
         input_memory_config = super_cfg.pop("input_memory_config")
         return {
             "mla1d": super_cfg,

@@ -51,6 +51,10 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
+# Issue #41501: row-batched prefill fused wq_kv_a matmul may hit DI_DT hangs without this grid clamp.
+WQ_KV_A_PREFILL_ISSUE_41501_COMPUTE_GRID = ttnn.CoreGrid(x=6, y=6)
+PREFILL_WQ_KV_A_ISSUE_41501_GRID_OVERRIDE_KEY = "prefill_wq_kv_a_issue_41501_compute_grid_override"
+
 
 def pad_n_to_dram_banks(n, tile_size=32, num_dram_banks=12):
     """Pad n dimension to be divisible by tile_size * num_dram_banks (default 32 and 12 respectively)."""
@@ -450,12 +454,16 @@ class MLA1D(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         batch_size_per_row: int,
+        *,
+        prefill_wq_kv_a_issue_41501_compute_grid_override: bool = True,
     ) -> ModelPrefillConfig:
         """Prefill model config for an MLP with 1D tensor parallelism.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device
+            prefill_wq_kv_a_issue_41501_compute_grid_override: When True, use a fixed 6×6 compute grid for the
+                fused wq_kv_a prefill matmul (workaround for potential DI_DT hangs; see issue #41501).
 
         Returns:
             Dict containing operator configurations for prefill mode
@@ -596,6 +604,7 @@ class MLA1D(AbstractModule):
         )
 
         return {
+            PREFILL_WQ_KV_A_ISSUE_41501_GRID_OVERRIDE_KEY: prefill_wq_kv_a_issue_41501_compute_grid_override,
             "batch_size_per_row": batch_size_per_row,
             "num_heads": num_heads,
             "num_heads_local": num_heads_local,
@@ -2403,15 +2412,15 @@ class MLA1D(AbstractModule):
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
         # Row-batched prefill drives the fused Q/KV projection with batch on dim 1.
         # The program config must account for that batch so fuse_batch stays disabled.
+        use_issue_41501_grid = cfg.get(PREFILL_WQ_KV_A_ISSUE_41501_GRID_OVERRIDE_KEY, True)
+        wq_kv_grid = WQ_KV_A_PREFILL_ISSUE_41501_COMPUTE_GRID if use_issue_41501_grid else None
         wq_kv_a_program_config = build_prefill_matmul_program_config(
             seq_len,
             k=dim,
             n=qkv_a_n,
             batch=batch_size,
             mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
-            override_compute_grid=ttnn.CoreGrid(
-                x=6, y=6
-            ),  # FIXME: optimize this config for prefill, potential DI_DT hang WORKAROUND. See issue #41501.
+            override_compute_grid=wq_kv_grid,  # FIXME: optimize when override off; see issue #41501.
         )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 

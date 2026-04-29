@@ -93,27 +93,8 @@ class DecoderBlock2DBase(DecoderBlockBase):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        # MLA norm
-        mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
-
-        # MLA
-        mla_out = MLA2D.forward_prefill(mla_norm_out, user_id, cfg["mla"], rope_tensors, page_table)
-        ttnn.deallocate(mla_norm_out)
-
-        # MLA Residual
-        x += mla_out
-        ttnn.deallocate(mla_out)
-
-        # MLP norm
-        mlp_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mlp_norm"])
-
-        # MLP
-        mlp_out = cls.forward_mlp_prefill(mlp_norm_out, cfg["mlp"])
-        ttnn.deallocate(mlp_norm_out)
-
-        # MLP Residual
-        x += mlp_out
-        ttnn.deallocate(mlp_out)
+        # # MLA
+        x = MLA2D.forward_prefill(x, user_id, cfg["mla"], rope_tensors, page_table)
 
         return x
 
@@ -165,8 +146,15 @@ class DecoderBlock2DBase(DecoderBlockBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         batch_size_per_row: int,
+        *,
+        prefill_wq_kv_a_issue_41501_compute_grid_override: bool = True,
     ) -> ModelPrefillConfig:
-        return MLA2D.prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
+        return MLA2D.prefill_model_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+            prefill_wq_kv_a_issue_41501_compute_grid_override=prefill_wq_kv_a_issue_41501_compute_grid_override,
+        )
 
     @classmethod
     @abstractmethod

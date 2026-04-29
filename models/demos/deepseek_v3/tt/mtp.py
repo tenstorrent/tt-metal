@@ -133,6 +133,8 @@ class MTP2D(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
+        *,
+        prefill_wq_kv_a_issue_41501_compute_grid_override: bool = True,
     ) -> ModelPrefillConfig:
         hidden_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         token_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
@@ -141,6 +143,7 @@ class MTP2D(AbstractModule):
             mesh_device,
             fabric_config,
             batch_size_per_row=batch_size_per_row,
+            prefill_wq_kv_a_issue_41501_compute_grid_override=prefill_wq_kv_a_issue_41501_compute_grid_override,
         )
         head_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         head_cfg = LMHead1D.prefill_model_config(mesh_device)

@@ -335,7 +335,17 @@ def run_test_forward_pass_dpmodel(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    *,
+    repro_hang: bool = True,
 ):
+    """RowBatchedModel forward vs reference. ``repro_hang`` only affects prefill MLA program config.
+
+    For ``mode == "prefill"`` (decode ignores this):
+    - ``repro_hang=True`` (default): ``override_compute_grid=None`` — device grid from
+      ``compute_with_storage_grid_size()`` (hang-prone path for investigation).
+    - ``repro_hang=False``: Issue #41501 workaround — fused ``wq_kv_a`` prefill matmul uses a fixed
+      ``CoreGrid(6, 6)`` as ``override_compute_grid``.
+    """
     if mode == "prefill":
         assert batch_size_per_row == 1, "Model-level prefill only supports a batch size of 1"
         batch_size = batch_size_per_row
@@ -482,12 +492,17 @@ def run_test_forward_pass_dpmodel(
     # The generator still drives prefill one prompt at a time, but the underlying
     # row-batched prefill kernels/cache layout are configured for a full row.
     configured_row_width = batch_size_per_row if mode == "decode" else USERS_PER_ROW
+    model_config_kwargs = {}
+    if mode == "prefill":
+        # Inverse of ``repro_hang`` (see docstring): ``repro_hang`` True → no fixed grid; False → 6×6 workaround.
+        model_config_kwargs["prefill_wq_kv_a_issue_41501_compute_grid_override"] = not repro_hang
     model_config = get_model_config(
         RowBatchedModel,
         mode,
         hf_config_short,
         mesh_device,
         configured_row_width,
+        **model_config_kwargs,
     )
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
     model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
@@ -518,7 +533,10 @@ def run_test_forward_pass_dpmodel(
 
     logger.info("Running TTNN forward pass")
     if mode == "prefill":
-        tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+        num_iters = 61 * 100
+        for iter_idx in range(num_iters):
+            tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+            logger.info(f"Completed iteration {iter_idx} of {num_iters}")
     else:
         tt_output = RowBatchedModel.forward_decode(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
@@ -574,11 +592,17 @@ TEST_CASES, TEST_IDS = _build_model_test_cases_and_ids(
 )
 @pytest.mark.timeout(10000)
 @pytest.mark.parametrize(
+    "repro_hang",
+    [True, False],
+    ids=["repro_hang_true_override_none", "repro_hang_false_issue41501_coregrid_6x6"],
+)
+@pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
     TEST_CASES,
     ids=TEST_IDS,
 )
 def test_forward_pass(
+    repro_hang,
     mode,
     seq_len,
     batch_size_per_row,
@@ -607,6 +631,7 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        repro_hang=repro_hang,
     )
 
 
