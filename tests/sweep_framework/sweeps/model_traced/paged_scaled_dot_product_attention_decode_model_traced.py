@@ -108,7 +108,7 @@ def _paged_sdpa_input_shard_axis_and_factor(placement_dict):
     return axis, factor
 
 
-def _paged_sdpa_decode_chip_attn(q_chip, k_cache_chip, v_cache_chip, page_table, cur_pos, num_users, page_size):
+def _paged_sdpa_decode_chip_attn(q_chip, k_cache_chip, v_cache_chip, page_table, cur_pos, num_users, page_size, sliding_window_size=None):
     """Compute per-chip paged attention output: (B, H_q, num_users, D_chip).
     q_chip:       (B, H_q, num_users, D_chip)
     k_cache_chip: (num_pages, H_kv, page_size, D_chip)
@@ -138,8 +138,14 @@ def _paged_sdpa_decode_chip_attn(q_chip, k_cache_chip, v_cache_chip, page_table,
         # Concat along sequence axis (page_size) → (H_kv, n_pages_active*page_size, D)
         k_seq = k_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)
         v_seq = v_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)
-        k_seq = k_seq[:, :n_active, :]  # trim to cur_pos+1
-        v_seq = v_seq[:, :n_active, :]
+        # Sliding-window: ttnn paged_sdpa_decode with sliding_window_size=W
+        # only attends to the last W positions before cur_pos.
+        if sliding_window_size is not None and sliding_window_size > 0:
+            start = max(0, n_active - int(sliding_window_size))
+        else:
+            start = 0
+        k_seq = k_seq[:, start:n_active, :]
+        v_seq = v_seq[:, start:n_active, :]
         # GQA broadcast: K/V repeat to H_q heads
         if H_kv < H_q:
             rep = H_q // H_kv
@@ -155,7 +161,8 @@ def _paged_sdpa_decode_chip_attn(q_chip, k_cache_chip, v_cache_chip, page_table,
 
 
 def _paged_sdpa_decode_golden(
-    torch_q, torch_k_cache, torch_v_cache, page_table, cur_pos, num_users, padded_users, factor
+    torch_q, torch_k_cache, torch_v_cache, page_table, cur_pos, num_users, padded_users, factor,
+    sliding_window_size=None,
 ):
     """Slice Q/K/V on dim -1 by `factor`, run per-chip paged attention, concat on -1.
     Returns tensor with shape (B, H_q, padded_users, D_global)."""
@@ -170,7 +177,7 @@ def _paged_sdpa_decode_golden(
         k_chunks = (torch_k_cache,)
         v_chunks = (torch_v_cache,)
     per_chip = [
-        _paged_sdpa_decode_chip_attn(q, k, v, page_table, cur_pos, num_users, page_size)
+        _paged_sdpa_decode_chip_attn(q, k, v, page_table, cur_pos, num_users, page_size, sliding_window_size)
         for q, k, v in zip(q_chunks, k_chunks, v_chunks)
     ]
     out = torch.cat(per_chip, dim=-1)  # (B, H_q, num_users, D_global)
@@ -303,16 +310,27 @@ def run(
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(shape_a)
     torch_input_b = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_b)(shape_b)
     torch_input_c = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c)(shape_c)
-    torch_input_d = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_d)(shape_d)
-    torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_e)(shape_e)
+    # page_table and cur_pos are INT32 indices, not float values.  Generating them
+    # via float-random-then-cast collapses to mostly 0/-1 (degenerate goldens
+    # where cur_pos<0 short-circuits to zeros, masking real correctness).
+    # Derive proper ranges from the K-cache shape: dim 0 = num_pages, dim 2 = page_size.
+    _num_pages = int(shape_b[0]) if len(shape_b) >= 4 else 1
+    _page_size = int(shape_b[2]) if len(shape_b) >= 4 else 1
+    _seq_len_max = max(2, _num_pages * _page_size)
+    torch_input_d = torch.randint(0, max(_num_pages, 1), tuple(shape_d), dtype=torch.int32)
+    torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
 
     # Real paged-SDPA-decode golden. Per user u: gather K/V from page_table[u]
     # pages, trim to cur_pos[u]+1 positions, compute SDPA. Q/K_cache/V_cache are
     # Shard(-1) at runtime, so we slice on -1 and run per-chip then concat —
     # matching what mesh_tensor_to_torch reassembles.
     if len(shape_a) == 4:
-        _padded_users = ((shape_a[2] + 31) // 32) * 32
+        # ttnn paged_sdpa_decode returns logical shape (B, H_q, num_users, D);
+        # mesh_tensor_to_torch strips the tile-pad, so do not pad the golden.
         _, _factor = _paged_sdpa_input_shard_axis_and_factor(input_a_tensor_placement)
+        _sliding_window = kwargs.get("sliding_window_size")
+        if _sliding_window == "__ABSENT__":
+            _sliding_window = None
         torch_output_tensor = _paged_sdpa_decode_golden(
             torch_input_a,
             torch_input_b,
@@ -320,8 +338,9 @@ def run(
             torch_input_d,
             torch_input_e,
             num_users=shape_a[2],
-            padded_users=_padded_users,
+            padded_users=shape_a[2],
             factor=_factor,
+            sliding_window_size=_sliding_window,
         ).to(torch_input_a.dtype)
     else:
         torch_output_tensor = torch_input_a.clone()
@@ -479,8 +498,5 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Placeholder golden — see TODO in golden block. Real reference attention: separately tracked.
-    # Random int32 page-table and cur_pos values from float-cast inputs limit
-    # the achievable PCC; threshold reflects current best with real golden.
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.4)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]
