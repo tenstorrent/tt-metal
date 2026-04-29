@@ -165,24 +165,78 @@ across 32 layers × ~10 K-chunks × 1024 positions.** Per-coord
 3-bit Lloyd-Max on unit-Gaussian has ~14 dB SNR; tiny noise per
 coord, but every K read adds it.
 
-### `--bits 4` made it worse, not better (2026-04-29)
+### `--bits 4` made it worse, not better — root cause found (2026-04-29)
 
 Track A `--bits 4` on the same eval: **81.6 % top-1 / 93.6 % top-5**
-— *worse* than 3-bit. Expected the opposite (more centroids =
-less quantization noise).
+— *worse* than 3-bit (86.9 % / 97.1 %).
 
-| Track A (TQ FD) | Top-1 | Top-5 | per-pos at 1010 |
-|-----------------|------:|------:|----------------:|
-| `--bits 3`      | 86.9% | 97.1% | 87.2% top-1     |
-| `--bits 4`      | 81.6% | 93.6% | 81.8% top-1     |
+**Root cause: BFP4 storage cannot represent the 4-bit index range.**
+BFP4 has 1 sign bit + 3 mantissa bits per element with shared
+8-bit exponent per 16 elements. For non-negative integer indices
+0..N-1, only 8 distinct positive mantissas are representable per
+exponent block.
 
-The per-position trace shows 4-bit *starts* slightly better at
-pos 560 (86 vs 84 %) but degrades faster, ending much lower.
-This points to a **bug in the 4-bit codebook** (scale, dynamic
-range, or boundaries) rather than a fundamental TQ-algorithm
-property. Worth a separate investigation into
-`turbo_quant/codebook.py` — likely the Lloyd-Max centroid
-generation for `bits=4` has the wrong σ or boundary handling.
+Verified empirically (`/tmp/bfp4_indices_test.py`):
+```
+Test 1 (3-bit, indices 0-7):
+  unique recovered: [0, 1, 2, 3, 4, 5, 6, 7]   max_diff = 0   ✓
+Test 2 (4-bit, indices 0-15):
+  unique recovered: [0, 2, 4, 6, 8, 10, 12, 14]  max_diff = 1  ✗
+  row 0 original:   [0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15]
+  row 0 recovered:  [0, 0, 2, 4, 4, 4, 6, 8, 8, 8,10,12,12,12,14,14]
+Test 3 (4-bit, indices 0-15 via BFP8):
+  unique recovered: [0, 1, ..., 15]   max_diff = 0   ✓
+```
+
+So `--bits 4` builds a 16-level Lloyd-Max codebook but the BFP4
+cache erases half the distinctions; the kernel reads only 8
+distinct indices and gathers WRONG centroid values for the lost
+indices. This is strictly worse than 3-bit (which fits BFP4
+exactly with no information loss).
+
+**Implication for memory savings.** TQ's 0.75× memory ratio
+relies on BFP4 indices (0.5 byte/coord). 4-bit TQ requires BFP8
+storage (1 byte/coord) → memory parity with BFP8 baseline →
+no advantage. So **3-bit is the only TQ configuration that
+preserves the memory savings**. Higher-precision TQ would need
+either:
+  - non-BFP4 storage for indices (BFP8 / int8 / BF16) and
+    accept memory parity, or
+  - a different storage trick (e.g. pack two 4-bit indices into
+    one BFP8 byte — but TTNN doesn't currently expose 4-bit int).
+
+### TTNN-side precision points (2026-04-29 review)
+
+Where else could precision hide in the pipeline? Quick survey:
+
+1. **BFP4 index storage** — covered above. Hard limit at 3-bit.
+2. **BF16 norms (TILE-padded)** — current. BF16 has ~3 decimal
+   digits of precision; norm values are typically 5-15, fine.
+   Switching to BFP8 norms saved memory (0.75× → ~0.50× ratio
+   in earlier experiments) but added a ~0.5-1 pp accuracy cost.
+   The current default is BF16 norms.
+3. **Centroids in compute** — loaded as F32 compile-time
+   constants, gathered via BF16 cascade in the SFPU. The cascade
+   does N-1 BF16 add/multiply ops per coord; each accumulates
+   tiny BF16 rounding. Could be tightened by keeping the gather
+   in F32 until the final pack, but the gain is small for 8
+   levels.
+4. **Q × K^T** — BF16 inputs, F32 accumulator, BF16 output.
+   Standard SDPA path. Not the bottleneck.
+5. **Centroid × norm (Track B write path)** — BF16 × BF16 →
+   BF16, then BF16 → BFP4. BFP4 has wide dynamic range but only
+   3-bit mantissa. For typical centroid×norm values (e.g.
+   1.95 × 10 ≈ 19.5), BFP4 rounds to ~16 or 20 — that's where
+   Track B's −20 pp comes from on top of the TQ baseline.
+6. **K rotation matmul** — BF16; Π is orthogonal so condition
+   number is 1, no amplification of error.
+
+Of these, the only one that matters for **Track A at 3 bits** is
+#3 (compounding cascade error across 32 layers × many chunks
+× 1024 positions). That's the irreducible cost of doing the
+quantize/dequant inside the kernel at BF16. The fix would be
+F32 internal accumulation in the cascade — non-trivial kernel
+change.
 
 ### Open follow-ups
 
