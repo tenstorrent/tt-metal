@@ -1693,7 +1693,6 @@ class MLA1D(AbstractModule):
             program_config=cfg["flash_mla"]["program_config"],
             compute_kernel_config=cfg["flash_mla"]["compute_kernel_config"],
             memory_config=cfg["flash_mla"]["memory_config"],
-            mesh_coords=mesh_coords,
         )  # [1, num_heads, seq_len, kv_lora_rank], valid only on mesh_coords device
         ttnn.deallocate(tt_q)
 
@@ -2001,8 +2000,6 @@ class MLA1D(AbstractModule):
                     tt_q_chunk, [0, user_batch_idx, 0, 0], [1, user_batch_idx + 1, chunk_seq_len, tt_q_chunk.shape[3]]
                 )
 
-                logger.debug(f"tt_q_chunk->tt_q_user: {tt_q_chunk.shape}->{tt_q_user.shape}")
-                logger.debug(f"page_table.shape={page_table.shape}")
                 user_page_table = ttnn.slice(
                     page_table,
                     [user_batch_idx, 0],

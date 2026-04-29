@@ -16,14 +16,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-SDPAOperation::program_factory_t SDPAOperation::select_program_factory(
-    const SDPAParams& attrs, const SDPAInputs& /*tensor_args*/) {
-    if (attrs.mesh_coords.has_value()) {
-        return SDPAMeshWorkloadFactory{};
-    }
-    return SDPAProgramFactory{};
-}
-
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const bool use_mla = attrs.use_mla;
 
@@ -391,7 +383,6 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     // Legacy chunked prefill bakes chunk_start_idx-derived Sk/padding into compile-time
     // program geometry, so different offsets must not alias in the program cache.
     const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
-    auto program_factory = select_program_factory(attrs, tensors);
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
@@ -409,9 +400,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
         tensors.attn_mask,
         page_table_for_hash,
         tensors.attention_sink,
-        attrs.use_mla,
-        attrs.mesh_coords,
-        program_factory.index());
+        attrs.use_mla);
     return hash;
 }
 
@@ -513,8 +502,7 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -528,7 +516,6 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
-            .mesh_coords = mesh_coords,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

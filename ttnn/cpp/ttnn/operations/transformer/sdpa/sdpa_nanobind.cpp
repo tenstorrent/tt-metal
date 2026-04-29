@@ -11,13 +11,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/set.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -606,9 +604,6 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            mesh_coords (Set[MeshCoordinate], optional): If set, restrict op execution to the listed mesh
-                coordinates; other coords stay idle for this op. Defaults to `None` (run on all coords
-                hosting the inputs).
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -628,8 +623,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("mesh_coords").noconvert() = nb::none());
+        nb::arg("compute_kernel_config") = nb::none());
 
     const auto* const ring_distributed_doc =
         R"doc(
