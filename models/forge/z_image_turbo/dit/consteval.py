@@ -20,6 +20,7 @@ Transformation types:
 import math
 
 import torch
+
 import ttnn
 
 DRAM_MC = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)

@@ -8,8 +8,6 @@ Loads the model from HuggingFace, applies RoPE patching required for
 TT-MLIR compatibility, and provides a clean forward() interface.
 """
 
-import os
-import sys
 
 import torch
 import torch.nn as nn
@@ -27,12 +25,12 @@ EXTRA_DIM = (PADDED_HEADS - ORIGINAL_HEADS) * HEAD_DIM  # 256
 def _patch_rope_for_tt():
     """Patch diffusers to use real-valued RoPE (no complex tensors) and
     XLA-compatible sequence prep, unpatchify, and cumsum."""
+    from diffusers.models.attention_dispatch import dispatch_attention_fn
     from diffusers.models.transformers.transformer_z_image import (
         RopeEmbedder,
-        ZSingleStreamAttnProcessor,
         ZImageTransformer2DModel,
+        ZSingleStreamAttnProcessor,
     )
-    from diffusers.models.attention_dispatch import dispatch_attention_fn
 
     @staticmethod
     def _precompute_freqs_cis_real(dim, end, theta=256.0):

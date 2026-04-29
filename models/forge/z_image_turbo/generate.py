@@ -32,14 +32,14 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
-import ttnn
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-from transformers import AutoTokenizer
-
-from text_encoder.model_ttnn import TextEncoderTTNN
 from dit.model_ttnn import ZImageTransformerTTNN
+from text_encoder.model_ttnn import TextEncoderTTNN
+from transformers import AutoTokenizer
 from vae.model_ttnn import VaeDecoderTTNN
+
+import ttnn
 
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
 CAP_TOKENS = 128  # caption tokens (baked into compiled model)

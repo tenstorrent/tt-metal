@@ -23,10 +23,10 @@ import os
 import sys
 
 import torch
-import ttnn
-
 from dit import consteval  # run_const_evals, CONSTEVAL_MAP
 from dit import model_pt
+
+import ttnn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

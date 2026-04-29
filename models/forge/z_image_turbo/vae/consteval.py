@@ -7,7 +7,6 @@ Each function produces the same output as its original main_const_eval_N counter
 
 import ttnn
 
-
 DRAM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
 
 
