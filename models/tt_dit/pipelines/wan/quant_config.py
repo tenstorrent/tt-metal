@@ -115,9 +115,21 @@ class QuantConfig:
 
     @staticmethod
     def all_bf8_lofi() -> QuantConfig:
-        """All weights + activations bfloat8_b, LoFi compute, SDPA bf8 HiFi2."""
+        """All weights + activations bfloat8_b, LoFi compute, SDPA bf8 HiFi2.
+
+        self_attn_out keeps bf16 weights because the fused matmul+addcmul kernel
+        (dit_minimal_matmul_addcmul_fused) requires ternary inputs (residual,
+        gate) to match the weight tile format, and those are bf16 activations.
+        """
         lc = LinearQuantConfig(
             weight_dtype=ttnn.bfloat8_b,
+            activation_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc=False,
+        )
+        # self_attn_out: same compute config but bf16 weights (fused addcmul constraint)
+        lc_out = LinearQuantConfig(
+            weight_dtype=ttnn.bfloat16,
             activation_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc=False,
@@ -129,7 +141,7 @@ class QuantConfig:
         )
         return QuantConfig(
             self_attn_qkv=lc,
-            self_attn_out=lc,
+            self_attn_out=lc_out,
             cross_attn_q=lc,
             cross_attn_kv=lc,
             cross_attn_out=lc,

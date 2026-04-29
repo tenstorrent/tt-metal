@@ -185,6 +185,3 @@ def test_pipeline_inference(
                 break
             frames = run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, frames)
-
-
-B
