@@ -184,7 +184,7 @@ void kernel_main() {
         .receiver =
             {
                 get_named_compile_time_arg_val("rms_inv_mcast_data_receiver_semaphore_addr"),
-                get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb"),
+                get_named_compile_time_arg_val("input_rms_inv_cb"),
                 get_named_compile_time_arg_val("rms_inv_mcast_dst_num_pages"),
             },
     };
@@ -828,8 +828,10 @@ void kernel_main() {
 
     // RMSInverse mcast sender args (input core mcasts 1/RMS scalar to dkv matmul cores)
     // Uses same grid and sender semaphore as first mcast; new receiver semaphore.
-    constexpr uint32_t rms_inv_mcast_src_cb = get_named_compile_time_arg_val("raw_input_rms_inv_output_cb");
-    constexpr uint32_t rms_inv_mcast_dst_cb = get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb");
+    // Source and destination are the same CB: the sender writes the scalar to its
+    // own L1 (front-half RMSInverse) and the mcast loops back to that same address
+    // on every receiver core.
+    constexpr uint32_t rms_inv_mcast_cb = get_named_compile_time_arg_val("input_rms_inv_cb");
     deepseek_b1_ops::Mcast::DMArgs rms_inv_mcast_args{
         .sender =
             {
@@ -840,10 +842,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
                 get_named_compile_time_arg_val("rms_inv_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("rms_inv_mcast_data_size_bytes"),
-                rms_inv_mcast_src_cb,
+                rms_inv_mcast_cb,
                 get_named_compile_time_arg_val("rms_inv_mcast_src_num_pages"),
-                get_read_ptr(rms_inv_mcast_src_cb),
-                get_write_ptr(rms_inv_mcast_dst_cb),
+                get_read_ptr(rms_inv_mcast_cb),
+                get_write_ptr(rms_inv_mcast_cb),
             },
         .receiver = {},
     };
@@ -1121,7 +1123,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("raw_input_rms_inv_output_cb")>;
+        get_named_compile_time_arg_val("input_rms_inv_cb")>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // Raw-input RMSInverse compute args (runs on input core; reuses rmsnorm1 epsilon/scalar)
@@ -1232,7 +1234,7 @@ void kernel_main() {
     // Two flavors: knope cores run a plain matmul; krope cores run the same
     // matmul with the deepseek-private CUSTOM_SFPU activation fused in, which
     // multiplies the matmul output by the mcasted 1/RMS scalar from
-    // raw_input_rms_inv_dst_cb (replaces the standalone RMSApply pass).
+    // input_rms_inv_cb (replaces the standalone RMSApply pass).
     using DKV_MatmulCTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("dkv_matmul_out_w_per_core")>;
     using DKV_MatmulApplyRMSCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
@@ -1240,7 +1242,7 @@ void kernel_main() {
         /*transpose=*/false,
         (uint32_t)FusedActivation::CUSTOM_SFPU,
         /*approx_mode=*/false,
-        get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb")>;
+        get_named_compile_time_arg_val("input_rms_inv_cb")>;
 
     // DKV Matmul compute args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Matmul::ComputeArgs dkv_matmul_args{
@@ -2365,7 +2367,7 @@ void kernel_main() {
 
         // ====================================================================
         // Raw-input RMSInverse: input core computes 1/RMS of the raw input it
-        // just mcast and stores the scalar in raw_input_rms_inv_output_cb.
+        // just mcast and stores the scalar in input_rms_inv_cb.
         // The inverse is NOT applied here — it is reserved for downstream use.
         // pop_input=true frees rmsnorm_input_cb for the next iteration.
         // ====================================================================
@@ -2379,8 +2381,8 @@ void kernel_main() {
         // RMSInverse mcast: input core broadcasts the 1/RMS scalar tile to
         // every dkv matmul core. Reuses the main mcast grid + sender semaphore;
         // a dedicated receiver semaphore separates this handshake from the raw
-        // input mcast. pop_src=true frees raw_input_rms_inv_output_cb after the
-        // bytes are dispatched.
+        // input mcast. pop_src=true frees input_rms_inv_cb on the sender after
+        // the bytes are dispatched.
         // ====================================================================
         {
             DeviceZoneScopedN("RMS_INV_MCAST");
@@ -2529,7 +2531,7 @@ void kernel_main() {
                 // Split by sub-grid: knope cores run a plain matmul (their output is
                 // gathered + rmsnorm'd downstream); krope cores run a matmul with the
                 // CUSTOM_SFPU activation fused in, scaling the output by 1/RMS from
-                // raw_input_rms_inv_dst_cb so krope can read pre-normalized values.
+                // input_rms_inv_cb so krope can read pre-normalized values.
                 // ================================================================
                 {
                     DeviceZoneScopedN("DKV_MATMUL");
