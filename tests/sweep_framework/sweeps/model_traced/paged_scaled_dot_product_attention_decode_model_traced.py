@@ -223,12 +223,24 @@ def run(
         shape_d = input_a_shape.get("input_d")
         shape_e = input_a_shape.get("input_e")
     else:
-        # Fallback for sample configurations
+        # V2 vectors store separate input_b_shape/input_c_shape/etc. columns;
+        # pull them from kwargs when present, falling back to shape_a only
+        # when V2 didn't provide a per-tensor shape (e.g., sample suite).
         if isinstance(input_a_shape, (tuple, list)):
-            shape = tuple(input_a_shape)
+            shape_a = tuple(input_a_shape)
         else:
-            shape = input_a_shape
-        shape_a = shape_b = shape_c = shape_d = shape_e = shape
+            shape_a = input_a_shape
+
+        def _shape_from_kwargs(k, default):
+            v = kwargs.get(k)
+            if v is None or v == "__ABSENT__":
+                return default
+            return tuple(v) if isinstance(v, (list, tuple)) else v
+
+        shape_b = _shape_from_kwargs("input_b_shape", shape_a)
+        shape_c = _shape_from_kwargs("input_c_shape", shape_b)
+        shape_d = _shape_from_kwargs("input_d_shape", shape_a)
+        shape_e = _shape_from_kwargs("input_e_shape", shape_a)
 
     # Use provided params directly - these are optional (None is fine if not in V2 JSON)
     dtype_a = input_a_dtype
@@ -268,6 +280,16 @@ def run(
     if dtype_d is None:
         dtype_d = ttnn.int32
 
+    # Extract attention_sink as a named tensor kwarg if present in V2 vector.
+    # The model's gpt-oss decode passes attention_sink=weights.decode_sinks;
+    # the master trace records it as a sharded tensor (placement Shard(-2)).
+    sink_info = extract_named_tensor_kwargs(kwargs, "attention_sink")
+    sink_shape = sink_info.get("shape") if sink_info else None
+    sink_dtype = sink_info.get("dtype") if sink_info else None
+    sink_layout = sink_info.get("layout") if sink_info else ttnn.TILE_LAYOUT
+    sink_mem_config = sink_info.get("memory_config") if sink_info else None
+    sink_placement = sink_info.get("tensor_placement") if sink_info else None
+
     layout_a = input_a_layout
     layout_b = input_b_layout
     layout_c = input_c_layout
@@ -305,10 +327,33 @@ def run(
         torch_output_tensor = torch_input_a.clone()
 
     # Convert to TTNN tensors
+    def _is_sharded_memory_config(mc):
+        if mc is None:
+            return False
+        try:
+            return getattr(mc, "is_sharded", lambda: False)()
+        except Exception:
+            return False
+
     if is_mesh_device and input_a_tensor_placement:
-        tensor_a = create_tensor_on_mesh(
-            torch_input_a, device, dtype_a, layout_a, mem_config_a, input_a_tensor_placement
-        )
+        # When the destination memory_config is sharded, ttnn.from_torch
+        # promotes the per-chip logical shape to the shard height (e.g. 8 -> 32).
+        # The master trace records the production logical shape (8), so we
+        # create the tensor in DRAM first and then to_memory_config into the
+        # sharded L1 layout to preserve the logical shape.
+        if _is_sharded_memory_config(mem_config_a):
+            tensor_a_dram = create_tensor_on_mesh(
+                torch_input_a, device, dtype_a, layout_a, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+            )
+            tensor_a = ttnn.to_memory_config(tensor_a_dram, mem_config_a)
+            try:
+                tensor_a_dram.deallocate(True)
+            except Exception:
+                pass
+        else:
+            tensor_a = create_tensor_on_mesh(
+                torch_input_a, device, dtype_a, layout_a, mem_config_a, input_a_tensor_placement
+            )
         tensor_b = create_tensor_on_mesh(
             torch_input_b, device, dtype_b, layout_b, mem_config_b, input_b_tensor_placement
         )
@@ -380,6 +425,49 @@ def run(
     is_causal = op_kwargs.pop("is_causal", None)
     if is_causal is not None:
         op_kwargs["is_causal"] = is_causal
+
+    # Pass sliding_window_size even when None — master records it whenever the
+    # model explicitly passed it (gpt-oss decode does, with config.sliding_window
+    # potentially being None). build_op_kwargs strips None values, so use
+    # __absent_keys__ to disambiguate "explicit None" from "key absent".
+    absent_keys = kwargs.get("__absent_keys__", set())
+    if "sliding_window_size" not in absent_keys and "sliding_window_size" in kwargs:
+        op_kwargs["sliding_window_size"] = kwargs.get("sliding_window_size")
+
+    # Inject the attention_sink tensor when V2 specifies it. Master records the
+    # sink as a separate kwarg with its own placement; we mirror that here.
+    sink_tensor = None
+    if sink_shape is not None:
+        torch_sink = gen_func_with_cast_tt(
+            partial(torch_random, low=-1, high=1, dtype=torch.float32),
+            sink_dtype if sink_dtype is not None else ttnn.bfloat16,
+        )(tuple(sink_shape))
+        if is_mesh_device and sink_placement:
+            sink_tensor = create_tensor_on_mesh(
+                torch_sink,
+                device,
+                sink_dtype if sink_dtype is not None else ttnn.bfloat16,
+                sink_layout if sink_layout is not None else ttnn.TILE_LAYOUT,
+                sink_mem_config,
+                sink_placement,
+            )
+        else:
+            sink_tensor = ttnn.from_torch(
+                torch_sink,
+                dtype=sink_dtype if sink_dtype is not None else ttnn.bfloat16,
+                layout=sink_layout if sink_layout is not None else ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=sink_mem_config,
+            )
+        op_kwargs["attention_sink"] = sink_tensor
+
+    # Pass memory_config from V2 vector when present (master records it).
+    v2_memory_config = kwargs.get("memory_config")
+    if v2_memory_config is not None and v2_memory_config != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        op_kwargs.setdefault("memory_config", parse_dict_value("memory_config", v2_memory_config))
+
     output_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q
         tensor_b,  # K

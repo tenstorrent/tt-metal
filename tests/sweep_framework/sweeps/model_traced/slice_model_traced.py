@@ -130,10 +130,16 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    use_named_kwargs = "starts" in kwargs or "ends" in kwargs
-    slice_start = kwargs.get("starts", None) or arg1 or [0] * len(shape)
-    slice_end = kwargs.get("ends", None) or arg2
-    slice_step = kwargs.get("steps", None) or arg3 or [1] * len(shape)
+    # Track which call style the master vector used so the trace matches.
+    starts_kw = kwargs.get("starts")
+    ends_kw = kwargs.get("ends")
+    steps_kw = kwargs.get("steps")
+    use_named_kwargs = starts_kw is not None or ends_kw is not None
+    has_explicit_step = (steps_kw is not None) or (arg3 is not None)
+
+    slice_start = starts_kw if starts_kw is not None else (arg1 if arg1 is not None else [0] * len(shape))
+    slice_end = ends_kw if ends_kw is not None else arg2
+    slice_step = steps_kw if steps_kw is not None else (arg3 if arg3 is not None else [1] * len(shape))
 
     if not slice_end:
         slice_end = list(shape)
@@ -182,17 +188,15 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    has_explicit_steps = "steps" in kwargs or arg3 is not None
-    is_default_steps = all(s == 1 for s in slice_step)
     if use_named_kwargs:
-        if has_explicit_steps or not is_default_steps:
+        if has_explicit_step:
             output_tensor = ttnn.slice(
                 input_tensor_a, starts=slice_start, ends=slice_end, steps=slice_step, **op_kwargs
             )
         else:
             output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, **op_kwargs)
     else:
-        if has_explicit_steps or not is_default_steps:
+        if has_explicit_step:
             output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
         else:
             output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)

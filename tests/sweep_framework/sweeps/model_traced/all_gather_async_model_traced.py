@@ -383,21 +383,24 @@ def run(
         shard_dims = _parse_shard_dims_from_placement(input_a_tensor_placement) if is_2d_mesh else None
 
         if shard_dims is not None:
-            # Build a global tensor whose shape accounts for sharding on
-            # ALL mesh axes.  input_shape is the per-device shape, so each
-            # sharded dim must be scaled by the number of devices on that axis.
+            # V2 vectors store input_shape as the *global* pre-shard tensor
+            # shape; from_torch + ShardTensor2dMesh then carves it into
+            # per-shard chunks. Master records the per-shard shape, so the
+            # sweep tensor's `tensor.shape` after sharding must match
+            # input_shape / mesh_shape on each sharded axis. Use input_shape
+            # directly as the global tensor — do NOT scale by mesh size.
             global_shape = list(input_shape)
+            torch_global = torch.rand(global_shape).bfloat16()
+
+            # Per-device size on each sharded axis (used for golden slicing).
+            per_dev_sizes = {}
             for axis_idx, sd in enumerate(shard_dims):
                 if sd is not None:
                     esd = sd if sd >= 0 else len(input_shape) + sd
-                    global_shape[esd] *= mesh_shape[axis_idx]
-
-            torch_global = torch.rand(global_shape).bfloat16()
+                    per_dev_sizes[esd] = global_shape[esd] // mesh_shape[axis_idx]
 
             # Golden reference for device 0 after all_gather:
-            # The op concatenates per-device chunks along `dim` (effective_dim),
-            # which may differ from the shard dimension on cluster_axis.
-            # Extract device-0's row/column of chunks and concat along `dim`.
+            # Concatenates the cluster's per-device chunks along `dim`.
             cluster_size = mesh_shape[cluster_axis]
             chunks = []
             for i in range(cluster_size):
@@ -405,11 +408,10 @@ def run(
                 for axis_idx, sd in enumerate(shard_dims):
                     if sd is not None:
                         esd = sd if sd >= 0 else len(input_shape) + sd
-                        size = input_shape[esd]
+                        size = per_dev_sizes[esd]
                         if axis_idx == cluster_axis:
                             slices[esd] = slice(i * size, (i + 1) * size)
                         else:
-                            # Device 0's slice on non-gathered axes
                             slices[esd] = slice(0, size)
                 chunks.append(torch_global[tuple(slices)])
 
@@ -519,15 +521,18 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
+                        # Match gpt_oss/config.py call style — kwarg-only.
+                        # Master trace records dim and mesh_device as kwargs and
+                        # has no arg1/arg2.
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
-                            None,  # persistent_output_buffer
-                            dim,
+                            dim=dim,
                             multi_device_global_semaphore=ccl_semaphore_handles[i],
                             num_links=num_links,
                             memory_config=output_memory_config,
                             topology=topology,
                             cluster_axis=cluster_axis,
+                            mesh_device=device,
                         )
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(

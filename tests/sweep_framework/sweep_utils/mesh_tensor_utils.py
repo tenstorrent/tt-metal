@@ -282,19 +282,40 @@ def replicate_with_topology(
     import ast as _ast
     import re
 
-    # Create tensor directly with the target layout.
-    # Note: For TILE_LAYOUT mesh tensors, logical_shape() may return tile-padded
-    # dimensions (e.g. 8→32). This is handled by normalization in
-    # validate_sweep_trace.py rather than working around it here, because the
-    # ROW_MAJOR→TILE_LAYOUT approach breaks some ops (e.g. SDPA).
-    tensor = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=layout,
-        device=mesh_device,
-        memory_config=memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    # Create tensor with target layout. When memory_config is sharded, going
+    # straight to from_torch tile-pads logical_shape to match the shard height
+    # (e.g. 8 -> 32), mismatching master where the production tensor preserved
+    # logical shape. Create in DRAM first, then to_memory_config preserves it.
+    def _is_sharded(mc):
+        if mc is None:
+            return False
+        try:
+            return getattr(mc, "is_sharded", lambda: False)()
+        except Exception:
+            return False
+
+    if _is_sharded(memory_config):
+        tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        try:
+            tensor = ttnn.to_memory_config(tensor, memory_config)
+        except Exception:
+            pass
+    else:
+        tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     if tensor_placement:
         placement_raw = tensor_placement.get("placement", "")
@@ -430,15 +451,39 @@ def create_tensor_on_mesh(
     else:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
-    # Create tensor on mesh
-    result = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=layout,
-        device=mesh_device,
-        memory_config=memory_config,
-        mesh_mapper=mesh_mapper,
-    )
+    # Create tensor on mesh. When memory_config is sharded, route via DRAM
+    # then to_memory_config to preserve logical shape (avoid tile-pad to shard
+    # height).
+    def _ctom_is_sharded(mc):
+        if mc is None:
+            return False
+        try:
+            return getattr(mc, "is_sharded", lambda: False)()
+        except Exception:
+            return False
+
+    if _ctom_is_sharded(memory_config):
+        result = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        try:
+            result = ttnn.to_memory_config(result, memory_config)
+        except Exception:
+            pass
+    else:
+        result = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=mesh_mapper,
+        )
 
     # Restore correct tensor topology from vector placement info.
     # The C++ factory methods may create a topology that doesn't match the

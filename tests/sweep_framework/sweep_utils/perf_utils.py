@@ -129,7 +129,11 @@ def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Opt
     if "device" in test_vector:
         test_vector = {k: v for k, v in test_vector.items() if k != "device"}
     # Convert "__ABSENT__" sentinel values to None (missing columns in multi-config suites)
+    # Track which keys were originally absent so sweeps can distinguish "master had key: None"
+    # from "master never passed key" — needed to match master trace when an op kwarg was None.
+    absent_keys = {k for k, v in test_vector.items() if v == "__ABSENT__"}
     test_vector = {k: (None if v == "__ABSENT__" else v) for k, v in test_vector.items()}
+    test_vector["__absent_keys__"] = absent_keys
     results = test_module.run(**test_vector, device=device)
     if isinstance(results, list):
         status, message = results[0]

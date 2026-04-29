@@ -420,9 +420,11 @@ def run(
             linear_kwargs["program_config"] = program_config
 
         # Pass compute_kernel_config even when None — the master trace records it
-        # when the model explicitly passed it (including None).
-        raw_ckc = kwargs.get("compute_kernel_config", "__ABSENT__")
-        if raw_ckc != "__ABSENT__":
+        # when the model explicitly passed it (including None). Use __absent_keys__
+        # (injected by execute_test) to distinguish "master had ckc=None" from
+        # "master never passed ckc". Falls back to value-based check for older callers.
+        absent_keys = kwargs.get("__absent_keys__", set())
+        if "compute_kernel_config" not in absent_keys:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
         elif compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
