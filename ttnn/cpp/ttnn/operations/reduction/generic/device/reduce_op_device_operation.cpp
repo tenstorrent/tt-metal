@@ -64,30 +64,30 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "Input shard grid {} must be contained in program core grid {}",
             input_shard_grid,
             program_grid);
-        const uint32_t th = tensor_args.tensor_spec().tile().get_height();
-        const uint32_t tw = tensor_args.tensor_spec().tile().get_width();
+        const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
+        const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(
             in_shard.shape[0] > 0 && in_shard.shape[1] > 0,
             "Sharded reduce input: shard face shape must be positive, got [{}, {}]",
             in_shard.shape[0],
             in_shard.shape[1]);
         TT_FATAL(
-            in_shard.shape[0] % th == 0,
+            in_shard.shape[0] % tile_height == 0,
             "Sharded reduce input: shard_shape[0]={} must be tile-height-aligned ({} px per tile face row)",
             in_shard.shape[0],
-            th);
+            tile_height);
         TT_FATAL(
-            in_shard.shape[1] % tw == 0,
+            in_shard.shape[1] % tile_width == 0,
             "Sharded reduce input: shard_shape[1]={} must be tile-width-aligned ({} px per tile face col)",
             in_shard.shape[1],
-            tw);
+            tile_width);
     }
 
     if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        const auto& out_nd = *operation_attributes.output_mem_config.nd_shard_spec();
-        const auto& output_shard_grid = out_nd.grid;
-        const uint32_t oth = tensor_args.tensor_spec().tile().get_height();
-        const uint32_t otw = tensor_args.tensor_spec().tile().get_width();
+        const auto& output_nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
+        const auto& output_shard_grid = output_nd_shard_spec.grid;
+        const uint32_t output_tile_height = tensor_args.tensor_spec().tile().get_height();
+        const uint32_t output_tile_width = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(
             program_grid.contains(output_shard_grid),
             "Output shard grid {} must be contained in program core grid {}",
@@ -98,23 +98,23 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "Output shard grid {} must be contained in device grid {}",
             output_shard_grid,
             device_grid);
-        if (out_nd.shard_shape.rank() >= 2) {
+        if (output_nd_shard_spec.shard_shape.rank() >= 2) {
             TT_FATAL(
-                out_nd.shard_shape[-2] > 0 && out_nd.shard_shape[-1] > 0,
+                output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,
                 "ND sharded output: last-2 shard dims must be positive, got [..., {}, {}] (height/width in "
                 "shard_shape)",
-                out_nd.shard_shape[-2],
-                out_nd.shard_shape[-1]);
+                output_nd_shard_spec.shard_shape[-2],
+                output_nd_shard_spec.shard_shape[-1]);
             TT_FATAL(
-                out_nd.shard_shape[-2] % oth == 0,
+                output_nd_shard_spec.shard_shape[-2] % output_tile_height == 0,
                 "ND sharded output: shard_shape[-2]={} must be tile-height-aligned ({}) for tilized output",
-                out_nd.shard_shape[-2],
-                oth);
+                output_nd_shard_spec.shard_shape[-2],
+                output_tile_height);
             TT_FATAL(
-                out_nd.shard_shape[-1] % otw == 0,
+                output_nd_shard_spec.shard_shape[-1] % output_tile_width == 0,
                 "ND sharded output: shard_shape[-1]={} must be tile-width-aligned ({}) for tilized output",
-                out_nd.shard_shape[-1],
-                otw);
+                output_nd_shard_spec.shard_shape[-1],
+                output_tile_width);
         }
     }
 }
