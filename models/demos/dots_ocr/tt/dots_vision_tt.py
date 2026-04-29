@@ -18,7 +18,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -63,6 +62,29 @@ def _pad_seq_dim_ttnn(x: ttnn.Tensor, s: int, s_pad: int) -> ttnn.Tensor:
     out = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
     ttnn.deallocate(x)
     return out
+
+
+def _dots_ttnn_sdpa_program_config(mesh_device: Any, seq_len: int) -> ttnn.SDPAProgramConfig:
+    """Chunk sizes for :func:`ttnn.transformer.scaled_dot_product_attention` (must align to ``TILE_WIDTH``)."""
+    tile = int(getattr(ttnn, "TILE_SIZE", 32))
+
+    def _tile_round_down(n: int, cap: int) -> int:
+        m = min(cap, max(n, tile))
+        r = (m // tile) * tile
+        return max(tile, r)
+
+    grid = (8, 8)
+    if mesh_device is not None and hasattr(mesh_device, "compute_with_storage_grid_size"):
+        try:
+            grid = mesh_device.compute_with_storage_grid_size()
+        except Exception:
+            pass
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid,
+        q_chunk_size=_tile_round_down(seq_len, 128),
+        k_chunk_size=_tile_round_down(seq_len, 512),
+        exp_approx_mode=False,
+    )
 
 
 def _get_compute_cfg():
@@ -556,8 +578,8 @@ class DotsMlpTt(LightweightModule):
 
 class DotsAttnQkvprojTt(LightweightModule):
     """
-    TTNN QKV and output projections; RoPE apply and ``F.scaled_dot_product_attention`` run on
-    host PyTorch inside this module (TTNN in/out at the submodule boundary).
+    TTNN QKV and output projections; RoPE on device; attention via
+    :func:`ttnn.transformer.scaled_dot_product_attention` (additive mask); host round-trip only for activations.
     """
 
     def __init__(
@@ -750,18 +772,78 @@ class DotsAttnQkvprojTt(LightweightModule):
         # deallocating them frees the shared backing store and breaks later vision blocks.
 
         cu_1d = ttnn.to_torch(cu_seqlens).reshape(-1).to(torch.int32)
-        # Use additive float mask to avoid boolean-mask semantic differences across torch versions.
-        # 0.0 = allow, -inf = disallow.
-        attn_mask = torch.full((1, s, s), float("-inf"), dtype=torch.float32, device=q.device)
+        # Additive mask: 0 = allow; large negative = disallow (use -1e9 for TTNN SDPA tilization).
+        attn_mask = torch.full((1, s, s), -1e9, dtype=torch.float32, device=q.device)
         for b in range(1, cu_1d.numel()):
             a, z = int(cu_1d[b - 1].item()), int(cu_1d[b].item())
             attn_mask[..., a:z, a:z] = 0.0
         q1 = q.transpose(0, 1).unsqueeze(0)
         k1 = k.transpose(0, 1).unsqueeze(0)
         v1 = v.transpose(0, 1).unsqueeze(0)
-        m3 = attn_mask.unsqueeze(0)  # [1, 1, S, S] additive mask
-        o = F.scaled_dot_product_attention(q1, k1, v1, attn_mask=m3, dropout_p=0.0, is_causal=False, scale=self.scale)
-        o = o.squeeze(0).transpose(0, 1).reshape(s, d)
+        m3 = attn_mask.unsqueeze(0)  # [1, 1, S, S]
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh)
+        tt_Q = ttnn.from_torch(
+            q1.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        tt_K = ttnn.from_torch(
+            k1.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        tt_V = ttnn.from_torch(
+            v1.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        tt_mask = ttnn.from_torch(
+            m3,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        tt_Q = ttnn.to_memory_config(tt_Q, ttnn.DRAM_MEMORY_CONFIG)
+        tt_K = ttnn.to_memory_config(tt_K, ttnn.DRAM_MEMORY_CONFIG)
+        tt_V = ttnn.to_memory_config(tt_V, ttnn.DRAM_MEMORY_CONFIG)
+        tt_mask = ttnn.to_memory_config(tt_mask, ttnn.DRAM_MEMORY_CONFIG)
+
+        sdpa_ck = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        tt_o = ttnn.transformer.scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            is_causal=False,
+            attn_mask=tt_mask,
+            scale=self.scale,
+            program_config=_dots_ttnn_sdpa_program_config(self.mesh, s),
+            compute_kernel_config=sdpa_ck,
+        )
+        o_t = ttnn.to_torch(tt_o)
+        o_t = o_t[:, :, :s, :]
+        o = o_t.squeeze(0).transpose(0, 1).reshape(s, d)
+        ttnn.deallocate(tt_Q)
+        ttnn.deallocate(tt_K)
+        ttnn.deallocate(tt_V)
+        ttnn.deallocate(tt_mask)
+        ttnn.deallocate(tt_o)
         out_pad = _w128(s)
         if out_pad > s:
             o_full = o.new_zeros(out_pad, d)
@@ -1106,19 +1188,21 @@ class DotsVisionTransformerTT(LightweightModule):
         # ttnn.embedding currently requires BF16 weight tensors.
         rotary_pos_emb_full = ttnn.typecast(rotary_pos_emb_full, ttnn.bfloat16)
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh)
-        h_idx_tt = ttnn.as_tensor(
-            np.asarray(h_ids, dtype=np.uint32).reshape(1, -1),
+        h_row = torch.tensor(h_ids, dtype=torch.uint32).reshape(1, -1)
+        w_row = torch.tensor(w_ids, dtype=torch.uint32).reshape(1, -1)
+        h_idx_tt = ttnn.from_torch(
+            h_row,
             dtype=ttnn.uint32,
-            device=self.mesh,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
-        w_idx_tt = ttnn.as_tensor(
-            np.asarray(w_ids, dtype=np.uint32).reshape(1, -1),
+        w_idx_tt = ttnn.from_torch(
+            w_row,
             dtype=ttnn.uint32,
-            device=self.mesh,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
