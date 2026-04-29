@@ -22,6 +22,13 @@ Set `SP_TRACE_NMS=1` to close the NMS loop on device via the fused `ttnn.experim
 SP_TRACE_NMS=1 pytest -s -q models/experimental/superpoint/tests/test_superpoint.py::test_superpoint_benchmark
 ```
 
+## Sample Output
+
+Top-500 tt-nn keypoints overlaid on the resized (480×640) sample image.
+Circle radius is proportional to keypoint score.
+
+![tt-nn SuperPoint keypoints on the sample image](media/sample.png)
+
 ## Supported Hardware
 
 - Blackhole (p150a / p150b)
