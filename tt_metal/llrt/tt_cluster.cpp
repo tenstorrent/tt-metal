@@ -865,7 +865,23 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     // WatcherServer::init_devices() and set_internal_routing_info_for_ethernet_cores iterate all
     // chips; once a relay is dead this catch prevents uncaught exceptions from propagating to
     // test SetUp() and killing the test process.
+    //
+    // FIX NY (#42429): Before attempting the write, check relay_broken_chips_ — a tt-metal-level
+    // set updated whenever FIX NX catches a relay timeout.  UMD's write_to_non_mmio does NOT
+    // check relay_broken_ before entering its 5s polling loop, so without this guard every
+    // subsequent write_core() call for the same chip pays another full 5s UMD timeout.
+    // Example: set_internal_routing_info_for_ethernet_cores iterates 6 ETH channels on chip 4,
+    // each call blocks 5s → 30s serial stall → GHA 5-minute action timeout.  With this guard,
+    // all writes after the first failure are skipped immediately (zero cost).
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
+        // FIX NY: skip immediately if relay already known broken at tt-metal level.
+        if (this->relay_broken_chips_.count(chip_id)) {
+            log_debug(
+                tt::LogDevice,
+                "FIX NY: write_core(chip {}) skipped — relay already known broken.",
+                chip_id);
+            return;
+        }
         try {
             // DMA is MMIO-only (supports_dma_operations returns false for remote chips), so only
             // the write_to_device (non-MMIO) path is relevant here.
@@ -875,10 +891,13 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogDevice,
-                "FIX NX: write_core(chip {}) threw: {}. Marking relay broken.",
+                "FIX NX: write_core(chip {}) threw: {}. Marking relay broken (FIX NX+NY).",
                 chip_id,
                 e.what());
             this->driver_->mark_relay_broken(chip_id);
+            // FIX NY: also record in relay_broken_chips_ so subsequent write_core() calls for
+            // this chip are skipped immediately without paying another 5s UMD timeout.
+            this->relay_broken_chips_.insert(chip_id);
         }
     } else {
         if (this->supports_dma_operations(chip_id, sz_in_bytes)) {

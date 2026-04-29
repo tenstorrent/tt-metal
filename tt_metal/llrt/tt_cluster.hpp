@@ -491,6 +491,13 @@ private:
     // keep a local reference for init.
     const llrt::RunTimeOptions& rtoptions_;
     const tt_metal::Hal* hal_ = nullptr;
+
+    // FIX NY (#42429): Track non-MMIO chips whose relay is known broken at the tt-metal level.
+    // Once write_core() catches a relay timeout (FIX NX) for a chip, subsequent write_core()
+    // calls for that chip skip write_to_device entirely instead of paying another 5s UMD timeout.
+    // This prevents serial N×5s stalls when callers (set_internal_routing_info_for_ethernet_cores,
+    // WatcherServer::init_devices) iterate over ETH cores on a chip with a dead relay.
+    mutable std::unordered_set<ChipId> relay_broken_chips_;
 };
 
 }  // namespace tt
