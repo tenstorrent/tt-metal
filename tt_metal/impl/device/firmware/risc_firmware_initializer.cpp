@@ -1335,6 +1335,27 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                         // and concurrent topology discovery / dispatch fabric operations hang or crash.
                         cluster_.deassert_risc_reset_at_core(
                             tt_cxy_pair(id_and_cores.first, virtual_core), tt::umd::RiscType::ALL);
+                        // FIX PA: clear the ERISC dispatch launch flag after force-reset so that
+                        // erisc_app_still_running() correctly sees this core as idle on the next open.
+                        // Hardware reset (assert + deassert) halts the ERISC and restarts base UMD
+                        // firmware, but does NOT zero L1. The fw_launch_addr flag retains its non-zero
+                        // value from the previous dispatch session, causing every subsequent test open
+                        // to hit a spurious 500ms wait_until_cores_done timeout, re-trigger the
+                        // force-reset, and loop — leaving the test suite unable to make progress.
+                        // (Observed: run 25094103200, devices 0-3 stuck in perpetual 500ms stall.)
+                        // For MMIO devices: write goes directly via PCIe — no relay required.
+                        // For non-MMIO devices: caught below; best-effort (FIX AE handles relay).
+                        try {
+                            const std::vector<uint32_t> zero = {0};
+                            cluster_.write_core_immediate(
+                                id_and_cores.first,
+                                virtual_core,
+                                zero,
+                                get_active_erisc_launch_flag_addr());
+                        } catch (...) {
+                            // Best-effort: MMIO chips always succeed via PCIe;
+                            // non-MMIO chips with a dead relay may throw — acceptable.
+                        }
                     } catch (const std::exception& reset_err) {
                         log_warning(
                             tt::LogAlways,
