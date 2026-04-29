@@ -320,8 +320,8 @@ struct CoreSetup {
 };
 
 // Per-slot initialization data for a DFB tile-counter slot. wr_ptr and rd_ptr
-// always start at the same position — producer-STRIDED/BLOCKED at the per-slot
-// offset, consumer-BLOCKED at the sub-range base. The 4 DFB role combinations
+// always start at the same position — producer-STRIDED/ALL at the per-slot
+// offset, consumer-ALL at the sub-range base. The 4 DFB role combinations
 // differ only in how these fields are computed (see fill_dfb_slots callers).
 struct DfbSlotInit {
     uint8_t counter_id;
@@ -1241,9 +1241,9 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         // Reconstructing the host pointer is a widening cast, not a new allocation.
         // See docs/QUASAR_EMULATION.md §4.1 and IMPLEMENTATION_REPORT.md "Address Translation".
         uint8_t* base = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(base_addr));
-        // STRIDED: M = max(P, C); BLOCKED: M = P.
-        bool is_blocked = (cfg.cap == ::dfb::AccessPattern::BLOCKED);
-        uint32_t M = is_blocked ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
+        // STRIDED: M = max(P, C); ALL: M = P.
+        bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
+        uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
         uint32_t capacity = cfg.num_entries / M;
         core->init_dfb_sync(dfb_id, base, cfg.entry_size, cfg.num_entries, capacity);
 
@@ -1254,13 +1254,13 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         }
 
         // Initialize tile counters for this DFB.
-        // STRIDED: M TCs. BLOCKED DM-DM: P*C TCs. Counter IDs are spaced by
+        // STRIDED: M TCs. ALL DM-DM: P*C TCs. Counter IDs are spaced by
         // MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions.
         if (dfb_id >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
             throw std::out_of_range("dfb_id exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
         }
         uint8_t counter_base = static_cast<uint8_t>(dfb_id * tt_emule::MAX_TC_SLOTS_PER_DFB);
-        uint32_t num_tcs_to_init = is_blocked ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
+        uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
         for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
             auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
             tc.capacity = capacity;
@@ -1315,7 +1315,7 @@ static void setup_core_state(
 
 // ---------------------------------------------------------------------------
 // Populate tile-counter slot state on a single EmuleDFBInterface for one
-// (producer/consumer) × (STRIDED/BLOCKED) role.  Pulled out of launch_cores
+// (producer/consumer) × (STRIDED/ALL) role.  Pulled out of launch_cores
 // because the 4-case slot-init block dominated the parent function.
 // ---------------------------------------------------------------------------
 static void populate_dfb_interface_slots(
@@ -1333,8 +1333,8 @@ static void populate_dfb_interface_slots(
     } else {
         proc_bit = static_cast<uint16_t>(1u << proc_id);
     }
-    bool is_blocked = (cfg.cap == ::dfb::AccessPattern::BLOCKED);
-    uint32_t M = is_blocked ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
+    bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
+    uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
     uint32_t stride_size = M * cfg.entry_size;
     if (alloc.dfb_id >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
         return;
@@ -1358,8 +1358,8 @@ static void populate_dfb_interface_slots(
 
     if (is_producer) {
         uint8_t p = static_cast<uint8_t>(std::popcount(cfg.producer_risc_mask & (proc_bit - 1u)));
-        if (is_blocked) {
-            // BLOCKED DM-DM: producer broadcasts to all consumer TCs.
+        if (is_all) {
+            // ALL DM-DM: producer broadcasts to all consumer TCs.
             iface.broadcast_tc = true;
             iface.num_tcs_to_rr = static_cast<uint8_t>(cfg.num_consumers);
             iface.stride_size = cfg.entry_size;
@@ -1386,8 +1386,8 @@ static void populate_dfb_interface_slots(
         }
     } else {
         uint8_t c = static_cast<uint8_t>(std::popcount(cfg.consumer_risc_mask & (proc_bit - 1u)));
-        if (is_blocked) {
-            // BLOCKED DM-DM consumer: drain each producer's TC block fully.
+        if (is_all) {
+            // ALL DM-DM consumer: drain each producer's TC block fully.
             iface.num_tcs_to_rr = static_cast<uint8_t>(cfg.num_producers);
             iface.stride_size = cfg.entry_size;
             iface.drain_per_tc = true;
