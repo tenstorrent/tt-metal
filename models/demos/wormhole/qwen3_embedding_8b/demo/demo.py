@@ -640,7 +640,8 @@ def test_embedding_perf(
         clear_all_kv_caches(generator)
         generator.prev_page_table = None
 
-        profiler.start(f"inference_prefill_{i}")
+        # Use (step_name, iteration) so CI create_benchmark_data() can match iteration 0 to schema.
+        profiler.start("inference_prefill", i)
         result = run_embedding_prefill(
             generator,
             input_ids,
@@ -651,14 +652,18 @@ def test_embedding_perf(
             return_hidden_states=True,
             warmup_prefill=False,
         )
-        profiler.end(f"inference_prefill_{i}")
+        profiler.end("inference_prefill", i)
 
-        t = profiler.get_duration(f"inference_prefill_{i}")
+        t = profiler.get_duration("inference_prefill", i)
         iteration_times.append(t)
         logger.info(f"  Iteration {i}: {t * 1000:.1f}ms")
 
         if embeddings is None:
             embeddings = result
+
+    # Prefill-only embedding: no decode phase. CI benchmark helpers still expect this span.
+    profiler.start("inference_decode", 0)
+    profiler.end("inference_decode", 0)
 
     # ---- Compute metrics ----
     avg_prefill_time = sum(iteration_times) / len(iteration_times)
@@ -677,6 +682,11 @@ def test_embedding_perf(
         "embeddings/s_best": embeddings_per_sec_best,
         "prefill_t/s_avg": tokens_per_sec_avg,
         "prefill_t/s_best": tokens_per_sec_best,
+        # Keys required by create_benchmark_data() (LLM schema); embedding has no decode.
+        "prefill_t/s": tokens_per_sec_avg,
+        "prefill_time_to_token": avg_prefill_time,
+        "decode_t/s": 0.0,
+        "decode_t/s/u": 0.0,
         "build_model_time": profiler.get_duration("build_model"),
         "batch_size": batch_size,
         "data_parallel": data_parallel,
