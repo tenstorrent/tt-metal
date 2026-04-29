@@ -20,6 +20,7 @@ from infra.data_collection.github.workflows import (
 )
 from infra.data_collection import pydantic_models
 from infra.data_collection.pydantic_models import Step
+from infra.data_collection.pydantic_models import TtSmiReset
 
 
 def get_cicd_json_filename(pipeline):
@@ -60,11 +61,12 @@ def create_cicd_json_for_data_analysis(
     )
 
     github_job_id_to_smi_versions, github_job_id_to_smi_resets = get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, github_pipeline_id)
-
+    print("CHECK:", 72824250364 in github_job_id_to_smi_resets)
+    print("AVAILABLE KEYS:", list(github_job_id_to_smi_resets.keys())[:10])
     jobs = []
 
     for raw_job in raw_jobs:
-        github_job_id = raw_job["github_job_id"]
+        github_job_id = int(raw_job["github_job_id"])
 
         logger.info(f"Processing raw GitHub job {github_job_id}")
 
@@ -92,13 +94,14 @@ def create_cicd_json_for_data_analysis(
         # Remove 'steps' from raw_job to avoid double-passing of 'steps'
         raw_job = dict(raw_job)
         raw_job.pop("steps", None)
+        raw_job.pop("tt_smi_reset", None)
 
         job = pydantic_models.Job(
             **raw_job,
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
             tests=tests,
             steps=steps,
-            tt_smi_reset=github_job_id_to_smi_resets.get(github_job_id),
+            tt_smi_reset=TtSmiReset(**github_job_id_to_smi_resets.get(github_job_id)),
         )
         jobs.append(job)
 

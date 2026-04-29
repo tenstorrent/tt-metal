@@ -29,43 +29,103 @@ def search_for_tt_smi_version_in_log_file_(log_file):
     return None
 
 def search_for_tt_smi_reset_in_log_file_(log_file):
-    with open(log_file, "r") as log_f:
-        for line in log_f:
-            if '"tt_smi_reset"' in line:
-                try:
-                    # try parsing full JSON line
-                    json_obj = json.loads(line.strip())
-                    return json_obj.get("tt_smi_reset")
-                except Exception:
-                    continue
-    return None
+
+    def parse_ts(line):
+        try:
+            ts = line.split(" ")[0]
+            ts = ts.replace("z", "Z")  # normalize
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except:
+            return None
+
+    def strip_ansi(text):
+        return re.sub(r'\x1B[@-_][0-?]*[ -/]*[@-~]', '', text)
+
+    with open(log_file, "r") as f:
+        log = f.read()
+
+    log = strip_ansi(log)
+    lines = log.splitlines()
+
+    capturing = False
+    reset_lines = []
+
+    for line in lines:
+        line_clean = line.strip()
+        lower = line_clean.lower()
+
+        if "tt-smi reset" in lower:
+            capturing = True
+            logger.info(f"FOUND RESET LINE: {line_clean}")
+
+        if capturing:
+            reset_lines.append(line)
+
+        if capturing and "tt-smi reset was successful" in lower.replace(".", ""):
+            break
+
+    if not reset_lines:
+        return {
+            "final_status": "UNKNOWN",
+            "num_reset_attempts": None,
+            "num_reset_retries": None,
+            "total_reset_time_sec": None,
+            "error_summary": "No tt-smi reset found",
+        }
+
+    joined = "\n".join(reset_lines).lower()
+    if "tt-smi reset was successful" in joined:
+        ts_list = [parse_ts(l) for l in reset_lines if parse_ts(l)]
+
+        duration = None
+        if len(ts_list) >= 2:
+            duration = (ts_list[-1] - ts_list[0]).total_seconds()
+
+        return {
+            "final_status": "SUCCESS",
+            "num_reset_attempts": 1,
+            "num_reset_retries": 0,
+            "total_reset_time_sec": duration,
+            "error_summary": None,
+        }
+
+    return {
+        "final_status": "FAILURE",
+        "num_reset_attempts": None,
+        "num_reset_retries": None,
+        "total_reset_time_sec": None,
+        "error_summary": "Reset detected but not successful",
+    }
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
-    """
-    Read the job output log for the tt-smi version. The tt-smi version is printed in the
-    Set up runner step, where we call tt-smi-metal -s to dump the smi output.
-    The tt-smi version stored in the "host_sw_vers" dict is only available in
-    higher versions of tt-smi (3.0.4+). For older versions we will not be able to extract
-    the smi version directly from the smi output log dump.
-    See: https://github.com/tenstorrent/tt-metal/issues/19095
-    """
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
-
     log_files = logs_dir.glob("*.log")
 
     github_job_ids_to_tt_smi_versions = {}
     github_job_ids_to_tt_smi_resets = {}
+
     for log_file in log_files:
-        tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
-        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
         github_job_id = log_file.name.replace(".log", "")
         assert github_job_id.isnumeric(), f"{github_job_id}"
         github_job_id = int(github_job_id)
+
+        tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
         if tt_smi_version:
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
 
-        if tt_smi_reset:
-            github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
+        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
+
+        if tt_smi_reset is None:
+            tt_smi_reset = {
+                "final_status": "UNKNOWN",
+                "num_reset_attempts": None,
+                "num_reset_retries": None,
+                "total_reset_time_sec": None,
+                "error_summary": "Parsing failed",
+            }
+
+        github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
+
     return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
 
 
