@@ -1291,19 +1291,13 @@ def _serialize_optimizer_state(
 def _deserialize_optimizer_state(
     state: dict,
 ) -> dict:
-    """Inverse of ``_serialize_optimizer_state``.
-
-    Returns a plain Python dict whose tensor leaves have been rebuilt as bf16
-    ``ttml.autograd.Tensor``s but **without** wrapping them in
-    ``ttml.NamedParameters``. The wrapping (and slot-correct variant routing)
-    is what trips up ``optimizer.set_state_dict`` from Python, so callers
-    should use ``_apply_optimizer_state`` to install the result instead.
-    """
+    """Inverse of ``_serialize_optimizer_state``."""
     out = {}
     for key, value in state.items():
         if isinstance(value, dict) and "kind" in value:
             if value["kind"] == _OPT_KIND_NAMED_PARAMS:
-                out[key] = {k: _numpy_entry_to_tensor(v) for k, v in value["params"].items()}
+                rebuilt = {k: _numpy_entry_to_tensor(v) for k, v in value["params"].items()}
+                out[key] = ttml.NamedParameters(rebuilt)
             elif value["kind"] == _OPT_KIND_TENSOR:
                 out[key] = _numpy_entry_to_tensor(value["tensor"])
             else:
@@ -1311,92 +1305,6 @@ def _deserialize_optimizer_state(
         else:
             out[key] = value
     return out
-
-
-def _apply_optimizer_state(
-    optimizer: "ttml.optimizers.OptimizerBase",
-    deserialized: dict,
-) -> None:
-    """Install a deserialized optimizer state without using ``set_state_dict``.
-
-    Why we don't call ``set_state_dict`` from Python:
-      The C++ ``ValueType`` is a ``std::variant`` with both ``int`` and
-      ``size_t`` alternatives. ``AdamW::set_state_dict`` does
-      ``std::get<size_t>(dict["steps"])``, but when nanobind converts a Python
-      ``int`` back into the variant it picks the first int-like alternative
-      (``int``), so ``std::get<size_t>`` throws "wrong index for variant".
-      We sidestep this by:
-        1. Advancing ``m_steps`` (and the cached ``m_beta1_pow``/``m_beta2_pow``)
-           by calling ``optimizer.step()`` once per saved step. That branch
-           short-circuits the inner per-parameter update when no gradient has
-           been backwarded yet, so it just runs the three scalar increments
-           inside ``step()`` and leaves the moments at zero.
-        2. Mutating each moment tensor in place via ``assign()`` on the
-           ``ttml.autograd.Tensor`` aliased through ``get_state_dict()``. This
-           preserves the original tensor's mesh distribution (created via
-           ``core::zeros_like(parameter)`` so it's correctly replicated across
-           all chips in the DDP mesh) instead of replacing it with a freshly
-           ``from_numpy``'d tensor whose distribution we can't easily control.
-
-    This path is exercised in DDP (``mesh_shape: [32, 1]``) so we cannot afford
-    to swap moment tensors with non-replicated host-built ones — the metal
-    AdamW kernel would then read mismatched values per chip, which is exactly
-    the failure mode that produced loss divergence on the first attempt.
-    """
-    saved_steps = int(deserialized.get("steps", 0))
-
-    # 1) Advance optimizer's internal step counter / beta-powers without
-    #    touching the moment tensors. This relies on ``step()`` short-circuiting
-    #    its per-parameter loop when ``is_grad_initialized()`` is false, which
-    #    is true immediately after ``create_optimizer`` and before any backward.
-    if saved_steps > 0:
-        for _ in range(saved_steps):
-            optimizer.step()
-
-    # 2) Mutate the moment tensors in place. ``get_state_dict()`` returns
-    #    NamedParameters aliasing the optimizer's internal storage (same
-    #    shared_ptr<autograd::Tensor> on the C++ side), so ``assign()`` on
-    #    these handles propagates back into the optimizer.
-    fresh_state = optimizer.get_state_dict()
-
-    def _apply_named(target_key: str) -> int:
-        """Apply moments for a NamedParameters slot. Returns count applied."""
-        if target_key not in deserialized or target_key not in fresh_state:
-            return 0
-        target = fresh_state[target_key]
-        source = deserialized[target_key]  # dict[str, ttml.autograd.Tensor]
-        applied = 0
-        for name, restored_tensor in source.items():
-            if name not in target:
-                print(
-                    f"   - WARNING: optimizer slot '{target_key}' missing param '{name}'; "
-                    f"skipping (likely arch / config drift between save and resume)"
-                )
-                continue
-            target[name].assign(restored_tensor)
-            applied += 1
-        # Surface the inverse case too: optimizer params not present in the
-        # checkpoint are silently left at zero. That can happen if a new
-        # parameter was added since the checkpoint was written.
-        for name in target.keys():
-            if name not in source:
-                print(
-                    f"   - WARNING: optimizer slot '{target_key}' has param '{name}' not in "
-                    f"checkpoint; left at zero"
-                )
-        return applied
-
-    moments_applied = _apply_named("exp_avg")
-    _apply_named("exp_avg_sq")
-
-    saved_amsgrad = bool(deserialized.get("amsgrad", False))
-    if saved_amsgrad and "max_exp_avg_sq" in deserialized:
-        _apply_named("max_exp_avg_sq")
-
-    print(
-        f"   - Restored optimizer state: steps={saved_steps}, "
-        f"moments_applied={moments_applied}/{len(fresh_state.get('exp_avg', {}))}"
-    )
 
 
 def save_checkpoint(
@@ -2093,16 +2001,11 @@ def main():
         print(f"   - Learning rate: {optimizer.get_lr()}")
 
         # Restore optimizer state (Adam moments, step counter) from checkpoint
-        # so resume continues with bias-correct gradient statistics. We bypass
-        # ``optimizer.set_state_dict`` because the Python -> std::variant
-        # conversion routes the saved step counter into the wrong variant slot
-        # (see ``_apply_optimizer_state`` for the full explanation).
+        # so resume continues with bias-correct gradient statistics.
         if resume_optimizer_state is not None:
             try:
-                _apply_optimizer_state(
-                    optimizer,
-                    _deserialize_optimizer_state(resume_optimizer_state),
-                )
+                optimizer.set_state_dict(_deserialize_optimizer_state(resume_optimizer_state))
+                print("   - Restored optimizer state from checkpoint")
             except Exception as e:
                 print(f"   - WARNING: failed to restore optimizer state ({e}); continuing with fresh moments")
 
