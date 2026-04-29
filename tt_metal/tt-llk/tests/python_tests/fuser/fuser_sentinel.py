@@ -140,15 +140,6 @@ class FuserSentinel:
     def pack_dst_format(self) -> str:
         return self._fmt(self._pack_format.pack_dst)
 
-    def _unpack_changed(self, new: FormatConfig) -> bool:
-        old = self._unpack_format
-        return (
-            old.unpack_A_src != new.unpack_A_src
-            or old.unpack_A_dst != new.unpack_A_dst
-            or old.unpack_B_src != new.unpack_B_src
-            or old.unpack_B_dst != new.unpack_B_dst
-        )
-
     def hw_configure_unpack(
         self,
         config: "GlobalConfig",
@@ -225,38 +216,42 @@ class FuserSentinel:
             C++ reconfig call(s), or "" if formats match current state
         """
         new_fmt = self._compute_format_config(config, operation, compute_node)
+        old = self._unpack_format
 
-        if not self._unpack_changed(new_fmt):
+        srca_changed = (
+            old.unpack_A_src != new_fmt.unpack_A_src
+            or old.unpack_A_dst != new_fmt.unpack_A_dst
+        )
+        srcb_changed = (
+            old.unpack_B_src != new_fmt.unpack_B_src
+            or old.unpack_B_dst != new_fmt.unpack_B_dst
+        )
+
+        if not (srca_changed or srcb_changed):
             return ""
 
         dest_acc = config.dest_acc.cpp_enum_value
-        old = self._unpack_format
         code = ""
 
-        if (
-            old.unpack_A_src != new_fmt.unpack_A_src
-            or old.unpack_A_dst != new_fmt.unpack_A_dst
-        ):
+        if srca_changed:
             code += (
                 f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, false>(\n"
                 f"    {self._fmt(new_fmt.unpack_A_src)}, {self._fmt(new_fmt.unpack_A_dst)}, {compute_node.src_a.tile_size}\n"
                 f");\n"
             )
 
-        srcb_tile_size = (
-            compute_node.src_a.tile_size
-            if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-            else (compute_node.src_b.tile_size if compute_node.src_b else None)
-        )
-        if srcb_tile_size is not None and (
-            old.unpack_B_src != new_fmt.unpack_B_src
-            or old.unpack_B_dst != new_fmt.unpack_B_dst
-        ):
-            code += (
-                f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
-                f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}, {srcb_tile_size}\n"
-                f");\n"
+        if srcb_changed:
+            srcb_tile_size = (
+                compute_node.src_a.tile_size
+                if compute_node.reuse_dest is EltwiseBinaryReuseDestType.DEST_TO_SRCA
+                else (compute_node.src_b.tile_size if compute_node.src_b else None)
             )
+            if srcb_tile_size is not None:
+                code += (
+                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
+                    f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}, {srcb_tile_size}\n"
+                    f");\n"
+                )
 
         self._unpack_format = new_fmt
         return code
