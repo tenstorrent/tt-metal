@@ -173,7 +173,7 @@ def _make_sdpa_compute_config(arch, sc: SDPAQuantConfig):
 
 def _apply_linear_config(linear, lc: LinearQuantConfig, arch, name: str) -> None:
     """Apply quantization + compute config to a single linear layer."""
-    if lc.weight_dtype != ttnn.bfloat16:
+    if lc.weight_dtype != ttnn.bfloat16 and linear.weight._data is not None:
         _quantize_weight(linear.weight, lc.weight_dtype)
         if hasattr(linear, "bias") and linear.bias is not None:
             _quantize_weight(linear.bias, lc.weight_dtype)
@@ -188,14 +188,17 @@ def _apply_linear_config(linear, lc: LinearQuantConfig, arch, name: str) -> None
 
 
 def apply_quant_config(model, config: QuantConfig) -> None:
-    """Apply quantization config to a WanTransformer3DModel after weight loading.
+    """Apply quantization config to a WanTransformer3DModel.
 
-    Modifies the model in-place:
-    - Typecasts weight parameters to the configured dtype
-    - Replaces compute_config on each linear layer
-    - Replaces mm_compute_kernel_config on attention blocks
-    - Replaces ff_compute_kernel_config on transformer blocks
-    - Replaces sdpa_compute_kernel_config on self-attention
+    Safe to call whether or not weights are currently loaded. When weights are
+    loaded (``_data is not None``), typecasts them to the configured dtype.
+    Compute configs are always applied (they are module attributes, not weight
+    data).
+
+    With ``dynamic_load=True`` the pipeline evicts transformer weights between
+    uses.  In that case, call this function again after each reload so the
+    freshly-loaded weights get quantized.  See ``set_quant_config`` for a
+    convenience wrapper that patches ``_prepare_transformer`` automatically.
 
     Wan-specific attribute mapping:
     - Self-attn QKV matmuls: block.attn1.mm_compute_kernel_config
@@ -266,3 +269,33 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
         f"fidelity={config.ring_sdpa.math_fidelity}, fp32_acc={config.ring_sdpa.fp32_dest_acc}"
     )
+
+
+def set_quant_config(pipeline, config: QuantConfig) -> None:
+    """Install a quantization config on a WanPipeline.
+
+    Patches ``pipeline._prepare_transformer`` so that ``apply_quant_config``
+    runs automatically after every weight load (including dynamic reloads).
+    This is necessary because ``dynamic_load=True`` evicts and reloads
+    transformer weights from cache, which would overwrite any earlier
+    typecast.
+
+    Also applies compute configs immediately (safe even if weights are
+    currently evicted).
+    """
+    # Apply compute configs now (these survive eviction since they are
+    # module attributes, not Parameter data).
+    for state in pipeline.transformer_states:
+        apply_quant_config(state.model, config)
+
+    # Patch _prepare_transformer to re-apply weight typecast after each reload.
+    original_prepare = pipeline._prepare_transformer
+
+    def _prepare_with_quant(idx: int):
+        was_loaded = pipeline.transformer_states[idx].model.is_loaded()
+        original_prepare(idx)
+        if not was_loaded:
+            # Weights were just loaded from cache — typecast them.
+            apply_quant_config(pipeline.transformer_states[idx].model, config)
+
+    pipeline._prepare_transformer = _prepare_with_quant

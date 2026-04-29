@@ -13,7 +13,7 @@ from PIL import Image
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
-from models.tt_dit.pipelines.wan.quant_config import QuantConfig, apply_quant_config
+from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 
 from ....utils.test import line_params, ring_params
@@ -99,8 +99,7 @@ def test_pipeline_inference(
 
     if quant_config_name is not None:
         qc = getattr(QuantConfig, quant_config_name)()
-        apply_quant_config(pipeline.transformer, qc)
-        apply_quant_config(pipeline.transformer_2, qc)
+        set_quant_config(pipeline, qc)
 
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 
@@ -148,7 +147,7 @@ def test_pipeline_inference(
 
         return frames
 
-    def check_output_with_clip(prompt, frames):
+    def check_output_with_clip(prompt, frames, clip_threshold=36.0):
         if int(ttnn.distributed_context_get_rank()) == 0:
             # Sample ~8 evenly-spaced frames from the video
             total_frames = frames.shape[0]
@@ -169,8 +168,8 @@ def test_pipeline_inference(
             clip_mean = sum(scores) / len(scores)
             logger.info(f"CLIP scores: min={clip_min:.2f}, max={clip_max:.2f}, mean={clip_mean:.2f}")
 
-            assert clip_mean >= 24.0, (
-                f"Mean CLIP score {clip_mean:.2f} is below threshold 24.0. "
+            assert clip_mean >= clip_threshold, (
+                f"Mean CLIP score {clip_mean:.2f} is below threshold {clip_threshold:.2f}. "
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
@@ -186,3 +185,6 @@ def test_pipeline_inference(
                 break
             frames = run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, frames)
+
+
+B
