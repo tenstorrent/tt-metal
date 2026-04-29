@@ -80,6 +80,56 @@ def _env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).lower() in ("1", "true", "yes", "on")
 
 
+def _is_fixed_b1s512_case(
+    *,
+    batch_size: int,
+    runtime: dict,
+    tt_data_parallel: int,
+    seq_len: int,
+    max_seq_len: int,
+) -> bool:
+    return (
+        batch_size == 1
+        and tt_data_parallel == 1
+        and runtime.get("local_data_parallel", 1) == 1
+        and int(seq_len) == 512
+        and int(max_seq_len) == 512
+    )
+
+
+def _maybe_enable_async_slow_dispatch(mesh_device, enable: bool) -> bool:
+    """
+    Enable async slow dispatch when requested and return whether we need to restore it.
+    """
+    if not enable:
+        return False
+    try:
+        already_enabled = bool(ttnn.device.is_asynchronous_slow_dispatch_enabled(mesh_device))
+    except Exception as e:
+        logger.warning(f"Unable to query async slow dispatch state: {e}. Continuing without async.")
+        return False
+    if already_enabled:
+        logger.info("Async slow dispatch already enabled on mesh device; keeping current state.")
+        return False
+    try:
+        ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+        logger.info("Auto-enabled async slow dispatch for this benchmark run.")
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to enable async slow dispatch: {e}. Continuing in synchronous mode.")
+        return False
+
+
+def _maybe_restore_async_slow_dispatch(mesh_device, restore_needed: bool) -> None:
+    if not restore_needed:
+        return
+    try:
+        ttnn.disable_asynchronous_slow_dispatch(mesh_device)
+        logger.info("Restored synchronous slow dispatch mode after benchmark run.")
+    except Exception as e:
+        logger.warning(f"Failed to restore async slow dispatch state: {e}")
+
+
 def load_input_texts(input_file, batch_size):
     """Load input texts from a JSON file or generate synthetic ones."""
     if input_file and os.path.exists(input_file):
@@ -256,6 +306,45 @@ def _to_ttnn_ids(ids: torch.Tensor, mesh_device, dtype=ttnn.uint32) -> ttnn.Tens
     )
 
 
+def _to_ttnn_additive_attention_mask(
+    additive_mask: torch.Tensor,
+    mesh_device,
+    dtype: ttnn.DataType,
+) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        additive_mask.to(torch.bfloat16),
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def build_position_ids(input_ids: torch.Tensor, pad_token_id: int) -> torch.Tensor:
+    """
+    XLM-RoBERTa-compatible padding-aware position IDs.
+
+    This mirrors ``BgeM3PerformantRunner.build_position_ids`` in ``demo.py`` and the on-device
+    ``BgeM3Model.create_position_ids_from_input_ids`` path.
+    """
+    mask = (input_ids != int(pad_token_id)).to(torch.int64)
+    incremental_indices = torch.cumsum(mask, dim=1) * mask
+    return (incremental_indices + int(pad_token_id)).to(torch.int64)
+
+
+def build_additive_attention_mask(attention_mask: torch.Tensor, seq_len: int) -> torch.Tensor:
+    """
+    Build a rank-4 additive mask for SDPA from a HF ``{0, 1}`` 2-D mask.
+
+    The additive-mask formula mirrors ``BgeM3PerformantRunner.build_additive_attention_mask`` in
+    ``demo.py``. We expand to ``[B, 1, S, S]`` on host so the measured TT forward does not run the
+    device-side rank-4 expansion.
+    """
+    keep = attention_mask.to(torch.bfloat16)
+    additive = (1.0 - keep) * -100000.0
+    return additive.unsqueeze(1).unsqueeze(1).expand(-1, -1, int(seq_len), -1).contiguous()
+
+
 def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
     mask = attention_mask.unsqueeze(-1).to(last_hidden_state.dtype)
     summed = (last_hidden_state * mask).sum(dim=1)
@@ -263,7 +352,15 @@ def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) ->
     return summed / counts
 
 
-def capture_embedding_trace(runtime, input_ids, attention_mask, token_type_ids):
+def capture_embedding_trace(
+    runtime,
+    input_ids,
+    attention_mask,
+    token_type_ids,
+    *,
+    position_ids=None,
+    model_attention_mask=None,
+):
     models = runtime["models"]
     submeshes = runtime["submeshes"]
     local_dp = runtime["local_data_parallel"]
@@ -281,17 +378,26 @@ def capture_embedding_trace(runtime, input_ids, attention_mask, token_type_ids):
     submesh = submeshes[0]
     input_chunk = input_ids
     attention_chunk = attention_mask
+    model_attention_chunk = model_attention_mask if model_attention_mask is not None else attention_chunk
     token_type_chunk = token_type_ids
+    position_chunk = position_ids
 
     tt_input_ids = _to_ttnn_ids(input_chunk, mesh_device=submesh)
-    tt_attention_mask = _to_ttnn_ids(attention_chunk, mesh_device=submesh)
+    if model_attention_chunk.dim() == 4:
+        mask_dtype = getattr(models[0], "_mask_dtype", ttnn.bfloat16)
+        tt_attention_mask = _to_ttnn_additive_attention_mask(
+            model_attention_chunk, mesh_device=submesh, dtype=mask_dtype
+        )
+    else:
+        tt_attention_mask = _to_ttnn_ids(model_attention_chunk, mesh_device=submesh)
     tt_token_type_ids = _to_ttnn_ids(token_type_chunk, mesh_device=submesh)
+    tt_position_ids = _to_ttnn_ids(position_chunk, mesh_device=submesh) if position_chunk is not None else None
 
     tt_output = models[0].capture_trace(
         input_ids=tt_input_ids,
         attention_mask=tt_attention_mask,
         token_type_ids=tt_token_type_ids,
-        position_ids=None,
+        position_ids=tt_position_ids,
         mesh_device=submesh,
         cq_id=0,
     )
@@ -347,7 +453,16 @@ def run_embedding_forward_trace(trace_state, profiler=None, step_name=None, coll
 
 
 def run_embedding_forward(
-    runtime, input_ids, attention_mask, token_type_ids, profiler=None, step_name=None, collect_conversion_timing=False
+    runtime,
+    input_ids,
+    attention_mask,
+    token_type_ids,
+    profiler=None,
+    step_name=None,
+    collect_conversion_timing=False,
+    *,
+    position_ids=None,
+    model_attention_mask=None,
 ):
     """Run one BGE-M3 TT forward pass and return dense sentence embeddings."""
     models = runtime["models"]
@@ -363,7 +478,11 @@ def run_embedding_forward(
 
     input_chunks = torch.chunk(input_ids, local_dp, dim=0)
     attention_chunks = torch.chunk(attention_mask, local_dp, dim=0)
+    model_attention_chunks = (
+        torch.chunk(model_attention_mask, local_dp, dim=0) if model_attention_mask is not None else attention_chunks
+    )
     token_type_chunks = torch.chunk(token_type_ids, local_dp, dim=0)
+    position_chunks = torch.chunk(position_ids, local_dp, dim=0) if position_ids is not None else [None] * local_dp
 
     # Phase 1: Stage TT inputs for each submesh.
     staged_inputs = []
@@ -379,8 +498,17 @@ def run_embedding_forward(
         staged_inputs.append(
             (
                 _to_ttnn_ids(input_chunks[i], mesh_device=submeshes[i]),
-                _to_ttnn_ids(attention_chunks[i], mesh_device=submeshes[i]),
+                (
+                    _to_ttnn_additive_attention_mask(
+                        model_attention_chunks[i],
+                        mesh_device=submeshes[i],
+                        dtype=getattr(models[i], "_mask_dtype", ttnn.bfloat16),
+                    )
+                    if model_attention_chunks[i].dim() == 4
+                    else _to_ttnn_ids(model_attention_chunks[i], mesh_device=submeshes[i])
+                ),
                 _to_ttnn_ids(token_type_chunks[i], mesh_device=submeshes[i]),
+                _to_ttnn_ids(position_chunks[i], mesh_device=submeshes[i]) if position_chunks[i] is not None else None,
             )
         )
     if collect_conversion_timing and use_profiler_for_conversion:
@@ -399,7 +527,7 @@ def run_embedding_forward(
             input_ids=staged_inputs[i][0],
             attention_mask=staged_inputs[i][1],
             token_type_ids=staged_inputs[i][2],
-            position_ids=None,
+            position_ids=staged_inputs[i][3],
         )
         tt_outputs.append(tt_output)
 
@@ -621,70 +749,126 @@ def test_embedding_perf(
     isl = input_seq_len if input_seq_len is not None else int(sum(prompt_lens) / len(prompt_lens))
     total_input_tokens = sum(prompt_lens)
     logger.info(f"Prepared {batch_size} inputs, ISL={isl}, total tokens = {total_input_tokens}")
-    use_trace = _env_flag("BGE_M3_USE_TRACE") or _env_flag("BGE_M3_USE_TRACE_REPLAY")
+    fixed_b1s512_case = _is_fixed_b1s512_case(
+        batch_size=batch_size,
+        runtime=runtime,
+        tt_data_parallel=tt_data_parallel,
+        seq_len=isl,
+        max_seq_len=max_seq_len,
+    )
+    manual_trace_requested = _env_flag("BGE_M3_USE_TRACE") or _env_flag("BGE_M3_USE_TRACE_REPLAY")
+    auto_trace_requested = _env_flag("BGE_M3_AUTO_TRACE", "1") and fixed_b1s512_case
+    use_trace = manual_trace_requested or auto_trace_requested
+    if auto_trace_requested and not manual_trace_requested:
+        logger.info("Auto-enabled trace replay for fixed B1/S512 benchmark. Set BGE_M3_AUTO_TRACE=0 to disable.")
     if use_trace and runtime["local_data_parallel"] != 1:
         logger.warning(
             "BGE_M3_USE_TRACE=1 requested, but local_data_parallel != 1; falling back to non-trace forward path."
         )
         use_trace = False
 
-    # ---- Warmup / compile ----
-    logger.info("Compiling (first forward)...")
-    _tracy_signpost("Compilation pass")
-    _, compile_conversion_timing = run_embedding_forward(
-        runtime,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        profiler,
-        "compile_prefill",
-        collect_conversion_timing=True,
-    )
-    logger.info(f"Compile forward: {profiler.get_duration('compile_prefill'):.2f}s")
-    trace_state = None
-    if use_trace:
-        _tracy_signpost("Trace capture pass")
-        logger.info("Capturing trace...")
-        trace_state = capture_embedding_trace(runtime, input_ids, attention_mask, token_type_ids)
-        logger.info("Trace captured successfully.")
+    manual_async_requested = _env_flag("BGE_M3_USE_ASYNC_SLOW_DISPATCH")
+    auto_async_requested = _env_flag("BGE_M3_AUTO_ASYNC_SLOW_DISPATCH", "0") and fixed_b1s512_case
+    disable_async_requested = _env_flag("BGE_M3_DISABLE_ASYNC_SLOW_DISPATCH")
+    enable_async_slow_dispatch = not disable_async_requested and (manual_async_requested or auto_async_requested)
+    if auto_async_requested and not manual_async_requested and not disable_async_requested:
+        logger.info(
+            "Auto-enabled async slow dispatch policy for fixed B1/S512 benchmark. "
+            "Set BGE_M3_AUTO_ASYNC_SLOW_DISPATCH=0 to disable."
+        )
 
-    # ---- Benchmark iterations ----
-    benchmark_mode = "trace replay" if trace_state is not None else "regular forward"
-    logger.info(f"Running {num_iterations} benchmark iterations ({benchmark_mode})...")
+    position_ids = None
+    use_precomputed_position_ids = _env_flag("BGE_M3_PRECOMPUTE_POSITION_IDS", "1") and fixed_b1s512_case
+    if use_precomputed_position_ids:
+        position_ids = build_position_ids(input_ids, model_args.pad_token_id)
+        logger.info(
+            "Precomputed host position_ids for fixed B1/S512 benchmark. "
+            "Set BGE_M3_PRECOMPUTE_POSITION_IDS=0 to use the on-device builder."
+        )
+
+    model_attention_mask = None
+    use_precomputed_attention_mask = _env_flag("BGE_M3_PRECOMPUTE_ATTENTION_MASK", "1") and fixed_b1s512_case
+    if use_precomputed_attention_mask:
+        model_attention_mask = build_additive_attention_mask(attention_mask, seq_len=input_ids.shape[1])
+        logger.info(
+            "Precomputed host additive attention mask for fixed B1/S512 benchmark. "
+            "Set BGE_M3_PRECOMPUTE_ATTENTION_MASK=0 to use the on-device builder."
+        )
+
+    trace_state = None
     iteration_times = []
     torch_to_ttnn_times = []
     ttnn_to_torch_times = []
     embeddings = None
+    dispatch_target = runtime["submeshes"][0] if runtime.get("submeshes") else mesh_device
+    restore_async_dispatch = _maybe_enable_async_slow_dispatch(dispatch_target, enable_async_slow_dispatch)
+    try:
+        # ---- Warmup / compile ----
+        logger.info("Compiling (first forward)...")
+        _tracy_signpost("Compilation pass")
+        _, compile_conversion_timing = run_embedding_forward(
+            runtime,
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            profiler,
+            "compile_prefill",
+            collect_conversion_timing=True,
+            position_ids=position_ids,
+            model_attention_mask=model_attention_mask,
+        )
+        logger.info(f"Compile forward: {profiler.get_duration('compile_prefill'):.2f}s")
 
-    for i in range(num_iterations):
-        if i == 0:
-            _tracy_signpost("Performance pass")
-        if trace_state is not None:
-            result, conversion_timing = run_embedding_forward_trace(
-                trace_state,
-                profiler,
-                f"inference_prefill_{i}",
-                collect_conversion_timing=True,
-            )
-        else:
-            result, conversion_timing = run_embedding_forward(
+        if use_trace:
+            _tracy_signpost("Trace capture pass")
+            logger.info("Capturing trace...")
+            trace_state = capture_embedding_trace(
                 runtime,
                 input_ids,
                 attention_mask,
                 token_type_ids,
-                profiler,
-                f"inference_prefill_{i}",
-                collect_conversion_timing=True,
+                position_ids=position_ids,
+                model_attention_mask=model_attention_mask,
             )
+            logger.info("Trace captured successfully.")
 
-        t = profiler.get_duration(f"inference_prefill_{i}")
-        iteration_times.append(t)
-        torch_to_ttnn_times.append(conversion_timing["torch_to_ttnn_s"])
-        ttnn_to_torch_times.append(conversion_timing["ttnn_to_torch_s"])
-        logger.info(f"  Iteration {i}: {t * 1000:.1f}ms")
+        # ---- Benchmark iterations ----
+        benchmark_mode = "trace replay" if trace_state is not None else "regular forward"
+        logger.info(f"Running {num_iterations} benchmark iterations ({benchmark_mode})...")
 
-        if embeddings is None:
-            embeddings = result
+        for i in range(num_iterations):
+            if i == 0:
+                _tracy_signpost("Performance pass")
+            if trace_state is not None:
+                result, conversion_timing = run_embedding_forward_trace(
+                    trace_state,
+                    profiler,
+                    f"inference_prefill_{i}",
+                    collect_conversion_timing=True,
+                )
+            else:
+                result, conversion_timing = run_embedding_forward(
+                    runtime,
+                    input_ids,
+                    attention_mask,
+                    token_type_ids,
+                    profiler,
+                    f"inference_prefill_{i}",
+                    collect_conversion_timing=True,
+                    position_ids=position_ids,
+                    model_attention_mask=model_attention_mask,
+                )
+
+            t = profiler.get_duration(f"inference_prefill_{i}")
+            iteration_times.append(t)
+            torch_to_ttnn_times.append(conversion_timing["torch_to_ttnn_s"])
+            ttnn_to_torch_times.append(conversion_timing["ttnn_to_torch_s"])
+            logger.info(f"  Iteration {i}: {t * 1000:.1f}ms")
+
+            if embeddings is None:
+                embeddings = result
+    finally:
+        _maybe_restore_async_slow_dispatch(dispatch_target, restore_async_dispatch)
 
     # ---- Compute metrics ----
     avg_prefill_time = sum(iteration_times) / len(iteration_times)
