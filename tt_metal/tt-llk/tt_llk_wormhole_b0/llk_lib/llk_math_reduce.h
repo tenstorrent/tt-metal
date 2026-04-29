@@ -28,6 +28,10 @@ inline void reduce_row_perform_transpose()
 {
     if constexpr (enforce_fp32_accumulation)
     {
+        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_override_MASK, ALU_FORMAT_SPEC_REG_SrcA_override_MASK, ALU_FORMAT_SPEC_REG_SrcA_override_ADDR32);
+
+        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_val_MASK, static_cast<std::uint8_t>(DataFormat::Tf32), ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32);
+
         // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
 
         // move hi16 bits D2B
@@ -44,12 +48,18 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
+        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_val_MASK, static_cast<std::uint8_t>(DataFormat::Float16), ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32);
+
         // move lo16 bits D2B
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         // transpose face
         TTI_TRNSPSRCB;
         // move row again for cases of reducing multiple tiles
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_override_MASK, 0, ALU_FORMAT_SPEC_REG_SrcA_override_ADDR32);
+
+        TTI_RMWCIB0(ALU_FORMAT_SPEC_REG_SrcA_val_MASK, static_cast<std::uint8_t>(DataFormat::Float32), ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32);
 
         // move lo16 bits B2D
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);

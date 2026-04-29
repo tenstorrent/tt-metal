@@ -43,7 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
+    constexpr bool enforce_fp32_accumulation = is_fp32_dest_acc_en;
+    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, enforce_fp32_accumulation>(tensor_shape);
     for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
     {
         _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[0]));
@@ -64,9 +65,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const bool is_int_fpu_en                = false;
-    const bool enforce_fp32_accumulation    = false;
-    const ckernel::TensorShape tensor_shape = {
+    const bool is_int_fpu_en                 = false;
+    constexpr bool enforce_fp32_accumulation = is_fp32_dest_acc_en;
+    const ckernel::TensorShape tensor_shape  = {
         static_cast<std::uint8_t>(params.in0_face_r_dim),
         static_cast<std::uint8_t>(params.in0_face_c_dim),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
@@ -74,7 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false>();
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, enforce_fp32_accumulation>();
 
     if (params.IS_REDUCE_TO_ONE)
     {
