@@ -218,7 +218,7 @@ def test_set_state_dict_after_steps_inprocess_roundtrip(optimizer_name):
 
 
 @pytest.mark.requires_device
-def test_adamw_set_state_dict_accepts_numpy_uint64():
+def test_adamw_set_state_dict_workaround_numpy_uint64_does_not_help():
     """``set_state_dict`` accepts a ``np.uint64`` for ``steps``.
 
     This test was originally written to *document* that ``np.uint64`` was
