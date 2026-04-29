@@ -35,6 +35,7 @@ struct DeepseekMoeFastReduceNcFusedReaderCtArgs {
     uint32_t inner_num_tiles{};
     uint32_t reduction_num_tiles{};
     uint32_t num_tokens{};
+    uint32_t num_tokens_x32{};
     uint32_t scores_cb_rm_page_size{};
 };
 
@@ -53,6 +54,7 @@ std::vector<uint32_t> to_reader_ct_arg_vector(const DeepseekMoeFastReduceNcFused
         ct.inner_num_tiles,      // the number of tiles in the inner dimensions: [reduction_dim+1,...,rank-1]
         ct.reduction_num_tiles,  // the number of tiles in the reduction dimension: inner_num_tiles * reduction_dim_size
         ct.num_tokens,
+        ct.num_tokens_x32,
         ct.scores_cb_rm_page_size,  // cb_scores_rm_id page size: one page = one token row
     };
 }
@@ -98,6 +100,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
 
     // scores shape: [tokens, 1, seq, experts_k] (ROW_MAJOR)
     const uint32_t num_tokens = scores_tensor.logical_shape()[0];  // tokens_per_device
+    const uint32_t num_tokens_x32 = round_up(num_tokens, 32);
 
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
     // Helps with locality and increases work unit for better performance.
@@ -131,6 +134,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     const uint32_t scores_cb_rm_page_size =
         round_up(scores_tensor.buffer()->aligned_page_size(), hal::get_l1_alignment());
 
+    const uint32_t scores_rm_cb_num_pages = num_tokens;
     const uint32_t scores_tile_size = tt::tile_size(scores_data_format);
 
     const uint32_t input_tensor_buffer_factor = input_granularity * 2;
@@ -154,7 +158,8 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
     // CB c_2: scratch for reading raw RM scores from DRAM (one page = one token row)
     uint32_t cb_scores_rm_id = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_scores_rm_config =
-        tt::tt_metal::CircularBufferConfig(num_tokens * scores_cb_rm_page_size, {{cb_scores_rm_id, scores_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            scores_rm_cb_num_pages * scores_cb_rm_page_size, {{cb_scores_rm_id, scores_data_format}})
             .set_page_size(cb_scores_rm_id, scores_cb_rm_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scores_rm_config);
 
@@ -184,6 +189,7 @@ DeepseekMoEFastReduceNCFusedProgramFactory::cached_program_t DeepseekMoEFastRedu
         .inner_num_tiles = inner_num_tiles,
         .reduction_num_tiles = reduction_num_tiles,
         .num_tokens = num_tokens,
+        .num_tokens_x32 = num_tokens_x32,
         .scores_cb_rm_page_size = scores_cb_rm_page_size,
     };
     std::vector<uint32_t> reader_ct_args = to_reader_ct_arg_vector(reader_ct_named);

@@ -17,11 +17,12 @@ constexpr uint32_t reduction_dim = get_compile_time_arg_val(8);
 constexpr uint32_t reduction_dim_size = get_compile_time_arg_val(9);  // expert_k
 constexpr uint32_t inner_num_tiles = get_compile_time_arg_val(10);
 constexpr uint32_t reduction_num_tiles = get_compile_time_arg_val(11);
-constexpr uint32_t num_tokens = get_compile_time_arg_val(12);  // tokens per device == TILE_HEIGHT
-constexpr uint32_t cb_scores_rm_page_size = get_compile_time_arg_val(13);  // RM CB page (one token row)
+constexpr uint32_t num_tokens = get_compile_time_arg_val(12);
+constexpr uint32_t num_tokens_x32 = get_compile_time_arg_val(13);          // tokens per device == TILE_HEIGHT
+constexpr uint32_t cb_scores_rm_page_size = get_compile_time_arg_val(14);  // RM CB page (one token row)
 
-// TensorAccessor CT args: activation starts at 14, scores starts after activation's args
-constexpr uint32_t initial_ct_idx_act = 14;
+// TensorAccessor CT args: activation starts at 15, scores starts after activation's args
+constexpr uint32_t initial_ct_idx_act = 15;
 constexpr uint32_t initial_ct_idx_scores = TensorAccessorArgs<initial_ct_idx_act>::next_compile_time_args_offset();
 
 void kernel_main() {
@@ -91,6 +92,24 @@ void kernel_main() {
             for (uint32_t t = 16; t < num_tokens; ++t) {
                 uint16_t score = scores_rm_u16[t * (cb_scores_rm_page_size / 2) + k];
                 expert_tile[512 + (t - 16) * 16] = score;
+            }
+        }
+    }
+    if ((num_tokens < num_tokens_x32) && (num_tokens < 16)) {
+        // Fill remaining Face 0 with 0
+        for (uint32_t k = 0; k < reduction_dim_size; ++k) {
+            volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
+            for (uint32_t t = num_tokens; t < 16; ++t) {
+                expert_tile[t * 16] = 0;
+            }
+        }
+    }
+    if (num_tokens < num_tokens_x32) {
+        // Fill remaining Face 2 with 0
+        for (uint32_t k = 0; k < reduction_dim_size; ++k) {
+            volatile tt_l1_ptr uint16_t* expert_tile = scores_tile_u16 + k * tile_u16_stride;
+            for (uint32_t t = num_tokens; t < 32; ++t) {
+                expert_tile[512 + (t - 16) * 16] = 0;
             }
         }
     }

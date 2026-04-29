@@ -187,7 +187,8 @@ def test_deepseek_moe_fast_reduce_nc_separated(
 
 
 # @pytest.mark.requires_device(["N150", "N300"])
-@pytest.mark.parametrize("batches_per_device", [32])
+# @pytest.mark.parametrize("batches_per_device", [32, 64])
+@pytest.mark.parametrize("batches_per_device", [32, 31, 1])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -260,6 +261,18 @@ def test_deepseek_moe_fast_reduce_nc_fused(
         u_slice = torch_unsqueezed_global[:, :, t0:t1, :].contiguous()
         s_slice = torch_expert_scores_global[t0:t1, :, :, :].contiguous()
 
+        # INSERT_YOUR_CODE
+        # Pad u_slice along dim=2 (tokens) to be a multiple of 32 if necessary
+        current_tokens = u_slice.shape[2]
+        target_tokens = ((current_tokens + 31) // 32) * 32  # Next multiple of 32
+        if current_tokens < target_tokens:
+            pad_amt = target_tokens - current_tokens
+            # Pad at the end along dim=2 ('tokens' axis)
+            pad_shape = list(u_slice.shape)
+            pad_shape[2] = pad_amt
+            pad_tensor = torch.zeros(pad_shape, dtype=u_slice.dtype, device=u_slice.device)
+            u_slice = torch.cat([u_slice, pad_tensor], dim=2)
+
         # Activation: TILE layout, L1 — same as unsqueezed_output in unfused path
         tt_activation = ttnn.from_torch(
             u_slice,
@@ -292,8 +305,10 @@ def test_deepseek_moe_fast_reduce_nc_fused(
 
         for i, tt_out in enumerate(tt_fused_outputs):
             tt_host = ttnn.to_torch(tt_out, dtype=torch.bfloat16)
+            tt_host_slice = tt_host[:, :, 0:current_tokens, :]
             golden_slice = torch_goldens[i][:, :, t0:t1, :]
-            ok, msg = comp_pcc(golden_slice, tt_host, pcc=pcc_threshold)
+
+            ok, msg = comp_pcc(golden_slice, tt_host_slice, pcc=pcc_threshold)
             logger.info(f"virtual_dev={virtual_device_idx} mesh_row={mesh_row} chunk={i}: {msg}")
             assert ok, f"virtual_dev={virtual_device_idx} chunk={i} failed: {msg}"
 
