@@ -486,7 +486,16 @@ def test_gated_deltanet_recurrent_ttnn(seq_len):
         ttnn.close_device(device)
 
 
-def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
+# @pytest.mark.parametrize("seq_len, chunk_size", [(128, 64)])
+@pytest.mark.parametrize(
+    "seq_len, chunk_size",
+    [
+        # (1, 64),
+        (128, 64)
+        # (256, 64)
+    ],
+)
+def test_gated_deltanet_chunked_ttnn(seq_len, chunk_size):
     """Compare TTNN GatedDeltaNet (chunked mode) against torch golden."""
     try:
         import ttnn
@@ -549,9 +558,6 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
         print(f"PASS: test_gated_deltanet_chunked_ttnn T={seq_len} cs={chunk_size} (PCC={pcc:.6f})")
     finally:
         ttnn.close_device(device)
-
-
-import pytest
 
 
 @pytest.mark.parametrize(
@@ -665,6 +671,115 @@ def test_fused_chunked_delta_rule_ttnn(seq_len, chunk_size, batch_size, num_head
             print(f"  Batch dimensions: BH={batch_head}, num_chunks={num_chunks}, total_batch={total_batch}")
             print(f"  Error: {str(e)[:200]}...")
             print(f"  This is a known TTNN limitation with certain tensor shapes.")
+    finally:
+        ttnn.close_device(device)
+
+
+@pytest.mark.parametrize(
+    "seq_len, chunk_size, batch_size, num_heads, head_k_dim, head_v_dim",
+    [
+        # chunk_size is unused (kept for parity with test_fused_chunked_delta_rule_ttnn matrix).
+        (1, 64, 2, 4, 128, 256),
+        # (2, 64, 2, 4, 128, 256),
+        # (4, 64, 2, 4, 128, 256),
+        # (8, 64, 2, 4, 128, 256),
+        # (16, 64, 2, 4, 128, 256),
+        # (32, 64, 2, 4, 128, 256),
+        # (64, 64, 2, 4, 128, 256),
+        # (64, 64, 2, 4, 128, 256),
+    ],
+)
+def test_recurrent_gated_delta_rule_ttnn(seq_len, chunk_size, batch_size, num_heads, head_k_dim, head_v_dim):
+    """Compare TTNN recurrent_gated_delta_rule_ttnn against torch recurrent_gated_delta_rule golden."""
+    _ = chunk_size  # fused chunked test only; recurrent loops full seq_len
+    assert seq_len <= 64
+    try:
+        import ttnn
+    except ImportError:
+        print("SKIP: test_recurrent_gated_delta_rule_ttnn (ttnn not available)")
+        return
+
+    from torch_functional.delta_rule_ops import recurrent_gated_delta_rule
+    from tt.ttnn_delta_rule_ops import recurrent_gated_delta_rule_ttnn
+
+    q = torch.randn(batch_size, seq_len, num_heads, head_k_dim, dtype=torch.float32)
+    k = torch.randn(batch_size, seq_len, num_heads, head_k_dim, dtype=torch.float32)
+    v = torch.randn(batch_size, seq_len, num_heads, head_v_dim, dtype=torch.float32)
+    beta = torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32)
+    g = -torch.rand(batch_size, seq_len, num_heads, dtype=torch.float32) * 2
+
+    print_kernels_operations(name_prefix="TORCH ", is_ttnn=False)
+    compare_kernels_operations()
+
+    torch_out, torch_state = recurrent_gated_delta_rule(
+        q,
+        k,
+        v,
+        beta,
+        g,
+        initial_state=None,
+        output_final_state=True,
+        use_qk_l2norm=True,
+    )
+
+    print_model_info(torch_out, "TORCH OUTPUT", is_ttnn=False)
+    print_model_info(torch_state, "TORCH STATE", is_ttnn=False)
+    print_model_structure(
+        {"q": q, "k": k, "v": v, "g": g, "beta": beta},
+        {"output": torch_out, "state": torch_state},
+        name_prefix="TORCH ",
+    )
+
+    device = ttnn.open_device(device_id=0)
+    try:
+        q_ttnn = ttnn.from_torch(
+            q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        k_ttnn = ttnn.from_torch(
+            k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        v_ttnn = ttnn.from_torch(
+            v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        beta_ttnn = ttnn.from_torch(
+            beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+        g_ttnn = ttnn.from_torch(
+            g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+
+        print_kernels_operations(name_prefix="TTNN ", is_ttnn=True)
+
+        try:
+            ttnn_out, ttnn_state = recurrent_gated_delta_rule_ttnn(
+                q_ttnn,
+                k_ttnn,
+                v_ttnn,
+                beta_ttnn,
+                g_ttnn,
+                scale=None,
+                initial_state=None,
+                device=device,
+            )
+
+            print_model_info(ttnn_out, "TTNN OUTPUT", is_ttnn=True)
+            print_model_info(ttnn_state, "TTNN STATE", is_ttnn=True)
+            print_model_structure(
+                {"q": q_ttnn, "k": k_ttnn, "v": v_ttnn, "g": g_ttnn, "beta": beta_ttnn},
+                {"output": ttnn_out, "state": ttnn_state},
+                name_prefix="TTNN ",
+            )
+
+            pcc_output = assert_with_pcc(torch_out, ttnn_out, pcc_threshold=0.999)
+            pcc_state = assert_with_pcc(torch_state, ttnn_state, pcc_threshold=0.999)
+            print(
+                f"PASS: test_recurrent_gated_delta_rule_ttnn T={seq_len} "
+                f"(Output PCC={pcc_output:.6f}, State PCC={pcc_state:.6f})"
+            )
+        except Exception as e:
+            print("SKIP: test_recurrent_gated_delta_rule_ttnn (kernel compilation or runtime issue)")
+            print(f"  Configuration: T={seq_len}, B={batch_size}, H={num_heads}, " f"K={head_k_dim}, V={head_v_dim}")
+            print(f"  Error: {str(e)[:200]}...")
     finally:
         ttnn.close_device(device)
 

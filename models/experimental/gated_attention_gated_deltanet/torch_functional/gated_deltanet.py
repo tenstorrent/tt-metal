@@ -145,6 +145,16 @@ def gated_deltanet_forward(
     v = F.linear(hidden_states, v_proj_weight)
 
     # 2. Causal conv1d + SiLU
+    def causal_conv1d_forward(x, weight, bias=None, conv_state=None, kernel_size=4):
+        B, T, D = x.shape
+        x_t = x.transpose(1, 2)  # [B, D, T]
+        x_padded = F.pad(x_t, (kernel_size - 1, 0))
+        out = F.conv1d(x_padded, weight, bias, padding=0, groups=D)
+        out = F.silu(out)
+
+        # new_state = None
+        return out.transpose(1, 2), None
+
     q, new_conv_q = causal_conv1d_forward(q, q_conv_weight, q_conv_bias, conv_state_q, conv_kernel_size)
     k, new_conv_k = causal_conv1d_forward(k, k_conv_weight, k_conv_bias, conv_state_k, conv_kernel_size)
     v, new_conv_v = causal_conv1d_forward(v, v_conv_weight, v_conv_bias, conv_state_v, conv_kernel_size)
