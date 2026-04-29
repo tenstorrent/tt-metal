@@ -124,8 +124,6 @@ struct Broadcast {
     private:
 #if defined(COMPILE_FOR_NCRISC)
         static constexpr uint8_t worker_to_fabric_noc = 0;
-        static constexpr uint32_t initial_header_payload_size_bytes =
-            CTArgs::num_chunks == 1 ? CTArgs::last_chunk_size_bytes : CTArgs::chunk_size_bytes;
         static_assert(
             noc_mode == DM_DYNAMIC_NOC || worker_to_fabric_noc == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
         std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
@@ -173,7 +171,7 @@ struct Broadcast {
                         headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 dst_noc_base, sem_nocs[link_idx], 1, false},
-                            initial_header_payload_size_bytes);
+                            CTArgs::chunk_size_bytes);
                     }
                 }
 
