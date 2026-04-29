@@ -135,23 +135,72 @@ cur_pos ≤ 72) is real and useful for some workloads — but it
 should not be defaulted on for general decoding without a
 sliding-window hybrid or further work to recover the lost top-1.
 
+### Track A gap — root cause (2026-04-29)
+
+A/B test on N150, same 1024-position eval, default seed:
+
+| Mode                                       | Top-1 | Top-5 |
+|--------------------------------------------|------:|------:|
+| BFP8 baseline (no TQ)                      | 97.3% | 100.0% |
+| **TQ 3-bit + BFP8 paged + std SDPA** (default flags) | **86.1%** | **97.1%** |
+| Track A (TQ 3-bit + BFP4 idx + fused kernel) | 86.9% | 97.1% |
+
+**The Track A gap is the TQ 3-bit quantization itself, not the
+fused kernel or BFP4 storage.** TQ rotation + 3-bit Lloyd-Max
+quantization stored as BFP8 (the highest-precision config that
+still uses TQ) lands at 86.1 % top-1 — within noise of Track A's
+86.9 %. The fused kernel preserves the TQ baseline; it does not
+add error.
+
+Rotation absorption math verified at `ttnn_integration.py:1043`
+(`wv_heads = rotation_t_cpu @ wv_heads` → Π^T·W_v) and `:1051`
+(`wo_cols = wo_cols @ rotation_cpu` → W_o·Π). These compose
+correctly: in rotated space attention_output is `attn·Π`, then
+`(attn·Π)·W_o' = (attn·Π)·(W_o·Π)` — wait, that doesn't reduce.
+Re-deriving: `attn·W_o^T_orig = (attn·Π)·(Π^T·W_o^T_orig) =
+attn_rotated · (W_o·Π)^T = attn_rotated·W_o'^T` ✓. Math is right.
+
+**The loss is purely from 3-bit quantization noise compounding
+across 32 layers × ~10 K-chunks × 1024 positions.** Per-coord
+3-bit Lloyd-Max on unit-Gaussian has ~14 dB SNR; tiny noise per
+coord, but every K read adds it.
+
+### `--bits 4` made it worse, not better (2026-04-29)
+
+Track A `--bits 4` on the same eval: **81.6 % top-1 / 93.6 % top-5**
+— *worse* than 3-bit. Expected the opposite (more centroids =
+less quantization noise).
+
+| Track A (TQ FD) | Top-1 | Top-5 | per-pos at 1010 |
+|-----------------|------:|------:|----------------:|
+| `--bits 3`      | 86.9% | 97.1% | 87.2% top-1     |
+| `--bits 4`      | 81.6% | 93.6% | 81.8% top-1     |
+
+The per-position trace shows 4-bit *starts* slightly better at
+pos 560 (86 vs 84 %) but degrades faster, ending much lower.
+This points to a **bug in the 4-bit codebook** (scale, dynamic
+range, or boundaries) rather than a fundamental TQ-algorithm
+property. Worth a separate investigation into
+`turbo_quant/codebook.py` — likely the Lloyd-Max centroid
+generation for `bits=4` has the wrong σ or boundary handling.
+
 ### Open follow-ups
 
+- **Investigate `bits=4` regression** — `turbo_quant/codebook.py`
+  Lloyd-Max generation; compare 3-bit and 4-bit centroid arrays
+  on a unit-Gaussian sample, check the codebook reconstruction
+  MSE per bit-count.
 - **Sliding-window hybrid** for Track B — recent tokens stay
-  BFP8 (or BF16), older tokens compress to BFP4. Could recover
-  quality while keeping the memory + per-call speed wins on
-  the older tokens.
-- **Investigate the gap in Track A** — fused kernel itself was
-  validated at cos > 0.999, so why is e2e top-1 down 10 pp?
-  Likely the W_o pre-rotation or rope+TQ interaction. Worth
-  re-checking the rotation absorption math against the BFP8
-  baseline at the lm_head level.
+  BFP8 (or BF16), older tokens compress to BFP4. Recovers
+  quality while keeping memory + per-call speed wins on older
+  tokens.
 - **T3K K=14 + Track A accuracy** — same 1024-position run on
-  T3K with `--tq-num-cores-per-head 14`. Should produce same
-  top-1/top-5 (numerics are deterministic) at much lower
-  latency.
+  T3K should give the same top-1/top-5 (numerics deterministic)
+  at much lower latency.
 - **Add `--tq-full-dequant` row** to `bench_seqlen_sweep.py`
   with K=14 numbers when run on T3K.
+- **Try 6/8-bit TQ** if the 4-bit fix lifts quality back above
+  3-bit — might be a usable accuracy/memory point for production.
 
 ### N150 per-call SDPA latency sweep (2026-04-29, K=1)
 
