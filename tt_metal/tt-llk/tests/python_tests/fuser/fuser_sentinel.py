@@ -66,7 +66,7 @@ class FuserSentinel:
         if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
             # DEST_TO_SRCA routes src_a L1 data to srcB, so srcB format
             # must match src_a's format, not src_b's.
-            src_a_format = src_b_format
+            src_b_format = src_a_format
 
         return infer_data_formats(
             input_format=src_a_format,
