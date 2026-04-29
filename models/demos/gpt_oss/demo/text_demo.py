@@ -174,18 +174,6 @@ def prepare_gpt_oss_generator_args(
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        # Single Blackhole card (P100/P150) - no fabric, no CCL
-        (1, 1),
-        # LoudBox (1×8) - Single device, low latency
-        (1, 8),
-        # Galaxy (4×8) - Multi-device mesh, higher throughput
-        (4, 8),
-    ],
-    ids=["mesh_1x1", "mesh_1x8", "mesh_4x8"],
-)
-@pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [
         (
@@ -421,7 +409,6 @@ def prepare_gpt_oss_generator_args(
 def test_gpt_oss_demo(
     mesh_device,
     device_params,
-    mesh_shape,
     input_prompts,
     data_parallel,
     batch_size,
@@ -442,6 +429,7 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    mesh_shape = tuple(mesh_device.shape)
     if mesh_shape[0] == 1:
         if batch_size > 1:
             pytest.skip(
@@ -454,7 +442,6 @@ def test_gpt_oss_demo(
     if os.environ.get("CI", None) and not run_in_ci:
         config_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
         pytest.skip(f"This test configuration is skipped in CI: {config_id}")
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)

@@ -108,81 +108,65 @@ class TestFactory:
         }
 
 
-def parametrize_mesh_with_fabric():
-    """Universal mesh parametrization with automatic fabric setup.
+def parametrize_mesh_with_fabric(mesh_shapes=None):
+    """Universal mesh + fabric parametrization for gpt_oss tests.
 
-    The mesh_device parameter has no explicit id — there's exactly one base
-    mesh per system (auto-selected from the available device count), so the
-    base-mesh id would be redundant in test names. Tests that exercise
-    multiple submesh shapes should additionally use ``parametrize_mesh_shapes``
-    (or a manual ``mesh_shape`` parametrize) and rely on its ids for
-    filtering. This avoids the ``mesh_1x2-...-mesh_1x1`` dual-id confusion
-    where the outer is just whatever base mesh the system happens to have.
+    Generates a paired ``(mesh_device, device_params)`` parametrize. Each
+    case opens a mesh of the requested shape directly (no submesh carving
+    in test bodies) and configures the appropriate fabric for that shape.
+    Each parametrize case has a single id like ``1x1`` / ``1x8`` / ``4x8``,
+    so ``pytest -k 1x1`` (or ``-k 4x8``) filters cleanly without dual-id
+    confusion from a separate inner ``mesh_shape`` parametrize.
 
-    Single-device / two-device runs (e.g. 1x1 Blackhole P150 or 1x2 P300)
-    disable fabric since there is no inter-chip topology to ring around —
-    mirrors the tt_transformers conftest.py pattern where is_single_device
-    sets fabric_config=None.
+    Auto-filters to the shapes that fit on the current system. Default
+    shapes: (1,1) single card, (1,8) LoudBox / T3K, (4,8) Galaxy. Pass an
+    explicit ``mesh_shapes`` list to override (useful for tests that only
+    make sense at one TP factor).
+
+    Fabric: ``(1,1)`` disables fabric (no inter-chip topology to ring
+    around). Multi-device shapes use ``FABRIC_1D_RING`` — gpt_oss's CCL
+    operations (reduce_scatter, all_gather, all_reduce) all use the ring
+    topology.
+
+    Usage:
+        @parametrize_mesh_with_fabric()              # all shapes that fit
+        @parametrize_mesh_with_fabric([(1, 8)])      # 1x8 only
+
+        pytest -k 1x1   # single card
+        pytest -k 1x8   # LoudBox / T3K
+        pytest -k 4x8   # Galaxy
     """
     num_devices = ttnn.get_num_devices()
-    if num_devices == 1:
-        mesh_params = [pytest.param((1, 1))]
-        fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
-    elif num_devices == 2:
-        # 2-card Blackhole (e.g. P300). Open a 1x2 base mesh; the test selects
-        # a submesh via the mesh_shape parametrize.
-        mesh_params = [pytest.param((1, 2))]
-        fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
-    elif num_devices == 8:
-        mesh_params = [pytest.param((1, 8))]
-        fabric_params = [
+    if mesh_shapes is None:
+        all_shapes = [(1, 1), (1, 8), (4, 8)]
+        mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
+
+    if not mesh_shapes:
+        params = [
             pytest.param(
-                {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
-            ),
-        ]
-    elif num_devices == 32:
-        mesh_params = [pytest.param((4, 8))]
-        fabric_params = [
-            pytest.param(
-                {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
-            ),
+                (1, 1),
+                {"fabric_config": None, "trace_region_size": 30000000},
+                id="1x1",
+                marks=pytest.mark.skip(reason="No supported gpt_oss mesh shape fits on this system"),
+            )
         ]
     else:
-        raise ValueError(f"Invalid number of devices: {num_devices}")
+        params = [
+            pytest.param(
+                shape,
+                {
+                    "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
+                    "trace_region_size": 30000000,
+                },
+                id=f"{shape[0]}x{shape[1]}",
+            )
+            for shape in mesh_shapes
+        ]
 
-    # Return a single decorator that combines both parametrizations
     def decorator(func):
-        func = pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)(func)
-        func = pytest.mark.parametrize("device_params", fabric_params, indirect=True)(func)
-        return func
+        return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)
 
     return decorator
-
-
-def parametrize_mesh_shapes():
-    """Parametrize the inner ``mesh_shape`` (used by tests that call
-    ``mesh_device.create_submesh(MeshShape(mesh_shape))``) with the shapes
-    that fit inside the base mesh opened by ``parametrize_mesh_with_fabric``.
-
-    Tests can use this *together with* ``parametrize_mesh_with_fabric``: the
-    outer decorator opens the base device, this one selects which submesh to
-    test on. On a 32-device system both ``(1,8)`` and ``(4,8)`` submeshes of
-    the ``(4,8)`` base are exercised; on smaller systems only the shapes that
-    actually fit are emitted, so ``-k mesh_1x1`` filters cleanly without
-    pulling in cross-product cases that crash submesh creation.
-    """
-    num_devices = ttnn.get_num_devices()
-    if num_devices == 1:
-        shapes = [pytest.param((1, 1), id="mesh_1x1")]
-    elif num_devices == 2:
-        shapes = [pytest.param((1, 1), id="mesh_1x1"), pytest.param((1, 2), id="mesh_1x2")]
-    elif num_devices == 8:
-        shapes = [pytest.param((1, 8), id="mesh_1x8")]
-    elif num_devices == 32:
-        shapes = [pytest.param((1, 8), id="mesh_1x8"), pytest.param((4, 8), id="mesh_4x8")]
-    else:
-        raise ValueError(f"Invalid number of devices: {num_devices}")
-    return pytest.mark.parametrize("mesh_shape", shapes)
 
 
 def parametrize_batch_seq(configs=None, ids=None):
