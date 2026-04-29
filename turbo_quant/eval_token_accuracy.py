@@ -241,7 +241,7 @@ def main():
 
     # Warmup + trace capture. The sliding-window path now ships ring_pos /
     # old_pos as trace-input device tensors, so trace is fully compatible.
-    use_trace = True
+    use_trace = not bool(os.environ.get("TQ_DUMP_LSE", ""))
     print("\nWarmup (compile decode programs)...")
     tokens_torch = torch.tensor([int(reference_tokens[0].item())], dtype=torch.int64)
     pos_torch = torch.tensor([0], dtype=torch.int64)

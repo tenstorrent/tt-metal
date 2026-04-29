@@ -1065,7 +1065,7 @@ class TTNNTurboQuantCache:
                 num_cores_per_head=1,
                 return_lse=True,
             )
-            return self._combine_lse(out_old, lse_old, out_new, lse_new)
+            return self._combine_lse(out_old, lse_old, out_new, lse_new, layer_idx=layer_idx)
 
         # ── Legacy fallback: host-sync read + Python branch ──
         cur_pos_host = getattr(self, "_cached_cur_pos", None)
@@ -1119,9 +1119,9 @@ class TTNNTurboQuantCache:
         )
         ttnn.deallocate(old_pos_dev)
 
-        return self._combine_lse(out_old, lse_old, out_new, lse_new)
+        return self._combine_lse(out_old, lse_old, out_new, lse_new, layer_idx=layer_idx)
 
-    def _combine_lse(self, out_old, lse_old, out_new, lse_new):
+    def _combine_lse(self, out_old, lse_old, out_new, lse_new, layer_idx=None):
         """Online-softmax combine of two SDPA halves on device.
 
         combined = out_old · w_old + out_new · w_new
@@ -1137,6 +1137,40 @@ class TTNNTurboQuantCache:
         ops are local) and then BROADCAST col 0 of the resulting weight tile
         to every column of the [B, NQH, 1, DH] output before multiplying.
         """
+        # Optional ablation hook: dump LSE values + weights to /tmp/tq_lse_dump.txt
+        # when TQ_DUMP_LSE env var is set. Adds host syncs — incompatible with trace
+        # (eval_token_accuracy.py auto-disables trace when TQ_DUMP_LSE is set).
+        # Limited to layers 0..3 to keep file size manageable.
+        import os as _os
+
+        _dump = bool(_os.environ.get("TQ_DUMP_LSE", "")) and (layer_idx is not None) and (layer_idx < 4)
+        if _dump:
+            _lse_old_t = ttnn.to_torch(lse_old).float()
+            _lse_new_t = ttnn.to_torch(lse_new).float()
+            with open("/tmp/tq_lse_dump.txt", "a") as _f:
+                _f.write(f"\n=== layer {layer_idx} ===\n")
+                _f.write(
+                    f"LSE_old col 0 per head: min={_lse_old_t[0,:,0,0].min():.3f} "
+                    f"max={_lse_old_t[0,:,0,0].max():.3f} "
+                    f"mean={_lse_old_t[0,:,0,0].mean():.3f}\n"
+                )
+                _f.write(
+                    f"LSE_new col 0 per head: min={_lse_new_t[0,:,0,0].min():.3f} "
+                    f"max={_lse_new_t[0,:,0,0].max():.3f} "
+                    f"mean={_lse_new_t[0,:,0,0].mean():.3f}\n"
+                )
+                # Compute per-head w_new (ring weight) on host.
+                import math as _math
+
+                for h in [0, 7, 15, 23, 31]:
+                    L_o = _lse_old_t[0, h, 0, 0].item()
+                    L_n = _lse_new_t[0, h, 0, 0].item()
+                    L_max = max(L_o, L_n)
+                    d_o = _math.exp(L_o - L_max)
+                    d_n = _math.exp(L_n - L_max)
+                    w_n = d_n / (d_o + d_n)
+                    _f.write(f"  head {h:2d}: LSE_old={L_o:.3f} LSE_new={L_n:.3f} → w_ring={w_n:.3f}\n")
+
         lse_max = ttnn.maximum(lse_old, lse_new)
         diff_old = ttnn.exp(ttnn.subtract(lse_old, lse_max))
         diff_new = ttnn.exp(ttnn.subtract(lse_new, lse_max))

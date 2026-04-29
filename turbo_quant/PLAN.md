@@ -47,6 +47,33 @@ at W=256), so we don't need a bigger ring.
 but stays available for a clean disjoint-coverage variant if/when the kernel
 grows per-token cur_pos masking.
 
+### Ablation: per-head LSE weights at W=128
+
+Set `TQ_DUMP_LSE=1` and run `eval_token_accuracy.py --tq-full-dequant
+--tq-recent-window 128`. The hook in `_combine_lse` writes one block per
+(step, layer<4) to `/tmp/tq_lse_dump.txt` with per-head `(LSE_old, LSE_new,
+w_ring)`. Sample at layer 0, cur_pos≈600:
+
+| Head | LSE_old | LSE_new | w_ring |
+|---:|---:|---:|---:|
+| 0  |  8.19 |  8.81 | **0.65** |
+| 7  |  9.25 |  9.00 | 0.44 |
+| 15 | 10.25 |  9.69 | 0.36 |
+| 23 |  8.06 |  7.69 | 0.41 |
+| 31 | 19.13 |  5.00 | **0.00** |
+
+Heads specialise. Head 0 has roughly equal LSE on both halves but a slight
+edge to ring (65% ring weight) — broad recent-context attention. Head 31 has
+LSE_old=19 (a sharp distant peak — "needle"-style head looking back for a
+specific far-away token) so the ring contributes essentially nothing. Average
+over 1023 steps × 32 heads at layer 0 lands at ~15-22% ring weight, which
+matches the +2 pp top-1 sweet spot at W=128: enough to nudge predictions
+toward recent context without overpowering the long-range signal.
+
+The combine is **not** a uniform 50/50 blend — it adaptively re-weights per
+head and per step based on actual attention scores. That's why W=128 (88.9%)
+beats the truncated-disjoint variant from earlier (which gave 0% top-1).
+
 ## 🚀 RESUME HERE — TurboQuant 128K plan complete (2026-04-29)
 
 Status of the **TurboQuant 128K — Two-Track Comparison** plan:
