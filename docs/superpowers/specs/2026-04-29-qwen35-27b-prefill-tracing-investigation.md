@@ -300,9 +300,11 @@ remaining ~1.4× is from prefill-tracing eliminating Python dispatch.
 For 27b on 4xP150, the dispatch overhead is **higher per op** (4-device
 mesh dispatch) and **count is higher** (3× model size, similar layer
 count, more chunks at 128k). Therefore the trace-only contribution should
-be at least as large as 9b's, plausibly larger. Expected TTFT speedup at
-matched bucket size: **1.3–1.6× over current 27b
-`prefill_layer_chunked`** for prompts where bucket padding adds < 30 %.
+be at least as large as 9b's, plausibly larger. Expected **replay-only**
+speedup vs current 27b `prefill_layer_chunked` at matched bucket size:
+**1.3–1.6×** for prompts where bucket padding adds < 30 %. This is the
+*replay* phase only — whether per-prompt total TTFT (capture + replay)
+also wins depends on Q3 in §7.3.
 
 ### 6.3 Capture cost vs replay savings — break-even ISL
 
