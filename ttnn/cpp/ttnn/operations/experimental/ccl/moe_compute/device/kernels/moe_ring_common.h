@@ -131,10 +131,8 @@ struct DeepSeekRingConfig {
 
     static constexpr uint32_t W2_TILES_PER_EXPERT_W = W2_TILES_PER_A2A_ITER_W * NUM_A2A_ITERS;  // = 4 * 5 = 20
     static constexpr uint32_t W2_TILES_PER_EXPERT_H =
-        W2_TILES_PER_A2A_ITER_H * ((NUM_W2_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) /
+        W2_TILES_PER_A2A_ITER_H * ((NUM_W2_DRAM_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) /
                                    W2_TILES_PER_A2A_ITER_H);  // = 7 * ((64 + 7 - 1) / 7) = 7 * 10 = 70
-
-    static constexpr uint32_t W2_SUBBLOCK_REM = NUM_W2_TILES_H % W2_TILES_PER_A2A_ITER_H;  // = 64 % 7 = 1
 
     static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
         W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H /
@@ -202,10 +200,8 @@ struct GptRingConfig {
 
     static constexpr uint32_t W2_TILES_PER_EXPERT_W = NUM_A2A_ITERS * W2_TILES_PER_A2A_ITER_W;  // = 2 * 4 = 8
     static constexpr uint32_t W2_TILES_PER_EXPERT_H =
-        ((NUM_W2_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) *
+        ((NUM_W2_DRAM_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) *
         W2_TILES_PER_A2A_ITER_H;  // = ((90 + 7 - 1) / 7) * 7 = 13 * 7 = 91
-
-    static constexpr uint32_t W2_SUBBLOCK_REM = NUM_W2_TILES_H % W2_TILES_PER_A2A_ITER_H;  // = 90 % 7 = 6
 
     static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
         W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H /

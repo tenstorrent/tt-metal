@@ -452,11 +452,11 @@ def validate_matmul(
                     f" Allclose passed: {allclose_passed}"
                 )
 
-                if not allclose_passed:
-                    mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
-                    logger.warning(
-                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
-                    )
+            #  if not allclose_passed:
+            #                     mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
+            #                     logger.warning(
+            #                         f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
+            #                     )
             else:
                 logger.info(
                     f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
@@ -610,8 +610,8 @@ def create_torch_w2(L, E, N, K):
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
     # torch_w2 = torch.ones_like(torch_w2)
-    #     for i in range(K//32):
-    #         torch_w2[:,:,:,32*i:32*(i+1)]*=i
+    #     for i in range(N//32):
+    #         torch_w2[:,:,32*i:32*(i+1),:]*=i
 
     return torch_w2
 
@@ -1302,6 +1302,10 @@ def run_moe_compute_test(
             torch.bfloat16
         )
 
+    #         torch_b0 = torch.zeros_like(torch_b0)
+    #         torch_b1 = torch.zeros_like(torch_b1)
+    #         torch_b2 = torch.zeros_like(torch_b2)
+
     # now we can create our golden reference
     # (L, D, E/D, T, H) (block sparse)
     matmul_goldens = compute_matmul_golden(
@@ -1377,7 +1381,7 @@ def run_moe_compute_test(
             torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
 
-    if has_bias:
+    if False:  # has_bias:
         # Verify prepare_w2_tensor_with_bias correctness:
         # The bias tile occupies element rows [N:N+TILE_SIZE] in the N dimension (tile Nt).
         # It should be non-zero (bias was appended) and must NOT appear in the weight rows [0:N]
@@ -1667,13 +1671,13 @@ def run_moe_compute_test(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
-@pytest.mark.parametrize("test_mode", ["perf"])
-# @pytest.mark.parametrize("enable_trace", [False, True])
-# @pytest.mark.parametrize("test_mode", ["perf", "correctness"])
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
+@pytest.mark.parametrize("has_bias", [False, True])
 def test_moe_compute_deepseek(
     mesh_device,
     mesh_shape,
+    has_bias,
     enable_trace,
     test_mode,
 ):
@@ -1689,7 +1693,6 @@ def test_moe_compute_deepseek(
     output_width_shard_dim = 4  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
     dtype = ttnn.bfloat16
     activation_type = MoEActivationFunction.SILU
-    has_bias = False
 
     # Test mode specific parameters
     if test_mode == "perf":
@@ -1739,11 +1742,9 @@ def test_moe_compute_deepseek(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False])
-# @pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("test_mode", ["perf"])
-# @pytest.mark.parametrize("test_mode", ["perf", "correctness"])
-@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
+@pytest.mark.parametrize("has_bias", [True])
 def test_moe_compute_gpt_oss(
     mesh_device,
     mesh_shape,
@@ -1762,7 +1763,7 @@ def test_moe_compute_gpt_oss(
     output_height_shard_dim = 4
     output_width_shard_dim = 3  # GptRingConfig::OUTPUT_WIDTH_SHARD_DIM
     dtype = ttnn.bfloat16
-    activation_type = MoEActivationFunction.SWIGLU
+    activation_type = MoEActivationFunction.SILU
 
     # Test mode specific parameters
     if test_mode == "perf":

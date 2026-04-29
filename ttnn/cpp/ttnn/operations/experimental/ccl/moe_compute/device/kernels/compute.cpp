@@ -143,8 +143,6 @@ void kernel_main() {
     constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
     constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
 
-    // constexpr uint32_t w2_blocks_per_four_mm2_tile = 13; //4 * w2_txns_h / w2_txns_per_block;
-
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
@@ -158,10 +156,6 @@ void kernel_main() {
 
     // The number of tiles to send in each step
     constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
-
-    DPRINT << "w2_blocks_per_expert: " << w2_blocks_per_expert << " num_a2a_iters: " << num_a2a_iters
-           << " w0_w1_blocks_per_two_elt_tile: " << w0_w1_blocks_per_two_elt_tile
-           << " w0_w1_blocks_per_expert: " << w0_w1_blocks_per_expert << "\n";
 
     //-------------------------------------------------------------------------
     // Compute

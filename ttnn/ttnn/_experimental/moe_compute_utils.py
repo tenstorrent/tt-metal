@@ -316,8 +316,6 @@ def add_shared_expert_weights(
 BLOCK_TILES_W = 4
 BLOCK_TILES_H = 7
 
-W0_W1_TILES_PER_TXN = BLOCK_TILES_W * BLOCK_TILES_H // 2
-
 DS_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
 DS_W0_W1_SHARD_VALS = [6, 5]
 DS_W2_SHARD_VALS = {False: (2, 2), True: (3, 1)}  # mapped to pad core assignment
@@ -490,7 +488,7 @@ def prepare_w2_tensor_for_moe_compute(
 
     # Pad "N" dimension to make it divisible by 7 tiles, since we read 7 tiles at a time.
     Nt = N // ttnn.TILE_SIZE
-    N_padding = math.ceil(Nt / 7) * 7 * ttnn.TILE_SIZE - N
+    N_padding = math.ceil(Nt / BLOCK_TILES_H) * BLOCK_TILES_H * ttnn.TILE_SIZE - N
     padding = torch.zeros(num_cores, L, E, w2_groups_per_core, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
     all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)
     return all_groups_per_bank
@@ -540,15 +538,9 @@ def prepare_w0_w1_tensor_with_bias(
     import torch
 
     # This constant must match moe_ring_common.h — it determines the DRAM read block alignment.
-    W0_W1_TILES_PER_TXN = 14
-
-    K_tiles = K // ttnn.TILE_SIZE  # 224
-    K_tiles_with_bias = K_tiles + 1  # 225
-    # Pad K to a transaction boundary so dm0 reads complete blocks.
-    # K_padded (in tiles) = ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN
-    # = ceil(225/14) * 14 = 17 * 14 = 238.
-    K_tiles_padded = math.ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN  # 238
-    K_padded = K_tiles_padded * ttnn.TILE_SIZE  # 7616
+    K_tiles = K // ttnn.TILE_SIZE
+    K_tiles_with_bias = K_tiles + 1
+    K_with_bias = K_tiles_with_bias * ttnn.TILE_SIZE
 
     # Convert true PyTorch bias (L, E, N) to kernel tile format (L, E, 32, N) with only row 0 populated.
     torch_b0_tiled = torch.zeros(L, E, ttnn.TILE_SIZE, N, dtype=torch_b0.dtype)
@@ -559,14 +551,8 @@ def prepare_w0_w1_tensor_with_bias(
     torch_w0_b0 = torch.cat([torch_w0, torch_b0_tiled], dim=2)  # (L, E, K+32, N)
     torch_w1_b1 = torch.cat([torch_w1, torch_b1_tiled], dim=2)  # (L, E, K+32, N)
 
-    # Pad K from K+32 to K_padded with zeros
-    K_pad_amount = K_padded - (K + ttnn.TILE_SIZE)  # 7616 - 7200 = 416
-    if K_pad_amount > 0:
-        padding = torch.zeros(L, E, K_pad_amount, N, dtype=torch_w0.dtype)
-        torch_w0_b0 = torch.cat([torch_w0_b0, padding], dim=2)
-        torch_w1_b1 = torch.cat([torch_w1_b1, padding], dim=2)
-
-    return prepare_w0_w1_tensor_for_moe_compute(torch_w0_b0, torch_w1_b1, L, E, K_padded, N, shard_map)
+    return prepare_w0_w1_tensor_for_moe_compute(torch_w0_b0, torch_w1_b1, L, E, K_with_bias, N, shard_map)
+    return
 
 
 def prepare_w2_tensor_with_bias(
@@ -691,7 +677,7 @@ def prepare_w2_tensor_with_bias(
     # We need to pad to make the total divisible by tiles_per_txn for the pipelined DRAM reads.
     N_total_tiles = Nt + 1  # Weight tiles + 1 bias tile
     # Pad to align with transaction boundary (7 tiles in A2A iteration)
-    N_target_tiles = math.ceil(N_total_tiles / 7) * 7
+    N_target_tiles = math.ceil(N_total_tiles / BLOCK_TILES_H) * BLOCK_TILES_H
     N_target = N_target_tiles * ttnn.TILE_SIZE
     N_padding = N_target - (N + ttnn.TILE_SIZE)
 
@@ -755,7 +741,7 @@ def get_weight_mem_configs(
     if has_bias:
         K_tiles = hidden_size // ttnn.TILE_SIZE
         K_tiles_with_bias = K_tiles + 1  # Add 1 tile for bias
-        K_tiles_padded = math.ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN
+        K_tiles_padded = math.ceil(K_tiles_with_bias / BLOCK_TILES_H) * BLOCK_TILES_H
         K_for_shard = K_tiles_padded * ttnn.TILE_SIZE
     else:
         # Without bias, just pad to BLOCK_TILES_H

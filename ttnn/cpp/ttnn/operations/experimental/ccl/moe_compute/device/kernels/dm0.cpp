@@ -75,17 +75,6 @@ void kernel_main() {
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
-    // all unused???
-    // Constants for MoE
-    //     constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
-    //     constexpr uint32_t num_w2_tiles_h = config_t::NUM_W2_TILES_H;
-    //
-    //     const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
-    //     const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
-    //
-    //     const uint32_t num_in2_tiles = num_w2_tiles_w;
-    //     const uint32_t num_mm2_tiles = num_w2_tiles_w;
-
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
@@ -105,17 +94,7 @@ void kernel_main() {
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;
-    constexpr uint32_t w2_blocks_per_expert =
-        config_t::W2_BLOCKS_PER_EXPERT;  // w2_blocks_per_four_mm2_tile * config_t::NUM_A2A_ITERS;
-
-    DPRINT << "w0_w1_blocks_per_two_elt_tile: " << w0_w1_blocks_per_two_elt_tile
-           << " w0_w1_blocks_per_expert: " << w0_w1_blocks_per_expert
-           << " w2_blocks_per_four_mm2_tile: " << w2_blocks_per_four_mm2_tile
-           << " w2_blocks_per_expert: " << w2_blocks_per_expert << " moe_config_type_value: " << moe_config_type_value
-           << "\n";
-
-    // config_t::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -126,16 +105,13 @@ void kernel_main() {
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Offsets for layer_id
-    constexpr uint32_t w0_size_per_expert = detail::div_up<w0_w1_dram_tiles_h, w0_w1_block_tiles_h>() *
-                                            w0_w1_block_tiles_h * config_t::IN2_TILES_PER_STEP * w0_w1_tile_size;
-    constexpr uint32_t w0_w1_total_size_per_expert = 2 * w0_size_per_expert;
 
+    constexpr uint32_t w0_w1_total_size_per_expert = w0_w1_blocks_per_expert * 2 * w0_w1_bytes_per_txn;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
     // W2: same approach
-    constexpr uint32_t w2_total_size_per_expert =
-        config_t::W2_TILES_PER_EXPERT_W * config_t::W2_TILES_PER_EXPERT_H * w2_tile_size;
+    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert * 2 * w2_bytes_per_txn;
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
