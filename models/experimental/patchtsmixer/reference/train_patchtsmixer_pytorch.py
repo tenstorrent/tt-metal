@@ -25,8 +25,15 @@ def resolve_output_dir(output_dir_arg: str) -> str:
     if not candidate:
         raise ValueError("--output_dir must be a non-empty path")
 
+    # Reject null bytes and other non-printable characters that can bypass path checks.
+    if "\x00" in candidate or any(c < " " for c in candidate):
+        raise ValueError(f"--output_dir contains illegal characters: {candidate!r}")
+
     # Relative paths are anchored to the PatchTSMixer demo directory.
-    resolved = os.path.abspath(candidate if os.path.isabs(candidate) else os.path.join(base_dir, candidate))
+    safe_candidate = os.path.normpath(candidate)
+    resolved = os.path.abspath(
+        safe_candidate if os.path.isabs(safe_candidate) else os.path.join(base_dir, safe_candidate)
+    )
 
     # Ensure final path stays under the safelisted base directory.
     if os.path.commonpath([resolved, base_dir]) != base_dir:
