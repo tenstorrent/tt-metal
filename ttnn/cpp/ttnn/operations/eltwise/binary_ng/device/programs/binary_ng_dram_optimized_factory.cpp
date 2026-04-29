@@ -21,11 +21,161 @@
 #include <cstdlib>
 #include <limits>
 #include <optional>
-#include <unordered_set>
 #include <algorithm>
+#include <random>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+
+using tt::tt_metal::CoreRange;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::IDevice;
+
+// Perf-tuning knob: how many worker cores stream tiles for each DRAM bank.
+// total_cores = kCoresPerDramBank * device->num_dram_channels()
+// kCoresPerDramBank = 1 reproduces the original 12-core (1 per bank) behavior on Wormhole.
+// Each bank's tiles are split contiguously across its kCoresPerDramBank cores;
+// cores are picked to minimize Manhattan distance to their bank's NOC endpoint.
+// constexpr uint32_t kCoresPerDramBank = 1;
+// constexpr uint32_t kFirstUnavailableWorkerPhysicalRow = 10;
+
+// struct DramCoreWorkAssignment {
+//     CoreCoord core;
+//     uint32_t dram_bank = 0;
+//     uint32_t slot = 0;
+//     uint32_t tile_ofs = 0;
+//     uint32_t num_tiles = 0;
+// };
+
+// bool is_worker_physical_row_available(const CoreCoord& worker_phys) {
+//     return worker_phys.y < kFirstUnavailableWorkerPhysicalRow;
+// }
+
+// inline uint32_t torus_dist(int a, int b, int n) {
+//     int d = (a - b) % n;
+//     if (d < 0) {
+//         d += n;
+//     }
+//     return static_cast<uint32_t>(d);
+// }
+
+// uint32_t dynamic_dram_worker_score(const CoreCoord& worker_phys, const CoreCoord& dram_phys, const CoreCoord& grid) {
+//     const int wx = static_cast<int>(worker_phys.x);
+//     const int wy = static_cast<int>(worker_phys.y);
+//     const int dx = static_cast<int>(dram_phys.x);
+//     const int dy = static_cast<int>(dram_phys.y);
+//     const int grid_x = static_cast<int>(grid.x);
+//     const int grid_y = static_cast<int>(grid.y);
+
+//     const uint32_t dram_to_worker_noc0 = torus_dist(wx, dx, grid_x) + torus_dist(wy, dy, grid_y);
+//     const uint32_t dram_to_worker_noc1 = torus_dist(dx, wx, grid_x) + torus_dist(dy, wy, grid_y);
+//     return std::min(dram_to_worker_noc0, dram_to_worker_noc1);
+// }
+
+// CoreRangeSet core_range_set_from_assignments(const std::vector<DramCoreWorkAssignment>& assignments) {
+//     std::vector<CoreRange> core_ranges;
+//     core_ranges.reserve(assignments.size());
+//     for (const auto& assignment : assignments) {
+//         core_ranges.emplace_back(assignment.core, assignment.core);
+//     }
+//     return CoreRangeSet(core_ranges);
+// // }
+
+[[maybe_unused]] std::pair<CoreRangeSet, std::map<CoreCoord, bool>> double_dram_core_coords() {
+    //
+    // std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
+    //                                                                  // (11,0)
+    //                                                                  {{0, 1}, {7, 7}},
+    //                                                                  // 1,0
+    //                                                                  {{0, 0}, {0, 7}},
+    //                                                                  // 5,0
+    //                                                                  {{4, 0}, {4, 7}},
+    //                                                                  // 7,0
+    //                                                                  {{5, 0}, {5, 7}},
+    //                                                                  // 1,5
+    //                                                                  {{0, 4}, {0, 3}},
+    //                                                                  // 11,5
+    //                                                                  {{0, 5}, {0, 6}},
+    //                                                                  // 2,5
+    //                                                                  {{1, 4}, {1, 3}},
+    //                                                                  // 9,5
+    //                                                                  {{7, 4}, {7, 3}},
+    //                                                                  // 8,5
+    //                                                                  {{6, 4}, {6, 3}},
+    //                                                                  // 3,5
+    //                                                                  {{2, 4}, {2, 3}},
+    //                                                                  // 5,5
+    //                                                                  {{4, 4}, {4, 3}},
+    //                                                                  // 7,5
+    //                                                                  {{5, 4}, {5, 3}}};
+
+    // noc swap for 4,7, 0,7, 5,7 0,3  1,3, 7,3  6,3  2,3, 4,3 5,3   (y,x)
+    //  Need to swap all cores, I use y,x format , CoreCoord use x,y format.
+
+    // std::vector<CoreCoord> swap_noc_cores = {
+    //     CoreCoord(7, 7),
+    //     CoreCoord(0, 7),
+    //     CoreCoord(4, 7),
+    //     CoreCoord(5, 7),
+    //     CoreCoord(0, 3),
+    //     CoreCoord(1, 3),
+    //     CoreCoord(7, 3),
+    //     CoreCoord(6, 3),
+    //     CoreCoord(2, 3),
+    //     CoreCoord(4, 3),
+    //     CoreCoord(5, 3)};
+
+    std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
+                                                                     // (11,0)
+                                                                     {{0, 1}, {0, 2}},
+                                                                     // 1,0
+                                                                     {{0, 0}, {1, 0}},
+                                                                     // 5,0
+                                                                     {{4, 0}, {4, 1}},
+                                                                     // 7,0
+                                                                     {{5, 0}, {5, 1}},
+                                                                     // 1,5
+                                                                     {{0, 4}, {0, 5}},
+                                                                     // 11,5
+                                                                     {{0, 6}, {0, 7}},
+                                                                     // 2,5
+                                                                     {{1, 4}, {1, 5}},
+                                                                     // 9,5
+                                                                     {{7, 4}, {7, 5}},
+                                                                     // 8,5
+                                                                     {{6, 4}, {6, 5}},
+                                                                     // 3,5
+                                                                     {{2, 4}, {2, 5}},
+                                                                     // 5,5
+                                                                     {{4, 4}, {4, 5}},
+                                                                     // 7,5
+                                                                     {{5, 4}, {5, 5}}};
+    std::vector<CoreCoord> swap_noc_cores;
+    //{0, 6} is only one without swap
+
+    auto num_of_cores_per_bank = 2;  // dram_worker_cores_ordered[0].size();
+    const uint32_t num_banks = 12;
+    std::vector<CoreRange> all_cores(num_banks * num_of_cores_per_bank, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    std::map<CoreCoord, bool> swap_noc_cores_map;
+
+    for (auto idx = 0; idx < num_of_cores_per_bank; ++idx) {
+        for (auto bank_id = 0; bank_id < dram_worker_cores_ordered.size(); ++bank_id) {
+            const auto& dram_cores = dram_worker_cores_ordered[bank_id];
+
+            bool is_swap_noc_core =
+                std::find(swap_noc_cores.begin(), swap_noc_cores.end(), dram_cores[idx]) != swap_noc_cores.end();
+
+            auto core = CoreCoord(dram_cores[idx].y, dram_cores[idx].x);
+            // std::cout << "core: " << core.x << ", " << core.y << " is_swap_noc_core: " << is_swap_noc_core <<
+            // std::endl;
+            all_cores[bank_id + idx * num_banks] = CoreRange(core);
+            swap_noc_cores_map[core] = is_swap_noc_core;
+        }
+    }
+
+    return {CoreRangeSet(all_cores), std::move(swap_noc_cores_map)};
+}
 
 // TODO: Move to utilities?
 uint32_t get_noc_max_burst_size(const ttnn::MeshDevice& mesh_device) {
@@ -70,9 +220,12 @@ uint32_t compute_num_tiles_per_batches(
     bool fp32_dest_acc_en =
         ttnn::operations::binary_ng::program::is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
 
+    const uint32_t max_tiles_per_dst = dtype == tt::DataFormat::Bfp4_b ? 8 : 16;
     return fp32_dest_acc_en or operation_attributes.is_sfpu
                ? 1
-               : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / (single_tile_size);
+               : std::min(
+                     max_tiles_per_dst,
+                     CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / single_tile_size);
 }
 
 template <bool initialize_args>
@@ -86,7 +239,8 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     const tt::tt_metal::KernelHandle compute_kernel_id,
     const CoreRangeSet& all_device_cores,
     const uint32_t num_batches,
-    const uint32_t num_tiles_per_batch) {
+    const uint32_t num_tiles_per_batch,
+    const std::map<CoreCoord, bool>& swap_noc_cores_map) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -120,10 +274,37 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
     std::vector<uint32_t> core_ids;
+
+    // device->get_mesh_device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+    const auto num_dram_banks = 12;
+    std::vector<int> tiles_per_bank(num_dram_banks, 0);
+    auto cores_per_bank = num_cores_total / num_dram_banks;
+
+    // std::cout << "num_tiles: " << num_tiles << std::endl;
+    // std::cout << "num_cores_total: " << num_cores_total << std::endl;
+    // std::cout << "num_dram_banks: " << num_dram_banks << std::endl;
+    // std::cout << "cores_per_bank: " << cores_per_bank << std::endl;
+
     for (uint32_t core_id = 0; core_id < num_cores_total; ++core_id) {
         const CoreCoord& core = cores.at(core_id);
+        const bool is_swap_noc_core = swap_noc_cores_map.contains(core) ? swap_noc_cores_map.at(core) : false;
 
-        uint32_t num_tiles_per_core = num_tiles / num_cores_total + (core_id < num_tiles % num_cores_total ? 1 : 0);
+        // uint32_t num_tiles_per_core = num_tiles / num_cores_total + ((core_id < num_tiles % num_cores_total) ? 1 :
+        // 0);
+
+        auto bank_id = core_id % num_dram_banks;
+        auto slot_id = core_id / num_dram_banks;
+        uint32_t pages_in_bank = num_tiles / num_dram_banks + (bank_id < num_tiles % num_dram_banks ? 1 : 0);
+        uint32_t num_tiles_per_core =
+            pages_in_bank / cores_per_bank + (slot_id < pages_in_bank % cores_per_bank ? 1 : 0);
+        uint32_t bank_page_offset = 0;
+        for (uint32_t slot = 0; slot < slot_id; ++slot) {
+            bank_page_offset += pages_in_bank / cores_per_bank + (slot < pages_in_bank % cores_per_bank ? 1 : 0);
+        }
+        uint32_t tile_ofs = bank_id + bank_page_offset * num_dram_banks;
+
+        // std::cout << "core_id: " << core_id << " core: " << core.x << ", " << core.y
+        //           << " num_tiles_per_core: " << num_tiles_per_core << " tile_ofs: " << tile_ofs << std::endl;
 
         if constexpr (!initialize_args) {
             // RuntimeArgsData
@@ -135,32 +316,27 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             writer_args[1] = 0;
         }
 
-        uint32_t vc = core_id & 0x3;
-        core_ids.push_back(core_id);
-        for (uint32_t j = 0; j < core_id; ++j) {
-            auto core_ = cores[j];
-
-            if (core_.y == core.y and ((core_id & 0x3) == (core_ids[j] & 0x3))) {  // same vc and same row
-                vc = (vc + 1) & 0x3;
-                break;
-            }
-        }
-
         std::vector<uint32_t> reader_args_vec = {
             a_tensor.buffer()->address(),
             b_tensor.buffer()->address(),
-            core_id,
+            tile_ofs,
             num_tiles_per_core,
+            num_batches,
             num_tiles_per_batch,
-            num_batches};
+            is_swap_noc_core ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0};
 
         std::vector<uint32_t> compute_args_vec = {
             num_tiles_per_core,
-            num_tiles_per_batch,
             num_batches,
+            num_tiles_per_batch,
         };
         std::vector<uint32_t> writer_args_vec = {
-            output.buffer()->address(), core_id, num_tiles_per_core, num_tiles_per_batch, num_batches};
+            output.buffer()->address(),
+            tile_ofs,
+            num_tiles_per_core,
+            num_batches,
+            num_tiles_per_batch,
+            is_swap_noc_core ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1};
 
         reader_args_array[core_id] = std::move(reader_args_vec);
         compute_args_array[core_id] = std::move(compute_args_vec);
@@ -182,6 +358,97 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
         SetRuntimeArgs(program, compute_kernel_id, cores, compute_args_array);
         SetRuntimeArgs(program, writer_kernel_id, cores, writer_args_array);
     }
+}
+
+[[maybe_unused]] CoreRangeSet get_dram_optimal_cores(IDevice* device) {
+    auto all_worker_cores_ordered =
+        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+
+    // The DRAM-bank-adjacent worker list is a fixed physical layout. Depending on DispatchCoreAxis
+    // (ROW vs. COL), some of those cores can be reserved as dispatch cores and are therefore both
+    // illegal for kernel placement and outside the compute-with-storage grid. Build the set of
+    // available compute cores from compute_with_storage_grid_size() (which already excludes
+    // dispatch-reserved rows/columns), optionally subtract any additional known dispatch cores,
+    // and, for any DRAM-bank worker that is not usable or is a duplicate, substitute the nearest
+    // free worker core so that every DRAM bank still has a 1:1 core assignment.
+    const auto compute_grid = device->compute_with_storage_grid_size();
+    const auto& dispatch_cores = tt::tt_metal::get_logical_dispatch_cores_on_user_chips();
+
+    std::vector<CoreCoord> available_workers_vec;
+    available_workers_vec.reserve(compute_grid.x * compute_grid.y);
+    for (uint32_t y = 0; y < compute_grid.y; ++y) {
+        for (uint32_t x = 0; x < compute_grid.x; ++x) {
+            CoreCoord w{x, y};
+            if (std::ranges::find(dispatch_cores, w) == dispatch_cores.end()) {
+                available_workers_vec.push_back(w);
+            }
+        }
+    }
+    std::unordered_set<CoreCoord> available_set(available_workers_vec.begin(), available_workers_vec.end());
+
+    // To handle scenarios where some of the optimal cores are used as dispatch cores
+    auto find_nearest_free_worker = [&](const CoreCoord& target,
+                                        const std::unordered_set<CoreCoord>& used) -> std::optional<CoreCoord> {
+        std::optional<CoreCoord> best;
+        int best_dist = std::numeric_limits<int>::max();
+        int best_dx = std::numeric_limits<int>::max();
+        for (const auto& w : available_workers_vec) {
+            if (used.contains(w)) {
+                continue;
+            }
+            int dx = std::abs(static_cast<int>(w.x) - static_cast<int>(target.x));
+            int dy = std::abs(static_cast<int>(w.y) - static_cast<int>(target.y));
+            int dist = dx + dy;
+            // Prefer the closest core; on ties prefer the one with the smallest column delta
+            // (DRAM banks run along columns on WH/BH, so staying in the same row preserves locality).
+            if (dist < best_dist || (dist == best_dist && dx < best_dx)) {
+                best_dist = dist;
+                best_dx = dx;
+                best = w;
+            }
+        }
+        return best;
+    };
+
+    std::unordered_set<CoreCoord> used_cores;
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(all_worker_cores_ordered.size());
+    for (const auto& c : all_worker_cores_ordered) {
+        CoreCoord chosen = c;
+        auto& w = chosen;
+        if (w.x == 3 && w.y == 7) {
+            w.x = 1;
+            w.y = 0;
+        }
+        if (w.x == 7 && w.y == 3) {
+            w.x = 5;
+            w.y = 0;
+        }
+        const bool is_reserved = !available_set.contains(c);
+        const bool is_duplicate = used_cores.contains(c);
+        if (is_reserved || is_duplicate) {
+            auto replacement = find_nearest_free_worker(c, used_cores);
+            TT_FATAL(
+                replacement.has_value(),
+                "No free worker core available to substitute for DRAM-bank-adjacent core ({}, {}){}.",
+                c.x,
+                c.y,
+                is_reserved ? " (reserved as dispatch core)" : " (duplicate)");
+            log_warning(
+                tt::LogOp,
+                "DRAM-bank-adjacent core ({}, {}) is {}; substituting nearest free worker ({}, {}).",
+                c.x,
+                c.y,
+                is_reserved ? "reserved as dispatch" : "already used",
+                replacement->x,
+                replacement->y);
+            chosen = *replacement;
+        }
+        used_cores.insert(chosen);
+        core_ranges.emplace_back(chosen, chosen);
+    }
+
+    return CoreRangeSet(core_ranges);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -292,95 +559,9 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     using namespace tt;
     using namespace tt::tt_metal;
 
-    auto* device = args.input_tensor_a.device();
-
-    auto all_worker_cores_ordered =
-        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
-
-    // The DRAM-bank-adjacent worker list is a fixed physical layout. Depending on DispatchCoreAxis
-    // (ROW vs. COL), some of those cores can be reserved as dispatch cores and are therefore both
-    // illegal for kernel placement and outside the compute-with-storage grid. Build the set of
-    // available compute cores from compute_with_storage_grid_size() (which already excludes
-    // dispatch-reserved rows/columns), optionally subtract any additional known dispatch cores,
-    // and, for any DRAM-bank worker that is not usable or is a duplicate, substitute the nearest
-    // free worker core so that every DRAM bank still has a 1:1 core assignment.
-    const auto compute_grid = device->compute_with_storage_grid_size();
-    const auto& dispatch_cores = tt::tt_metal::get_logical_dispatch_cores_on_user_chips();
-
-    std::vector<CoreCoord> available_workers_vec;
-    available_workers_vec.reserve(compute_grid.x * compute_grid.y);
-    for (uint32_t y = 0; y < compute_grid.y; ++y) {
-        for (uint32_t x = 0; x < compute_grid.x; ++x) {
-            CoreCoord w{x, y};
-            if (std::ranges::find(dispatch_cores, w) == dispatch_cores.end()) {
-                available_workers_vec.push_back(w);
-            }
-        }
-    }
-    std::unordered_set<CoreCoord> available_set(available_workers_vec.begin(), available_workers_vec.end());
-
-    auto find_nearest_free_worker = [&](const CoreCoord& target,
-                                        const std::unordered_set<CoreCoord>& used) -> std::optional<CoreCoord> {
-        std::optional<CoreCoord> best;
-        int best_dist = std::numeric_limits<int>::max();
-        int best_dx = std::numeric_limits<int>::max();
-        for (const auto& w : available_workers_vec) {
-            if (used.contains(w)) {
-                continue;
-            }
-            int dx = std::abs(static_cast<int>(w.x) - static_cast<int>(target.x));
-            int dy = std::abs(static_cast<int>(w.y) - static_cast<int>(target.y));
-            int dist = dx + dy;
-            // Prefer the closest core; on ties prefer the one with the smallest column delta
-            // (DRAM banks run along columns on WH/BH, so staying in the same row preserves locality).
-            if (dist < best_dist || (dist == best_dist && dx < best_dx)) {
-                best_dist = dist;
-                best_dx = dx;
-                best = w;
-            }
-        }
-        return best;
-    };
-
-    std::unordered_set<CoreCoord> used_cores;
-    std::vector<CoreRange> core_ranges;
-    core_ranges.reserve(all_worker_cores_ordered.size());
-    for (const auto& c : all_worker_cores_ordered) {
-        CoreCoord chosen = c;
-        auto& w = chosen;
-        if (w.x == 3 && w.y == 7) {
-            w.x = 1;
-            w.y = 0;
-        }
-        if (w.x == 7 && w.y == 3) {
-            w.x = 7;
-            w.y = 0;
-        }
-        const bool is_reserved = !available_set.contains(c);
-        const bool is_duplicate = used_cores.contains(c);
-        if (is_reserved || is_duplicate) {
-            auto replacement = find_nearest_free_worker(c, used_cores);
-            TT_FATAL(
-                replacement.has_value(),
-                "No free worker core available to substitute for DRAM-bank-adjacent core ({}, {}){}.",
-                c.x,
-                c.y,
-                is_reserved ? " (reserved as dispatch core)" : " (duplicate)");
-            log_warning(
-                tt::LogOp,
-                "DRAM-bank-adjacent core ({}, {}) is {}; substituting nearest free worker ({}, {}).",
-                c.x,
-                c.y,
-                is_reserved ? "reserved as dispatch" : "already used",
-                replacement->x,
-                replacement->y);
-            chosen = *replacement;
-        }
-        used_cores.insert(chosen);
-        core_ranges.emplace_back(chosen, chosen);
-    }
-
-    auto dram_optimal_cores = CoreRangeSet(core_ranges);
+    // std::map<CoreCoord, bool> swap_noc_cores_map;
+    //  auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_dram_optimal_cores(args.input_tensor_a.device());
+    auto [dram_optimal_cores, swap_noc_cores_map] = CMAKE_UNIQUE_NAMESPACE::double_dram_core_coords();
 
     Program program{};
     auto dtype = tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
@@ -451,19 +632,28 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     tt::tt_metal::TensorAccessorArgs(args.input_tensor_a.buffer()).append_to(reader_compile_time_vec);
     tt::tt_metal::TensorAccessorArgs(args.input_tensor_b->buffer()).append_to(reader_compile_time_vec);
 
+    // READER
     std::map<std::string, std::string> reader_defines;
+    if (args.input_tensor_a.dtype() == DataType::BFLOAT4_B) {
+        reader_defines["BFLOAT4_B_TILES"] = "1";
+    }
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         kernel_prefix + "dataflow/reader_interleaved_dram_optimized.cpp",
         dram_optimal_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, reader_defines));
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_0,
+            .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC,  // DM_DYNAMIC_NOC
+            .compile_args = reader_compile_time_vec,
+            .defines = reader_defines,
+        });
 
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     /***************   WRITER KERNEL ***************/
-    // TODO: We can't use num_batches and num_tiles_per_batch as compile time aruments, the op expect one kernels for
-    // tensors with different shapes.
+
     std::vector<uint32_t> writer_compile_time_vec = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
 
@@ -472,7 +662,13 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         program,
         kernel_prefix + "dataflow/writer_interleaved_dram_optimized.cpp",
         dram_optimal_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_vec, writer_defines));
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_1,
+            .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            .compile_args = writer_compile_time_vec,
+            .defines = writer_defines,
+        });
 
     /***************   COMPUTE KERNEL ***************/
 
@@ -571,11 +767,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         }
     }
 
-    // TODO: Don't hardcode num_batches and num_tiles_per_batch, that should be runtime args, when device compute hash,
-    // that info is not taken into account
-    std::vector<uint32_t> compute_compile_time_vec = {
-
-    };
+    std::vector<uint32_t> compute_compile_time_vec = {};
     std::string compute_kernel_path = operation_attributes.is_sfpu ? "compute/eltwise_binary_sfpu_dram_optimized.cpp"
                                                                    : "compute/eltwise_binary_dram_optimized.cpp";
     // if (operation_attributes.is_where_op) {
@@ -623,7 +815,8 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         compute_kernel_id,
         dram_optimal_cores,
         num_batches,
-        num_tiles_per_batch);
+        num_tiles_per_batch,
+        swap_noc_cores_map);
     return {
         std::move(program),
         {reader_kernel_id,
@@ -645,6 +838,8 @@ void BinaryNgDramOptimizedProgram::override_runtime_arguments(
     Tensor& tensor_return_value) {
     const auto& sh_var = cached_program.shared_variables;
 
+    auto [_, swap_noc_cores_map] = CMAKE_UNIQUE_NAMESPACE::double_dram_core_coords();
+
     CMAKE_UNIQUE_NAMESPACE::set_eltwise_binary_runtime_args_for_dram_cores<false>(
         cached_program.program,
         tensor_args.input_tensor_a,
@@ -655,6 +850,7 @@ void BinaryNgDramOptimizedProgram::override_runtime_arguments(
         sh_var.eltwise_kernel_id,
         sh_var.dram_device_cores,
         CMAKE_UNIQUE_NAMESPACE::compute_num_batches(tensor_args),
-        CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, tensor_args, tensor_return_value));
+        CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, tensor_args, tensor_return_value),
+        swap_noc_cores_map);
 }
 }  // namespace ttnn::operations::binary_ng::program

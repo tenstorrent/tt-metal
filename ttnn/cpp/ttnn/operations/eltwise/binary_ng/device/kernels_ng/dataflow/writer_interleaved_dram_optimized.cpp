@@ -15,12 +15,11 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
     const uint32_t num_batches = get_arg_val<uint32_t>(3);
     const uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(4);
+    const uint32_t noc = get_arg_val<uint32_t>(5);
 
     if (num_tiles == 0) {
         return;
     }
-
-    constexpr uint8_t noc = 1;  // 0;
 
     const uint32_t tile_size = get_tile_size(cb_dst);
     const auto dst_tensor = TensorAccessor(dst_args, dst_addr, tile_size);

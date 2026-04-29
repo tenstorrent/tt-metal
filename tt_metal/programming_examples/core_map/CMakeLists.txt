@@ -20,7 +20,8 @@ if(TARGET Metalium::Metal)
     target_include_directories(
         metal_example_core_map
         BEFORE
-        PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
     )
 endif()
 

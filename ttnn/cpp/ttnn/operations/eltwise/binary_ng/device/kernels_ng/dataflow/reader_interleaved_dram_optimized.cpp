@@ -21,6 +21,7 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(3);
     const uint32_t num_batches = get_arg_val<uint32_t>(4);
     const uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(5);
+    const uint32_t noc = get_arg_val<uint32_t>(6);
 
     if (num_tiles == 0) {
         return;
@@ -39,13 +40,13 @@ void kernel_main() {
     //   best_noc  : 1  1 | 0  0 | 1  1 | 0  0
     //
     // i.e. the decision is bit 1 of logical_x.
-    const uint8_t logical_x = get_absolute_logical_x();
-    const uint8_t logical_y = get_absolute_logical_y();
+    // const uint8_t logical_x = get_absolute_logical_x();
+    // const uint8_t logical_y = get_absolute_logical_y();
     // uint8_t noc = ((logical_x >> 1) & 1u) ? 1u : 0u;
     // if ((logical_y == 7 && logical_x == 7)) {
     //     noc = 1;
     // }
-    uint8_t noc = 0;
+    // uint8_t noc = 0;
 
     const uint32_t a_tile_size = get_tile_size(cb_a);
     const uint32_t b_tile_size = get_tile_size(cb_b);
