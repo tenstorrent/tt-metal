@@ -123,7 +123,11 @@ runs:
         chunk_index=0
         current_chunk_text=""
 
-        # Process each regression
+        # ── Per-job granularity ──────────────────────────────────────────
+        # Each failing job gets its own top-level Slack message (and its
+        # own boundary marker so the send step opens a new thread).
+        # The boundary name is "workflow_name / job_name" so the ts_map
+        # can route auto-triage threads to the correct message.
         for i in $(seq 0 $((REGRESSION_COUNT - 1))); do
           regression=$(jq -c ".[$i]" "$tmp_file")
           regression_name=$(echo "$regression" | jq -r '.name // "Unknown"')
@@ -134,118 +138,39 @@ runs:
 
           echo "Processing regression $((i + 1)): $regression_name with $failing_jobs_count failing jobs"
 
-          # Flush accumulated content from previous regressions so each pipeline
-          # starts on its own top-level Slack message.
-          if [ -n "$current_chunk_text" ]; then
-            echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
-            chunk_index=$((chunk_index + 1))
-            current_chunk_text=""
-          fi
-          # Mark this chunk index as the start of a new regression.
-          # The slack_send step uses these boundary files to decide when to open
-          # a new top-level message vs. reply in an existing thread.
-          echo "$regression_name" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
-
           if [ "$failing_jobs_count" -eq 0 ]; then
-            # No failing jobs, just add the header
-            test_text="${current_chunk_text}"
-            if [ -n "$test_text" ]; then
-              test_text="${test_text}${NEWLINE}${regression_header}"
-            else
-              test_text="${HEADER_PREFIX}${regression_header}"
-            fi
-
-            test_length=$(printf '%s' "$test_text" | wc -c)
-            if [ "$test_length" -gt "$MAX_BLOCK_TEXT_LENGTH" ] && [ -n "$current_chunk_text" ]; then
-              # Save current chunk and start new one
+            # No failing jobs — emit a single top-level message with just the header.
+            if [ -n "$current_chunk_text" ]; then
               echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
               chunk_index=$((chunk_index + 1))
-              current_chunk_text="${HEADER_PREFIX}${regression_header}"
-            else
-              current_chunk_text="$test_text"
+              current_chunk_text=""
             fi
+            echo "$regression_name" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
+            current_chunk_text="${HEADER_PREFIX}${regression_header}"
           else
-            # Has failing jobs - may need to split them
-            jobs_added=0
-            is_first_job_batch=true
+            # Each failing job gets its own top-level Slack message.
+            for j in $(seq 0 $((failing_jobs_count - 1))); do
+              job=$(echo "$regression" | jq -c ".failing_jobs[$j]")
+              job_text=$(format_single_job "$job")
+              job_name=$(echo "$job" | jq -r 'if type == "object" then .name // "Unknown" else . end')
 
-            while [ "$jobs_added" -lt "$failing_jobs_count" ]; do
-              # Build text for this batch of jobs
-              if [ "$is_first_job_batch" = true ]; then
-                # First batch includes the regression header
-                if [ -n "$current_chunk_text" ]; then
-                  batch_text="${current_chunk_text}${NEWLINE}${regression_header}"
-                else
-                  batch_text="${HEADER_PREFIX}${regression_header}"
-                fi
-              else
-                # Continuation batch
-                if [ -n "$current_chunk_text" ]; then
-                  batch_text="${current_chunk_text}${NEWLINE}_(continued)_ *${regression_name}*"
-                else
-                  batch_text="${HEADER_PREFIX}_(continued)_ *${regression_name}*"
-                fi
-              fi
-
-              # Add jobs one at a time until we hit the limit
-              jobs_in_this_batch=0
-              for j in $(seq "$jobs_added" $((failing_jobs_count - 1))); do
-                job=$(echo "$regression" | jq -c ".failing_jobs[$j]")
-                job_text=$(format_single_job "$job")
-
-                if [ -z "$job_text" ]; then
-                  jobs_added=$((jobs_added + 1))
-                  continue
-                fi
-
-                test_batch="${batch_text}${NEWLINE}${job_text}"
-                test_length=$(printf '%s' "$test_batch" | wc -c)
-
-                # Reserve space for chunk indicator
-                test_length_with_buffer=$((test_length + CHUNK_INDICATOR_BUFFER))
-
-                if [ "$test_length_with_buffer" -gt "$MAX_BLOCK_TEXT_LENGTH" ]; then
-                  # This job would exceed the limit
-                  if [ "$jobs_in_this_batch" -eq 0 ] && [ -z "$current_chunk_text" ]; then
-                    # This single job is too large even for a fresh chunk - add it anyway
-                    batch_text="${test_batch}"
-                    jobs_added=$((jobs_added + 1))
-                    jobs_in_this_batch=$((jobs_in_this_batch + 1))
-                    echo "⚠️ Warning: Single job exceeds limit, adding anyway"
-                  fi
-                  # Stop adding jobs to this batch
-                  break
-                else
-                  # Add this job
-                  batch_text="${test_batch}"
-                  jobs_added=$((jobs_added + 1))
-                  jobs_in_this_batch=$((jobs_in_this_batch + 1))
-                fi
-              done
-
-              # If we added jobs but didn't finish, save this chunk and continue
-              if [ "$jobs_added" -lt "$failing_jobs_count" ] && [ "$jobs_in_this_batch" -gt 0 ]; then
-                echo "$batch_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
+              # Flush any accumulated text from the previous job/regression.
+              if [ -n "$current_chunk_text" ]; then
+                echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
                 chunk_index=$((chunk_index + 1))
                 current_chunk_text=""
-                is_first_job_batch=false
-              else
-                # All jobs fit or we're done
-                current_chunk_text="$batch_text"
-                is_first_job_batch=false
               fi
 
-              # Safety check to prevent infinite loop
-              if [ "$jobs_in_this_batch" -eq 0 ] && [ "$jobs_added" -lt "$failing_jobs_count" ]; then
-                # No progress made - save what we have and continue after skipping this job
-                if [ -n "$current_chunk_text" ]; then
-                  echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
-                  chunk_index=$((chunk_index + 1))
-                  current_chunk_text=""
-                fi
-                is_first_job_batch=false
-                # Force increment jobs_added to skip problematic job and allow next iteration
-                jobs_added=$((jobs_added + 1))
+              # Boundary key: "workflow_name / job_name" — used by the
+              # send step to record per-job ts entries in slack_ts_map.
+              boundary_key="${regression_name} / ${job_name}"
+              echo "$boundary_key" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
+              echo "  → Job boundary [$chunk_index]: $boundary_key"
+
+              # Build message: workflow header + single job line
+              current_chunk_text="${HEADER_PREFIX}${regression_header}"
+              if [ -n "$job_text" ]; then
+                current_chunk_text="${current_chunk_text}${NEWLINE}${job_text}"
               fi
             done
           fi

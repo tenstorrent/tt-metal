@@ -119,20 +119,15 @@ async function run() {
         .replace(/^\.github\/workflows\//, '')
         .replace(/\.ya?ml$/i, '');
 
-      // Resolve the Slack thread ts for this specific pipeline.
-      // The slack-report action keys the map by workflow.name (display name).
-      // Fall back to the global slackTs for backward compatibility.
-      const pipelineTs = slackTsMap[workflow.name] || slackTsMap[workflowFileName] || slackTs;
-      if (pipelineTs !== slackTs) {
-        core.info(`Using pipeline-specific ts=${pipelineTs} for ${workflow.name}`);
-      }
-
       const allFailingJobs = workflow.failing_jobs || [];
 
       core.info(`Processing workflow: ${workflowFileName} with ${allFailingJobs.length} failing job(s)`);
 
       if (allFailingJobs.length === 0) {
         core.warning(`No failing jobs found for workflow: ${workflowFileName}`);
+
+        // Resolve the Slack thread ts — fall back to workflow-level then global.
+        const pipelineTs = slackTsMap[workflow.name] || slackTsMap[workflowFileName] || slackTs;
 
         // Send Slack notification if credentials are available
         if (pipelineTs && slackChannelId && slackBotToken) {
@@ -150,11 +145,14 @@ async function run() {
       const failingJobs = allFailingJobs.slice(0, MAX_JOBS_PER_WORKFLOW);
       if (allFailingJobs.length > MAX_JOBS_PER_WORKFLOW) {
         core.warning(`Workflow ${workflowFileName} has ${allFailingJobs.length} failing jobs, capping auto-triage to first ${MAX_JOBS_PER_WORKFLOW} to control cost`);
-        if (pipelineTs && slackChannelId && slackBotToken) {
+        // Use the first job's ts (or workflow-level fallback) for the cap message
+        const firstJobName = (typeof allFailingJobs[0] === 'object' && allFailingJobs[0]?.name) ? allFailingJobs[0].name : String(allFailingJobs[0]);
+        const capTs = slackTsMap[`${workflow.name} / ${firstJobName}`] || slackTsMap[workflow.name] || slackTsMap[workflowFileName] || slackTs;
+        if (capTs && slackChannelId && slackBotToken) {
           try {
             const skipped = allFailingJobs.length - MAX_JOBS_PER_WORKFLOW;
             const message = `⚠️ \`${workflowFileName}\` has ${allFailingJobs.length} failing jobs. Auto-triage capped to ${MAX_JOBS_PER_WORKFLOW} jobs (${skipped} skipped). This usually indicates a systemic issue or shared root cause.`;
-            await sendSlackMessage(slackChannelId, slackBotToken, message, pipelineTs);
+            await sendSlackMessage(slackChannelId, slackBotToken, message, capTs);
           } catch (error) {
             core.warning(`Failed to send Slack cap notification: ${error.message}`);
           }
@@ -164,6 +162,15 @@ async function run() {
       for (const job of failingJobs) {
         // Handle both old format (string) and new format ({name, url} object)
         const jobName = (typeof job === 'object' && job !== null && job.name) ? job.name : String(job);
+
+        // Resolve the Slack thread ts for this specific job.
+        // The slack-report action now keys the map as "workflow_name / job_name".
+        // Fall back to workflow-level key, then global ts for backward compatibility.
+        const jobTs = slackTsMap[`${workflow.name} / ${jobName}`] || slackTsMap[workflow.name] || slackTsMap[workflowFileName] || slackTs;
+        if (jobTs && jobTs !== slackTs) {
+          core.info(`Using job-specific ts=${jobTs} for ${workflow.name} / ${jobName}`);
+        }
+
         core.info(`Triggering auto-triage for workflow: ${workflowFileName}, job: ${jobName}`);
 
         try {
@@ -175,7 +182,7 @@ async function run() {
             inputs: {
               workflow_name: workflowFileName,
               job_name: jobName,
-              slack_ts: pipelineTs,
+              slack_ts: jobTs,
               'send-slack-message': sendSlackMessageFlag,
               slack_channel_id: slackChannelId
             }

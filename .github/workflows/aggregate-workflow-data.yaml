@@ -24,7 +24,8 @@ on:
         description: |
           (Testing only) JSON array of ≤3 fake regression objects. When set, skips fetch+analyze
           and sends these directly to Slack + auto-triage. Max 3 entries enforced.
-          Example: [{"name":"Fake Pipeline A","workflow_path":".github/workflows/sanity-tests.yaml","failing_jobs":[{"name":"Fake Job 1","url":"https://github.com/tenstorrent/tt-metal/actions/runs/1"}]},{"name":"Fake Pipeline B","workflow_path":".github/workflows/blackhole-post-commit.yaml","failing_jobs":[{"name":"Fake Job 2","url":"https://github.com/tenstorrent/tt-metal/actions/runs/2"}]},{"name":"Fake Pipeline C","workflow_path":".github/workflows/galaxy-perf-tests.yaml","failing_jobs":[{"name":"Fake Job 3","url":"https://github.com/tenstorrent/tt-metal/actions/runs/3"}]}]
+          Each failing job within a regression gets its own top-level Slack message.
+          Example: [{"name":"Fake Pipeline A","workflow_path":".github/workflows/sanity-tests.yaml","failing_jobs":[{"name":"Fake Job 1","url":"https://github.com/tenstorrent/tt-metal/actions/runs/1"},{"name":"Fake Job 2","url":"https://github.com/tenstorrent/tt-metal/actions/runs/2"}]}]
         required: false
         default: ''
 
