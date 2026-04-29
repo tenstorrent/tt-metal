@@ -38,6 +38,8 @@ _SDPA_B1S512_K_CHUNK = 128
 def _sdpa_chunks_for_seq_len(seq_len: int, batch_size: int | None = None) -> tuple[int, int]:
     """Q/K chunk sizes for SDPA. ``main`` uses fixed Q=128 for all 128-token-aligned lengths."""
     if seq_len % 128 == 0:
+        if seq_len == 512 and batch_size == 32:
+            return 256, 512
         if seq_len == 512 and batch_size == 1:
             return _SDPA_Q_CHUNK_MAIN, _SDPA_B1S512_K_CHUNK
         for k_chunk in _SDPA_K_CANDIDATES_MAIN:
@@ -111,6 +113,17 @@ def _attention_output_memory_config(
     return bge_m3_linear_activation_memory_config(max_seq_len, max_batch)
 
 
+def _create_heads_output_memory_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    mesh_device: ttnn.MeshDevice | None,
+) -> ttnn.MemoryConfig:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return ttnn.L1_MEMORY_CONFIG
+    return bge_m3_linear_activation_memory_config(max_seq_len, max_batch)
+
+
 @dataclass
 class BgeM3AttentionConfig:
     # Required weights
@@ -135,6 +148,7 @@ class BgeM3AttentionConfig:
     score_dtype: ttnn.DataType | None = None
     output_dtype: ttnn.DataType | None = None
     qkv_memcfg: ttnn.MemoryConfig | None = None
+    create_heads_memcfg: ttnn.MemoryConfig | None = None
     score_memcfg: ttnn.MemoryConfig | None = None
     output_memcfg: ttnn.MemoryConfig | None = None
 
@@ -306,7 +320,7 @@ class BgeM3Attention(LightweightModule):
             num_heads=cfg.num_heads,
             num_kv_heads=cfg.num_heads,
             transpose_k_heads=False,
-            memory_config=cfg.score_memcfg,
+            memory_config=cfg.create_heads_memcfg,
         )
         ttnn.deallocate(qkv_fused)
 
@@ -446,6 +460,8 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     act_mem = bge_m3_linear_activation_memory_config(max_seq, max_batch)
     if config.qkv_memcfg is None:
         to_set["qkv_memcfg"] = act_mem
+    if config.create_heads_memcfg is None:
+        to_set["create_heads_memcfg"] = _create_heads_output_memory_config(max_seq, max_batch, mesh_device)
     if config.score_memcfg is None:
         to_set["score_memcfg"] = act_mem
     if config.output_memcfg is None:
