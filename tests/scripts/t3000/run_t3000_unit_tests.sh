@@ -216,8 +216,24 @@ run_t3000_ttnn_tests() {
   # AsyncBuildPhaseRelayGuardFixture: GAP-43 — FIX NV + FIX NW: non-MMIO chips
   #   skipped for get_device_aiclk and clear_launch_messages_on_eth_cores in
   #   run_async_build_phase; dead relay must NOT throw through async futures.
+  # WriteCorRelayGuardFixture: GAP-44 — FIX NX: write_core() for non-MMIO chips
+  #   wraps both write_to_device + wait_for_non_mmio_flush in one try/catch so
+  #   relay timeout in set_internal_routing_info or WatcherServer::init_devices
+  #   does not propagate to MetalContext::initialize as an uncaught exception.
+  # EthTrainingFabricEriscsFixture: GAP-45 — FIX X extension: wait_eth_core_training
+  #   now also returns early when heartbeat IS 0xABCDxxxx but training stays
+  #   IN_PROGRESS after 2000ms — fabric firmware left ETH_TRAIN_STATUS_ADDR=0 via
+  #   ConfigureDeviceWithProgram .bss write; original FIX X only skipped no-heartbeat
+  #   case, missing the "fabric ERISC alive but training never written" case.
+  # RelayBrokenChipsCacheFixture: GAP-46 — FIX NY: relay_broken_chips_ cache in
+  #   Cluster::write_core() eliminates per-channel 5s UMD timeout stall after the
+  #   first failure for a dead-relay chip. Without FIX NY, FIX NX alone allows
+  #   set_internal_routing_info_for_ethernet_cores to stall 6×5s=30s per chip
+  #   (6 ETH channels × 5s UMD timeout each). FIX NY caches the first failure in
+  #   relay_broken_chips_ so channels 2-6 return immediately (0ms). Primary check
+  #   is TIMING (35s budget); FIX NX regression shows as exit non-zero.
   timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*' ; record_test
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*' ; record_test
 
   # GAP regression tests — validate race condition / ETH hang fixes.
   # Each test is a direct regression for one or more numbered fixes.

@@ -42,6 +42,8 @@ target_sources(
         test_gap42_fixnu_mmio_ethcoord_before_relay_guard.cpp
         test_gap43_fixnv_fixnw_async_build_phase_no_relay.cpp
         test_gap44_fixnx_write_core_relay_guard.cpp
+        test_gap45_fixx_ext_eth_training_fabric_erisc.cpp
+        test_gap46_fixny_relay_broken_chips_cache.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
