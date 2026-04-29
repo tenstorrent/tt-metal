@@ -185,7 +185,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         get_output_tile_c_dim(output_id),
         get_output_num_faces(output_id),
         llk::san::IGNORE,
-        get_output_narrow_tile(output_id));
+        llk::san::IGNORE);
 
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
 }
@@ -336,7 +336,7 @@ inline void llk_matmul_pack(
         get_output_tile_c_dim(output_id),
         get_output_num_faces(output_id),
         llk::san::IGNORE,
-        get_output_narrow_tile(output_id));
+        llk::san::IGNORE);
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =
