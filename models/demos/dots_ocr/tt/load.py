@@ -114,7 +114,7 @@ def load_dots_text_state_dict(
 
 def load_dots_vision_state_dict(hf_model_id_or_dir: str) -> dict:
     """
-    Load vision weights for the full TTNN VisionTransformerTT.
+    Load vision weights for the TTNN Dots vision stack (e.g. ``DotsVisionTransformerTT``).
 
     This extracts weights for:
     - Patch embedding

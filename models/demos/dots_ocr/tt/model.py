@@ -10,7 +10,7 @@ Top-level TT model classes for Dots OCR.
   host rot_mats (or uses device RoPE caches when ``rot_mats is None``).
 - ``DropInVisionTransformer`` — TT vision path with the same call signature as HF
   ``model.vision_tower`` (``forward(pixel_values, grid_thw)``), built from checkpoint weights
-  and :class:`~models.demos.dots_ocr.tt.vision_transformer.VisionTransformerTT`.
+  and :class:`~models.demos.dots_ocr.tt.dots_vision_tt.DotsVisionTransformerTT`.
 
 Callers build ``DotsModelArgs`` / ``DotsTransformer`` / optional ``DropInVisionTransformer`` and
 drive decode via ``models.tt_transformers.tt.generator.Generator``.
@@ -22,8 +22,6 @@ import torch
 from loguru import logger
 
 from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
-
-# from models.demos.dots_ocr.tt.vision_transformer import VisionTransformerTT
 from models.demos.dots_ocr.tt.dots_vision_tt import DotsVisionTransformerTT
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.model import Transformer as TTTransformer
@@ -178,9 +176,9 @@ class DropInVisionTransformer(torch.nn.Module):
     Drop-in for HF ``model.vision_tower`` (Dots OCR): same
     ``forward(pixel_values, grid_thw) -> torch.Tensor`` as the hub implementation.
 
-    Loads weights from the reference model checkpoint (``standardize_hf_keys_multimodal`` +
-    ``convert_hf_to_meta``) and runs :class:`VisionTransformerTT` (TTNN linears, device RoPE,
-    TTNN SDPA, TTNN patch merger).
+    Loads weights from the reference model checkpoint (``standardize_hf_keys_multimodal``;
+    no text-stack ``convert_hf_to_meta`` on vision keys) and runs
+    :class:`~models.demos.dots_ocr.tt.dots_vision_tt.DotsVisionTransformerTT` (TTNN vision stack).
     """
 
     def __init__(

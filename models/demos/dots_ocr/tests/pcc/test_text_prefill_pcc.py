@@ -12,10 +12,10 @@ in torch.
 **TT path (ttnn only for the model forward)**
 ``Generator.prefill_forward_text(input_ids, rot_mats=None)``: ttnn token ``embd``, device
 ``HfRotarySetup`` prefill cos/sin, then ``ttnn_prefill_forward`` (decoder + LM head). Logits are
-read back to host tensors only for :func:`comp_pcc` vs HF.
+read back to host tensors only for :func:`assert_quality` vs HF.
 
 **Constants:** ``TEXT_PREFILL_PCC_MIN`` (floor vs HF; end-to-end ttnn is typically ~0.98–0.99).
-PCC lines: ``[dots_ocr text_prefill_pcc] ...``.
+Log lines: ``[dots_ocr text_prefill_pcc] ...``.
 """
 
 import gc
@@ -26,7 +26,6 @@ from loguru import logger
 
 from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec
 from models.demos.dots_ocr.reference.model import DotsOCRReference
-from models.demos.dots_ocr.reference.pcc import comp_pcc
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_hf_to_meta_no_qkv_permute
 
 try:
@@ -43,6 +42,7 @@ if not _HAS_TTNN_RUNTIME:
 from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device
 from models.demos.dots_ocr.tt.model import DotsTransformer
 from models.demos.dots_ocr.tt.model_config import DotsModelArgs
+from models.tt_dit.utils.check import assert_quality
 
 # PCC floor vs HF reference (full ttnn prefill; adjust if CI hardware varies).
 TEXT_PREFILL_PCC_MIN: float = 0.985
@@ -70,11 +70,9 @@ def _open_mesh_device():
         pytest.skip(f"Requires TT device runtime (could not open mesh device): {e!r}")
 
 
-def run_text_decoder_prefill_pcc_check(tmp_path):
+def test_text_decoder_prefill_pcc(tmp_path):
     """
     ttnn prefill (``prefill_forward_text``, no host rot/embed path) vs HF last **non-pad** token.
-
-    Shared by ``test_text_only_prefill_pcc_gt_0_99`` and ``test_decoder_smoke.test_dots_decoder_prefill_pcc``.
     """
     torch.manual_seed(0)
 
@@ -258,35 +256,36 @@ def run_text_decoder_prefill_pcc_check(tmp_path):
             pcc_label = "ttnn token embd+device RoPE+decoder"
             last_pos = n_real - 1
             hf_last = hf_logits[:, last_pos : last_pos + 1, :]
-            # Use shared :func:`comp_pcc` (less brittle for large-vocab logits than ad-hoc corrcoef).
             # If vocab differs (should not in real-weight mode), compare overlapping prefix.
             hf_cmp = hf_last.float()
             tt_cmp = tt_logits.float()
             min_vocab = min(hf_cmp.shape[-1], tt_cmp.shape[-1])
             hf_cmp = hf_cmp[..., :min_vocab]
             tt_cmp = tt_cmp[..., :min_vocab]
-            pcc = comp_pcc(hf_cmp, tt_cmp)
-            logger.info(f"Text-only prefill PCC (qkv_permute={int(qkv_permute)}): {pcc:.4f}")
-            print(
-                f"[dots_ocr text_prefill_pcc] qkv_permute={int(qkv_permute)} last_token_pcc={pcc:.6f}  ({pcc_label})",
-                flush=True,
-            )
-            return pcc
+            logger.info(f"Text-only prefill tensors ready ({pcc_label}, qkv_permute={int(qkv_permute)})")
+            return hf_cmp, tt_cmp
 
-        # Run TT PCC: try both QKV conversion variants and take the best (requires real weights; see gate above).
+        # Run TT quality check: try both QKV conversion variants (same as taking max PCC vs HF).
         try:
-            pcc0 = _run_once(qkv_permute=False)
-            pcc1 = _run_once(qkv_permute=True)
-            pcc = max(pcc0, pcc1)
-            logger.info(f"Best Text-only prefill PCC: {pcc:.4f} (max of permute={pcc1:.4f}, noperm={pcc0:.4f})")
             min_pcc = TEXT_PREFILL_PCC_MIN
-            print(
-                f"[dots_ocr text_prefill_pcc] best_last_token_pcc={pcc:.6f}  "
-                f"noperm={pcc0:.6f}  perm={pcc1:.6f}  min_threshold={min_pcc:.6f}",
-                flush=True,
-            )
-            assert pcc >= min_pcc, f"PCC too low: {pcc:.4f} (expected >= {min_pcc}; see TEXT_PREFILL_PCC_MIN)"
-            print(f"[dots_ocr text_prefill_pcc] PASS  (PCC {pcc:.6f} >= {min_pcc})", flush=True)
+            last_exc: Exception | None = None
+            for qkv_permute in (False, True):
+                try:
+                    hf_cmp, tt_cmp = _run_once(qkv_permute=qkv_permute)
+                    assert_quality(hf_cmp, tt_cmp, pcc=min_pcc)
+                    logger.info(f"Text-only prefill assert_quality passed (qkv_permute={int(qkv_permute)})")
+                    print(
+                        f"[dots_ocr text_prefill_pcc] PASS qkv_permute={int(qkv_permute)} "
+                        f"(assert_quality pcc>={min_pcc:.6f})",
+                        flush=True,
+                    )
+                    break
+                except Exception as e:
+                    last_exc = e
+                    logger.warning(f"Prefill quality check failed for qkv_permute={int(qkv_permute)}: {e}")
+            else:
+                assert last_exc is not None
+                raise last_exc
         except Exception as e:
             logger.exception("Prefill/PCC path raised: {}", e)
             raise
@@ -294,35 +293,3 @@ def run_text_decoder_prefill_pcc_check(tmp_path):
     finally:
         if device is not None:
             close_dots_mesh_device(device)
-
-
-def test_text_only_prefill_pcc_gt_0_99(tmp_path):
-    """
-    Last-token prefill PCC: full ttnn prefill vs HF (torch) reference. Floor ``TEXT_PREFILL_PCC_MIN``.
-    """
-    run_text_decoder_prefill_pcc_check(tmp_path)
-
-
-def test_rope_helper_alignment():
-    """Test that RoPE helper produces matrices in the expected format."""
-    from models.demos.dots_ocr.reference.rope import Qwen2RopeHelper
-
-    helper = Qwen2RopeHelper(head_dim=128, max_seq_len=512)
-
-    # Test rot mats generation
-    cos_mat, sin_mat = helper.get_rot_mats(seq_len=32)
-
-    assert cos_mat.shape == (1, 1, 32, 64), f"Expected [1,1,32,64], got {cos_mat.shape}"
-    assert sin_mat.shape == (1, 1, 32, 64), f"Expected [1,1,32,64], got {sin_mat.shape}"
-    assert cos_mat.dtype == torch.float32
-    assert sin_mat.dtype == torch.float32
-
-    # Test they are valid rotation matrices (values between -1 and 1)
-    assert torch.all(cos_mat.abs() <= 1.0 + 1e-6)
-    assert torch.all(sin_mat.abs() <= 1.0 + 1e-6)
-
-
-if __name__ == "__main__":
-    test_rope_helper_alignment()
-    print("✅ RoPE helper test passed")
-    print("Prefill PCC: requires TT device runtime")

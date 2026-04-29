@@ -4,7 +4,7 @@ TTNN-based implementation of the Dots OCR vision-language model family (HF: `red
 - Modular design (patch embedding, feature extractor, decoder)
 - PyTorch reference implementation for correctness
 - TTNN implementation optimized for Tenstorrent devices
-- Pytest suite: PCC checks vs HF (vision, merger, text prefill, fusion) plus HF-only demo smoke
+- Pytest suite: PCC checks vs HF (vision tower, text prefill) plus HF-only demo smoke
 - Demo script + performance benchmark
 
 ## Quick start
@@ -25,20 +25,17 @@ pytest models/demos/dots_ocr/tests -q --confcutdir=models/demos/dots_ocr/tests
 
 | File | Role |
 |------|------|
-| `test_vision_tower_pcc.py` | Vision tower TTNN vs HF (`comp_pcc`, threshold) |
-| `test_patch_merger_pcc.py` | Patch merger vs reference |
-| `test_text_prefill_pcc.py` | Text decoder prefill logits vs HF |
-| `test_fusion.py` | Vision–text fusion scatter vs reference |
+| `pcc/test_vision_tower_pcc.py` | Vision tower TTNN vs HF (`assert_quality`, threshold) |
+| `pcc/test_text_prefill_pcc.py` | Text decoder prefill logits vs HF |
 | `test_decoder_smoke.py` | Wraps the text prefill PCC check |
-| `test_pcc_reference.py` | Unit tests for `reference.pcc.comp_pcc` |
 | `test_demo_hf_torch_only.py` | HF backend demo path (no TT device) |
 
-Many tests are skipped without a Tenstorrent mesh / cached weights; `test_pcc_reference.py` and `test_demo_hf_torch_only.py` are the most hermetic.
+Many tests are skipped without a Tenstorrent mesh / cached weights; `test_demo_hf_torch_only.py` is the most hermetic.
 
 Run demo with TTNN backend (text + optional TTNN vision):
 
 ```bash
-MESH_DEVICE=N300 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.demo.demo \
+MESH_DEVICE=N300 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo \
   --image path/to/image.png \
   --backend ttnn \
   --vision-backend ttnn
@@ -47,14 +44,14 @@ MESH_DEVICE=N300 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_oc
 Run HF reference only:
 
 ```bash
-HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.demo.demo --image path/to/image.png --backend hf
+HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo --image path/to/image.png --backend hf
 ```
 
 Run HF reference OCR demo (image → text):
 
 ```bash
-PYTHONPATH=$(pwd) python3 -m models.demos.dots_ocr.demo.reference_demo \
-  --input models/demos/dots_ocr/demo/test12.png \
+PYTHONPATH=$(pwd) python3 -m models.demos.dots_ocr.tests.demo.reference_demo \
+  --input models/demos/dots_ocr/tests/demo/test12.png \
   --dtype fp32 \
   --use-slow-processor \
   --ocr-preset en \
@@ -87,28 +84,28 @@ export HF_MODEL=rednote-hilab/dots.mocr
 # Optional: cap prefill/KV length to fit DRAM
 export DOTS_MAX_SEQ_LEN=8192   # legacy name DOTS_MAX_SEQ_LEN_WH_LB still honored
 
-PYTHONPATH=$(pwd) python -m models.demos.dots_ocr.demo.demo --image /path/to/page.png
+PYTHONPATH=$(pwd) python -m models.demos.dots_ocr.tests.demo.demo --image /path/to/page.png
 ```
 
 Performance benchmark (HF vs TTNN; aligned with ``demo.run_ttnn_backend``):
 
 ```bash
 # From repo root: uses demo/benchmark_image.png by default (multimodal + TTNN vision).
-PYTHONPATH=$(pwd) python models/demos/dots_ocr/perf/benchmark.py --backend both
+PYTHONPATH=$(pwd) python models/demos/dots_ocr/tests/perf/benchmark.py --backend both
 
 # Text-only (no image tensors):
-PYTHONPATH=$(pwd) python models/demos/dots_ocr/perf/benchmark.py --backend ttnn --text-only
+PYTHONPATH=$(pwd) python models/demos/dots_ocr/tests/perf/benchmark.py --backend ttnn --text-only
 ```
 
-**Full TTNN Vision**: Complete 42-layer TTNN `VisionTransformerTT` (no hybrid
-HF `vision_tower`). Includes `PatchEmbedTT`, `VisionBlockTT` (post-norm), and
-integration with the existing `PatchMergerTT`. Vision weights are currently
-replicated across the mesh, so effective vision TP is 1 even on N300 / T3K.
+**Full TTNN Vision**: Complete 42-layer TTNN stack in
+`models.demos.dots_ocr.tt.dots_vision_tt.DotsVisionTransformerTT` (no hybrid HF
+`vision_tower` in that path). Vision weights are currently replicated across the mesh, so
+effective vision TP is 1 even on N300 / T3K.
 
 The TTNN text decoder uses embeddings-based prefill with proper RoPE alignment and
 greedy token selection via TTNN argmax by default.
 
-See `models/demos/dots_ocr/demo/demo.py` for CLI flags.
+See `models/demos/dots_ocr/tests/demo/demo.py` for CLI flags.
 
 ## Notes
 - The full `rednote-hilab/dots.mocr` checkpoint is large; CI runs skip device tests unless `MESH_DEVICE` is set.

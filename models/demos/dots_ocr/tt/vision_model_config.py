@@ -93,7 +93,7 @@ class DotsVisionModelArgs(DotsModelArgs):
         self.initializer_range = getattr(self.vision_config, "initializer_range", 0.02)
         self.init_merger_std = getattr(self.vision_config, "init_merger_std", 0.02)
 
-        # Convenience aliases used by tests and the VisionTransformerTT driver.
+        # Convenience aliases used by tests and the Dots vision TT driver.
         self.num_hidden_layers = self.vision_config.num_hidden_layers
 
         # TTNN-specific configurations

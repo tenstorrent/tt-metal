@@ -28,14 +28,28 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 
 import torch
 from loguru import logger
 from PIL import Image
 
-from models.demos.dots_ocr.logging_utils import configure_dots_ocr_console_logging
 from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec, get_hf_model_id
 from models.demos.dots_ocr.reference.model import DotsOCRReference
+
+
+def configure_dots_ocr_console_logging() -> None:
+    """
+    Point loguru at stderr with a sane default level so noisy TTNN DEBUG lines
+    (e.g. tensor ``.tensorbin`` cache load/generate in ``ttnn.from_torch``) stay hidden.
+
+    Override with ``DOTS_LOG_LEVEL`` (e.g. ``DEBUG`` to see those messages again).
+    """
+    raw = (os.environ.get("DOTS_LOG_LEVEL") or "INFO").strip().upper()
+    allowed = ("TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR")
+    level = raw if raw in allowed else "INFO"
+    logger.remove()
+    logger.add(sys.stderr, level=level)
 
 
 def _ensure_local_ttnn_import() -> None:
@@ -46,8 +60,8 @@ def _ensure_local_ttnn_import() -> None:
     `ttnn` package (no `__file__`) or load `_ttnn.so` from a different location. That can produce
     "works but wrong output" behavior for Dots OCR. Force the repo root onto `sys.path` early.
     """
-    # demo.py lives at: <repo>/models/demos/dots_ocr/demo/demo.py
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+    # demo.py lives at: <repo>/models/demos/dots_ocr/tests/demo/demo.py
+    repo_root = str(Path(__file__).resolve().parents[5])
     # TTNN python package lives at: <repo>/ttnn/ttnn/__init__.py, so we must add <repo>/ttnn to sys.path.
     ttnn_py_root = os.path.join(repo_root, "ttnn")
     for p in (ttnn_py_root, repo_root):
