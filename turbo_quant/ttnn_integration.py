@@ -818,10 +818,17 @@ class TTNNTurboQuantCache:
             ttnn.deallocate(k_ring_perm)
             ttnn.deallocate(v_ring_perm)
 
-            # paged_update_cache requires update_idx within [0, cache_size). For
-            # the ring, that's cur_pos % ring_W_padded. Compute on host (sync).
-            cur_pos_host = ttnn.to_torch(pos_tt).flatten()[0].item()
-            ring_idx_host = int(cur_pos_host) % self.ring_W_padded
+            # paged_update_cache requires update_idx within [0, cache_size).
+            # For the ring, that's cur_pos % ring_W_padded. Computing this needs
+            # a host sync; do it ONCE per step (at layer_idx == 0) and cache the
+            # result for the remaining 31 layers — reduces host syncs 32×.
+            # For full trace compatibility we'd need ring_pos as a model input;
+            # this is the cheaper interim fix.
+            if layer_idx == 0:
+                cur_pos_host = int(ttnn.to_torch(pos_tt).flatten()[0].item())
+                self._cached_cur_pos = cur_pos_host
+                self._cached_ring_pos = cur_pos_host % self.ring_W_padded
+            ring_idx_host = self._cached_ring_pos
             ring_pos_tt = ttnn.from_torch(
                 torch.tensor([ring_idx_host], dtype=torch.int32),
                 device=self.device,
@@ -1006,8 +1013,11 @@ class TTNNTurboQuantCache:
         centroids = get_codebook(self.head_dim, self.bits, device="cpu", dtype=torch.float32).centroids.tolist()
 
         # Need cur_pos as a Python int to decide branch + compute split point.
-        # Breaks tracing for the hybrid path (matches the dual-write update_cache).
-        cur_pos_host = int(ttnn.to_torch(current_pos).flatten()[0].item())
+        # Read from the cached value populated by update_cache at layer_idx==0
+        # (avoids 32 host syncs per step). Falls back to live read if no cache.
+        cur_pos_host = getattr(self, "_cached_cur_pos", None)
+        if cur_pos_host is None:
+            cur_pos_host = int(ttnn.to_torch(current_pos).flatten()[0].item())
 
         # Ring covers the last W positions; clamped position for the ring SDPA
         # is min(W − 1, cur_pos). For cur_pos ≥ W, ring stores positions

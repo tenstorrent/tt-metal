@@ -305,20 +305,25 @@ correct answer at 99.3 ms/tok.
 
 **Open issues for next session:**
 
-1. **1024-position accuracy blocked by host syncs.** Each `update_cache`
-   call reads cur_pos to host (to compute `cur_pos % W` for the ring
-   write — paged_update_cache requires page_table length ≤ cache size,
-   so the cyclic page_table trick doesn't work). With 32 layers × 1024
-   steps = ~33K host syncs per run, the test takes minutes per layer.
-   Killed after 4 min still in setup.
+1. **1024-position accuracy still slow even after host-sync 32× cut.**
+   Tried caching cur_pos %W at layer_idx=0 (saves 32× host syncs per
+   step). Did not fix the bottleneck — the test still sat in setup
+   after 2-3 minutes. Likely cause: the no-trace decode path has
+   per-op Python/dispatch overhead that dominates with the doubled
+   SDPA call count + 5 extra ttnn ops in the LSE combine. Or the
+   first-N-step JIT compile is much heavier than expected because the
+   hybrid path creates two distinct programs per step.
 
-   **Fix options:**
-   (a) Add a device-side modulo op (or `ttnn.subtract`/`ttnn.divide_int`
-       chain) to compute `cur_pos % W` on device.
-   (b) Have the model pass a separate `ring_pos` tensor pre-computed at
-       host before each step (alongside cur_pos) — same trace-friendly
-       pattern as cur_pos.
-   Option (b) is cheaper and trace-compatible; ~½ day to plumb.
+   **Fix paths to try, in order:**
+   (a) Profile the no-trace per-step time with smaller eval
+       (`--num-eval-tokens 50` is currently a no-op since 1023 forward
+       passes still happen — would need a real fast-exit). Goal:
+       confirm whether bottleneck is JIT vs dispatch.
+   (b) Plumb `ring_pos` as a separate trace-input tensor (the original
+       proper fix) — reenables trace and cuts dispatch overhead 10-50×.
+   (c) Drop the on-device LSE combine in favour of host-side combine
+       (small tensor reads, simple math, 1 round-trip per layer).
+       Probably faster than the current 5-op device path.
 
 2. **W-sweep validation** (W ∈ {32, 64, 128, 256}) — runs once #1 lands.
 3. **Standard SDPA decode kernel LSE export** — no longer needed thanks
