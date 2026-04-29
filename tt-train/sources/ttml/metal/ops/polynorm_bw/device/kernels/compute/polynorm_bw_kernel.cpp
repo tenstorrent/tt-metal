@@ -14,6 +14,27 @@
 //   dL/dw  — packed as 3 scalar tiles (one per weight)
 //   dL/db  — packed as 1 scalar tile
 //
+// Math (per row of length N, summing k=1,2,3 with f_k = w_{3-k}):
+//
+//   inv_rms_k = (Σ x^(2k)/N + ε)^(-1/2)
+//   g_k       = Σ x^k · dout
+//
+//   dL/df_k = inv_rms_k · g_k                          (per-row scalar)
+//   dL/db   = Σ dout                                   (per-row scalar)
+//   dL/dx_i = Σ_k  α_k · ( dout_i − γ_k · x_i^k ) · k · x_i^(k-1)    where:
+//       α_k = f_k · inv_rms_k                          (per-row scalar)
+//       γ_k = inv_rms_k² · g_k · (1/N)                 (per-row scalar)
+//
+// Algebraic-refactor note: writing the bracket as α·(dout − γ·x^k) instead of
+// (α·dout − coeff·x^k) (with coeff = α·γ = f·inv_rms³·g/N) puts α OUTSIDE the
+// cancellation. The cancellation `dout − γ·x^k` is the precision-critical step
+// of the polynorm gradient (it's the same "remove the radial component"
+// structure as RMSNorm backward); keeping α outside means α's TF32 fan-out
+// error multiplies the small post-cancellation result rather than the large
+// pre-cancellation operands, so it is no longer amplified by cancellation
+// depth. γ also drops one factor of inv_rms (square, not cube) and the f_k
+// factor compared to the previous coeff form.
+//
 // Algorithm (per row, executed on each Tensix core):
 //
 //   Pass 1 — accumulate_all_sums_for_row():
@@ -22,27 +43,19 @@
 //       Σx², Σx⁴, Σx⁶, Σ(x·dout), Σ(x²·dout), Σ(x³·dout), Σdout
 //
 //   Reduce phase:
-//     reduce_sum_to_inv_rms: row-reduce each power sum → 1/rms scalar tiles
-//       Σx²  → inv_rms_x   = 1/√(mean(x²) + ε)
-//       Σx⁴  → inv_rms_x2  = 1/√(mean(x⁴) + ε)
-//       Σx⁶  → inv_rms_x3  = 1/√(mean(x⁶) + ε)
-//     reduce_sum_to_scalar: row-reduce mixed sums → scalar tiles
-//       Σ(x·dout) → scalar, Σ(x²·dout) → scalar, Σ(x³·dout) → scalar
+//     reduce_sum_to_inv_rms: row-reduce each power sum → inv_rms scalar tiles
+//     reduce_sum_to_scalar:  row-reduce mixed sums → g_k scalar tiles
 //
-//   compute_dw_and_ws: from each reduced scalar and inv_rms, produce
-//     dw_k = scalar_k · inv_rms_k    (partial weight gradient)
-//     ws_k = scalar_k · w_k          (for correction coefficients)
-//
-//   compute_coeff_tile: correction coefficient for grad_x:
-//     coeff_k = inv_rms_k³ · ws_k · (1/N)
+//   compute_dw_and_gamma: from each g_k and inv_rms_k, produce in one DST cycle
+//     dw_k = g_k · inv_rms_k                    (partial weight gradient)
+//     γ_k  = inv_rms_k² · g_k · (1/N)           (correction for grad_x)
 //
 //   prepare_weighted_inv_rms_for_row: fold weights into inv_rms, producing
-//     w2·inv_rms_x, w1·inv_rms_x2, w0·inv_rms_x3 as Float32 tiles — reused across
-//     every tile of Pass-2.
+//     α_k = f_k · inv_rms_k as Float32 tiles — reused across every Pass-2 tile.
 //
 //   Pass 2 — emit_output_for_row():
 //     Re-read x and dout from DRAM. For each tile compute per-element grad_x
-//     as the sum of three order terms (see function docstring).
+//     as the sum of three terms α_k · (dout − γ_k · x^k) · k·x^(k-1).
 //
 //   Finalize:
 //     reduce_sum_to_scalar on accumulated Σdout → dL/db scalar
@@ -98,21 +111,24 @@ constexpr auto cb_sum_x3dout = tt::CBIndex::c_14;
 constexpr auto cb_inv_rms_x = tt::CBIndex::c_15;
 constexpr auto cb_inv_rms_x2 = tt::CBIndex::c_16;
 constexpr auto cb_inv_rms_x3 = tt::CBIndex::c_17;
-constexpr auto cb_coeff_1 = tt::CBIndex::c_18;
-constexpr auto cb_coeff_2 = tt::CBIndex::c_19;
-constexpr auto cb_coeff_3 = tt::CBIndex::c_20;
+// γ_k = inv_rms_k² · g_k · (1/N) — correction coefficient used inside the Pass-2
+// cancellation `dout − γ_k · x^k`. Stored as bfloat16 (col 0 only meaningful;
+// fanned out via FPU bcast<COL> at use time, TF32 in DST).
+constexpr auto cb_gamma_1 = tt::CBIndex::c_18;
+constexpr auto cb_gamma_2 = tt::CBIndex::c_19;
+constexpr auto cb_gamma_3 = tt::CBIndex::c_20;
 constexpr auto cb_output = tt::CBIndex::c_21;
 constexpr auto cb_packed_partials_output = tt::CBIndex::c_22;
-// Preweighted inv_rms (Float32 + UnpackToDestFp32) used by Pass-2 emit_output_for_row():
+// Preweighted inv_rms used by Pass-2 emit_output_for_row():
 //   c_24 = w2 * inv_rms_x    (linear branch)
 //   c_25 = w1 * inv_rms_x2   (quadratic branch)
 //   c_26 = w0 * inv_rms_x3   (cubic branch)
 //
-// PRECISION NOTE: these CBs preserve the w*inv_rms product in fp32 and reload it directly
-// into DEST via UnpackToDestFp32. This removes the extra bf16 rounding from the original
-// BW preweighting hoist. One-block row reductions use a matmul-reduce workaround to avoid
-// scalar-sum precision loss; the remaining very-short-shape error is dominated by final
-// BF16 dL/dx output quantization.
+// PRECISION NOTE: stored as Float32 with Default unpack mode. α_k now multiplies the
+// post-cancellation result (see header docstring), so its TF32 fan-out via SrcA is
+// adequate — TF32 (10-bit mantissa) is well below the bf16-input precision floor of
+// the cancelled value, and the error is no longer amplified by cancellation depth.
+// FPU SrcA path also avoids TEN-3868 stale-DVALID hazards.
 constexpr auto cb_weighted_inv_rms_x = tt::CBIndex::c_24;
 constexpr auto cb_weighted_inv_rms_x2 = tt::CBIndex::c_25;
 constexpr auto cb_weighted_inv_rms_x3 = tt::CBIndex::c_26;
@@ -146,23 +162,15 @@ inline bool use_one_block_precision_path() {
     return get_num_inner() <= block_size;
 }
 
-// Compute dout · (w_k · inv_rms_k) into reg_dst, using the preweighted inv_rms tile from
-// cb_weighted_inv (produced once per row by prepare_weighted_inv_rms_for_row() as fp32 and
-// reloaded through UnpackToDestFp32).
-// Clobbers register 1. Leaves math pipeline in mul mode.
-inline void weighted_dout_to_reg(const uint32_t block_idx, const uint32_t cb_weighted_inv, const uint32_t reg_dst) {
-    constexpr uint32_t r1 = 1U;
-
-    reconfig_data_format(cb_weighted_inv, cb_weighted_inv);
-    copy_tile_to_dst_init_short(cb_weighted_inv);
-    copy_tile(cb_weighted_inv, 0U, reg_dst);
-
-    reconfig_data_format(cb_dout, cb_dout);
-    copy_tile_to_dst_init_short(cb_dout);
-    copy_tile(cb_dout, block_idx, r1);
-
-    mul_binary_tile_init();
-    mul_binary_tile(r1, reg_dst, reg_dst);
+// Load the preweighted-inv_rms tile (α_k = f_k · inv_rms_k, tile-broadcast) into a DST
+// register via the FPU SrcA path. cb_alpha is Float32 with Default unpack mode, so SrcA
+// truncates to TF32 — acceptable here because α multiplies the post-cancellation result
+// in the new algebra (its fan-out error is no longer amplified). Using FPU MVDBGA also
+// keeps SrcA DVALID flow clean (no TEN-3868 hazard for the next FPU op).
+inline void load_alpha_tile(const uint32_t cb_alpha, const uint32_t reg_dst) {
+    reconfig_data_format(cb_alpha, cb_alpha);
+    copy_tile_to_dst_init_short(cb_alpha);
+    copy_tile(cb_alpha, 0U, reg_dst);
 }
 
 // --- Reduction helpers ---
@@ -239,8 +247,8 @@ void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
 
 // Multiply one inv_rms tile by its matching weight scalar and push an fp32 tile that
 // has valid data in every column. We broadcast inv_rms's col-0 to all columns, then
-// multiply by the uniform weight tile — the result is a per-row scalar replicated across
-// the tile. Downstream emit reads it via UnpackToDestFp32.
+// multiply by the uniform weight tile — the result α_k = w_k · inv_rms_k is a per-row
+// scalar replicated across the tile. Pass-2 reloads it via FPU SrcA (TF32 fan-out).
 inline void emit_weighted_inv_rms(const uint32_t cb_inv, const uint32_t cb_w, const uint32_t cb_out) {
     constexpr uint32_t reg_inv = 0U;
     constexpr uint32_t reg_weight = 1U;
@@ -271,69 +279,41 @@ void prepare_weighted_inv_rms_for_row() {
     cb_pop_front(cb_inv_rms_x3, onetile);
 }
 
-// Compute the correction coefficient for one order's grad_x contribution:
-//   coeff = inv³ · ws · scaler
-// where ws = (Σ x^n · dout) · w_k (the weight-scaled sum from compute_dw_and_ws).
-// Consumes cb_scale (pop); cb_inv and cb_scaler remain available.
-void compute_coeff_tile(const uint32_t cb_inv, const uint32_t cb_scale, const uint32_t cb_coeff) {
+// From the reduced row-sum g_k (= Σ x^k · dout) and inv_rms_k, produce in one DST cycle:
+//   dw_k = g_k · inv_rms_k                (partial weight gradient for this order)
+//   γ_k  = inv_rms_k² · g_k · (1/N)       (correction coefficient for grad_x)
+// Only column 0 of each output tile is meaningful; downstream consumers fan out via
+// bcast<COL>. cb_g is consumed (pop) and dw is written in-place into the same slot.
+// cb_inv and cb_scaler remain available for downstream callers.
+//
+// This replaces the previous compute_dw_and_ws + compute_coeff_tile pair. The combined
+// γ formula has one fewer multiply than coeff (no f_k factor, square instead of cube)
+// and avoids materialising the intermediate ws_k = g_k · w_k tile.
+void compute_dw_and_gamma(const uint32_t cb_g, const uint32_t cb_inv, const uint32_t cb_gamma) {
+    cb_wait_front(cb_g, onetile);
     cb_wait_front(cb_inv, onetile);
-    cb_wait_front(cb_scale, onetile);
     cb_wait_front(cb_scaler, onetile);
 
     tile_regs_acquire();
-    constexpr uint32_t reg_inv_sq = 0U;
-    constexpr uint32_t reg_scale = 1U;
-    constexpr uint32_t reg_scaler = 2U;
-    constexpr uint32_t reg_inv = 3U;
+    constexpr uint32_t reg_inv = 0U;     // bcast inv_rms across the tile (col 0 → all cols)
+    constexpr uint32_t reg_g = 1U;       // g_k in col 0
+    constexpr uint32_t reg_scaler = 2U;  // 1/N in col 0
+    constexpr uint32_t reg_dw = 3U;      // dw_k in col 0
 
-    unary_bcast_init<BroadcastType::COL>(cb_inv, cb_inv);
-    unary_bcast<BroadcastType::COL>(cb_inv, 0, reg_inv);
-    reconfigure_unary_bcast<BroadcastType::COL, BroadcastType::COL>(cb_inv, cb_scale, cb_inv, cb_inv);
-    unary_bcast<BroadcastType::COL>(cb_scale, 0, reg_scale);
+    bcast_col_to_reg(cb_inv, reg_inv);
+    reconfig_data_format_srca(cb_g);
+    copy_scalar_tile_to_reg(cb_g, reg_g);
     copy_scalar_tile_to_reg(cb_scaler, reg_scaler);
 
     mul_binary_tile_init();
-    mul_binary_tile(reg_inv, reg_inv, reg_inv_sq);      // inv²
-    mul_binary_tile(reg_inv_sq, reg_scale, reg_scale);  // inv² · ws
-    mul_binary_tile(reg_scale, reg_inv, reg_scale);     // inv³ · ws
-    mul_binary_tile(reg_scale, reg_scaler, reg_scale);  // inv³ · ws · scaler
+    mul_binary_tile(reg_g, reg_inv, reg_dw);     // dw = g · inv_rms
+    mul_binary_tile(reg_inv, reg_inv, reg_inv);  // inv²
+    mul_binary_tile(reg_inv, reg_g, reg_g);      // inv² · g
+    mul_binary_tile(reg_g, reg_scaler, reg_g);   // γ = inv² · g · scaler
 
     tile_regs_commit();
-    pack_and_push(reg_scale, cb_coeff);
-    cb_pop_front(cb_scale, onetile);
-}
-
-// From a reduced scalar and inv_rms, produce two outputs:
-//   dw  = scalar · inv_rms   (partial weight gradient for this order)
-//   ws  = scalar · weight    (weight-scaled sum, used by compute_coeff_tile)
-// Consumes cb_scalar (pop); cb_inv and cb_weight remain available.
-void compute_dw_and_ws(
-    const uint32_t cb_scalar,
-    const uint32_t cb_inv,
-    const uint32_t cb_weight,
-    const uint32_t cb_dw_out,
-    const uint32_t cb_ws_out) {
-    cb_wait_front(cb_scalar, onetile);
-    cb_wait_front(cb_inv, onetile);
-
-    tile_regs_acquire();
-    constexpr uint32_t reg_s = 0U;
-    constexpr uint32_t reg_inv = 1U;
-    constexpr uint32_t reg_w = 2U;
-    constexpr uint32_t reg_dw = 3U;
-
-    bcast_col_to_reg(cb_inv, reg_inv);
-    reconfig_data_format_srca(cb_scalar);
-    copy_scalar_tile_to_reg(cb_scalar, reg_s);
-    copy_scalar_tile_to_reg(cb_weight, reg_w);
-
-    mul_binary_tile_init();
-    mul_binary_tile(reg_s, reg_inv, reg_dw);  // dw = scalar · inv_rms
-    mul_binary_tile(reg_s, reg_w, reg_s);     // ws = scalar · weight
-
-    tile_regs_commit();
-    cb_pop_front(cb_scalar, onetile);
-    pack_and_push_two_tiles(reg_dw, cb_dw_out, reg_s, cb_ws_out);
+    cb_pop_front(cb_g, onetile);
+    pack_and_push_two_tiles(reg_dw, cb_g, reg_g, cb_gamma);
 }
 
 // --- Pass 1: single-pass accumulation ---
@@ -461,29 +441,34 @@ void emit_packed_partials_for_row() {
 //
 // For each element, dL/dx is the sum of three order-k terms (k=1,2,3):
 //
-//   term_k = (dout·w_k·inv_rms_k − x^k·coeff_k) · k·x^(k−1)
+//   term_k = α_k · ( dout − γ_k · x^k ) · k · x^(k-1)
 //
-// where inv_rms_k = 1/√(mean(x^(2k)) + ε)  and  coeff_k = inv_rms_k³ · ws_k · (1/N).
+// where α_k = w_k · inv_rms_k  (preloaded once per row in cb_weighted_inv_rms_*)
+//   and γ_k = inv_rms_k² · g_k · (1/N)  (preloaded in cb_gamma_*).
 //
-// The w2 (order 1) term has derivative factor 1 (no multiply by x^0).
-// The w1 (order 2) term multiplies by 2x.
-// The w0 (order 3) term multiplies by 3x².
+// The k=1 term has outer factor 1·x⁰ = 1 (no outer multiply).
+// The k=2 term multiplies by 2x.
+// The k=3 term multiplies by 3x².
+//
+// Per-order schedule (each order acquires no extra DST register beyond reg_acc + 3 working
+// regs): bcast γ → load x → x² (and x³ for k=3) → multiply by γ → load dout → subtract →
+// load α (FPU SrcA copy) → multiply by α → multiply by k·x^(k-1) → accumulate into reg_acc.
+// All α loads use FPU MVDBGA from Default-mode CBs, so SrcA DVALID flow is clean throughout.
 void emit_output_for_row() {
     const uint32_t num_inner = get_num_inner();
     constexpr uint32_t reg_acc = 0U;
-    constexpr uint32_t reg1 = 1U;
-    constexpr uint32_t reg0 = 2U;
-    constexpr uint32_t reg_tmp = 3U;
+    constexpr uint32_t reg0 = 1U;
+    constexpr uint32_t reg1 = 2U;
+    constexpr uint32_t reg2 = 3U;
 
     binary_op_init_common(cb_x, cb_x, cb_output);
 
-    // Wait for preweighted inv_rms triplet (consumed here) and the three correction coeffs.
     cb_wait_front(cb_weighted_inv_rms_x, onetile);
     cb_wait_front(cb_weighted_inv_rms_x2, onetile);
     cb_wait_front(cb_weighted_inv_rms_x3, onetile);
-    cb_wait_front(cb_coeff_1, onetile);
-    cb_wait_front(cb_coeff_2, onetile);
-    cb_wait_front(cb_coeff_3, onetile);
+    cb_wait_front(cb_gamma_1, onetile);
+    cb_wait_front(cb_gamma_2, onetile);
+    cb_wait_front(cb_gamma_3, onetile);
 
     for (uint32_t col = 0; col < num_inner; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, num_inner - col);
@@ -494,50 +479,57 @@ void emit_output_for_row() {
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             tile_regs_acquire();
 
-            // w2 term (order 1): dout·(w2·inv_rms_x) − x·coeff_1
-            copy_tile_to_reg(cb_x, block_idx, reg0);
-            weighted_dout_to_reg(block_idx, cb_weighted_inv_rms_x, reg_acc);
-            bcast_col_to_reg(cb_coeff_1, reg1);
-            mul_binary_tile(reg0, reg1, reg_tmp);
+            // ---- Order 1 (k=1): term_1 = α_1 · (dout − γ_1 · x) ----
+            bcast_col_to_reg(cb_gamma_1, reg0);       // γ_1 broadcast
+            copy_tile_to_reg(cb_x, block_idx, reg1);  // x
+            mul_binary_tile_init();
+            mul_binary_tile(reg0, reg1, reg0);           // γ_1 · x
+            copy_tile_to_reg(cb_dout, block_idx, reg1);  // dout
             sub_binary_tile_init();
-            sub_binary_tile(reg_acc, reg_tmp, reg_acc);
+            sub_binary_tile(reg1, reg0, reg0);             // dout − γ_1 · x
+            load_alpha_tile(cb_weighted_inv_rms_x, reg1);  // α_1 (FPU SrcA, TF32)
+            mul_binary_tile_init();
+            mul_binary_tile(reg1, reg0, reg_acc);  // α_1 · (dout − γ_1·x)
 
-            // w1 term (order 2): (dout·(w1·inv_rms_x2) − x²·coeff_2) · 2x
-            weighted_dout_to_reg(block_idx, cb_weighted_inv_rms_x2, reg_tmp);
-            copy_tile_to_reg(cb_x, block_idx, reg1);
-            mul_binary_tile(reg1, reg1, reg1);  // x²
-            bcast_col_to_reg(cb_coeff_2, reg0);
-            mul_binary_tile(reg1, reg0, reg0);  // x²·coeff_2
+            // ---- Order 2 (k=2): term_2 = α_2 · (dout − γ_2 · x²) · 2x ----
+            bcast_col_to_reg(cb_gamma_2, reg0);       // γ_2 broadcast
+            copy_tile_to_reg(cb_x, block_idx, reg1);  // x  (kept for outer 2x)
+            mul_binary_tile_init();
+            mul_binary_tile(reg1, reg1, reg2);           // x²
+            mul_binary_tile(reg0, reg2, reg2);           // γ_2 · x²
+            copy_tile_to_reg(cb_dout, block_idx, reg0);  // dout
             sub_binary_tile_init();
-            sub_binary_tile(reg_tmp, reg0, reg_tmp);  // main − correction
-            copy_tile_to_reg(cb_x, block_idx, reg1);
+            sub_binary_tile(reg0, reg2, reg0);              // dout − γ_2 · x²
+            load_alpha_tile(cb_weighted_inv_rms_x2, reg2);  // α_2
+            mul_binary_tile_init();
+            mul_binary_tile(reg2, reg0, reg0);  // α_2 · (...)
             add_binary_tile_init();
             add_binary_tile(reg1, reg1, reg1);  // 2x
             mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg1, reg_tmp);  // · 2x
+            mul_binary_tile(reg0, reg1, reg0);  // · 2x
             add_binary_tile_init();
-            add_binary_tile(reg_acc, reg_tmp, reg_acc);  // accumulate
+            add_binary_tile(reg_acc, reg0, reg_acc);  // accumulate
 
-            // w0 term (order 3): (dout·(w0·inv_rms_x3) − x³·coeff_3) · 3x²
-            weighted_dout_to_reg(block_idx, cb_weighted_inv_rms_x3, reg_tmp);
-            copy_tile_to_reg(cb_x, block_idx, reg1);
-            mul_binary_tile(reg1, reg1, reg1);  // x²
-            copy_tile_to_reg(cb_x, block_idx, reg0);
-            mul_binary_tile(reg1, reg0, reg0);  // x³
-            bcast_col_to_reg(cb_coeff_3, reg1);
-            mul_binary_tile(reg0, reg1, reg0);  // x³·coeff_3
+            // ---- Order 3 (k=3): term_3 = α_3 · (dout − γ_3 · x³) · 3x² ----
+            bcast_col_to_reg(cb_gamma_3, reg0);       // γ_3 broadcast
+            copy_tile_to_reg(cb_x, block_idx, reg1);  // x
+            mul_binary_tile_init();
+            mul_binary_tile(reg1, reg1, reg2);           // x²  (kept for outer 3x²)
+            mul_binary_tile(reg1, reg2, reg1);           // x³ = x · x²
+            mul_binary_tile(reg0, reg1, reg1);           // γ_3 · x³
+            copy_tile_to_reg(cb_dout, block_idx, reg0);  // dout
             sub_binary_tile_init();
-            sub_binary_tile(reg_tmp, reg0, reg_tmp);  // main − correction
-            copy_tile_to_reg(cb_x, block_idx, reg1);
+            sub_binary_tile(reg0, reg1, reg0);              // dout − γ_3 · x³
+            load_alpha_tile(cb_weighted_inv_rms_x3, reg1);  // α_3
             mul_binary_tile_init();
-            mul_binary_tile(reg1, reg1, reg1);  // x²
+            mul_binary_tile(reg1, reg0, reg0);  // α_3 · (...)
             add_binary_tile_init();
-            add_binary_tile(reg1, reg1, reg0);  // 2x²
-            add_binary_tile(reg0, reg1, reg1);  // 3x²
+            add_binary_tile(reg2, reg2, reg1);  // 2x²
+            add_binary_tile(reg2, reg1, reg1);  // 3x²
             mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg1, reg_tmp);  // · 3x²
+            mul_binary_tile(reg0, reg1, reg0);  // · 3x²
             add_binary_tile_init();
-            add_binary_tile(reg_acc, reg_tmp, reg_acc);  // accumulate
+            add_binary_tile(reg_acc, reg0, reg_acc);  // accumulate
 
             tile_regs_commit();
             pack_l1_acc_block(cb_output, true, 1U, block_idx);
@@ -551,9 +543,9 @@ void emit_output_for_row() {
     cb_pop_front(cb_weighted_inv_rms_x, onetile);
     cb_pop_front(cb_weighted_inv_rms_x2, onetile);
     cb_pop_front(cb_weighted_inv_rms_x3, onetile);
-    cb_pop_front(cb_coeff_1, onetile);
-    cb_pop_front(cb_coeff_2, onetile);
-    cb_pop_front(cb_coeff_3, onetile);
+    cb_pop_front(cb_gamma_1, onetile);
+    cb_pop_front(cb_gamma_2, onetile);
+    cb_pop_front(cb_gamma_3, onetile);
 }
 
 // --- Main entry point ---
@@ -586,15 +578,10 @@ void kernel_main() {
         reduce_sum_to_scalar(cb_sum_x2dout, cb_sum_x2dout);
         reduce_sum_to_scalar(cb_sum_x3dout, cb_sum_x3dout);
 
-        // Partial weight gradients (dw) and weight-scaled sums (ws)
-        compute_dw_and_ws(cb_sum_xdout, cb_inv_rms_x, cb_w2, cb_sum_xdout, cb_sum_x2);
-        compute_dw_and_ws(cb_sum_x2dout, cb_inv_rms_x2, cb_w1, cb_sum_x2dout, cb_sum_x4);
-        compute_dw_and_ws(cb_sum_x3dout, cb_inv_rms_x3, cb_w0, cb_sum_x3dout, cb_sum_x6);
-
-        // Correction coefficients for grad_x
-        compute_coeff_tile(cb_inv_rms_x, cb_sum_x2, cb_coeff_1);
-        compute_coeff_tile(cb_inv_rms_x2, cb_sum_x4, cb_coeff_2);
-        compute_coeff_tile(cb_inv_rms_x3, cb_sum_x6, cb_coeff_3);
+        // Partial dw_k = g_k · inv_rms_k (in-place into cb_sum_x*dout slot) and γ_k = inv² · g · (1/N).
+        compute_dw_and_gamma(cb_sum_xdout, cb_inv_rms_x, cb_gamma_1);
+        compute_dw_and_gamma(cb_sum_x2dout, cb_inv_rms_x2, cb_gamma_2);
+        compute_dw_and_gamma(cb_sum_x3dout, cb_inv_rms_x3, cb_gamma_3);
 
         // Fold w0/w1/w2 into inv_rms once per row so Pass-2 drops 3 muls + 3 CB reads per output tile.
         prepare_weighted_inv_rms_for_row();
