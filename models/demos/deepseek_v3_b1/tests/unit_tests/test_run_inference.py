@@ -187,5 +187,5 @@ def test_run_inference_replays_spec_decode_trace(run_inference_trace_path: Path,
     assert emitted_tokens == trace["expected_host"]["generated_tokens"]
     assert fake_model.writes == [_normalize_expected_write(write) for write in trace["expected_host"]["writes"]]
     assert fake_model.read_count == trace["expected_host"]["read_count"]
-    assert pipeline.last_inference_stats["accepted_spec_tokens"] == trace["metadata"]["num_accepts"]
-    assert pipeline.last_inference_stats["rejected_spec_tokens"] == trace["metadata"]["num_rejects"]
+    assert pipeline.last_inference_stats["num_accepts"] == trace["metadata"]["num_accepts"]
+    assert pipeline.last_inference_stats["num_rejects"] == trace["metadata"]["num_rejects"]
