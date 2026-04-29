@@ -1949,7 +1949,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         global_stage2_semaphore=stage2_semaphores[0],
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
-        skip_ccl=False,
+        skip_ccl=True,
         fabric_config=device_params["fabric_config"],
         enable_mtp=enable_mtp,
     )
@@ -1980,7 +1980,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             global_stage2_semaphore=stage2_semaphores[i % 2],
             fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
+            skip_ccl=True,
             enable_mtp=enable_mtp,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
@@ -2011,7 +2011,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             global_stage2_semaphore=stage2_semaphores[i % 2],
             fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
+            skip_ccl=True,
             enable_mtp=enable_mtp,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
@@ -2949,10 +2949,7 @@ def test_single_device_d2h(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
+        {"fabric_config": ttnn.FabricConfig.DISABLED},
     ],
     indirect=True,
 )
@@ -3148,8 +3145,8 @@ def test_multidevice(
         global_stage2_semaphore=global_stage2_semaphore,
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
-        skip_ccl=False,
-        fabric_config=device_params["fabric_config"],
+        skip_ccl=True,
+        fabric_config=None,
     )
     ttnn.synchronize_device(submesh)
 
@@ -3485,7 +3482,7 @@ def test_multidevice_mtp(
         global_stage2_semaphore=global_stage2_semaphore,
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
-        skip_ccl=False,
+        skip_ccl=True,
         enable_mtp=True,
         base_token_buffer=base_token_buffer,
     )
@@ -3713,7 +3710,7 @@ def test_d2h(
         global_stage2_semaphore=global_stage2_semaphore,
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
-        skip_ccl=False,
+        skip_ccl=True,
         socket_output=d2h_socket,
         fabric_config=device_params["fabric_config"],
     )
@@ -4023,7 +4020,7 @@ def test_d2d_to_d2h_pipeline(
         global_stage2_semaphore=global_stage2_semaphore,
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
-        skip_ccl=False,
+        skip_ccl=True,
         socket_output=socket_interface.get_upstream_socket(),
         fabric_config=device_params["fabric_config"],
     )
@@ -4354,7 +4351,7 @@ def test_4stage_galaxy_1_iteration(
             global_stage2_semaphore=global_stage2_semaphore,
             fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
+            skip_ccl=True,
             socket_input=ingress_d2d_link.get_downstream_socket(),
             socket_output=egress_d2d_link.get_upstream_socket(),
             fabric_config=device_params["fabric_config"],

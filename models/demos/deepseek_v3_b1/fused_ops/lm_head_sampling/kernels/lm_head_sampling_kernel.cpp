@@ -546,13 +546,13 @@ void kernel_main() {
     // ========================================================================
 
     // ── CCL Broadcast / Mcast / Argmax (no-ops on TRISC) ────────────
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
+    using BcastCTArgs [[maybe_unused]] = deepseek_b1_ops::Broadcast::ComputeCTArgs;
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
-    using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+    using McastCTArgs [[maybe_unused]] = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
-    using McastEhCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+    using McastEhCTArgs [[maybe_unused]] = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast_eh_args{};
-    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ComputeCTArgs;
+    using ArgmaxCTArgs [[maybe_unused]] = deepseek_b1_ops::Sampling::ComputeCTArgs;
     deepseek_b1_ops::Sampling::ComputeArgs sampling_args{};
 
     // ── ReduceToOneB1 compute (eh_reduce cores) ─────────────────────
