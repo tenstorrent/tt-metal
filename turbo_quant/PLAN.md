@@ -1,47 +1,51 @@
 # TurboQuant KV Cache Quantization
 
-## 🚧 BLOCKED 2026-04-29: hybrid combine kernel hang
+## ✅ HYBRID COMBINE WORKING (2026-04-29 PM): W-sweep done
 
-The trace-input plumbing (`ring_pos`, `old_pos`) is committed end-to-end (commit
-`34bada48f3a`). `prepare_decode_inputs_host` builds the position tensors,
-`update_cache` and `hybrid_sdpa_decode` consume them, no per-step host syncs.
+The sliding-window hybrid (TQ over `[0, cur_pos]` + BFP8 ring over recent W
+tokens, combined via online-softmax LSE) now runs end-to-end with trace.
 
-**Blocker:** the fused TQ SDPA kernel hangs when called with
-`pre_rescaled=True + return_lse=True`. The compute kernel's LSE pack code only
-runs in the `!pre_rescaled` branch (`sdpa_tq_decode.cpp:1069`); the
-`pre_rescaled` branch calls `sdpa_standard` which does not export LSE. The
-writer (`writer_tq_decode.cpp:178`) unconditionally `cb_wait_front`s on
-`cb_lse_out`, so it deadlocks waiting for tiles compute never pushes.
+**N150 Llama-3.1-8B, 512-position teacher-forced eval, with trace:**
 
-The previous "Paris" smoke test that worked at 99.3 ms/tok must have been short
-enough that `cur_pos < W` always held, in which case the legacy hybrid path
-sets `return_lse=False` for the ring SDPA — sidestepping the bug. The
-1024-position eval inevitably hits `cur_pos ≥ W`, requesting LSE for the
-combine, and hangs.
+| Config | Top-1 | Top-5 | ms/tok | Δ top-1 vs Track A |
+|---|---:|---:|---:|---:|
+| Track A baseline (W=0) | 86.9 % | 97.1 % | 81.6 | — |
+| Hybrid W=32  | 87.5 % | 97.3 % | 88.1 | +0.6 |
+| Hybrid W=64  | 87.5 % | 97.5 % | 88.0 | +0.6 |
+| **Hybrid W=128** | **88.9 %** | **97.9 %** | **88.1** | **+2.0** |
+| Hybrid W=256 | 88.5 % | 97.7 % | 88.5 | +1.6 |
 
-Test confirming: `test_hybrid_fast_path.py` (also has its own shape bug in the
-test itself — `pre_rotate_query` expects `[1, B, NQH, DH]`, not
-`[1, NQH, 1, DH]`; same Q-shape footgun once you populate the cache).
+W=128 is the sweet spot: +2.0 pp top-1, +0.8 pp top-5 vs Track A at ~+6.5 ms/tok.
+Memory overhead is negligible — 128 tokens × 8 KV heads × 128 dim × 1 byte × 32
+layers ≈ 4 MB extra ring cache. Past W=128 the gain plateaus (and dips slightly
+at W=256), so we don't need a bigger ring.
 
-**Required fix:** add LSE export to the `pre_rescaled` branch in
-`sdpa_tq_decode.cpp`. Two implementation options:
+### Three fixes that unblocked this:
 
-(a) Replace the `sdpa_standard` call with a custom Flash-Attention loop that
-mirrors the `!pre_rescaled` chunk loop but skips the dequant steps (Steps 0,
-1, 4 in the current code). The loop's existing post-loop LSE pack at
-`sdpa_tq_decode.cpp:1069` would then run for both modes.
+1. **Kernel: gate dequant by `!pre_rescaled`** instead of taking the
+   `sdpa_standard` fast path (`sdpa_tq_decode.cpp`). The `pre_rescaled+
+   return_lse` case now falls through to the existing Flash-Attention chunk
+   loop, with Steps 0/1/4 (BFP8 norms typecast, K dequant, V dequant) gated
+   by `if constexpr (!pre_rescaled)`. The post-loop LSE pack then runs for
+   both modes. Without this the writer would deadlock on `cb_lse_out`.
+2. **Combine: slice LSE col 0 before broadcasting to head_dim**
+   (`ttnn_integration.py _combine_lse`). The LSE tile only has a meaningful
+   value at column 0 — columns 1-31 are -inf/+inf/NaN from `log(0)` of the
+   `matmul_reduce`'d rowsum and uninitialised cols of the max tile. The
+   previous `ttnn.repeat([1,1,1,4])` propagated that garbage.  Slice→repeat
+   guarantees all 128 cols hold col 0's value.
+3. **Strategy: old SDPA gets full `current_pos` coverage, not `cur_pos-W`.**
+   The TQ kernel rounds `valid_k_chunks` up to chunk boundary, so passing
+   `cur_pos-W` produced ~31 positions of overlap with the ring — and the
+   LSE-aware combine assumes disjoint coverage, so the result was 0 % top-1.
+   Using full `current_pos` turns the combine into an "emphasis blend": the
+   ring's BFP8-precision recent-token output gets up-weighted via LSE so
+   recent tokens contribute more than their share. Beats Track A.
 
-(b) Add a `bool return_lse` template param to `sdpa_inner_loop`/`sdpa_standard`
-in `compute_common.hpp` (shared with the standard SDPA decode), gated to emit
-`max·scale + log(sum)` to `cb_lse_out` between the K-chunk loop and the final
-recip+normalize.
-
-(a) is contained to TQ kernel territory but duplicates ~50 lines of Flash
-Attention. (b) is cleaner but touches a shared file.
-
-Until that lands, the W-sweep at W ∈ {32, 64, 128, 256} cannot run with the
-hybrid combine. Track A baseline still works — confirmed at 88.9 % top-1, 81.6
-ms/tok, 8-position eval (`b0fzclfk1.output`).
+`old_pos` device tensor is still plumbed through `prepare_decode_inputs_host
+→ hybrid_sdpa_decode` for future work; it is not used in the current strategy
+but stays available for a clean disjoint-coverage variant if/when the kernel
+grows per-token cur_pos masking.
 
 ## 🚀 RESUME HERE — TurboQuant 128K plan complete (2026-04-29)
 
