@@ -51,44 +51,59 @@ void kernel_main() {
 
         // Process second half: multiply by -1 and store in rotated buffer
         mul_tiles_bcast_scalar_init_short(in_cb, scalar_cb);
-        ACQ();
+        tile_regs_acquire();
         for (uint32_t j = 0; j < half_Wt; ++j) {
-            // Multiply second half by -1 scalar
             mul_tiles_bcast_scalar(in_cb, scalar_cb, j + half_Wt, 0, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < half_Wt; ++j) {
             pack_tile(j, rotated_in_interm_cb, j);
         }
-        REL();
+        tile_regs_release();
 
         // Copy first half to second half of rotated buffer
-        ACQ();
+        tile_regs_acquire();
         for (uint32_t j = 0; j < half_Wt; ++j) {
             copy_tile_init_with_dt(in_cb);
             copy_tile(in_cb, j, j + half_Wt);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < half_Wt; ++j) {
             pack_tile(j + half_Wt, rotated_in_interm_cb, j + half_Wt);
         }
-        REL();
+        tile_regs_release();
 
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
         // sin_interim = rotated * sin (broadcast rows)
         mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
+        tile_regs_acquire();
         for (uint32_t j = 0; j < Wt; ++j) {
             mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < Wt; ++j) {
             pack_tile(j, sin_interm_cb, j);
         }
-        REL();
+        tile_regs_release();
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
         // cos_interim = x * cos (broadcast rows)
-        ACQ();
+        tile_regs_acquire();
         for (uint32_t j = 0; j < Wt; ++j) {
             mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < Wt; ++j) {
             pack_tile(j, cos_interm_cb, j);
         }
-        REL();
+        tile_regs_release();
         cb_push_back(cos_interm_cb, Wt);
         cb_pop_front(in_cb, Wt);  // Done with input
 
@@ -96,12 +111,16 @@ void kernel_main() {
         cb_wait_front(sin_interm_cb, Wt);
         cb_wait_front(cos_interm_cb, Wt);
         add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
+        tile_regs_acquire();
         for (uint32_t j = 0; j < Wt; ++j) {
             add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < Wt; ++j) {
             pack_tile(j, out_cb, j);
         }
-        REL();
+        tile_regs_release();
         cb_push_back(out_cb, Wt);
         cb_pop_front(sin_interm_cb, Wt);
         cb_pop_front(cos_interm_cb, Wt);

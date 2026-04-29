@@ -8,20 +8,19 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Multiply input by cos or sin
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
-    ACQ();
+    tile_regs_acquire();
     mul_tiles_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, out_cb);
-    REL();
+    tile_regs_release();
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(in1_cb, num_tiles);
@@ -55,11 +54,13 @@ void kernel_main() {
                 pack_reconfig_data_format(rotated_in_interm_cb);
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
-                ACQ();
+                tile_regs_acquire();
                 mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(0, rotated_in_interm_cb);
-                REL();
+                tile_regs_release();
                 cb_push_back(rotated_in_interm_cb, onetile);
                 cb_pop_front(rotated_in_cb, onetile);
                 reconfig_data_format_srcb(scalar_cb, sin_cb);
@@ -83,11 +84,13 @@ void kernel_main() {
 
             reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
             pack_reconfig_data_format(cos_interm_cb, out_cb);
-            ACQ();
+            tile_regs_acquire();
             add_tiles_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, out_cb);
-            REL();
+            tile_regs_release();
 
             cb_push_back(out_cb, onetile);
             cb_pop_front(cos_interm_cb, onetile);
