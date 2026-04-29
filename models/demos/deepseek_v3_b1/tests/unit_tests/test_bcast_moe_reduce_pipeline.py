@@ -371,7 +371,7 @@ def test_bcast_moe_reduce_pipeline(
     if is_stage0:
         token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-        torch_token[0, 0] = token_id
+        torch_token[0, 6] = token_id
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         pipeline_block.write_token(token_tensor)
         logger.info(f"[rank=0] token {token_id} injected")
@@ -915,7 +915,7 @@ def test_persistent_mode_pipeline(
             for iteration in range(iterations):
                 print(f"[rank={my_mesh_id}] iteration {iteration} start")
                 torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
+                torch_token[0, 6] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
                 d2h_output_tensor = ttnn.from_torch(
