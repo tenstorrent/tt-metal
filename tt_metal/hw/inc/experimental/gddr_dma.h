@@ -34,11 +34,6 @@ namespace experimental {
 
     All size and increment parameters are in bytes and must be multiples of 16.
     stream must be 0 or 1.
-
-    Stream mode must be enabled before calling any DMA function:
-        experimental::drisc_set_stream_mode_all();
-    Restore NOC2AXI before returning from kernel_main:
-        experimental::drisc_set_noc2axi_mode_all();
 */
 
 #ifdef COMPILE_FOR_DRISC

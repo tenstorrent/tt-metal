@@ -53,7 +53,7 @@ void kernel_main() {
     constexpr uint32_t total_iters = get_compile_time_arg_val(9);
     experimental::UnicastEndpoint dst;
     constexpr uint8_t tx_stream = 0;
-    constexpr uint8_t num_reads_outstanding = 2;
+    constexpr uint8_t num_reads_outstanding = 1;
     constexpr uint32_t half_buffer_bytes = num_bytes / 2;
     constexpr uint32_t src_A = src_gddr_addr;
     constexpr uint32_t src_B = src_gddr_addr + half_buffer_bytes;
@@ -69,7 +69,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < total_iters - 2; i++) {
         experimental::dma_async_read_wait_n(tx_stream, num_reads_outstanding);
         // noc async write from dst_A
-        noc.async_write_barrier(trid_A);
+        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_A);
         noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
             src,
             dst,
@@ -81,7 +81,7 @@ void kernel_main() {
         experimental::dma_async_read(tx_stream, src_A, dst_A, half_buffer_bytes);
         experimental::dma_async_read_wait_n(tx_stream, num_reads_outstanding);
         // noc async write from dst_B
-        noc.async_write_barrier(trid_B);
+        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_B);
         noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
             src,
             dst,
@@ -92,9 +92,9 @@ void kernel_main() {
             trid_B);
         experimental::dma_async_read(tx_stream, src_B, dst_B, half_buffer_bytes);
     }
-    // Drain: two reads still in flight — wait for each in turn and flush its NoC write.
+    // Drain: two reads still in flight - wait for each in turn and flush its NoC write.
     experimental::dma_async_read_wait_n(tx_stream, num_reads_outstanding);
-    noc.async_write_barrier(trid_A);
+    noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_A);
     noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
         src,
         dst,
@@ -104,7 +104,7 @@ void kernel_main() {
         NOC_UNICAST_WRITE_VC,
         trid_A);
     experimental::dma_async_read_wait_n(tx_stream, 0);
-    noc.async_write_barrier(trid_B);
+    noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(trid_B);
     noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(
         src,
         dst,

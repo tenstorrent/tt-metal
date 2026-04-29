@@ -187,9 +187,9 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixReadFromDRISCL1) {
     distributed::Finish(mesh_device->mesh_command_queue());
 
     // Verify Tensix read the seeded value.
-    std::vector<uint32_t> result;
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        device, logical_core_tensix, tensix_l1_addr, sizeof(kMagicValue), result, CoreType::WORKER);
+    std::vector<uint32_t> result(1);
+    MetalContext::instance().get_cluster().read_core(
+        result.data(), sizeof(kMagicValue), tt_cxy_pair(mesh_device->build_id(), tensix_virtual), tensix_l1_addr);
     log_info(LogTest, "Tensix L1 result: 0x{:X} (expected: 0x{:X})", result[0], kMagicValue);
     EXPECT_EQ(result[0], kMagicValue) << "Tensix should have read the value from DRISC L1";
 }
@@ -218,8 +218,11 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDRISCReadFromTensixL1) {
 
     // Host writes magic value to Tensix L1
     std::vector<uint32_t> write_data = {kMagicValue};
-    tt::tt_metal::detail::WriteToDeviceL1(
-        device, logical_core_tensix, l1_unreserved_base_tensix, write_data, CoreType::WORKER);
+    MetalContext::instance().get_cluster().write_core(
+        write_data.data(),
+        write_data.size() * sizeof(uint32_t),
+        tt_cxy_pair(mesh_device->build_id(), tensix_virtual),
+        l1_unreserved_base_tensix);
 
     distributed::MeshWorkload workload;
     Program program = CreateProgram();
@@ -619,17 +622,147 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDRISCRTensixParallelDRAMReads) {
     }
 }
 
-// Read from GDDR over DMA into DRISC L1
-// mcast data from DRISC L1 to Tensix L1
-// Host write to DRAM
-// Read from DRISC (single endpoint)
-// Mcast to Tensix L1 (need a grid here)
-// Read from Host and verify (read from the series of grid)
-TEST_F(BlackholeSingleCardFixture, DramKernelDRISCReadFromDRAMUcastToTensix) {
+class DRAMGDDRReadBWSweepFixture : public BlackholeSingleCardFixture, public testing::WithParamInterface<uint32_t> {};
+
+// Tensix serial GDDR reads - one read + full barrier per iteration.
+TEST_P(DRAMGDDRReadBWSweepFixture, TensixSerialRead) {
+    const uint32_t bytes_per_iter = GetParam();
+    constexpr uint32_t iters = 1000;
+    const uint32_t total_bytes = iters * bytes_per_iter;
+
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord);
+
+    uint32_t dram_unreserved_base = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    CoreCoord logical_core{0, 0};
+    uint32_t bank_id = device->dram_channel_from_logical_core(logical_core);
+
+    std::vector<uint32_t> data = create_random_vector_of_bfloat16(
+        bytes_per_iter, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, dram_unreserved_base, data);
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& prog = workload.get_programs().at(device_range);
+
+    CreateKernel(
+        prog,
+        "tests/tt_metal/tt_metal/test_kernels/misc/tensix_dram_reads_bw.cpp",
+        logical_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_0,
+            .compile_args = {bank_id, dram_unreserved_base, l1_unreserved_base, bytes_per_iter, iters}});
+
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
+    uint64_t l1_base = static_cast<uint64_t>(l1_unreserved_base);
+
+    std::vector<uint32_t> result(data.size());
+    MetalContext::instance().get_cluster().read_core(
+        result.data(), bytes_per_iter, tt_cxy_pair(mesh_device->build_id(), virtual_core), l1_base);
+    EXPECT_EQ(result, data);
+
+    std::vector<uint32_t> t(2);
+    MetalContext::instance().get_cluster().read_core(
+        t.data(), sizeof(uint64_t), tt_cxy_pair(mesh_device->build_id(), virtual_core), l1_base + bytes_per_iter);
+    uint64_t cycles = (static_cast<uint64_t>(t[1]) << 32) | t[0];
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;
+
+    log_info(
+        LogTest,
+        "Tensix serial GDDR read BW ({}KB): {:.2f} GB/s ({:.0f} MB total, {} cycles)",
+        bytes_per_iter / 1024,
+        static_cast<double>(total_bytes) * clk_hz / cycles / 1e9,
+        total_bytes / 1e6,
+        cycles);
+}
+
+// Tensix pipelined DRAM GDDR address reads - double-buffer TRID 2/3, two half-buffer reads in flight.
+TEST_P(DRAMGDDRReadBWSweepFixture, TensixPipelinedRead) {
+    const uint32_t bytes_per_iter = GetParam();
+    const uint32_t half_bytes = bytes_per_iter / 2;
+    constexpr uint32_t iters = 1000;
+    const uint32_t total_bytes = iters * bytes_per_iter;
+
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord);
+
+    uint32_t dram_unreserved_base = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    CoreCoord logical_core{0, 0};
+    uint32_t bank_id = device->dram_channel_from_logical_core(logical_core);
+
+    std::vector<uint32_t> data = create_random_vector_of_bfloat16(
+        bytes_per_iter, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, dram_unreserved_base, data);
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& prog = workload.get_programs().at(device_range);
+
+    CreateKernel(
+        prog,
+        "tests/tt_metal/tt_metal/test_kernels/misc/tensix_dram_reads_bw.cpp",
+        logical_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_0,
+            .compile_args = {bank_id, dram_unreserved_base, l1_unreserved_base, bytes_per_iter, iters},
+            .defines = {{"PIPELINED", "1"}}});
+
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
+    uint64_t l1_base = static_cast<uint64_t>(l1_unreserved_base);
+
+    // Both buffers read from the same GDDR address - each holds the first half of data.
+    std::vector<uint32_t> first_half(data.begin(), data.begin() + data.size() / 2);
+    std::vector<uint32_t> result_a(first_half.size()), result_b(first_half.size());
+    MetalContext::instance().get_cluster().read_core(
+        result_a.data(), half_bytes, tt_cxy_pair(mesh_device->build_id(), virtual_core), l1_base);
+    MetalContext::instance().get_cluster().read_core(
+        result_b.data(), half_bytes, tt_cxy_pair(mesh_device->build_id(), virtual_core), l1_base + half_bytes);
+    EXPECT_EQ(result_a, first_half);
+    EXPECT_EQ(result_b, first_half);
+
+    std::vector<uint32_t> t(2);
+    MetalContext::instance().get_cluster().read_core(
+        t.data(), sizeof(uint64_t), tt_cxy_pair(mesh_device->build_id(), virtual_core), l1_base + bytes_per_iter);
+    uint64_t cycles = (static_cast<uint64_t>(t[1]) << 32) | t[0];
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;
+
+    log_info(
+        LogTest,
+        "Tensix pipelined DRAM GDDR read BW ({}KB): {:.2f} GB/s ({:.0f} MB total, {} cycles)",
+        bytes_per_iter / 1024,
+        static_cast<double>(total_bytes) * clk_hz / cycles / 1e9,
+        total_bytes / 1e6,
+        cycles);
+}
+
+// DRISC DMA GDDR -> L1 + NOC unicast to Tensix L1, double-buffered
+TEST_P(DRAMGDDRReadBWSweepFixture, DRISCDMAUcastToTensix) {
     const auto& hal = MetalContext::instance().hal();
     if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         GTEST_SKIP() << "DRAM programmable cores not enabled";
     }
+
+    const uint32_t bytes_per_iter = GetParam();
+    constexpr uint32_t iters = 1000;
+    const uint32_t total_bytes = iters * bytes_per_iter;
 
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];
@@ -637,31 +770,20 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDRISCReadFromDRAMUcastToTensix) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord);
 
     uint32_t dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    uint32_t dram_unreserved_size = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
     uint32_t l1_unreserved_base_drisc = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     uint32_t l1_unreserved_base_tensix = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    constexpr uint32_t bytes_per_iter = 64 * 1024;
-    constexpr uint32_t iters = 1000;
-    constexpr uint32_t total_bytes = iters * bytes_per_iter;
-
-    TT_FATAL(
-        dram_unreserved_size >= total_bytes,
-        "Not enough DRAM: need {} bytes, have {}",
-        total_bytes,
-        dram_unreserved_size);
 
     std::vector<uint32_t> data = create_random_vector_of_bfloat16(
-        total_bytes, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
-
-    distributed::MeshWorkload workload;
-    Program program = CreateProgram();
+        bytes_per_iter, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
 
     CoreCoord logical_core{0, 0};
     uint32_t dram_channel = device->dram_channel_from_logical_core(logical_core);
-    CoreCoord tensix_sub_logical_start_coord{0, 0};
-    CoreCoord sub_worker_start_coord =
-        device->virtual_core_from_logical_core(tensix_sub_logical_start_coord, CoreType::WORKER);
+    CoreCoord tensix_logical{0, 0};
+    CoreCoord sub_worker = device->virtual_core_from_logical_core(tensix_logical, CoreType::WORKER);
     tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_unreserved_base, data);
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
 
     CreateKernel(
         program,
@@ -673,40 +795,47 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDRISCReadFromDRAMUcastToTensix) {
                 dram_unreserved_base,
                 l1_unreserved_base_drisc,
                 l1_unreserved_base_tensix,
-                sub_worker_start_coord.x,
-                sub_worker_start_coord.y,
-                sub_worker_start_coord.x,
-                sub_worker_start_coord.y,
-                total_bytes,
-                0}});
+                sub_worker.x,
+                sub_worker.y,
+                sub_worker.x,
+                sub_worker.y,
+                bytes_per_iter,
+                0,
+                iters}});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    CoreCoord virtual_core = device->virtual_core_from_logical_core(tensix_sub_logical_start_coord, CoreType::WORKER);
+    CoreCoord tensix_virtual = device->virtual_core_from_logical_core(tensix_logical, CoreType::WORKER);
     std::vector<uint32_t> result(data.size());
     MetalContext::instance().get_cluster().read_core(
         result.data(),
         data.size() * sizeof(uint32_t),
-        tt_cxy_pair(mesh_device->build_id(), virtual_core),
+        tt_cxy_pair(mesh_device->build_id(), tensix_virtual),
         l1_unreserved_base_tensix);
     EXPECT_EQ(result, data);
 
-    CoreCoord dram_virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+    CoreCoord dram_virtual = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
     uint64_t l1_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     uint64_t timing_noc_addr = l1_noc_base + static_cast<uint64_t>(bytes_per_iter);
     uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;
-    uint64_t max_cycles = 0;
     std::vector<uint32_t> t(2);
     MetalContext::instance().get_cluster().read_core(
-        t.data(), sizeof(uint64_t), tt_cxy_pair(mesh_device->build_id(), dram_virtual_core), timing_noc_addr);
-    max_cycles = (static_cast<uint64_t>(t[1]) << 32) | t[0];
+        t.data(), sizeof(uint64_t), tt_cxy_pair(mesh_device->build_id(), dram_virtual), timing_noc_addr);
+    uint64_t cycles = (static_cast<uint64_t>(t[1]) << 32) | t[0];
 
     log_info(
         LogTest,
-        "DRISC DMA Multi-Endpoint Read BW: {:.2f} GB/s ({:.0f} MB total, {} max cycles)",
-        static_cast<double>(total_bytes) * clk_hz / max_cycles / 1e9,
+        "DRISC DMA + NOC ucast BW ({}KB): {:.2f} GB/s ({:.0f} MB total, {} cycles)",
+        bytes_per_iter / 1024,
+        static_cast<double>(total_bytes) * clk_hz / cycles / 1e9,
         total_bytes / 1e6,
-        max_cycles);
+        cycles);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    SizeSweep,
+    DRAMGDDRReadBWSweepFixture,
+    testing::Values(2048u, 4096u, 8192u, 16384u, 32768u, 65536u),
+    [](const testing::TestParamInfo<uint32_t>& info) { return std::to_string(info.param / 1024) + "KB"; });
