@@ -47,9 +47,6 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
-
     constexpr uint32_t double_buffer = 2;
     const uint32_t in0_tiles = block_size * double_buffer;
     const uint32_t out0_tiles = output_tiles_per_row * double_buffer;
@@ -80,13 +77,47 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     const uint32_t reciprocal_CB_size_bytes = recip_tensor.buffer()->aligned_size_per_bank();
     constexpr tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramDescriptor
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor program_descriptor;
+
+    // Reader kernel
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/dataflow/"
+        "reader_layernorm_preallgather_dit.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+
+    // Writer kernel
+    KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/dataflow/"
+        "writer_layernorm_preallgather_dit.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = all_cores;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.config = WriterConfigDescriptor{};
+
+    // Compute kernel
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source = compute_kernel_file;
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
+
     // Build runtime args per core
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
-    reader_runtime_args.reserve(num_cores);
-    writer_runtime_args.reserve(num_cores);
-    compute_runtime_args.reserve(num_cores);
+    reader_kernel_desc.runtime_args.reserve(num_cores);
+    writer_kernel_desc.runtime_args.reserve(num_cores);
+    compute_kernel_desc.runtime_args.reserve(num_cores);
 
     uint32_t curr_row = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -104,56 +135,15 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
         uint32_t in_tile_offset = curr_row * Wt;
         uint32_t out_tile_offset = curr_row * output_tiles_per_row;
 
-        reader_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{a_addr, num_tile_rows_per_core, Wt, in_tile_offset});
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
-        writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core, out_tile_offset});
+        reader_kernel_desc.emplace_runtime_args(core, {a.buffer(), num_tile_rows_per_core, Wt, in_tile_offset});
+        compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
+        writer_kernel_desc.emplace_runtime_args(core, {output.buffer(), num_tile_rows_per_core, out_tile_offset});
 
         curr_row += num_tile_rows_per_core;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build ProgramDescriptor
-    ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor program_descriptor;
-
-    // Reader kernel
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/dataflow/"
-        "reader_layernorm_preallgather_dit.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Writer kernel
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/dataflow/"
-        "writer_layernorm_preallgather_dit.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
-
-    // Compute kernel
-    KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source = compute_kernel_file;
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = std::move(compute_args);
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
     ////////////////////////////////////////////////////////////////////////////

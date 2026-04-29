@@ -72,48 +72,6 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     std::vector<CoreCoord> cores = grid_to_cores(
         num_cores, device_compute_with_storage_grid_size.x, device_compute_with_storage_grid_size.y, row_major);
 
-    // Build runtime args per core
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
-    reader_runtime_args.reserve(num_cores);
-    writer_runtime_args.reserve(num_cores);
-    compute_runtime_args.reserve(num_cores);
-
-    uint32_t num_blocks_per_core = 0;
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-        if (i < g1_numcores) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        }
-
-        // (src_addr, num_tiles, start_id, ashape[2]/TILE_HEIGHT, ashape[-1]/TILE_WIDTH)
-        reader_runtime_args.emplace_back(
-            cores[i],
-            std::vector<uint32_t>{
-                input_buffer->address(),
-                num_blocks_per_core * LATENT_DIM,
-                num_blocks_written * LATENT_DIM,
-                ashape[2] / TILE_HEIGHT,
-                ashape[-1] / TILE_WIDTH});
-
-        // (dst_addr, num_tiles, start_id, ashape[2]/TILE_HEIGHT, ashape[-1]/(LATENT_DIM*TILE_WIDTH))
-        writer_runtime_args.emplace_back(
-            cores[i],
-            std::vector<uint32_t>{
-                out_buffer->address(),
-                num_blocks_per_core,
-                num_blocks_written,
-                ashape[2] / TILE_HEIGHT,
-                ashape[-1] / (LATENT_DIM * TILE_WIDTH)});
-
-        compute_runtime_args.emplace_back(
-            cores[i], std::vector<uint32_t>{num_blocks_per_core, ashape[2] / TILE_HEIGHT});
-
-        num_blocks_written += num_blocks_per_core;
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Build ProgramDescriptor
     ////////////////////////////////////////////////////////////////////////////
@@ -180,9 +138,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
-    desc.kernels.push_back(std::move(reader_kernel_desc));
 
     KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
@@ -190,9 +146,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
-    desc.kernels.push_back(std::move(writer_kernel_desc));
 
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
@@ -200,9 +154,47 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = operation_attributes.math_fidelity, .fp32_dest_acc_en = false, .math_approx_mode = false};
+
+    // Build runtime args per core
+    reader_kernel_desc.runtime_args.reserve(num_cores);
+    writer_kernel_desc.runtime_args.reserve(num_cores);
+    compute_kernel_desc.runtime_args.reserve(num_cores);
+
+    uint32_t num_blocks_per_core = 0;
+    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        if (i < g1_numcores) {
+            num_blocks_per_core = num_blocks_per_core_group_1;
+        } else {
+            num_blocks_per_core = num_blocks_per_core_group_2;
+        }
+
+        // (src_addr, num_tiles, start_id, ashape[2]/TILE_HEIGHT, ashape[-1]/TILE_WIDTH)
+        reader_kernel_desc.emplace_runtime_args(
+            cores[i],
+            {input_buffer,
+             num_blocks_per_core * LATENT_DIM,
+             num_blocks_written * LATENT_DIM,
+             ashape[2] / TILE_HEIGHT,
+             ashape[-1] / TILE_WIDTH});
+
+        // (dst_addr, num_tiles, start_id, ashape[2]/TILE_HEIGHT, ashape[-1]/(LATENT_DIM*TILE_WIDTH))
+        writer_kernel_desc.emplace_runtime_args(
+            cores[i],
+            {out_buffer,
+             num_blocks_per_core,
+             num_blocks_written,
+             ashape[2] / TILE_HEIGHT,
+             ashape[-1] / (LATENT_DIM * TILE_WIDTH)});
+
+        compute_kernel_desc.emplace_runtime_args(cores[i], {num_blocks_per_core, ashape[2] / TILE_HEIGHT});
+
+        num_blocks_written += num_blocks_per_core;
+    }
+
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    desc.kernels.push_back(std::move(writer_kernel_desc));
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
     return desc;

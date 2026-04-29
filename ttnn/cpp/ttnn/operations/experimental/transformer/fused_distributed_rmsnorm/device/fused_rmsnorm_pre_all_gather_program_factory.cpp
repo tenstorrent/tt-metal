@@ -69,9 +69,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
     log_debug(tt::LogOp, "dst_reg_count: {}", dst_reg_count);
 
-    auto input_addr = input_tensor.buffer()->address();
-    auto output_addr = output_tensor.buffer()->address();
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -128,40 +125,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
 
     const auto cores = corerange_to_cores(core_grid, num_cores, true);
 
-    // Build runtime args per core
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
-    reader_runtime_args.reserve(num_cores);
-    writer_runtime_args.reserve(num_cores);
-    compute_runtime_args.reserve(num_cores);
-
-    for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
-        CoreCoord core = cores.at(core_id);
-
-        const uint32_t tile_row_start = std::min(core_id * num_tile_rows_per_core, num_tile_rows);
-        const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_core, num_tile_rows);
-        const uint32_t num_tile_rows_to_process = tile_row_end - tile_row_start;
-
-        reader_runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                input_addr,
-                tile_row_start,
-                tile_row_end,
-            });
-
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_to_process});
-
-        writer_runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                output_addr,
-                tile_row_start,
-                tile_row_end,
-            });
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Build ProgramDescriptor
     ////////////////////////////////////////////////////////////////////////////
@@ -175,9 +138,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = core_grid_set;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
     // Writer kernel
     KernelDescriptor writer_kernel_desc;
@@ -187,9 +148,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = core_grid_set;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
     // Compute kernel
     KernelDescriptor compute_kernel_desc;
@@ -197,12 +156,33 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = core_grid_set;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode};
+
+    // Build runtime args per core
+    reader_kernel_desc.runtime_args.reserve(num_cores);
+    writer_kernel_desc.runtime_args.reserve(num_cores);
+    compute_kernel_desc.runtime_args.reserve(num_cores);
+
+    for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
+        CoreCoord core = cores.at(core_id);
+
+        const uint32_t tile_row_start = std::min(core_id * num_tile_rows_per_core, num_tile_rows);
+        const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_core, num_tile_rows);
+        const uint32_t num_tile_rows_to_process = tile_row_end - tile_row_start;
+
+        reader_kernel_desc.emplace_runtime_args(core, {input_tensor.buffer(), tile_row_start, tile_row_end});
+
+        compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_to_process});
+
+        writer_kernel_desc.emplace_runtime_args(core, {output_tensor.buffer(), tile_row_start, tile_row_end});
+    }
+
+    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
+    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
     ////////////////////////////////////////////////////////////////////////////

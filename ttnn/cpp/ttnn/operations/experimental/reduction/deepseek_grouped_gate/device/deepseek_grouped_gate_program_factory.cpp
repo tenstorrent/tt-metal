@@ -264,14 +264,52 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build kernels
+    ////////////////////////////////////////////////////////////////////////////
+
+    // Reader kernel
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/dataflow/"
+        "reader_deepseek_grouped_gate.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.named_compile_time_args = KernelDescriptor::NamedCompileTimeArgs(
+        reader_named_compile_time_args.begin(), reader_named_compile_time_args.end());
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+
+    // Writer kernel
+    KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/dataflow/"
+        "writer_deepseek_grouped_gate.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = all_cores;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.named_compile_time_args = KernelDescriptor::NamedCompileTimeArgs(
+        writer_named_compile_time_args.begin(), writer_named_compile_time_args.end());
+    writer_kernel_desc.config = WriterConfigDescriptor{};
+
+    // Compute kernel
+    bool fp32_dest_acc_en = false;  // Needed for topK to work with uint16_t indices
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/"
+        "deepseek_grouped_gate.cpp";
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_compile_time_args);
+    compute_kernel_desc.named_compile_time_args = KernelDescriptor::NamedCompileTimeArgs(
+        compute_named_compile_time_args.begin(), compute_named_compile_time_args.end());
+    compute_kernel_desc.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
+
     // Build runtime args per core
     auto cores = corerange_to_cores(all_cores, std::nullopt);
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
-    reader_runtime_args.reserve(cores.size());
-    writer_runtime_args.reserve(cores.size());
-    compute_runtime_args.reserve(cores.size());
+    reader_kernel_desc.runtime_args.reserve(cores.size());
+    writer_kernel_desc.runtime_args.reserve(cores.size());
+    compute_kernel_desc.runtime_args.reserve(cores.size());
 
     uint32_t start_height_tile = 0;
     uint32_t end_height_tile = 0;
@@ -288,65 +326,15 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
         start_height_tile = end_height_tile;
         end_height_tile = start_height_tile + workload_per_core;
 
-        reader_runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                scores.buffer()->address(), bias.buffer()->address(), start_height_tile, end_height_tile});
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{start_height_tile, end_height_tile});
-        writer_runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                output_weights.buffer()->address(),
-                output_indices.buffer()->address(),
-                start_height_tile,
-                end_height_tile});
+        reader_kernel_desc.emplace_runtime_args(
+            core, {scores.buffer(), bias.buffer(), start_height_tile, end_height_tile});
+        compute_kernel_desc.emplace_runtime_args(core, {start_height_tile, end_height_tile});
+        writer_kernel_desc.emplace_runtime_args(
+            core, {output_weights.buffer(), output_indices.buffer(), start_height_tile, end_height_tile});
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build kernels
-    ////////////////////////////////////////////////////////////////////////////
-
-    // Reader kernel
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/dataflow/"
-        "reader_deepseek_grouped_gate.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.named_compile_time_args = KernelDescriptor::NamedCompileTimeArgs(
-        reader_named_compile_time_args.begin(), reader_named_compile_time_args.end());
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
     desc.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Writer kernel
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/dataflow/"
-        "writer_deepseek_grouped_gate.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.named_compile_time_args = KernelDescriptor::NamedCompileTimeArgs(
-        writer_named_compile_time_args.begin(), writer_named_compile_time_args.end());
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
     desc.kernels.push_back(std::move(writer_kernel_desc));
-
-    // Compute kernel
-    bool fp32_dest_acc_en = false;  // Needed for topK to work with uint16_t indices
-    KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/"
-        "deepseek_grouped_gate.cpp";
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_kernel_desc.named_compile_time_args = KernelDescriptor::NamedCompileTimeArgs(
-        compute_named_compile_time_args.begin(), compute_named_compile_time_args.end());
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
-    compute_kernel_desc.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
     return desc;
