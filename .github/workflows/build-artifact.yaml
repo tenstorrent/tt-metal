@@ -281,6 +281,8 @@ jobs:
     outputs:
       run-id: ${{ steps.find.outputs.run-id }}
       found: ${{ steps.find.outputs.found }}
+      wheel-found: ${{ steps.find.outputs.wheel-found }}
+      wheel-run-id: ${{ steps.find.outputs.wheel-run-id }}
     steps:
       - name: ⬇️ Checkout (actions only)
         uses: actions/checkout@v4
@@ -293,6 +295,7 @@ jobs:
         uses: ./.github/actions/find-build-for-sha
         with:
           tracy: ${{ inputs.tracy }}
+          check-wheel: ${{ inputs.build-wheel }}
 
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
@@ -682,11 +685,13 @@ jobs:
 
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    # Skip when artifacts are available from a prior run (explicit input or auto-detected by find-existing-build)
+    # Skip when a wheel artifact is confirmed available from a prior run.
+    # NOTE: We check wheel-found (not found) because found only confirms a C++ build
+    # artifact exists — a prior run may have had build-wheel=false, so no wheel was built.
     if: >-
       ${{ always() && !failure() && !cancelled() && inputs.build-wheel &&
           inputs.use-artifacts-from-run == '' &&
-          needs.find-existing-build.outputs.found != 'true' }}
+          needs.find-existing-build.outputs.wheel-found != 'true' }}
     name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
     needs: [parse-platform, build-docker-image, determine-python-version, find-existing-build]
