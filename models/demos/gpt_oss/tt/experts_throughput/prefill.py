@@ -72,16 +72,18 @@ class DeepSeekPrefillConfig:
         self.seq_len_per_chip = seq_len_per_chip
         self.capacity_factor = capacity_factor
 
-        _, metadata_len, max_dispatched = compute_constants(
+        _, metadata_len, max_dispatch_buffer_token_size, max_dispatched = compute_constants(
             seq_len_per_chip=seq_len_per_chip,
             num_routed_experts=config.num_experts,
             num_experts_per_tok=config.num_experts_per_tok,
             num_devices=dispatch_group_size * num_dispatch_groups,
             dispatch_group_size=dispatch_group_size,
-            capacity_factor=capacity_factor,
+            dispatch_buffer_capacity_factor=int(capacity_factor),
         )
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched
+        # New in #41668: dispatch buffer's total token capacity (drives TtDispatchModule sizing).
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
 
         # Standard GROUP-BASED dispatch table
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
@@ -99,7 +101,7 @@ class DeepSeekPrefillConfig:
             num_routed_experts=config.num_experts,
             num_experts_per_tok=config.num_experts_per_tok,
             metadata_len=metadata_len,
-            max_dispatched_tokens_per_expert=max_dispatched,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=config.hidden_size,
             cluster_axis=0,
@@ -279,7 +281,7 @@ def _forward_prefill_deepseek_chunk(
         idx_for_routing = ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(idx_u16)
 
-    tt_offsets, tt_counts, _ = pc.routing_setup(
+    tt_offsets, tt_counts, expert_region_offsets, _ = pc.routing_setup(
         ttnn_top_k_experts_indices=idx_for_routing,
         num_routed_experts=config.num_experts,
         seq_len_per_chip=pc.seq_len_per_chip,
@@ -356,10 +358,11 @@ def _forward_prefill_deepseek_chunk(
     expert_out_rm = ttnn.unsqueeze(expert_out_rm, dim=0)
 
     # Step 7: Combine
-    combined = pc.combine_module(expert_out_rm, metadata, tt_counts)
+    combined = pc.combine_module(expert_out_rm, metadata, tt_counts, expert_region_offsets)
     ttnn.deallocate(expert_out_rm)
     ttnn.deallocate(metadata)
     ttnn.deallocate(tt_counts)
+    ttnn.deallocate(expert_region_offsets)
 
     # Step 8: Fused post-combine reduce (w_reduce/w_5d may be views of scores_for_reduce)
     w_reduce = ttnn.reshape(scores_for_reduce, (1, 1, pc.seq_len_per_chip, config.num_experts_per_tok))
