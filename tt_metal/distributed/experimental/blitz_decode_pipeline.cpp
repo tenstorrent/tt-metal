@@ -102,7 +102,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
     //   Stage 0 entry is intra-mesh on mesh_0.
 
     // Find unclaimed nodes on mesh_0: need 2 with loopback (entry + loopback exit), 1 without.
-    const std::size_t unclaimed_needed = initialize_loopback ? 2 : 1;
+    // const std::size_t unclaimed_needed = initialize_loopback ? 2 : 1;
     // Stage 0 entry and loopback exit are intra-mesh on mesh_0 (not from inter-mesh cables).
     // Pick two unclaimed chips with a direct intra-mesh ethernet link (loopback_exit -> stage_0_entry).
     // Prefer a non-Z link when available so the loopback hop matches typical NESW mesh wiring.
@@ -156,6 +156,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
     stages.reserve(num_meshes + 1);
 
     // Stage 0: entry is intra-mesh (from loopback), exit goes to mesh_1 via hop[0]
+    std::cout << "stage0:" << fn_to_coord(*stage_0_entry_fn) << " -> " << fn_to_coord(hops[0].first) << "\n";
     stages.emplace_back(BlitzDecodePipelineStage{
         .stage_index = static_cast<std::size_t>(*mesh_ids[0]),
         .entry_node_coord = fn_to_coord(*stage_0_entry_fn),
@@ -163,6 +164,8 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
 
     // Stages 1..N-1: entry from previous hop's peer, exit from current hop
     for (std::size_t i = 1; i < num_meshes; i++) {
+        std::cout << "stage" << i << ":" << fn_to_coord(hops[i - 1].second) << " -> " << fn_to_coord(hops[i].first)
+                  << "\n";
         stages.emplace_back(BlitzDecodePipelineStage{
             .stage_index = static_cast<std::size_t>(*mesh_ids[i]),
             .entry_node_coord = fn_to_coord(hops[i - 1].second),
@@ -179,7 +182,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
     return stages;
 }
 
-void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
+void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool initialize_loopback) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
     auto mesh_ids = mesh_graph.get_mesh_ids();
@@ -659,8 +662,8 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
 }  // namespace
 
 std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline() {
-    auto stages = build_pipeline_from_topology();
-    validate_pipeline(stages);
+    auto stages = build_pipeline_from_topology(true);
+    validate_pipeline(stages, true);
 
     // Synchronize all ranks before returning so that downstream socket creation
     // (which cascades sequentially through stages) starts from a common point.

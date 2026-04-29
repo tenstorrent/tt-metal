@@ -739,8 +739,13 @@ struct ReduceToAllB1 {
                             socket_barrier(sender_socket);
                             DPRINT << "WSB\n";
                             update_socket_config(sender_socket);
-                        }
-                        if (args.persistent_enable != 0) {
+                            DPRINT << "WSC\n";
+                            uint64_t fc_sem = get_noc_addr(
+                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                            noc_semaphore_inc(fc_sem, 1);
+                            noc_async_atomic_barrier();
+                            DPRINT << "incremented fc sem t\n";
+                        } else if (args.persistent_enable != 0) {
                             uint64_t fc_sem = get_noc_addr(
                                 args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
                             noc_semaphore_inc(fc_sem, 1);

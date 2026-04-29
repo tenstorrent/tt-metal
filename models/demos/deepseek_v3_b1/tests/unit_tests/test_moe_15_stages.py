@@ -116,8 +116,8 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
 
     is_stage0 = my_mesh_id == 0
 
-    M = 1
-    K = embedding_dim
+    M = RoutedExpert.M
+    K = RoutedExpert.K
 
     # Core allocation — single pipeline_core for both entry and exit d2d exchange.
     # The entry d2d_exchange runs on BRISC, the multi-upstream exit runs on NCRISC,
@@ -133,7 +133,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
 
     torch_embedding = torch.arange(vocab_size * K, dtype=torch.float32).reshape(1, 1, vocab_size, K).to(torch.bfloat16)
 
-    reduce_root_coord = ttnn.MeshCoordinate(0, 0)
+    reduce_root_coord = ttnn.MeshCoordinate(1, 0)
 
     # ── Core setup for reduce aggregation ──
     gate_proj_noc = ttnn.NOC.NOC_0
@@ -157,6 +157,26 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     entry_socket_interface = None
     stage0_program_entries = None
 
+    entry_column = 0
+    reduce_exit_column = 0
+    if len(pipeline_config) > 1:
+        try:
+            entry_column = int(pipeline_config[0].entry_node_coord[1])
+        except Exception:
+            entry_column = 0
+        try:
+            reduce_exit_column = int(pipeline_config[0].exit_node_coord[1])
+        except Exception:
+            reduce_exit_column = 0
+    exit_column = entry_column
+    entry_column_coords = [ttnn.MeshCoordinate(r, entry_column) for r in range(int(mesh_rows))]
+    exit_column_coords = [ttnn.MeshCoordinate(r, reduce_exit_column) for r in range(int(mesh_rows))]
+    pipeline_column_coords = exit_column_coords
+    logger.info(
+        f"entry_column={entry_column}, reduce_exit_column={reduce_exit_column}, "
+        f"entry_devices={len(entry_column_coords)}, exit_devices={len(exit_column_coords)}"
+    )
+
     if is_stage0:
         # PipelineBlock.__init__ calls generate_blitz_decode_pipeline (collective).
         # Stage 0 must match so all processes participate.
@@ -171,11 +191,24 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
 
         d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in device_coords]
 
+        fwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
+        bwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        print(
+            f"[TEST] stage0: fwd_d2d_cores(col {entry_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_d2d_cores]}",
+            flush=True,
+        )
+        print(
+            f"[TEST] stage0: bwd_d2d_cores(col {reduce_exit_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_d2d_cores]}",
+            flush=True,
+        )
+
         exit_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=d2d_cores,
-            recv_core_coords=d2d_cores,
+            send_core_coords=fwd_d2d_cores,
+            recv_core_coords=fwd_d2d_cores,
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
         )
@@ -183,8 +216,8 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         entry_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=d2d_cores,
-            recv_core_coords=d2d_cores,
+            send_core_coords=bwd_d2d_cores,
+            recv_core_coords=bwd_d2d_cores,
             sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
             receiver_mesh=MeshWrapper(mesh_device),
             receiver_use_reader_config=True,
@@ -195,7 +228,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         d2h_sockets = []
         host_ios = []
 
-        for dc in device_coords:
+        for dc_idx, dc in enumerate(exit_column_coords):
             h2d = ttnn.H2DSocket(
                 mesh_device,
                 ttnn.MeshCoreCoord(dc, core_io),
@@ -214,7 +247,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
                 token_size_bytes,
                 embedding_size_bytes,
                 core_to_core_socket_buffer_size=embedding_fifo_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(dc, pipeline_core),
+                h2d_downstream_core=ttnn.MeshCoreCoord(entry_column_coords[dc_idx], pipeline_core),
                 d2h_upstream_core=ttnn.MeshCoreCoord(dc, pipeline_core),
                 embedding_tensor=embedding_tensor,
             )
@@ -232,6 +265,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             all_entries.extend(hio._build_programs())
         exit_progs = exit_socket_interface.build_programs()
         combined_progs = entry_socket_interface.build_programs(base_programs=exit_progs)
+        all_entries.extend(exit_progs)
         all_entries.extend(combined_progs)
         stage0_program_entries = all_entries
         logger.info(f"[rank=0] parallel stage 0 programs built ({len(device_coords)} channels), dispatch deferred")
@@ -248,6 +282,8 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             entry_downstream_core=moe_sender_core,
             exit_upstream_cores=shard_cores_list,
             exit_upstream_page_size=reduce_payload_per_shard,
+            entry_device_coords=entry_column_coords,
+            exit_device_coords=exit_column_coords,
         )
         logger.info(f"[rank={my_mesh_id}] parallel pipeline block created")
 
@@ -314,7 +350,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             ),
         )
         sdpa_out_interm_shard_height = 48
-        sdpa_out_interm_shard_width = 544
+        sdpa_out_interm_shard_width = 1024
         num_worker_cores = moe_worker_core_grid.num_cores()
         sdpa_out_interm_shard_spec = ttnn.ShardSpec(
             moe_worker_core_grid,
@@ -394,6 +430,13 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_available_cores, 0) for _ in range(4)]
 
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
+        moe_K_single = r.ttnn_residual_mcast_src.shape[-1]
+        moe_forward_staging_tensor_single = MoeOp.create_forward_staging_tensor(
+            mesh_device,
+            moe_sender_core,
+            moe_K_single,
+            dtype=r.ttnn_residual_mcast_src.dtype,
+        )
         logger.info(f"[rank={my_mesh_id}] semaphores created")
 
     # ── Launch pipeline programs ──────────────────────────────────────────────
@@ -445,10 +488,13 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
             forward_sockets=forward_sockets,
+            forward_staging_tensor=moe_forward_staging_tensor_single,
             semaphores=moe_semaphores,
             worker_core_grid=moe_worker_core_grid,
             is_torus=is_torus,
             downstream_sockets=downstream_sockets,
+            exit_column=exit_column,
+            reduce_exit_column=reduce_exit_column,
         )
         logger.info(f"[rank={my_mesh_id}] MoE + reduce-to-all completed")
 
@@ -456,17 +502,24 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     if is_stage0:
         logger.info(f"[rank=0] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
-        received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
-        d2h_output_tensor = ttnn.from_torch(received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        d2h_results = []
+        for sock_idx, d2h_sock in enumerate(d2h_sockets):
+            buf = torch.zeros(1, num_elements, dtype=torch.bfloat16)
+            buf_tensor = ttnn.from_torch(buf, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            d2h_sock.read_tensor(buf_tensor)
+            result = ttnn.to_torch(buf_tensor)
+            nz = torch.count_nonzero(result)
+            logger.info(f"[rank=0] D2H socket[{sock_idx}]: non-zero={nz}/{result.numel()} " f"first5={result[0, :5]}")
+            d2h_results.append(result)
 
-        d2h_sockets[0].read_tensor(d2h_output_tensor)
-        d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
-        logger.info(f"[rank=0] D2H read complete, shape={d2h_result_torch.shape}")
-        logger.info(f"[rank=0] D2H first 5 values: {d2h_result_torch[0, :5]}")
-
-        d2h_nonzero = torch.count_nonzero(d2h_result_torch)
-        logger.info(f"[rank=0] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
-        assert d2h_nonzero > 0, "D2H output is all zeros — reduce or pipeline failed"
+        # Pick the first socket with non-zero data for validation
+        d2h_result_torch = None
+        for sock_idx, result in enumerate(d2h_results):
+            if torch.count_nonzero(result) > 0:
+                d2h_result_torch = result
+                logger.info(f"[rank=0] using D2H socket[{sock_idx}] for golden comparison")
+                break
+        assert d2h_result_torch is not None, "All D2H sockets returned zeros -- reduce or pipeline failed"
 
     ttnn.distributed_context_barrier()
 

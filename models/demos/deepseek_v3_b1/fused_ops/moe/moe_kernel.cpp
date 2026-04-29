@@ -1441,19 +1441,26 @@ void kernel_main() {
 #ifdef ENABLE_REDUCE_TO_ALL
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_reduce_fabric_core) {
+            DPRINT << "MOE: reduce fabric core signaling iteration completion\n";
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
             constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("reduce_sync_noc_x");
             constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("reduce_sync_noc_y");
             uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
+            DPRINT << "MOE: reduce fabric core writing to sync semaphore at NOC address 0x" << std::hex
+                   << sync_sem_noc_addr << std::dec << "\n";
             noc_semaphore_inc(sync_sem_noc_addr, 1);
+            DPRINT << "MOE: reduce fabric core done signaling\n";
         }
 #elif defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {
+            DPRINT << "MOE: sender core waiting for reduce fabric cores to signal iteration completion\n";
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
             constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
             volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
             noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
+            DPRINT << "MOE: sender core received all signals\n";
             noc_semaphore_set(sync_sem_ptr, 0);
+            DPRINT << "MOE: sender core reset sync semaphore, proceeding to next iteration\n";
         }
 #endif
 #endif
@@ -1465,7 +1472,7 @@ void kernel_main() {
 
         if constexpr (persistent_mode == 0) {
             if (iteration >= num_iterations) {
-                // DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
+                DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
                 break;
             }
         }

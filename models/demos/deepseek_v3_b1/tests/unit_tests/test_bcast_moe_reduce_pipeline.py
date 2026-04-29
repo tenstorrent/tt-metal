@@ -177,11 +177,11 @@ def test_bcast_moe_reduce_pipeline(
     reduce_exit_column = 0
     if len(pipeline_config) > 1:
         try:
-            entry_column = int(pipeline_config[my_mesh_id].entry_node_coord[1])
+            entry_column = int(pipeline_config[0].entry_node_coord[1])
         except Exception:
             entry_column = 0
         try:
-            reduce_exit_column = int(pipeline_config[my_mesh_id].exit_node_coord[1])
+            reduce_exit_column = int(pipeline_config[0].exit_node_coord[1])
         except Exception:
             reduce_exit_column = 0
     exit_column = entry_column
@@ -934,11 +934,11 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
     reduce_exit_column = 0
     if len(pipeline_config) > 1:
         try:
-            entry_column = int(pipeline_config[1].entry_node_coord[1])
+            entry_column = int(pipeline_config[0].entry_node_coord[1])
         except Exception:
             entry_column = 0
         try:
-            reduce_exit_column = int(pipeline_config[1].exit_node_coord[1])
+            reduce_exit_column = int(pipeline_config[0].exit_node_coord[1])
         except Exception:
             reduce_exit_column = 0
     exit_column = entry_column
