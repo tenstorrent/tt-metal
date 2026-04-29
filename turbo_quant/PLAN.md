@@ -73,6 +73,42 @@ Track B costs ~15 % e2e latency vs BFP8 baseline, gains 0.5×
 KV memory. Quality preserved (correct, coherent answer; the
 divergence at later tokens is the usual sampling sensitivity).
 
+### T3K e2e three-way comparison (2026-04-29)
+
+Same prompt + setup as N150 above, but on T3K (8 chips, KV heads
+sharded 1 per device). Cache loaded from
+`/localdev/mtairum/hf/ttnn_cache/T3K`:
+
+| Mode                                    | Answer | ms/tok | vs BFP8   | KV memory |
+|-----------------------------------------|:------:|-------:|----------:|----------:|
+| `--no-turbo-quant` (BFP8 baseline)      | Paris  | **13.9** | 1.00×   | 1.00×     |
+| `--tq-rescaled-bfp4` (Track B)          | Paris  | **18.8** | 1.35× slower | **0.50×** |
+| `--tq-full-dequant --tq-num-cores-per-head 14` (Track A) | Paris | **29.1** | 2.09× slower | 0.75× |
+
+**Verdict: Track B wins on every axis** — 1.55× faster than
+Track A, halves the memory (vs Track A's 0.75×), and uses no
+custom kernel. Track A's K=14 plumbing is verified live
+(`[TQ Phase 2.3] num_cores_per_head req=14, max=16, clamped=14`),
+but at cur_pos=72 SDPA is too small a fraction of step time for
+the 13.7× per-call SDPA speedup to translate to e2e.
+
+Track A's e2e gap to BFP8 is dominated by the rotated-path's
+non-SDPA ops (matmul/norm work), not the SDPA cost — so K=14
+parallelism cannot close it. Long-context (e.g. 32K+) might
+narrow the relative gap somewhat as SDPA grows, but Track B
+should hold its lead because BFP8 SDPA also stays fast there.
+
+### Final recommendation
+
+Adopt **Track B (`--tq-rescaled-bfp4`)** as the production TQ
+path. Keep Track A's fused kernel + Tier 2A code in tree (it's a
+research artifact and may matter for future workloads), but mark
+it deprecated for production e2e use.
+
+Remaining open follow-ups:
+- Long-context Track B quality test (4K / 8K / 16K).
+- Add `--tq-rescaled-bfp4` row to `bench_seqlen_sweep.py`.
+
 ### Tier 2A — DONE (commits e74354b → e6aa928)
 
 Phase 2.3 (cross-core split) landed end-to-end on T3K. Full bench
