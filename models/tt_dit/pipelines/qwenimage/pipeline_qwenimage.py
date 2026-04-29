@@ -538,18 +538,12 @@ class QwenImagePipeline:
             img_shapes = [[(1, latents_height // p, latents_width // p)]] * transformer_batch_size
             txt_seq_lens = [prompt_sequence_length] * transformer_batch_size
 
-            # When sp_factor == 1 the per-submesh RoPE tensors are replicated, so we
-            # assemble them on device via QwenPosEmbedTT. For sp_factor > 1 we still
-            # need to shard along the sequence axis at upload time, so we fall back to
-            # the host builder (no ttnn replicated->SP-sharded reshard primitive yet).
+            # Assemble RoPE tensors on device via QwenPosEmbedTT. For sp_factor > 1 the
+            # sequence axis of the spatial RoPE tables must be sharded across the sp mesh
+            # axis; we build replicated and convert via ``ttnn.mesh_partition`` (inverse of
+            # all-gather). Prompt RoPE stays replicated since the text sequence is not
+            # sp-sharded.
             sp_factor = self._parallel_config.sequence_parallel.factor
-            use_device_pos_embed = sp_factor == 1
-            if not use_device_pos_embed:
-                spatial_rope, prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
-                spatial_rope_cos_half = spatial_rope.real
-                spatial_rope_sin_half = spatial_rope.imag
-                prompt_rope_cos_half = prompt_rope.real
-                prompt_rope_sin_half = prompt_rope.imag
 
             tt_prompt_embeds_device_list = []
             tt_prompt_embeds_list = []
@@ -574,32 +568,21 @@ class QwenImagePipeline:
                     latents, device=submesh_device, on_host=False, mesh_axes=[None, sp_axis, None]
                 )
 
-                if use_device_pos_embed:
-                    cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
-                        submesh_index=i,
-                        img_shapes_per_batch=img_shapes[0],
-                        max_txt_seq_len=txt_seq_lens[0],
+                cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
+                    submesh_index=i,
+                    img_shapes_per_batch=img_shapes[0],
+                    max_txt_seq_len=txt_seq_lens[0],
+                )
+                tt_spatial_rope_cos = tensor.rope_double_last_dim_device(cos_half)
+                tt_spatial_rope_sin = tensor.rope_double_last_dim_device(sin_half)
+                tt_prompt_rope_cos = tensor.rope_double_last_dim_device(txt_cos_half)
+                tt_prompt_rope_sin = tensor.rope_double_last_dim_device(txt_sin_half)
+                if sp_factor > 1:
+                    tt_spatial_rope_cos = tensor.mesh_partition_with_padding(
+                        tt_spatial_rope_cos, dim=0, cluster_axis=sp_axis, cluster_size=sp_factor
                     )
-                    tt_spatial_rope_cos = tensor.rope_double_last_dim_device(cos_half)
-                    tt_spatial_rope_sin = tensor.rope_double_last_dim_device(sin_half)
-                    tt_prompt_rope_cos = tensor.rope_double_last_dim_device(txt_cos_half)
-                    tt_prompt_rope_sin = tensor.rope_double_last_dim_device(txt_sin_half)
-                else:
-                    tt_spatial_rope_cos = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(
-                            spatial_rope_cos_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
-                        )
-                    )
-                    tt_spatial_rope_sin = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(
-                            spatial_rope_sin_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
-                        )
-                    )
-                    tt_prompt_rope_cos = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(prompt_rope_cos_half, device=submesh_device, on_host=False)
-                    )
-                    tt_prompt_rope_sin = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(prompt_rope_sin_half, device=submesh_device, on_host=False)
+                    tt_spatial_rope_sin = tensor.mesh_partition_with_padding(
+                        tt_spatial_rope_sin, dim=0, cluster_axis=sp_axis, cluster_size=sp_factor
                     )
 
                 if traced:

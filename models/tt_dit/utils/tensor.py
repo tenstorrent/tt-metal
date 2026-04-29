@@ -646,6 +646,64 @@ def rope_double_last_dim_device(tt_x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(transposed, doubled_shape)
 
 
+def mesh_partition_with_padding(
+    tt_x: ttnn.Tensor,
+    dim: int,
+    cluster_axis: int,
+    cluster_size: int,
+) -> ttnn.Tensor:
+    """Shard a replicated device tensor along ``dim`` across ``cluster_axis``.
+
+    Pads the sharded dim with zeros so it divides evenly by ``cluster_size``
+    (no-op when already divisible), then calls ``ttnn.mesh_partition``. This
+    mirrors the semantic of ``from_torch(..., mesh_axes=[..., cluster_axis, ...])``
+    but consumes a tensor that has already been assembled on device (replicated
+    across the submesh) rather than a host tensor.
+
+    Parameters
+    ----------
+    tt_x:
+        Device-resident tensor, replicated across the cluster axis being
+        partitioned.
+    dim:
+        Tensor dimension to shard. Negative indices are resolved against the
+        tensor rank.
+    cluster_axis:
+        Mesh axis along which to scatter the shards (``0`` or ``1`` for a 2D
+        mesh).
+    cluster_size:
+        Number of devices along ``cluster_axis``. Used purely for padding
+        calculation; ``ttnn.mesh_partition`` will still query the actual mesh
+        layout at runtime.
+
+    Returns
+    -------
+    ttnn.Tensor
+        The partitioned tensor. Output shape matches the input except
+        ``output.shape[dim] == ceil(input.shape[dim] / cluster_size)``.
+    """
+    if ttnn.has_storage_type_of(tt_x, ttnn.StorageType.HOST):
+        msg = "mesh_partition_with_padding requires device-backed input"
+        raise ValueError(msg)
+    if cluster_size < 1:
+        msg = f"cluster_size must be >= 1, got {cluster_size}"
+        raise ValueError(msg)
+    if cluster_size == 1:
+        # No real partition needed; the tensor is already the per-rank shard.
+        return tt_x
+
+    rank = len(tt_x.shape)
+    resolved_dim = dim % rank
+    size = int(tt_x.shape[resolved_dim])
+    padded = ((size + cluster_size - 1) // cluster_size) * cluster_size
+    if padded > size:
+        pad_spec = [(0, 0)] * rank
+        pad_spec[resolved_dim] = (0, padded - size)
+        tt_x = ttnn.pad(tt_x, pad_spec, value=0.0)
+
+    return ttnn.mesh_partition(tt_x, dim=dim, cluster_axis=cluster_axis)
+
+
 def pack_latents_device(
     tt_x: ttnn.Tensor,
     batch_size: int,

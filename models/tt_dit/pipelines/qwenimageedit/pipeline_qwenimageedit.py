@@ -738,28 +738,18 @@ class QwenImageEditPipeline:
                     dtype=torch.float32,
                 )
 
-            # Pack noise latents (same packing as QwenImage). When ``sp_factor == 1`` the
-            # per-submesh latent tensor is replicated, so we can upload the raw noise
-            # (and image latents, if any) straight to device and let ``pack_latents_device``
-            # + ``ttnn.concat`` assemble the transformer input on device. For sp_factor > 1
-            # the sequence axis is sharded across the mesh, which would require a
-            # rank-aware device-side slice that ttnn does not expose yet, so we keep the
-            # original host path for that case.
+            # Latent packing and RoPE assembly both run on device. When sp_factor > 1 the
+            # sequence axis of the transformer input and the spatial RoPE tables must be
+            # sharded across the sp mesh axis; we build each as a replicated device tensor
+            # first, then convert it to sp-sharded via ``ttnn.mesh_partition`` (inverse of
+            # all-gather). Prompt RoPE stays replicated because the text sequence is not
+            # sp-sharded.
             noise_h, noise_w = noise_latents.shape[3], noise_latents.shape[4]
             sp_factor = self._parallel_config.sequence_parallel.factor
-            use_device_pack = sp_factor == 1
-
             noise_seq_len = (noise_h // 2) * (noise_w // 2)
-            if use_device_pack:
-                latent_model_input = None
-            else:
-                latents = _pack_latents(
-                    noise_latents, transformer_batch_size, self._num_channels_latents, noise_h, noise_w
-                )
-                if image_latents_packed is not None:
-                    latent_model_input = torch.cat([latents, image_latents_packed], dim=1)
-                else:
-                    latent_model_input = latents
+            total_spatial_seq = noise_seq_len + (
+                image_latents_packed.shape[1] if image_latents_packed is not None else 0
+            )
 
             # RoPE: build img_shapes accounting for noise + image patches
             p = self._patch_size
@@ -770,18 +760,6 @@ class QwenImageEditPipeline:
                 )
             img_shapes = [img_shapes_per_batch] * transformer_batch_size
             txt_seq_lens = [prompt_sequence_length] * transformer_batch_size
-
-            # When sp_factor == 1 the per-submesh RoPE tensors are replicated, so we
-            # assemble them on device via QwenPosEmbedTT. For sp_factor > 1 we still
-            # need to shard along the sequence axis at upload time, so we fall back to
-            # the host builder (no ttnn replicated->SP-sharded reshard primitive yet).
-            use_device_pos_embed = sp_factor == 1
-            if not use_device_pos_embed:
-                spatial_rope, prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
-                spatial_rope_cos_half = spatial_rope.real
-                spatial_rope_sin_half = spatial_rope.imag
-                prompt_rope_cos_half = prompt_rope.real
-                prompt_rope_sin_half = prompt_rope.imag
 
             # Transfer to devices
             tt_prompt_embeds_device_list = []
@@ -809,51 +787,39 @@ class QwenImageEditPipeline:
                     on_host=True,
                 )
 
-                if use_device_pack:
-                    tt_noise = tensor.from_torch(noise_latents, device=submesh_device, on_host=False)
-                    tt_noise_packed = tensor.pack_latents_device(
-                        tt_noise,
-                        transformer_batch_size,
-                        self._num_channels_latents,
-                        noise_h,
-                        noise_w,
-                    )
-                    if image_latents_packed is not None:
-                        tt_image_packed = tensor.from_torch(image_latents_packed, device=submesh_device, on_host=False)
-                        tt_initial_latents = ttnn.concat([tt_noise_packed, tt_image_packed], dim=1)
-                    else:
-                        tt_initial_latents = tt_noise_packed
+                tt_noise = tensor.from_torch(noise_latents, device=submesh_device, on_host=False)
+                tt_noise_packed = tensor.pack_latents_device(
+                    tt_noise,
+                    transformer_batch_size,
+                    self._num_channels_latents,
+                    noise_h,
+                    noise_w,
+                )
+                if image_latents_packed is not None:
+                    tt_image_packed = tensor.from_torch(image_latents_packed, device=submesh_device, on_host=False)
+                    tt_initial_latents = ttnn.concat([tt_noise_packed, tt_image_packed], dim=1)
                 else:
-                    tt_initial_latents = tensor.from_torch(
-                        latent_model_input, device=submesh_device, on_host=False, mesh_axes=[None, sp_axis, None]
+                    tt_initial_latents = tt_noise_packed
+                if sp_factor > 1:
+                    tt_initial_latents = tensor.mesh_partition_with_padding(
+                        tt_initial_latents, dim=1, cluster_axis=sp_axis, cluster_size=sp_factor
                     )
 
-                if use_device_pos_embed:
-                    cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
-                        submesh_index=i,
-                        img_shapes_per_batch=img_shapes[0],
-                        max_txt_seq_len=txt_seq_lens[0],
+                cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
+                    submesh_index=i,
+                    img_shapes_per_batch=img_shapes[0],
+                    max_txt_seq_len=txt_seq_lens[0],
+                )
+                tt_spatial_rope_cos = tensor.rope_double_last_dim_device(cos_half)
+                tt_spatial_rope_sin = tensor.rope_double_last_dim_device(sin_half)
+                tt_prompt_rope_cos = tensor.rope_double_last_dim_device(txt_cos_half)
+                tt_prompt_rope_sin = tensor.rope_double_last_dim_device(txt_sin_half)
+                if sp_factor > 1:
+                    tt_spatial_rope_cos = tensor.mesh_partition_with_padding(
+                        tt_spatial_rope_cos, dim=0, cluster_axis=sp_axis, cluster_size=sp_factor
                     )
-                    tt_spatial_rope_cos = tensor.rope_double_last_dim_device(cos_half)
-                    tt_spatial_rope_sin = tensor.rope_double_last_dim_device(sin_half)
-                    tt_prompt_rope_cos = tensor.rope_double_last_dim_device(txt_cos_half)
-                    tt_prompt_rope_sin = tensor.rope_double_last_dim_device(txt_sin_half)
-                else:
-                    tt_spatial_rope_cos = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(
-                            spatial_rope_cos_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
-                        )
-                    )
-                    tt_spatial_rope_sin = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(
-                            spatial_rope_sin_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
-                        )
-                    )
-                    tt_prompt_rope_cos = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(prompt_rope_cos_half, device=submesh_device, on_host=False)
-                    )
-                    tt_prompt_rope_sin = tensor.rope_double_last_dim_device(
-                        tensor.from_torch(prompt_rope_sin_half, device=submesh_device, on_host=False)
+                    tt_spatial_rope_sin = tensor.mesh_partition_with_padding(
+                        tt_spatial_rope_sin, dim=0, cluster_axis=sp_axis, cluster_size=sp_factor
                     )
 
                 if traced:
@@ -915,8 +881,6 @@ class QwenImageEditPipeline:
                                 device=submesh_device if not traced else None,
                             )
                             tt_sigma_difference_list.append(tt_sigma_difference)
-
-                        total_spatial_seq = latent_model_input.shape[1]
 
                         tt_latents_step_list = self._step(
                             timestep=tt_timestep_list,
