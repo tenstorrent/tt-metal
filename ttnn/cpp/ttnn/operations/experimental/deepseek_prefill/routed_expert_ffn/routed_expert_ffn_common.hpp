@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "routed_expert_ffn.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -39,6 +40,10 @@ ttnn::Tensor routed_expert_ffn_default(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    RoutedExpertMode mode,
+    const std::optional<const ttnn::Tensor>& gate_bias,
+    const std::optional<const ttnn::Tensor>& up_bias,
+    const std::optional<const ttnn::Tensor>& down_bias,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output);
 
@@ -48,6 +53,10 @@ ttnn::Tensor routed_expert_ffn_wh(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    RoutedExpertMode mode,
+    const std::optional<const ttnn::Tensor>& gate_bias,
+    const std::optional<const ttnn::Tensor>& up_bias,
+    const std::optional<const ttnn::Tensor>& down_bias,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output);
 
@@ -57,6 +66,10 @@ ttnn::Tensor routed_expert_ffn_bh(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    RoutedExpertMode mode,
+    const std::optional<const ttnn::Tensor>& gate_bias,
+    const std::optional<const ttnn::Tensor>& up_bias,
+    const std::optional<const ttnn::Tensor>& down_bias,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output);
 
