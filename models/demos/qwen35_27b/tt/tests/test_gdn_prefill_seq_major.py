@@ -203,8 +203,55 @@ def test_gdn_prefill_seq_major_correctness(mesh_device, reset_seeds, ensure_gc, 
     a_3d_b = _unshard(ttnn.reshape(a_all, (1, num_tokens, Nv_TP)))
     b_3d_b = _unshard(ttnn.reshape(b_all, (1, num_tokens, Nv_TP)))
 
-    test_rec_states = _to_mesh(torch.zeros(num_pairs, gdn.Dk, Dv, dtype=torch.bfloat16), mesh_device)
-    test_output = _to_mesh(torch.zeros(1, 1, num_tokens, num_pairs * Dv, dtype=torch.bfloat16), mesh_device)
+    # During staging (Tasks 3-4), the new entry point may still be using the
+    # OLD writer that emits [num_pairs*N, 1, Dv]. Set GDN_SEQ_MAJOR_INTERIM=1 to
+    # exercise the kernel via the old writer's output shape and compare against
+    # the reference's pre-permute intermediate (rms_norm output, NO permute).
+    interim = os.environ.get("GDN_SEQ_MAJOR_INTERIM", "")
+    if interim:
+        # Re-run reference WITHOUT the post-rms_norm permute/reshape — just rms_norm.
+        from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import gdn_prefill_fused as _old_pf
+
+        ref_states = _to_mesh(torch.zeros(num_pairs, gdn.Dk, Dv, dtype=torch.bfloat16), mesh_device)
+        ref_flat = _to_mesh(torch.zeros(num_pairs * num_tokens, 1, Dv, dtype=torch.bfloat16), mesh_device)
+        conv_out_3d_r = _unshard(ttnn.reshape(conv_out_all, (1, num_tokens, qkv_dim_tp)))
+        a_3d_r = _unshard(ttnn.reshape(a_all, (1, num_tokens, Nv_TP)))
+        b_3d_r = _unshard(ttnn.reshape(b_all, (1, num_tokens, Nv_TP)))
+        _old_pf(
+            conv_out_3d_r,
+            a_3d_r,
+            b_3d_r,
+            gdn.neg_exp_A,
+            tw["dt_bias"],
+            tw["norm_w"],
+            gdn.scale_tt,
+            gdn.rms_scale_tt,
+            gdn.rms_eps_tt,
+            ref_states,
+            ref_flat,
+            num_pairs=num_pairs,
+            num_tokens=num_tokens,
+            Nv_TP=Nv_TP,
+            Nk_TP=Nk_TP,
+            repeat_factor=repeat_factor,
+            key_dim_tp=key_dim_tp,
+        )
+        ref_normed = ttnn.rms_norm(ref_flat, weight=tw["norm_w"], epsilon=1e-6)
+        ref_dense = ttnn.to_torch(ref_normed, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
+        ref_state = ttnn.to_torch(ref_states, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
+            :num_pairs
+        ].float()
+        ttnn.deallocate(ref_normed)
+        ttnn.deallocate(ref_states)
+        ttnn.deallocate(conv_out_3d_r)
+        ttnn.deallocate(a_3d_r)
+        ttnn.deallocate(b_3d_r)
+        # Reshape test_output allocation to match old writer
+        test_rec_states = _to_mesh(torch.zeros(num_pairs, gdn.Dk, Dv, dtype=torch.bfloat16), mesh_device)
+        test_output = _to_mesh(torch.zeros(num_pairs * num_tokens, 1, Dv, dtype=torch.bfloat16), mesh_device)
+    else:
+        test_rec_states = _to_mesh(torch.zeros(num_pairs, gdn.Dk, Dv, dtype=torch.bfloat16), mesh_device)
+        test_output = _to_mesh(torch.zeros(1, 1, num_tokens, num_pairs * Dv, dtype=torch.bfloat16), mesh_device)
 
     gdn_prefill_fused_seq_major(
         conv_out_3d_b,

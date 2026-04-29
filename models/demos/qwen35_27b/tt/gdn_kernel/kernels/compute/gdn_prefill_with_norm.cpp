@@ -378,7 +378,7 @@ void kernel_main() {
             cb_pop_front(cb_state_b, state_tiles);
             cb_pop_front(cb_delta_s, Vt);
 
-            // 5.6: output = q @ state_out
+            // 5.6: output = q @ state_out (writes into cb_out, Vt tiles)
             cb_wait_front(cb_state_out, state_tiles);
             cb_reserve_back(cb_out, Vt);
             mm_init(cb_q, cb_state_out, cb_out);
@@ -393,6 +393,122 @@ void kernel_main() {
                 tile_regs_release();
             }
             cb_push_back(cb_out, Vt);
+
+            // ============================================================
+            // Phase 6: per-head RMSNorm (in-place on cb_out)
+            //
+            // Equivalent to ttnn.rms_norm(out, weight=norm_w, epsilon=eps):
+            //   sq   = transpose_wh(out)                                   [Vt tiles]
+            //   ssq  = sum(out^2) = (out @ sq)                             [1 tile]
+            //   gain = sqrt(Dv) * rsqrt(ssq + Dv*eps)                      [1 tile]
+            //         = rsqrt(mean(out^2) + eps)
+            //   out  = out * gain * norm_w                                 [Vt tiles]
+            //
+            // Uses cb_sq_acc and cb_tmp as scratch (both free here — popped after
+            // Phases 1 and 2). cb_norm_w and cb_rms_scale stay at front since the
+            // start of the kernel; do NOT pop them.
+            // ============================================================
+            cb_wait_front(cb_out, Vt);
+
+            // 6.1: transpose-WH each tile of cb_out into cb_sq_acc
+            cb_reserve_back(cb_sq_acc, Vt);
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                tile_regs_acquire();
+                transpose_wh_init_short(cb_out);
+                transpose_wh_tile(cb_out, vt, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_sq_acc, vt);
+                tile_regs_release();
+            }
+            cb_push_back(cb_sq_acc, Vt);
+
+            // 6.2: ssq = sum_{vt} dot(cb_out[vt], cb_sq_acc[vt]) -> 1 tile in cb_tmp
+            cb_wait_front(cb_sq_acc, Vt);
+            cb_reserve_back(cb_tmp, 1);
+            mm_init(cb_out, cb_sq_acc, cb_tmp);
+            tile_regs_acquire();
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                matmul_tiles(cb_out, cb_sq_acc, vt, vt, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_tmp);
+            tile_regs_release();
+            cb_push_back(cb_tmp, 1);
+            cb_pop_front(cb_sq_acc, Vt);
+
+            // 6.3a: cb_tmp = rsqrt(ssq + rms_eps)   -- rms_eps is precomputed Dv * eps
+            cb_wait_front(cb_tmp, 1);
+            tile_regs_acquire();
+            add_tiles_init(cb_tmp, cb_rms_eps);
+            add_tiles(cb_tmp, cb_rms_eps, 0, 0, 0);
+            rsqrt_tile_init();
+            rsqrt_tile(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_pop_front(cb_tmp, 1);
+            cb_reserve_back(cb_tmp, 1);
+            pack_tile(0, cb_tmp);
+            tile_regs_release();
+            cb_push_back(cb_tmp, 1);
+
+            // 6.3b: cb_tmp *= cb_rms_scale (= sqrt(Dv))
+            //
+            // Folds the sqrt(Dv) factor that converts rsqrt(sum(x^2)+Dv*eps) into
+            //   sqrt(Dv) * rsqrt(sum(x^2)+Dv*eps) = rsqrt(mean(x^2)+eps).
+            // This matches ttnn.rms_norm(x, weight=norm_w, epsilon=eps) exactly.
+            // cb_rms_scale is pinned at the front of the kernel; do NOT pop.
+            cb_wait_front(cb_tmp, 1);
+            tile_regs_acquire();
+            mul_tiles_bcast_scalar_init_short(cb_tmp, cb_rms_scale);
+            mul_tiles_bcast_scalar(cb_tmp, cb_rms_scale, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_pop_front(cb_tmp, 1);
+            cb_reserve_back(cb_tmp, 1);
+            pack_tile(0, cb_tmp);
+            tile_regs_release();
+            cb_push_back(cb_tmp, 1);
+
+            // 6.4: cb_out[vt] = cb_out[vt] * inv * cb_norm_w[vt]
+            //
+            // Two-stage to avoid double-allocating cb_out (sized Vt tiles only):
+            //   Stage A: tmp_scratch = cb_out * inv  -> cb_sq_acc (Vt tiles)
+            //   Stage B: cb_out      = tmp_scratch * cb_norm_w   (Vt tiles, fresh)
+            // cb_sq_acc is sized Vt and free here (popped in Phase 6.2).
+            // cb_norm_w is read but not consumed (pinned to front for the whole kernel).
+            cb_wait_front(cb_tmp, 1);
+
+            // Stage A: cb_sq_acc[vt] = cb_out[vt] * inv  (broadcast scalar from cb_tmp)
+            cb_reserve_back(cb_sq_acc, Vt);
+            mul_tiles_bcast_scalar_init_short(cb_out, cb_tmp);
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                tile_regs_acquire();
+                mul_tiles_bcast_scalar(cb_out, cb_tmp, vt, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_sq_acc, vt);
+                tile_regs_release();
+            }
+            cb_push_back(cb_sq_acc, Vt);
+            cb_pop_front(cb_out, Vt);
+            cb_pop_front(cb_tmp, 1);
+
+            // Stage B: cb_out[vt] = cb_sq_acc[vt] * cb_norm_w[vt]  (elementwise)
+            cb_wait_front(cb_sq_acc, Vt);
+            cb_reserve_back(cb_out, Vt);
+            mul_tiles_init(cb_sq_acc, cb_norm_w);
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                tile_regs_acquire();
+                mul_tiles(cb_sq_acc, cb_norm_w, vt, vt, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_out, vt);
+                tile_regs_release();
+            }
+            cb_push_back(cb_out, Vt);
+            cb_pop_front(cb_sq_acc, Vt);
 
             // Pop per-token inputs
             cb_pop_front(cb_q, Kt);
