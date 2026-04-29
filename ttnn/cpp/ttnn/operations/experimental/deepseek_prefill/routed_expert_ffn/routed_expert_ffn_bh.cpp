@@ -7,6 +7,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/gpt_oss_swiglu/gpt_oss_swiglu.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
@@ -16,6 +17,10 @@ ttnn::Tensor routed_expert_ffn_bh(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    RoutedExpertMode mode,
+    const std::optional<const ttnn::Tensor>& gate_bias,
+    const std::optional<const ttnn::Tensor>& up_bias,
+    const std::optional<const ttnn::Tensor>& down_bias,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
     // Blackhole compute grid is fixed at 11x8 = 88 cores. All configs below
@@ -76,20 +81,25 @@ ttnn::Tensor routed_expert_ffn_bh(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
-    auto gate_result = ttnn::matmul(
+    const std::optional<std::string> gate_activation =
+        mode == RoutedExpertMode::SILU ? std::optional<std::string>(std::string("silu")) : std::nullopt;
+
+    auto gate_result = ttnn::linear(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/gate_proj,
+        /*bias=*/gate_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
         /*program_config=*/gate_up_config,
-        /*activation=*/std::string("silu"),
+        /*activation=*/gate_activation,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    auto up_result = ttnn::matmul(
+    auto up_result = ttnn::linear(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/up_proj,
+        /*bias=*/up_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
@@ -98,18 +108,31 @@ ttnn::Tensor routed_expert_ffn_bh(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    // In-place multiply: writes into gate_result's block-sharded L1 buffer.
-    // Reshard to L1 interleaved afterwards so the down matmul sees an unsharded
-    // input A (logical Kt = N_gate_tiles, no divisor constraint on in0_block_w).
-    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
-    up_result.deallocate();
+    ttnn::Tensor swiglu_result;
+    if (mode == RoutedExpertMode::SILU) {
+        // In-place multiply: writes into gate_result's block-sharded L1 buffer.
+        ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
+        up_result.deallocate();
+        swiglu_result = std::move(gate_result);
+    } else {
+        TT_FATAL(
+            mode == RoutedExpertMode::GPT_OSS_SWIGLU,
+            "routed_expert_ffn_bh: unsupported mode {}",
+            static_cast<uint32_t>(mode));
+        swiglu_result = ttnn::experimental::gpt_oss_swiglu(
+            gate_result, up_result, /*alpha=*/1.702f, /*clamp_limit=*/7.0f, /*output_memory_config=*/gate_up_mem);
+        gate_result.deallocate();
+        up_result.deallocate();
+    }
 
+    // Reshard to L1 interleaved so the down matmul sees an unsharded input A
+    // (logical Kt = N_gate_tiles, no divisor constraint on in0_block_w).
     auto activated = ttnn::to_memory_config(
-        /*tensor=*/gate_result,
+        /*tensor=*/swiglu_result,
         /*memory_config=*/ttnn::L1_MEMORY_CONFIG,
         /*dtype=*/std::nullopt,
         /*output_tensor=*/std::nullopt);
-    gate_result.deallocate();
+    swiglu_result.deallocate();
 
     // --- Down matmul config ---
     // Input A is L1-interleaved (not sharded) so in0_block_w only needs to
@@ -147,9 +170,10 @@ ttnn::Tensor routed_expert_ffn_bh(
         .fuse_batch = false,
     };
 
-    return ttnn::matmul(
+    return ttnn::linear(
         /*input_tensor_a=*/activated,
         /*input_tensor_b=*/down_proj,
+        /*bias=*/down_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,

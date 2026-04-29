@@ -6,6 +6,7 @@
 #include "routed_expert_ffn_common.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/gpt_oss_swiglu/gpt_oss_swiglu.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
@@ -91,22 +92,31 @@ ttnn::Tensor routed_expert_ffn_default(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    RoutedExpertMode mode,
+    const std::optional<const ttnn::Tensor>& gate_bias,
+    const std::optional<const ttnn::Tensor>& up_bias,
+    const std::optional<const ttnn::Tensor>& down_bias,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
-    auto gate_result = ttnn::matmul(
+    const auto gate_activation =
+        mode == RoutedExpertMode::SILU ? std::optional<std::string>(std::string("silu")) : std::nullopt;
+
+    auto gate_result = ttnn::linear(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/gate_proj,
+        /*bias=*/gate_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         /*program_config=*/std::nullopt,
-        /*activation=*/std::string("silu"),
+        /*activation=*/gate_activation,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    auto up_result = ttnn::matmul(
+    auto up_result = ttnn::linear(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/up_proj,
+        /*bias=*/up_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
@@ -115,12 +125,28 @@ ttnn::Tensor routed_expert_ffn_default(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
-    up_result.deallocate();
+    if (mode == RoutedExpertMode::SILU) {
+        ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
+        up_result.deallocate();
+    } else {
+        // GPT_OSS_SWIGLU expects sharded inputs; the default (interleaved) path
+        // can't use the fused SFPU op directly, so reshard first. This default
+        // path is the M_tiles>64 fallback — not the hot path — so the reshard
+        // overhead is acceptable.
+        TT_FATAL(
+            mode == RoutedExpertMode::GPT_OSS_SWIGLU,
+            "routed_expert_ffn_default: unsupported mode {}",
+            static_cast<uint32_t>(mode));
+        auto fused = ttnn::experimental::gpt_oss_swiglu(gate_result, up_result, /*alpha=*/1.702f, /*clamp_limit=*/7.0f);
+        gate_result.deallocate();
+        up_result.deallocate();
+        gate_result = std::move(fused);
+    }
 
-    return ttnn::matmul(
+    return ttnn::linear(
         /*input_tensor_a=*/gate_result,
         /*input_tensor_b=*/down_proj,
+        /*bias=*/down_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
@@ -140,6 +166,10 @@ ttnn::Tensor routed_expert_ffn(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
+    RoutedExpertMode mode,
+    const std::optional<const ttnn::Tensor>& gate_bias,
+    const std::optional<const ttnn::Tensor>& up_bias,
+    const std::optional<const ttnn::Tensor>& down_bias,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
@@ -149,12 +179,16 @@ ttnn::Tensor routed_expert_ffn(
     // manually configured program configs would need too many grid rows.
     if (M_tiles > 64) {
         return detail::routed_expert_ffn_default(
-            /*x=*/x,
-            /*gate_proj=*/gate_proj,
-            /*up_proj=*/up_proj,
-            /*down_proj=*/down_proj,
-            /*compute_kernel_config=*/compute_kernel_config,
-            /*output=*/std::move(output));
+            x,
+            gate_proj,
+            up_proj,
+            down_proj,
+            mode,
+            gate_bias,
+            up_bias,
+            down_bias,
+            compute_kernel_config,
+            std::move(output));
     }
 
     TT_FATAL(
@@ -163,9 +197,20 @@ ttnn::Tensor routed_expert_ffn(
         x.dtype());
 
     if (is_wormhole) {
-        return detail::routed_expert_ffn_wh(x, gate_proj, up_proj, down_proj, compute_kernel_config, output);
+        return detail::routed_expert_ffn_wh(
+            x, gate_proj, up_proj, down_proj, mode, gate_bias, up_bias, down_bias, compute_kernel_config, output);
     }
-    return detail::routed_expert_ffn_bh(x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
+    return detail::routed_expert_ffn_bh(
+        x,
+        gate_proj,
+        up_proj,
+        down_proj,
+        mode,
+        gate_bias,
+        up_bias,
+        down_bias,
+        compute_kernel_config,
+        std::move(output));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
