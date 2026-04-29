@@ -146,6 +146,37 @@ inline void bitonic_sort_len_16()
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
+inline void bitonic_sort_len_16_alt()
+{
+    // Step 4
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+
+    // Step 3
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Step 4
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+
+    // Step 3
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
 inline void bitonic_sort_len_32(bool ascending)
 {
     if (ascending)
@@ -546,6 +577,128 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
     TTI_SFPCONFIG(0x0000, 0xF, 1); // clear sfpu config
+
+    // ------------------------------------------------------------
+    // build bitonic sequences of len=1024
+    // ------------------------------------------------------------
+    // transpose DST faces in order to do bitonic sort for 512+
+    transpose_8_faces();
+    // each loop processes 16 / 128 rows
+    for (int i = 0; i < 8; i++)
+    {
+        load16_rows_x2<2>();
+        bitonic_sort_len_8();
+        store16_rows_x2<2, false>();
+        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    // transpose DST faces back
+    transpose_8_faces();
+    // set every 4 SFPU instances to alternate SWAP direction
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0104);
+    TTI_SFPCONFIG(0x5500, 0xF, 8);
+    for (int col = 0; col < 2; col++)
+    {
+        // each loop processes 32 / 128 rows
+        for (int i = 0; i < 4; i++)
+        {
+            load16_rows_x2<64>();
+            bitonic_sort_len_k(dir);
+            store16_rows_x2<64, false>();
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        // each loop processes 64 / 128 rows
+        for (int i = 0; i < 2; i++)
+        {
+            load16_rows_x2<32>();
+            bitonic_sort_len_k(dir);
+            store16_rows_x2<32, false>();
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            load16_rows_x2<32>();
+            bitonic_sort_len_k(dir);
+            store16_rows_x2<32, true>();
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        for (int i = 0; i < 2; i++)
+        {
+            load16_rows_x2<consecutive_32_offset>();
+            bitonic_sort_len_32(dir);
+            store16_rows_x2<consecutive_32_offset, true>();
+            load16_rows_x2<consecutive_32_offset>();
+            bitonic_sort_len_32(dir);
+            store16_rows_x2<consecutive_32_offset, true>();
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+        // set dst addr to work on odd columns, then back to even columns
+        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+    }
+    TTI_SFPCONFIG(0x0000, 0xF, 1); // clear sfpu config
+
+    // ------------------------------------------------------------
+    // build bitonic sequences of len=2048
+    // ------------------------------------------------------------
+    // transpose DST faces in order to do bitonic sort for 512+
+    transpose_8_faces();
+    // each loop processes 16 / 128 rows
+    for (int i = 0; i < 8; i++)
+    {
+        load16_rows_x2<2>();
+        bitonic_sort_len_16_alt();
+        store16_rows_x2<2, false>();
+        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    // transpose DST faces back
+    transpose_8_faces();
+    for (int col = 0; col < 2; col++)
+    {
+        // each loop processes 32 / 128 rows
+        for (int i = 0; i < 4; i++)
+        {
+            load16_rows_x2<64>();
+            bitonic_sort_len_k(dir);
+            store16_rows_x2<64, false>();
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        // each loop processes 64 / 128 rows
+        for (int i = 0; i < 2; i++)
+        {
+            load16_rows_x2<32>();
+            bitonic_sort_len_k(dir);
+            store16_rows_x2<32, false>();
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            load16_rows_x2<32>();
+            bitonic_sort_len_k(dir);
+            store16_rows_x2<32, true>();
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        for (int i = 0; i < 2; i++)
+        {
+            load16_rows_x2<consecutive_32_offset>();
+            bitonic_sort_len_32(dir);
+            store16_rows_x2<consecutive_32_offset, true>();
+            load16_rows_x2<consecutive_32_offset>();
+            bitonic_sort_len_32(dir);
+            store16_rows_x2<consecutive_32_offset, true>();
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+        // set dst addr to work on odd columns, then back to even columns
+        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+    }
 
     // clear srcA and srcB valids - needed for DST transpose
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);

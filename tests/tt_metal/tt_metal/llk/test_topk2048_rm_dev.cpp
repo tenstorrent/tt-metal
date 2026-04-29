@@ -124,7 +124,8 @@ bool verify_topk_outputs(const std::vector<uint32_t>& out_u32, const std::vector
     bool all_ok = true;
     for (uint32_t k = 0; k < kTopK; k++) {
         const uint32_t w_exp = exp_u32[k];
-        const uint32_t w_got = out_u32[k];
+        // strange indexing due to data being sorted in columns
+        const uint32_t w_got = out_u32[((k * 16) % kTopK) + ((k * 16) / kTopK)];
         const bool m = (w_exp == w_got);
         all_ok &= m;
         float fe = 0.f, fg = 0.f;
