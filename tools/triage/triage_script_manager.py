@@ -134,13 +134,8 @@ class TriageScriptManager:
                 sys.path.remove(base_path)
 
     def resolve_dependencies(self) -> None:
-        """Build the DAG and topo-sort into script_queue.
-        Scripts whose declared deps aren't in the registry are dropped (with a clear log
-        line) so they never enter the queue. Drops cascade: if A depends on B and B was
-        dropped, A is dropped too. By the time this returns, every script in script_queue
-        has all its deps wired up; failed/skipped are reserved for runtime outcomes."""
-        # Iteratively drop scripts whose deps cannot be resolved, until stable.
-        # Drops cascade: dropping A causes scripts that depended on A to drop too.
+        """Wire up `depends=[...]` refs and topo-sort into script_queue.
+        Scripts with unresolvable deps are dropped (cascading) before the queue is built."""
         while True:
             missing_by_path: dict[str, list[str]] = {}
             for path, script in self.scripts.items():
