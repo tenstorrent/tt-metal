@@ -8,7 +8,7 @@ BASE="pretrained and e256_device_fp32 and mesh-8x4 and 61 and balanced and right
 
 run() {
     local k="$1" log="$2"
-    cd $MAIN && source python_env/bin/activate
+    # cd $MAIN && source python_env/bin/activate
     eval "$ENV pytest -vs models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k '$k' |& tee $log"
 }
 
