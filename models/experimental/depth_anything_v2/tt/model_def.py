@@ -808,18 +808,19 @@ def custom_preprocessor(torch_model, name):
     # =========================================================
 
     # Patch projection weight: (out=1024, in=3, kH=14, kW=14)
-    #   -> permute to (in, kH, kW, out) = (3, 14, 14, 1024)
-    #   -> reshape  to (3*14*14, 1024)  = (588, 1024)
+    #   Input patches are laid out as (kH, kW, C_in) after permute in vit_patch_embeddings.
+    #   -> permute to (kH, kW, C_in, C_out) = (14, 14, 3, 1024)
+    #   -> reshape  to (14*14*3, 1024)  = (588, 1024)
     #   -> pad rows to 608 (nearest 32-multiple >= 588)
     pw = torch_model.backbone.embeddings.patch_embeddings.projection.weight
-    pw = pw.permute(1, 2, 3, 0).reshape(-1, 1024)
+    pw = pw.permute(2, 3, 1, 0).reshape(-1, 1024)
     pw = torch.nn.functional.pad(pw, (0, 0, 0, 608 - pw.shape[0]))
 
     parameters["backbone"] = {
         "embeddings": {
             "patch_embeddings": {
                 "projection": {
-                    "weight": _tile(pw, dtype=ttnn.bfloat8_b),
+                    "weight": _tile(pw, dtype=ttnn.bfloat16),
                     "bias": _rm(torch_model.backbone.embeddings.patch_embeddings.projection.bias),
                 }
             },
