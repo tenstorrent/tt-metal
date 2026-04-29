@@ -77,7 +77,7 @@ Sub-headers are pulled in transitively:
  - `dataflow_buffer_spec.hpp`
  - `semaphore_spec.hpp`
 
-**These header files are self-documenting, with extensive comments.** Please read them.
+**These header files are self-documenting, with extensive comments.** Please read them!
 
 All Metal 2.0 host API symbols currently live in the `tt::tt_metal::experimental::metal2_host_api` namespace.
 
@@ -89,10 +89,9 @@ All Metal 2.0 host API symbols currently live in the `tt::tt_metal::experimental
 ## Host API Migration
 
 ### ProgramSpec
+See `program_spec.hpp`.
 
-`ProgramSpec` replaces the legacy "build a `Program` imperatively, then enqueue it" pattern. The entire program — kernels, DFBs, semaphores, work units — is described as data first, then realized with `MakeProgramFromSpec`. This unlocks legality checks at construction time (no more "discover the bug at enqueue") and matches the descriptor-based caching strategy used elsewhere in the codebase.
-
-**Legacy (imperative builder):**
+**Legacy:**
 
 ```cpp
 Program program = CreateProgram();
@@ -114,7 +113,7 @@ SetRuntimeArgs(program, writer_h, core, {dst_addr, num_pages});
 EnqueueProgram(cq, program, /*blocking=*/false);
 ```
 
-**Metal 2.0 (declarative):**
+**Metal 2.0:**
 
 ```cpp
 ProgramSpec spec{
@@ -124,24 +123,23 @@ ProgramSpec spec{
     .semaphores = {sem},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(spec);  // temporary free function
+Program program = MakeProgramFromSpec(spec);  // (temporary free function)
 
 ProgramRunParams params;
 params.kernel_run_params = { /* per-execution argument values */ };
-SetProgramRunParameters(program, params);  // temporary free function
+SetProgramRunParameters(program, params);  // (temporary free function)
 
 EnqueueProgram(cq, program, /*blocking=*/false);
 ```
 
-`MakeProgramFromSpec` performs all legality checks and JIT compilation up front; if anything is wrong, it throws. Kernel handles are gone — kernels are referenced everywhere (work-unit membership, run params, DFB bindings) by their `unique_id` string.
-
 ---
 
 ### KernelSpec
+See `kernel_spec.hpp`.
 
-The Quasar `experimental::quasar::CreateKernel` family is replaced by populating `KernelSpec`s and adding them to `ProgramSpec::kernels`. This is the largest shape change in Metal 2.0: kernels are no longer added to a `Program` imperatively — they are declared as data and consumed at the end by `MakeProgramFromSpec`.
+The Quasar `experimental::quasar::CreateKernel` family is replaced by populating `KernelSpec`, and adding it to `ProgramSpec::kernels`. This is the difference between a builder API and a descriptor API. You don't add kernels to the Program imperatively; they are declared as data and consumed at the end at Program creation.
 
-**Legacy (`experimental::quasar::CreateKernel`):**
+**Legacy:**
 
 ```cpp
 Program program;
@@ -159,7 +157,7 @@ KernelHandle reader_handle = experimental::quasar::CreateKernel(
 SetRuntimeArgs(program, reader_handle, CoreCoord{0, 0}, {src_addr, dst_addr});
 ```
 
-**Metal 2.0 (`KernelSpec` and the surrounding `ProgramSpec` / `ProgramRunParams`):**
+**Metal 2.0:**
 
 ```cpp
 // ----- KernelSpec: kernel declaration -----
@@ -211,20 +209,21 @@ SetProgramRunParameters(program, params);  // temporary free function
 
 Reuse a single `constexpr const char*` for `unique_id` everywhere the kernel is referenced (`WorkUnitSpec`, `ProgramRunParams`, DFB and semaphore bindings) — this catches typos at compile time.
 
-> **Tripwire — DM thread cap**: `QuasarDataMovementConfig::num_threads_per_cluster` allowed up to 8 DM threads. Metal 2.0 reserves DM0 and DM1 for runtime use, so `KernelSpec::num_threads` is capped at 6 for DM kernels. Specifying 7 or 8 will fail validation.
-
-Full API surface (varargs, per-node thread overrides, compiler options): `tt_metal/api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp`.
+> **New DM thread cap**: `QuasarDataMovementConfig::num_threads_per_cluster` allowed up to 8 DM threads. Metal 2.0 reserves DM0 and DM1 for runtime use, so `KernelSpec::num_threads` is capped at 6 for DM kernels. Specifying 7 or 8 will fail validation.
 
 ---
 
 ### DataflowBufferSpec
+See `dataflow_buffer_spec.hpp`.
 
-`DataflowBufferSpec` replaces the two-step Quasar pattern — `experimental::dfb::CreateDataflowBuffer` followed by `BindDataflowBufferToProducerConsumerKernels`. Two shape changes:
+`DataflowBufferSpec` replaces the two-step Quasar pattern — `experimental::dfb::CreateDataflowBuffer` followed by `BindDataflowBufferToProducerConsumerKernels`.
 
-1. **Placement is derived, not specified.** The DFB lives wherever its bound producer / consumer kernels run; you do not pass a `core_spec` to the DFB. The runtime now infers everything that the legacy bind-after-create call had to be told (which RISCs, how many threads, etc.). Local DFB invariant: producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
+Changes:
+
+1. **Placement is derived, not specified.** The DFB lives wherever its bound producer / consumer kernels run; you don't pass a `core_spec` to the DFB. The runtime now infers everything that the legacy bind-after-create call had to be told (which RISCs, how many threads, etc.). Local DFB producer and consumer kernels must have identical `WorkUnitSpec` membership.
 2. **Endpoints are bound at the kernel spec.** Each producer / consumer kernel declares a `DFBBinding` on its `KernelSpec`, naming the DFB and a local accessor name. The kernel code references the DFB through that local accessor name (e.g. `dfb::my_dfb`).
 
-**Legacy (`experimental::dfb`):**
+**Legacy:**
 
 ```cpp
 experimental::dfb::DataflowBufferConfig dfb_config{
@@ -241,7 +240,7 @@ experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
     program, dfb_id, producer_handle, consumer_handle);
 ```
 
-**Metal 2.0 (`DataflowBufferSpec`):**
+**Metal 2.0:**
 
 ```cpp
 constexpr const char* MY_DFB = "my_dfb";
@@ -273,22 +272,22 @@ KernelSpec consumer{ /* ... */
 };
 ```
 
-Each `local_accessor_name` is independent per binding; the producer and consumer can — and often will — name the same DFB differently in their respective kernel sources. The producer/consumer RISC masks that the legacy `DataflowBufferConfig` carried are no longer needed: the runtime determines RISC assignment from the kernel bindings.
+Each `local_accessor_name` is independent per binding; the producer and consumer can name the same DFB differently in their respective kernel sources. The producer/consumer RISC masks that the legacy `DataflowBufferConfig` carried are no longer needed: the runtime determines RISC assignment from the kernel bindings.
 
-Advanced cases (aliased DFBs, borrowed-memory DFBs built on a `Buffer` or `MeshTensor` view, remote DFBs spanning nodes) are described in `dataflow_buffer_spec.hpp`. Note: `RemoteDataflowBufferSpec` is exposed in the API surface but the runtime does not yet support it — using one will trigger a `TT_FATAL` at `MakeProgramFromSpec`.
+Advanced cases (aliased DFBs, borrowed-memory DFBs, remote DFBs) are exposed in `dataflow_buffer_spec.hpp`, but aren't supported yet.
 
 ---
 
 ### SemaphoreSpec
 
-`SemaphoreSpec` replaces `CreateSemaphore`. Two shape changes:
+`SemaphoreSpec` replaces `CreateSemaphore`. Changes:
 
-1. **Semaphores are declared as data**, like everything else in the new API — no longer minted by an imperative `CreateSemaphore` call into a Program object.
+1. **Descriptor API**, no longer minted by an imperative `CreateSemaphore` call into a Program object.
 2. **Semaphore IDs no longer travel as runtime arguments.** Each kernel that uses a semaphore declares a `SemaphoreBinding` naming it and giving it a local accessor name; kernel code accesses it as `sem::accessor_name`.
 
 Unlike DFBs, semaphore placement is *not* derived: a semaphore is a remote resource accessible from any kernel, so its node set is specified directly via `target_nodes`.
 
-**Legacy (`CreateSemaphore`):**
+**Legacy:**
 
 ```cpp
 uint32_t sem_id = CreateSemaphore(program, core_spec, /*initial_value=*/0);
@@ -297,7 +296,7 @@ uint32_t sem_id = CreateSemaphore(program, core_spec, /*initial_value=*/0);
 SetRuntimeArgs(program, reader_h, core, {/* ... */, sem_id});
 ```
 
-**Metal 2.0 (`SemaphoreSpec`):**
+**Metal 2.0:**
 
 ```cpp
 constexpr const char* DONE = "done";
@@ -318,17 +317,14 @@ KernelSpec writer{ /* ... */
 
 Notes:
 
-- `target_nodes` is `std::variant<NodeCoord, NodeRange, NodeRangeSet>` — pass any of the three. Any kernel in the `ProgramSpec` can bind to the semaphore regardless of where the kernel runs.
-- `SemaphoreSpec::SemaphoreMemoryType::Register` is a placeholder for a Gen2 hardware feature (register-backed semaphores); it is not yet supported. Only `L1` works today. The runtime team intends to automate the L1 / Register selection eventually.
-- Setting `initial_value` to a non-zero value is not supported on Gen2; the runtime team intends to deprecate non-zero initial values entirely once remote DFBs land.
+- `SemaphoreSpec::SemaphoreMemoryType::Register` is a placeholder for a Gen2 hardware feature (register-backed semaphores); it is not yet supported. Only `L1` works today. If we ever decide to support `Register`, we'll hopefully automate the L1 / Register selection on Quasar.
+- Setting `initial_value` to a non-zero value is not supported on Gen2 (for compatibility with Register-based semaphores). We hope to deprecate non-zero initial values on Gen 1 as well, with the help of remote DFB.
 
 ---
 
 ### WorkUnitSpec
 
 `WorkUnitSpec` is a new top-level concept that replaces the `core_spec` argument from `experimental::quasar::CreateKernel` (and from `experimental::dfb::CreateDataflowBuffer`). It declares groups of kernels that operate together on a worker node, and on which nodes they run.
-
-A `WorkUnitSpec` is `{unique_id, kernels, target_nodes}` — that is all.
 
 **Single work unit on one node:**
 
@@ -366,36 +362,24 @@ WorkUnitSpec wu_halo{
 // COMPUTE's effective node set is the union: inner ∪ halo.
 ```
 
-Notes:
-
-- `target_nodes` is `std::variant<NodeCoord, NodeRange, NodeRangeSet>` — pass any of the three.
-- A kernel may belong to multiple `WorkUnitSpec`s; its effective node set is the union of those work units' `target_nodes`.
-- Every kernel referenced in `ProgramSpec::kernels` must be referenced by at least one `WorkUnitSpec`. Otherwise it has no place to run.
-- **Local DFB invariant**: the producer and consumer kernels of a local `DataflowBufferSpec` must share *identical* `WorkUnitSpec` membership. If they differ, the runtime cannot determine where to allocate the DFB.
-
 ---
 
 ### ProgramRunParams
 
-`ProgramRunParams` replaces the imperative `SetRuntimeArgs(program, kernel_handle, core, args)` family. The kernel declares its runtime-arg *schema* (names, count of varargs) on `KernelSpec::runtime_arguments_schema`; values are supplied per execution via `ProgramRunParams`.
+`ProgramRunParams` replaces `SetRuntimeArgs(program, kernel_handle, core, args)` and related APIs. The kernel declares its runtime-arg *schema*; values are supplied per execution via `ProgramRunParams`.
 
-The execution flow:
-
-1. Build the immutable `ProgramSpec` once.
-2. `Program program = MakeProgramFromSpec(spec);` — JIT compile and structural setup.
-3. For each execution: populate a fresh `ProgramRunParams`, call `SetProgramRunParameters(program, params)`, then `EnqueueProgram`.
-
-**Legacy (imperative `SetRuntimeArgs`):**
+**Legacy:**
 
 ```cpp
+// All arguments are positional
 SetRuntimeArgs(program, reader_h, core, {src_addr, num_pages, sem_id});
 SetCommonRuntimeArgs(program, reader_h, {bank_id});
 ```
 
-**Metal 2.0 (schema on the spec, values on the run params):**
+**Metal 2.0:**
 
 ```cpp
-// Schema declared on the kernel:
+// Schema declared on the kernel (with named arguments!):
 KernelSpec reader{
     .unique_id = READER,
     // ...
@@ -417,6 +401,9 @@ params.kernel_run_params = {{
 SetProgramRunParameters(program, params);  // temporary free function
 ```
 
+Some kernels can't get away with just named arguments. They're written to take a flexible number of arguments, e.g. variable tensor rank.
+For those unfortunate situations, we have the mildly confusing varargs.
+
 Vararg form (positional, dynamic count):
 
 ```cpp
@@ -434,55 +421,15 @@ Named and vararg forms can coexist on the same kernel. Vararg indices are stable
 
 `ProgramRunParams` must be specified for every kernel that has runtime arguments, on every node where the kernel runs. Kernel handles are gone — kernels are referenced by `unique_id` string (`kernel_spec_name`).
 
+There's a "power user, efficient inner loop" version of the runtime args update API: `ProgramRunParamsView`. It's not implemented yet.
+
 ---
 
 ## Device-Side Migration
 
-### Circular Buffers → Dataflow Buffers
-
-Metal 2.0 replaces Circular Buffers (CBs) with Dataflow Buffers (DFBs) on both the host and device sides. The kernel-side DFB FIFO API is shape-compatible with the Device 2.0 `experimental::CircularBuffer` wrapper: same method names (`reserve_back` / `push_back` / `wait_front` / `pop_front` / `get_write_ptr` / `get_read_ptr`).
-
-The change at the call site is twofold:
-
-1. **The class is `experimental::DataflowBuffer`** (instead of `experimental::CircularBuffer`).
-2. **The constructor takes a named binding accessor**, not a magic-number `cb_id`. The accessor is auto-generated from the host-side DFB binding into the `dfb::` namespace in `kernel_bindings_generated.h`.
-
-**Legacy (Device 2.0 `experimental::CircularBuffer`):**
-
-```cpp
-constexpr uint32_t cb_id = 0;
-experimental::CircularBuffer cb(cb_id);
-
-cb.reserve_back(num_pages);
-uint32_t write_ptr = cb.get_write_ptr();
-// ... write data ...
-cb.push_back(num_pages);
-```
-
-**Metal 2.0 (`experimental::DataflowBuffer`):**
-
-```cpp
-// Host-side DFB binding declared local_accessor_name = "my_dfb".
-// Auto-generated from that: constexpr DFBAccessor dfb::my_dfb;
-experimental::DataflowBuffer dfb(dfb::my_dfb);
-
-dfb.reserve_back(num_entries);
-uint32_t write_ptr = dfb.get_write_ptr();
-// ... write data ...
-dfb.push_back(num_entries);
-```
-
-> **Quasar bonus — implicit sync**: On Quasar, you can elide the explicit `reserve_back` / `push_back` (or `wait_front` / `pop_front`) pattern entirely. Pass the `DataflowBuffer` directly to `experimental::Noc::async_read` or `async_write`, and the runtime hardware handles the FIFO sync via ISR. This is the default behavior; you can disable it per-DFB by setting `DataflowBufferSpec::disable_implicit_sync = true` (rarely needed).
-
-*[Almeet to fill in: complete method-by-method mapping including `pages_reservable_at_back` / `pages_available_at_front` / `finish` / `write_barrier`; DFB ↔ `Noc` integration examples; an end-to-end implicit-sync example.]*
-
----
-
 ### Kernel Argument Retrieval Syntax
 
 The Metal 2.0 host API declares kernel arguments by name; the kernel-side API retrieves them by name. This replaces the legacy positional `get_arg_val<uint32_t>(N)` style.
-
-> **Note**: This syntax is expected to evolve again to support custom argument types beyond `uint32_t`. The named-accessor mechanism will be preserved; the underlying argument types will become user-extensible.
 
 Include `experimental/kernel_args.h` in any kernel that uses the named-argument API. The `args::` and `dfb::` / `sem::` namespaces are auto-generated from the host-side bindings into `kernel_bindings_generated.h`, which the kernel build system pulls in.
 
@@ -559,7 +506,7 @@ void kernel_main() {
 
 Vararg indices are stable across schema changes: if you later promote a named RTA to a CRTA, or add or remove named arguments, the existing `get_vararg(N)` / `get_common_vararg(N)` calls still resolve to the same vararg slots.
 
-> **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible. No-one will be unhappy about it — every team has been asking for this.
+> **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible.
 
 ---
 
@@ -567,7 +514,7 @@ Vararg indices are stable across schema changes: if you later promote a named RT
 
 Reader kernel reads from DRAM into a DFB; writer kernel pulls from the DFB and writes to DRAM. Single-threaded kernels on a single Quasar cluster, no semaphores. End-to-end host code.
 
-**Legacy (temporary Quasar APIs + standard `host_api.hpp`):**
+**Legacy:**
 
 ```cpp
 constexpr uint32_t page_size = 1024;
@@ -689,26 +636,9 @@ SetProgramRunParameters(program, params);
 EnqueueProgram(cq, program, /*blocking=*/false);
 ```
 
-The Metal 2.0 form is longer, but the additional structure is information that previously had to be threaded through several imperative calls (and several arguments to those calls). DFB endpoint information, in particular, was scattered across `DataflowBufferConfig` (RISC masks, access patterns) and the subsequent `BindDataflowBufferToProducerConsumerKernels` call (kernel handles); in Metal 2.0 it lives entirely on each `KernelSpec::dfb_bindings`. RISC assignment is the runtime's job again.
+The Metal 2.0 form is more verbose, but carries additional structure. DFB endpoint information, in particular, was scattered across `DataflowBufferConfig` (RISC masks, access patterns) and the subsequent `BindDataflowBufferToProducerConsumerKernels` call (kernel handles); in Metal 2.0 it lives entirely on each `KernelSpec::dfb_bindings`.
 
 ---
-
-## Troubleshooting
-
-Common pitfalls when migrating from the temporary Quasar APIs:
-
-- **Don't pass core specs to DFBs.** `DataflowBufferSpec` has no `target_nodes` field by design — placement is derived from kernel DFB bindings. The legacy two-step "create the DFB, then bind it" pattern collapses into one declarative form.
-- **Quasar kernel handles are gone.** Kernels are referenced by `unique_id` string everywhere (work-unit membership, run params, DFB / semaphore bindings). Define each `unique_id` as a `constexpr const char*` and reuse the constant — catches typos at compile time.
-- **All CTAs are named.** The Quasar `compile_args` (positional) / `named_compile_args` (named) split is gone; populate `KernelSpec::compile_time_arg_bindings` instead. If you had a positional `compile_args` vector, give every entry a name.
-- **Producer / consumer RISC masks are not specified.** The legacy `DataflowBufferConfig::producer_risc_mask` and `consumer_risc_mask` are gone — the runtime determines RISC assignment from the kernel bindings. Don't try to reconstitute these in Metal 2.0.
-- **DM threads per kernel are capped at 6.** DM0 and DM1 are reserved for runtime use. The temporary Quasar API allowed up to 8; Metal 2.0 caps at 6 and validates. (See the `KernelSpec` section's tripwire callout.)
-- **Every kernel must belong to a `WorkUnitSpec`.** A kernel listed in `ProgramSpec::kernels` but not referenced by any `WorkUnitSpec::kernels` has no place to run; `MakeProgramFromSpec` will reject it.
-- **A kernel may belong to multiple `WorkUnitSpec`s.** Its effective node set is the union of those work units' `target_nodes`. Use this for kernels that participate in multiple roles.
-- **Local DFB invariant.** Producer and consumer kernels of a local DFB must share *identical* `WorkUnitSpec` membership. Not "compatible" or "overlapping" — identical.
-- **Semaphore IDs are no longer runtime args.** Bind the semaphore at the kernel spec instead; access it as `sem::accessor_name` in kernel code. If your migration leaves a `sem_id` runtime arg behind, you've missed a binding.
-- **Every named RTA must be set on every node.** `ProgramRunParams::KernelRunParams::named_runtime_args` is per-node; missing an entry for a node where the kernel runs causes `SetProgramRunParameters` to error. Same for varargs.
-- **Remote DFBs are not yet supported by the runtime.** `RemoteDataflowBufferSpec` is exposed in the API surface as a breadcrumb, but using one triggers a `TT_FATAL` at `MakeProgramFromSpec`.
-- **`MakeProgramFromSpec` and `SetProgramRunParameters` are temporary free functions.** They will become a `Program` constructor and member function respectively — call sites will need a one-line update later.
 
 ### Kernel globals
 

@@ -85,7 +85,7 @@ Sub-headers are pulled in transitively:
  - `dataflow_buffer_spec.hpp`
  - `semaphore_spec.hpp`
 
-**These header files are self-documenting, with extensive comments.** Please read them.
+**These header files are self-documenting, with extensive comments.** Please read them!
 
 All Metal 2.0 host API symbols currently live in the `tt::tt_metal::experimental::metal2_host_api` namespace.
 
