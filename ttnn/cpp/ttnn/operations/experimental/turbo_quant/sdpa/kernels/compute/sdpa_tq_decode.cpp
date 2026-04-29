@@ -423,6 +423,11 @@ void kernel_main() {
     constexpr bool pre_rescaled = get_compile_time_arg_val(TQ_BASE + 1 + num_levels) == 1;
     // norms_are_bfp8=1: norms cache is BFP8_B (must typecast to BF16 before bcast_cols multiply)
     constexpr bool norms_are_bfp8 = get_compile_time_arg_val(TQ_BASE + 2 + num_levels) == 1;
+    // return_lse=1: also pack LSE = max + log(sum) to cb_lse_out (c_3) before
+    // the final divide, so a host-side combine can merge two SDPA outputs via
+    // online softmax. See turbo_quant/LSE_COMBINE_DESIGN.md. Incompatible with
+    // cores_per_head_arg > 1 (no combine of LSE across the Tier 2A reducer).
+    constexpr bool return_lse = get_compile_time_arg_val(TQ_BASE + 3 + num_levels) == 1;
 
     // Runtime args
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -1050,6 +1055,41 @@ void kernel_main() {
                         cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
                         cb_reserve_back(alias_prev_sum, Sq_chunk_t);
                         cb_push_back(alias_prev_sum, Sq_chunk_t);
+                    }
+
+                    // ── LSE export (sliding-window hybrid) ──
+                    // Pack LSE = prev_max + log(prev_sum) to cb_lse_out (c_3)
+                    // BEFORE the recip+normalize. The host-side hybrid combine
+                    // uses LSE from two SDPA calls (this one over old positions
+                    // + a standard SDPA over the BFP8 ring) to merge their
+                    // outputs via online softmax math. cb_3 is otherwise the
+                    // Tier 2A reducer's cb_merge_new_max — return_lse and
+                    // cores_per_head_arg > 1 must not be set at the same time.
+                    if constexpr (return_lse) {
+                        constexpr uint32_t cb_lse_out = tt::CBIndex::c_3;
+                        cb_reserve_back(cb_lse_out, Sq_chunk_t);
+                        cb_wait_front(alias_prev_max, Sq_chunk_t);
+                        for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+                            tile_regs_acquire();
+                            // DST 0 = sum
+                            copy_tile_to_dst_init_short(alias_prev_sum);
+                            copy_tile(alias_prev_sum, i, 0);
+                            // DST 0 = log(sum)
+                            log_tile_init();
+                            log_tile(0);
+                            // DST 1 = max
+                            copy_tile_to_dst_init_short(alias_prev_max);
+                            copy_tile(alias_prev_max, i, 1);
+                            // DST 0 = log(sum) + max = LSE
+                            add_binary_tile_init();
+                            add_binary_tile(0, 1, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_reconfig_data_format(cb_lse_out);
+                            pack_tile(0, cb_lse_out);
+                            tile_regs_release();
+                        }
+                        cb_push_back(cb_lse_out, Sq_chunk_t);
                     }
 
                     recip_block_inplace(alias_prev_sum, Sq_chunk_t);

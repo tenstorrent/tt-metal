@@ -370,6 +370,10 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // Whether norms are BFP8_B (1) or BF16 (0) — compute kernel typecasts when 1.
     const bool norms_are_bfp8 = (k_norms.dtype() == tt::tt_metal::DataType::BFLOAT8_B);
     compute_ct_args.push_back(norms_are_bfp8 ? 1 : 0);
+    // return_lse: when 1, kernel packs LSE = max + log(sum) to cb_lse_out (c_3)
+    // before the final divide. Used by the sliding-window hybrid host-level
+    // combine (see turbo_quant/LSE_COMBINE_DESIGN.md).
+    compute_ct_args.push_back(attrs.return_lse ? 1 : 0);
 
     KernelHandle compute_kernel = CreateKernel(
         program,

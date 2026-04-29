@@ -26,6 +26,14 @@ struct SDPATQDeviceOperation {
         // K used at runtime is min(this, num_cores_grid / (B * NQH)). 1 = legacy
         // behavior (one core per tuple, full chunk loop, no reduce).
         uint32_t num_cores_per_head = 1;
+
+        // Sliding-window hybrid: when true, compute kernel packs LSE = max + log(sum)
+        // to cb_lse_out (c_3) and writer writes it to a second output tensor. Used
+        // by the host-level online softmax combine that merges old-positions TQ
+        // SDPA with recent-positions standard SDPA. See LSE_COMBINE_DESIGN.md.
+        // Mutually exclusive with num_cores_per_head > 1 (cb_lse_out aliases the
+        // Tier 2A reducer's cb_merge_new_max).
+        bool return_lse = false;
     };
 
     struct tensor_args_t {
