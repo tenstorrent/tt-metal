@@ -912,22 +912,18 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsComputeCoreBudgetFails) {
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    // Create enough compute kernels to exceed the 4 Tensix core budget
+    // Create enough compute kernels to exceed the 4 Tensix core budget (2+4=6).
+    // (Legal thread counts on Quasar are 1, 2, 4; 3 is explicitly disallowed.)
     auto kernel1 = MakeMinimalComputeKernel("compute1", 2);
     auto kernel2 = MakeMinimalComputeKernel("compute2", 4);
-
-    // This case is broken in two separate ways:
-    //  - Total engines: 6 > 4
-    //  - Multiple compute kernels on the same work_unit
 
     spec.kernels = {kernel1, kernel2};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute1", "compute2"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AnyOf(
-            ::testing::HasSubstr("WorkUnitSpec 'work_unit' needs 6 Tensix engines"),
-            ::testing::HasSubstr("WorkUnitSpec 'work_unit' has more than one compute kernel"))));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("WorkUnitSpec 'work_unit' needs 6 Tensix engines")));
 }
 
 TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
