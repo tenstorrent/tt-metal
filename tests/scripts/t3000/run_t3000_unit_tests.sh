@@ -209,8 +209,15 @@ run_t3000_ttnn_tests() {
   # FixAzL1BarrierSkipNoPriorFabricFixture: GAP-32 — FIX AZ l1_barrier not called
   #   after assert_cores throws for non-MMIO when relay_broken_non_mmio is empty
   #   (no FabricFirmwareInitializer session — e.g. unit_tests_ttnn_udm scenario).
+  # EthCoordPreservedOnAqSkipFixture: GAP-41 — FIX NT EthCoord preserved in
+  #   chip_locations for FIX-AQ-skipped chips (no TT_FATAL on YAML coord lookup).
+  # MmioEthCoordBeforeRelayGuardFixture: GAP-42 — FIX NU MMIO EthCoord captured
+  #   via PCIe before FIX W heartbeat guard loop (no TT_FATAL when all ETH dead).
+  # AsyncBuildPhaseRelayGuardFixture: GAP-43 — FIX NV + FIX NW: non-MMIO chips
+  #   skipped for get_device_aiclk and clear_launch_messages_on_eth_cores in
+  #   run_async_build_phase; dead relay must NOT throw through async futures.
   timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*' ; record_test
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*' ; record_test
 
   # GAP regression tests — validate race condition / ETH hang fixes.
   # Each test is a direct regression for one or more numbered fixes.
