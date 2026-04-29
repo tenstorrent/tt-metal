@@ -91,6 +91,42 @@
 - name: "Pipeline Test (DeepSeek V3 B1 Superpod 4)"
   cmd: |
     set -x
+
+    MAX_RETRIES=10
+    validation_succeeded=false
+
+    for attempt in $(seq 1 "$MAX_RETRIES"); do
+      echo "=== Recovery attempt $attempt of $MAX_RETRIES ==="
+
+      echo "--- Running cluster validation ---"
+      if mpirun --pernode --tag-output \
+        /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+        --send-traffic \
+        --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+        --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+        --num-iterations 100 \
+        --hard-fail; then
+          echo "SUCCESS: Cluster validation passed on attempt $attempt"
+          validation_succeeded=true
+          break
+      fi
+
+      echo "WARNING: Validation failed on attempt $attempt"
+
+      echo "--- Resetting cards with tt-smi ---"
+      mpirun --pernode --tag-output /opt/venv/bin/tt-smi -glx_reset
+
+      if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+        echo "--- Sleeping 30s before next attempt ---"
+        sleep 30
+      fi
+    done
+
+    if [ "$validation_succeeded" != true ]; then
+      echo "ERROR: Recovery failed after $MAX_RETRIES attempts -- SKIPPING PIPELINE TEST (DeepSeek V3 B1 Superpod 4)"
+      exit 1
+    fi
+
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
     mkdir -p $PIPELINE_DIR
@@ -103,77 +139,16 @@
       --output-dir $PIPELINE_DIR \
       /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
 
-    MAX_RETRIES=10
-    validation_succeeded=false
-
-    for attempt in $(seq 1 "$MAX_RETRIES"); do
-      echo "=== Recovery attempt $attempt of $MAX_RETRIES ==="
-
-      echo "--- Resetting cards with tt-smi ---"
-      if ! mpirun --pernode --tag-output bash -lc '
-        for tt_smi in /usr/local/bin/tt-smi /home/user/.local/bin/tt-smi "$(command -v tt-smi 2>/dev/null)" "$HOME/.local/bin/tt-smi"; do
-          if [ -n "$tt_smi" ] && [ -x "$tt_smi" ]; then
-            echo "Using tt-smi at $tt_smi on $(hostname)"
-            # exec replaces this remote shell, so mpirun sees the tt-smi exit code.
-            exec "$tt_smi" -glx_reset_auto
-          fi
-        done
-
-        for search_root in /usr/local /home/user/ /usr /opt; do
-          tt_smi=$(find "$search_root" -maxdepth 5 -type f -name tt-smi -perm /111 -print -quit 2>/dev/null || true)
-          if [ -n "$tt_smi" ]; then
-            echo "Using tt-smi at $tt_smi on $(hostname)"
-            # exec replaces this remote shell, so mpirun sees the tt-smi exit code.
-            exec "$tt_smi" -glx_reset_auto
-          fi
-        done
-
-        echo "ERROR: tt-smi not found on $(hostname); PATH=$PATH"
-        exit 127
-      '; then
-        echo "WARNING: tt-smi reset failed on attempt $attempt"
-        if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-          echo "Sleeping 30s before retry..."
-          sleep 30
-        fi
-        continue
-      fi
-
-      echo "--- Running cluster validation ---"
-      if mpirun --pernode --tag-output \
-        /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-        --send-traffic \
-        --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-        --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-        --num-iterations 100 \
-        --hard-fail; then
-        echo "SUCCESS: Recovery completed on attempt $attempt"
-        validation_succeeded=true
-        break
-      fi
-
-      echo "WARNING: Validation failed on attempt $attempt"
-      if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-        echo "Sleeping 30s before retry..."
-        sleep 30
-      fi
-    done
-
-    if [ "$validation_succeeded" != true ]; then
-      echo "ERROR: Recovery failed after $MAX_RETRIES attempts -- SKIPPING PIPELINE TEST (DeepSeek V3 B1 Superpod 4)"
-      exit 1
-    fi
-
     echo "=== SP4 superpod: running tt-run ==="
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
-    --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
-    --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
-    python -m models.demos.deepseek_v3_b1.demo.cli \
-    --max-new-tokens 2048 \
-    --weights real \
-    --cache-path /home/esmal/cache \
-    --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-    --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
+      python -m models.demos.deepseek_v3_b1.demo.cli \
+        --max-new-tokens 2048 \
+        --weights real \
+        --cache-path /home/esmal/cache \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
 
   skus:
     bh_sp4:
