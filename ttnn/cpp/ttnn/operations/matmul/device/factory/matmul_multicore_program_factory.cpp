@@ -1,16 +1,12 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
-#include <map>
-#include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/compute_throttle_utils.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -49,19 +45,12 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b.buffer();
 
     tt::tt_metal::IDevice* device = a.device();
-
-    TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
-    // packer_l1_acc is not applicable, because the compute kernel doesn't have any
-    // intermediate accumulation. Silences compiler warnings.
-    (void)packer_l1_acc;
-
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -224,35 +213,6 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     return desc;
 }
 
-// Program is constructed from the ProgramDescriptor, then shared_variables_t
-// is populated with kernel/CB handles for override_runtime_arguments().
-MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::create(
-    const ttnn::prim::MatmulParams& operation_attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    ProgramDescriptor descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-
-    tt_metal::Program program{descriptor};
-
-    // Kernel handles are assigned sequentially in descriptor order: reader=0, writer=1
-    constexpr tt_metal::KernelHandle reader_id = 0;
-    constexpr tt_metal::KernelHandle writer_id = 1;
-
-    // Recover num_cores and num_cores_y for override_runtime_arguments
-    const auto& a = tensor_args.input_tensors.at(0);
-    auto& output = tensor_return_value.at(0);
-    tt::tt_metal::IDevice* device = a.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    const auto& cshape = output.padded_shape();
-    uint32_t c_batch_size = get_batch_size(cshape);
-    auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
-    auto [num_cores, all_cores, cg1, cg2, n1, n2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
-
-    return {std::move(program), {reader_id, writer_id, num_cores, num_cores_y}};
-}
-
 void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::MatmulParams& /*operation_attributes*/,
@@ -297,9 +257,20 @@ MatmulMeshWorkloadMultiCoreFactory::cached_mesh_workload_t MatmulMeshWorkloadMul
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
             const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program = MatmulMultiCoreProgramFactory::create(attributes, tensor_args, output);
-            shared_variables[mesh_coord_range] = single_device_program.shared_variables;
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+            ProgramDescriptor descriptor =
+                MatmulMultiCoreProgramFactory::create_descriptor(attributes, tensor_args, output);
+            tt_metal::Program program{descriptor};
+            const auto& a = tensor_args.input_tensors.at(0);
+            auto& out_tensor = output.at(0);
+            auto* device = a.device();
+            auto grid_size = device->compute_with_storage_grid_size();
+            uint32_t num_cores_y = grid_size.y;
+            const auto& cshape = out_tensor.padded_shape();
+            auto num_output_tiles_total = get_batch_size(cshape) * cshape[-2] * cshape[-1] / TILE_HW;
+            auto [num_cores, all_cores, cg1, cg2, n1, n2] =
+                tt::tt_metal::split_work_to_cores(grid_size, num_output_tiles_total);
+            shared_variables[mesh_coord_range] = {0, 1, num_cores, num_cores_y};
+            workload.add_program(mesh_coord_range, std::move(program));
         }
     }
     return {std::move(workload), std::move(shared_variables)};

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
@@ -26,101 +26,6 @@ namespace ttnn::prim {
 
 // Program is constructed from the ProgramDescriptor, then shared_variables_t
 // is populated with kernel/CB handles for override_runtime_arguments().
-MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReuseOptimizedProgramFactory::create(
-    const ttnn::prim::MatmulParams& operation_attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    // create_descriptor falls back to program_config.compute_with_storage_grid_size when
-    // core_range_set is not provided, so no need to pass one explicitly here.
-    ProgramDescriptor descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-
-    tt_metal::Program program{descriptor};
-
-    // Kernel handles are assigned sequentially in descriptor order:
-    // reader=0, writer=1, compute kernels follow
-    constexpr tt_metal::KernelHandle reader_id = 0;
-    constexpr tt_metal::KernelHandle writer_id = 1;
-
-    // Look up CB handles by buffer index
-    tt_metal::CBHandle cb_src0 = 0, cb_src1 = 0, cb_output = 0;
-    for (const auto& cb : program.circular_buffers()) {
-        if (cb->buffer_indices().contains(tt::CBIndex::c_0)) {
-            cb_src0 = cb->id();
-        }
-        if (cb->buffer_indices().contains(tt::CBIndex::c_1)) {
-            cb_src1 = cb->id();
-        }
-        if (cb->buffer_indices().contains(tt::CBIndex::c_4)) {
-            cb_output = cb->id();
-        }
-    }
-
-    // Compute num_cores and cores vector for shared_variables_t, used by
-    // override_runtime_arguments for program cache reuse.
-    const auto& program_config =
-        std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
-    CoreCoord compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
-
-    const auto& a = tensor_args.input_tensors.at(0);
-    const auto& b = tensor_args.input_tensors.at(1);
-    auto& output = tensor_return_value.at(0);
-
-    bool in0_is_sharded = a.is_sharded();
-    bool in1_is_sharded = b.is_sharded();
-    bool output_is_sharded = output.is_sharded();
-
-    std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
-    if (in0_is_sharded) {
-        shard_spec = a.shard_spec().value();
-    } else if (in1_is_sharded) {
-        shard_spec = b.shard_spec().value();
-    } else if (output_is_sharded) {
-        shard_spec = output.shard_spec().value();
-    }
-
-    bool transpose_a = operation_attributes.transpose_a;
-    const auto& ashape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
-    auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
-    uint32_t B = get_batch_size(ashape);
-    uint32_t M = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
-
-    bool transpose_b = operation_attributes.transpose_b;
-    const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, transpose_b);
-    auto in1_tile = operations::matmul::utilities::get_matmul_tile(b, transpose_b);
-    uint32_t N = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
-
-    uint32_t per_core_M = program_config.per_core_M;
-    uint32_t per_core_N = program_config.per_core_N;
-    uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
-
-    uint32_t num_cores = 0;
-    CoreRangeSet all_cores, core_group_1, core_group_2;
-    uint32_t num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
-
-    if (shard_spec.has_value()) {
-        all_cores = shard_spec.value().grid;
-        num_cores = all_cores.num_cores();
-    } else {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
-    }
-
-    bool row_major = false;
-    if (shard_spec.has_value()) {
-        row_major = shard_spec.value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    }
-    const auto cores =
-        grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
-
-    return {std::move(program), {reader_id, writer_id, cb_src0, cb_src1, cb_output, num_cores, cores}};
-}
-
 void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::MatmulParams& /*operation_attributes*/,
@@ -446,7 +351,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         {"cb_in0_intermediate", tt::CBIndex::c_8},
         {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
-        {"bias_ntiles", in1_per_core_w},
     };
 
     // Compute kernel compile time args (group 1)
@@ -732,10 +636,61 @@ MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::create_mesh_workload(
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
             const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program =
-                MatmulMultiCoreReuseOptimizedProgramFactory::create(attributes, tensor_args, tensor_return_value);
-            shared_variables[mesh_coord_range] = single_device_program.shared_variables;
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+            ProgramDescriptor descriptor = MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor(
+                attributes, tensor_args, tensor_return_value);
+            tt_metal::Program program{descriptor};
+            tt_metal::CBHandle cb_src0 = 0, cb_src1 = 0, cb_output = 0;
+            for (const auto& cb : program.circular_buffers()) {
+                if (cb->buffer_indices().contains(tt::CBIndex::c_0)) {
+                    cb_src0 = cb->id();
+                }
+                if (cb->buffer_indices().contains(tt::CBIndex::c_1)) {
+                    cb_src1 = cb->id();
+                }
+                if (cb->buffer_indices().contains(tt::CBIndex::c_4)) {
+                    cb_output = cb->id();
+                }
+            }
+            const auto& pc =
+                std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(attributes.program_config.value());
+            CoreCoord grid_size = pc.compute_with_storage_grid_size;
+            const auto& a = tensor_args.input_tensors.at(0);
+            const auto& b = tensor_args.input_tensors.at(1);
+            auto& out = tensor_return_value.at(0);
+            std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
+            if (a.is_sharded()) {
+                shard_spec = a.shard_spec().value();
+            } else if (b.is_sharded()) {
+                shard_spec = b.shard_spec().value();
+            } else if (out.is_sharded()) {
+                shard_spec = out.shard_spec().value();
+            }
+            const auto& ashape =
+                operations::matmul::utilities::get_matmul_tensor_padded_shape(a, attributes.transpose_a);
+            const auto& bshape =
+                operations::matmul::utilities::get_matmul_tensor_padded_shape(b, attributes.transpose_b);
+            uint32_t B_dim = get_batch_size(ashape);
+            uint32_t M = operations::matmul::utilities::get_M_dim(
+                ashape, operations::matmul::utilities::get_matmul_tile(a, attributes.transpose_a), false);
+            uint32_t N = operations::matmul::utilities::get_N_dim(
+                bshape, operations::matmul::utilities::get_matmul_tile(b, attributes.transpose_b));
+            uint32_t num_output_blocks_total = (B_dim * M / pc.per_core_M) * (N / pc.per_core_N);
+            uint32_t num_cores = 0;
+            CoreRangeSet all_cores;
+            if (shard_spec.has_value()) {
+                all_cores = shard_spec.value().grid;
+                num_cores = all_cores.num_cores();
+            } else {
+                CoreRangeSet cg1, cg2;
+                uint32_t n1 = 0, n2 = 0;
+                std::tie(num_cores, all_cores, cg1, cg2, n1, n2) =
+                    tt::tt_metal::split_work_to_cores(grid_size, num_output_blocks_total);
+            }
+            bool row_major =
+                shard_spec.has_value() && shard_spec.value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
+            const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, row_major);
+            shared_variables[mesh_coord_range] = {0, 1, cb_src0, cb_src1, cb_output, num_cores, cores};
+            workload.add_program(mesh_coord_range, std::move(program));
         }
     }
     return {std::move(workload), std::move(shared_variables)};

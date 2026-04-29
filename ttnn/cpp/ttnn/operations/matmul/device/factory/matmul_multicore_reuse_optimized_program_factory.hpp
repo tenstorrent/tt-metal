@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -21,11 +21,6 @@ struct MatmulMultiCoreReuseOptimizedProgramFactory {
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const ttnn::prim::MatmulParams& operation_attributes,
-        const ttnn::prim::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,

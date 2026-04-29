@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +46,7 @@ create_program_batch_sharded(
     tt::tt_metal::IDevice* device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    tt::tt_metal::MathFidelity math_fidelity,
+    MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -72,8 +72,7 @@ create_program_batch_sharded(
     tt::DataFormat output_data_format,
     bool untilize_out,
     bool skip_compute,
-    bool skip_write_back,
-    bool row_broadcast_bias) {
+    bool skip_write_back) {
     log_debug(tt::LogOp, "Batch-sharded DRAM matmul");
     log_debug(tt::LogOp, "B: {}, M: {}, K: {}, N: {}", B, M, K, N);
     log_debug(tt::LogOp, "per_core_M: {}, per_core_N: {}, in0_block_w: {}", per_core_M, per_core_N, in0_block_w);
@@ -478,9 +477,6 @@ create_program_batch_sharded(
         0u,                      // get_batch_from_reader
         0u,                      // in0_transpose_tile
     };
-    if (bias_buffer != nullptr) {
-        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
-    }
 
     // Create kernels on all cores in bounding box
     // Runtime args control which cores are active workers vs idle
@@ -1214,8 +1210,6 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
-
     tt::tt_metal::IDevice* device =
         reuse_batched_hs_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, mesh_coord);
 
@@ -1335,9 +1329,8 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         bias_data_format,
         output_data_format,
         untilize_out,
-        false,  // skip_compute
-        false,  // skip_write_back
-        row_broadcast_bias);
+        false,   // skip_compute
+        false);  // skip_write_back
 }
 
 MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::cached_mesh_workload_t
