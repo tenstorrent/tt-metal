@@ -45,6 +45,10 @@ static bool run_test_bandwidth(
     struct l1_allocator send_allocator = new_erisc_allocator();
     struct l1_allocator recv_allocator = new_erisc_allocator();
 
+    uint32_t progress_counter = l1_alloc(&recv_allocator, sizeof(uint32_t));
+    uint32_t send_progress_counter = l1_alloc(&send_allocator, sizeof(uint32_t));
+    TT_FATAL(progress_counter == send_progress_counter, "Progress counters should be at the same address");
+
     uint32_t recv_l1_address = 0;
 
     tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
@@ -58,6 +62,7 @@ static bool run_test_bandwidth(
         transfer_count,
         inputs,
         processor,
+        progress_counter,
         &recv_l1_address,
         &recv_program);
 
@@ -72,12 +77,23 @@ static bool run_test_bandwidth(
         inputs,
         processor,
         num_bytes_per_send,
+        send_progress_counter,
         recv_l1_address,
         &send_program);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
+    wait_to_finish_eth_timeout(
+        fixture,
+        send_program,
+        recv_program,
+        send_mesh_device,
+        recv_mesh_device,
+        device_range,
+        send_core,
+        recv_core,
+        progress_counter,
+        transfer_count);
 
     bool pass = true;
     pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);

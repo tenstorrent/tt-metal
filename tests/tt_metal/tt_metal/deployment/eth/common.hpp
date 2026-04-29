@@ -31,6 +31,7 @@ static inline void prepare_sender(
     std::vector<uint32_t>& inputs,
     DataMovementProcessor processor,
     uint32_t num_bytes_per_send,
+    uint32_t progress_counter,
     uint32_t recv_l1_address,
     tt_metal::Program* send_program) {
     /* ==================== */
@@ -50,6 +51,7 @@ static inline void prepare_sender(
                 *send_delta_addr,
                 send_l1_address,
                 recv_l1_address,
+                progress_counter,
             },
     };
     eth_test_common::set_arch_specific_eth_config(send_eth_config);
@@ -72,6 +74,7 @@ static inline void prepare_receiver(
     uint32_t transfer_count,
     std::vector<uint32_t>& inputs,
     DataMovementProcessor processor,
+    uint32_t progress_counter,
     uint32_t* recv_l1_address,
     tt_metal::Program* recv_program) {
     /* ==================== */
@@ -88,6 +91,7 @@ static inline void prepare_receiver(
             {
                 transfer_size,
                 transfer_count,
+                progress_counter,
             },
     };
     eth_test_common::set_arch_specific_eth_config(recv_eth_config);
