@@ -504,6 +504,32 @@ class AttentionBlock:
                 )
             ]
         )
+        create_q_heads_nope_helper_cores = [
+            ttnn.CoreCoord(0, 5),
+            ttnn.CoreCoord(1, 5),
+            ttnn.CoreCoord(2, 5),
+            ttnn.CoreCoord(3, 5),
+            ttnn.CoreCoord(0, 6),
+            ttnn.CoreCoord(1, 6),
+            ttnn.CoreCoord(2, 6),
+            ttnn.CoreCoord(3, 6),
+        ]
+        create_q_heads_rope_helper_cores = [
+            ttnn.CoreCoord(11, 0),
+            ttnn.CoreCoord(11, 1),
+            ttnn.CoreCoord(11, 2),
+            ttnn.CoreCoord(11, 3),
+            ttnn.CoreCoord(11, 4),
+            ttnn.CoreCoord(11, 5),
+            ttnn.CoreCoord(11, 6),
+            ttnn.CoreCoord(11, 7),
+        ]
+        create_q_heads_nope_helper_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(core, core) for core in create_q_heads_nope_helper_cores]
+        )
+        create_q_heads_rope_helper_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(core, core) for core in create_q_heads_rope_helper_cores]
+        )
 
         # CreateQHeads parameters for 3-phase tilization layout
         COMBINED_HEAD_SIZE = 576  # 512 (QNOPE) + 64 (QROPE) elements per combined head
@@ -1258,6 +1284,8 @@ class AttentionBlock:
         # ========================================================================
         # Get NOC coordinates for all SDPA Input cores (4×2 grid, indexed by source row)
         sdpa_input_noc_coords = []
+        cqh_nope_helper_noc_coords = []
+        cqh_rope_helper_noc_coords = []
         for src_row in range(HEAD_GRID_ROWS):
             # Mapping: target_x = row % 4, target_y = 1 + row // 4
             target_x = SDPA_INPUT_GRID_START_X + (src_row % 4)
@@ -1265,6 +1293,14 @@ class AttentionBlock:
             sdpa_input_logical_core = ttnn.CoreCoord(target_x, target_y)
             sdpa_input_noc_core = device.worker_core_from_logical_core(sdpa_input_logical_core)
             sdpa_input_noc_coords.append((sdpa_input_noc_core.x, sdpa_input_noc_core.y))
+
+            nope_helper_logical_core = create_q_heads_nope_helper_cores[src_row]
+            nope_helper_noc_core = device.worker_core_from_logical_core(nope_helper_logical_core)
+            cqh_nope_helper_noc_coords.append((nope_helper_noc_core.x, nope_helper_noc_core.y))
+
+            rope_helper_logical_core = create_q_heads_rope_helper_cores[src_row]
+            rope_helper_noc_core = device.worker_core_from_logical_core(rope_helper_logical_core)
+            cqh_rope_helper_noc_coords.append((rope_helper_noc_core.x, rope_helper_noc_core.y))
 
         # Common unicast parameters
         head_stride_bytes = COMBINED_HEAD_SIZE * 2  # 576 * 2 = 1152 bytes (2 bytes per bfloat16 element)
@@ -1279,14 +1315,78 @@ class AttentionBlock:
         # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
         create_q_heads_ncrisc_named_compile_time_args = [
             # Packed coordinates (x | (y << 16)) for each source row's target
-            ("cqh_target_noc_coords_row0", (sdpa_input_noc_coords[0][1] << 16 | sdpa_input_noc_coords[0][0])),
-            ("cqh_target_noc_coords_row1", (sdpa_input_noc_coords[1][1] << 16 | sdpa_input_noc_coords[1][0])),
-            ("cqh_target_noc_coords_row2", (sdpa_input_noc_coords[2][1] << 16 | sdpa_input_noc_coords[2][0])),
-            ("cqh_target_noc_coords_row3", (sdpa_input_noc_coords[3][1] << 16 | sdpa_input_noc_coords[3][0])),
-            ("cqh_target_noc_coords_row4", (sdpa_input_noc_coords[4][1] << 16 | sdpa_input_noc_coords[4][0])),
-            ("cqh_target_noc_coords_row5", (sdpa_input_noc_coords[5][1] << 16 | sdpa_input_noc_coords[5][0])),
-            ("cqh_target_noc_coords_row6", (sdpa_input_noc_coords[6][1] << 16 | sdpa_input_noc_coords[6][0])),
-            ("cqh_target_noc_coords_row7", (sdpa_input_noc_coords[7][1] << 16 | sdpa_input_noc_coords[7][0])),
+            ("cqh_original_noc_coords_row0", (sdpa_input_noc_coords[0][1] << 16 | sdpa_input_noc_coords[0][0])),
+            ("cqh_original_noc_coords_row1", (sdpa_input_noc_coords[1][1] << 16 | sdpa_input_noc_coords[1][0])),
+            ("cqh_original_noc_coords_row2", (sdpa_input_noc_coords[2][1] << 16 | sdpa_input_noc_coords[2][0])),
+            ("cqh_original_noc_coords_row3", (sdpa_input_noc_coords[3][1] << 16 | sdpa_input_noc_coords[3][0])),
+            ("cqh_original_noc_coords_row4", (sdpa_input_noc_coords[4][1] << 16 | sdpa_input_noc_coords[4][0])),
+            ("cqh_original_noc_coords_row5", (sdpa_input_noc_coords[5][1] << 16 | sdpa_input_noc_coords[5][0])),
+            ("cqh_original_noc_coords_row6", (sdpa_input_noc_coords[6][1] << 16 | sdpa_input_noc_coords[6][0])),
+            ("cqh_original_noc_coords_row7", (sdpa_input_noc_coords[7][1] << 16 | sdpa_input_noc_coords[7][0])),
+            (
+                "cqh_nope_helper_noc_coords_row0",
+                (cqh_nope_helper_noc_coords[0][1] << 16 | cqh_nope_helper_noc_coords[0][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row1",
+                (cqh_nope_helper_noc_coords[1][1] << 16 | cqh_nope_helper_noc_coords[1][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row2",
+                (cqh_nope_helper_noc_coords[2][1] << 16 | cqh_nope_helper_noc_coords[2][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row3",
+                (cqh_nope_helper_noc_coords[3][1] << 16 | cqh_nope_helper_noc_coords[3][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row4",
+                (cqh_nope_helper_noc_coords[4][1] << 16 | cqh_nope_helper_noc_coords[4][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row5",
+                (cqh_nope_helper_noc_coords[5][1] << 16 | cqh_nope_helper_noc_coords[5][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row6",
+                (cqh_nope_helper_noc_coords[6][1] << 16 | cqh_nope_helper_noc_coords[6][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row7",
+                (cqh_nope_helper_noc_coords[7][1] << 16 | cqh_nope_helper_noc_coords[7][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row0",
+                (cqh_rope_helper_noc_coords[0][1] << 16 | cqh_rope_helper_noc_coords[0][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row1",
+                (cqh_rope_helper_noc_coords[1][1] << 16 | cqh_rope_helper_noc_coords[1][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row2",
+                (cqh_rope_helper_noc_coords[2][1] << 16 | cqh_rope_helper_noc_coords[2][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row3",
+                (cqh_rope_helper_noc_coords[3][1] << 16 | cqh_rope_helper_noc_coords[3][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row4",
+                (cqh_rope_helper_noc_coords[4][1] << 16 | cqh_rope_helper_noc_coords[4][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row5",
+                (cqh_rope_helper_noc_coords[5][1] << 16 | cqh_rope_helper_noc_coords[5][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row6",
+                (cqh_rope_helper_noc_coords[6][1] << 16 | cqh_rope_helper_noc_coords[6][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row7",
+                (cqh_rope_helper_noc_coords[7][1] << 16 | cqh_rope_helper_noc_coords[7][0]),
+            ),
             ("cqh_head_stride_bytes", head_stride_bytes),
             ("cqh_qnope_data_size_bytes", qnope_data_size_bytes),
             ("cqh_qrope_head_size_bytes", qrope_head_size_bytes),
@@ -1299,6 +1399,9 @@ class AttentionBlock:
             ("cqh_qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
             ("cqh_qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
             ("cqh_qnope_cols", QNOPE_COLS),
+            ("cqh_receiver_grid_start_x", SDPA_INPUT_GRID_START_X),
+            ("cqh_receiver_grid_start_y", SDPA_INPUT_GRID_START_Y),
+            ("cqh_receiver_cols", SDPA_INPUT_GRID_END_X - SDPA_INPUT_GRID_START_X + 1),
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB for row-major data
             # Receiver args (also on NCRISC, for sdpa input cores)
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
@@ -3183,6 +3286,18 @@ class AttentionBlock:
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_sdpa_input_core",
                 core_range=sdpa_input_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_cqh_nope_helper_core",
+                core_range=create_q_heads_nope_helper_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_cqh_rope_helper_core",
+                core_range=create_q_heads_rope_helper_grid,
                 value=1,
                 other_value=0,
             ),
