@@ -824,9 +824,12 @@ void bind_binary_composite_with_rtol_atol(
 
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
-            When one or both input tensors are INT32, each INT32 input is individually promoted
-            to FLOAT32 for the comparison, and the NaN sentinel replacement is skipped for that
-            input (integer dtypes have no NaN representation).
+            When either input is INT32, **both** inputs are promoted to FLOAT32 internally
+            before the comparison. This ensures downstream binary ops see matching dtypes
+            and lets the ``rtol``/``atol`` check run in fractional arithmetic. As a result,
+            mixed-dtype calls (e.g., INT32 with BFLOAT16) are supported. ``equal_nan``
+            handling only takes effect for inputs that are originally floating point, since
+            integer dtypes have no NaN representation.
 
             Note: INT32 values with magnitude greater than 2^24 (16,777,216) may lose precision
             during the internal FLOAT32 promotion.

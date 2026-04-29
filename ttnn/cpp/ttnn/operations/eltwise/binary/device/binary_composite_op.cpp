@@ -53,32 +53,51 @@ Tensor isclose(
     float atol,
     bool equal_nan,
     const std::optional<MemoryConfig>& output_mem_config) {
-    // Integer dtypes have no NaN representation, and the underlying SFPU ops
-    // only accept floating-point formats, so promote each INT32 input to
-    // FLOAT32 individually before running the arithmetic.
+    // `rtol` and `atol` are float-valued tolerances and |a-b| <= atol + rtol*|b|
+    // requires fractional arithmetic, so any INT32 input must be promoted to
+    // FLOAT32. Both inputs are promoted whenever either is INT32 so that the
+    // downstream binary ops (subtract / multiply / le) see matching dtypes.
+    // Note: INT32 magnitudes greater than 2^24 may lose precision in FLOAT32.
     const bool a_is_int = input_a.dtype() == DataType::INT32;
     const bool b_is_int = input_b.dtype() == DataType::INT32;
+    const bool any_int = a_is_int || b_is_int;
 
-    Tensor value1 = a_is_int ? typecast(input_a, DataType::FLOAT32, output_mem_config) : input_a;
-    Tensor value2 = b_is_int ? typecast(input_b, DataType::FLOAT32, output_mem_config) : input_b;
+    Tensor value1 = any_int ? typecast(input_a, DataType::FLOAT32, output_mem_config) : input_a;
+    Tensor value2 = any_int ? typecast(input_b, DataType::FLOAT32, output_mem_config) : input_b;
 
-    // For each floating-point input with equal_nan=false, replace NaN with a
-    // sentinel so that NaN never compares as close to anything (incl. itself).
-    if (!equal_nan) {
-        if (!a_is_int) {
-            value1 = ttnn::where(ttnn::isnan(value1, output_mem_config), 1.0f, value1);
+    Tensor abs_diff = ttnn::abs(ttnn::subtract(value1, value2, std::nullopt, output_mem_config), output_mem_config);
+    Tensor tol = ttnn::add(
+        ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config),
+        atol,
+        std::nullopt,
+        output_mem_config);
+    Tensor result = ttnn::where(ttnn::le(abs_diff, tol, std::nullopt, output_mem_config), 1.f, 0.f);
+    abs_diff.deallocate();
+    tol.deallocate();
+
+    // Match torch.isclose NaN semantics. The underlying float arithmetic on
+    // device doesn't reliably propagate NaN into a `0` result, so we apply the
+    // fix-up explicitly:
+    //   1. Force result=0 wherever EITHER input is NaN.
+    //   2. If equal_nan=true, then force result=1 wherever BOTH inputs are NaN.
+    // INT32 inputs (already promoted to FLOAT32) cannot contain NaN, so this
+    // is skipped entirely when both inputs were originally INT32.
+    if (!a_is_int || !b_is_int) {
+        Tensor a_nan = ttnn::isnan(value1, output_mem_config);
+        Tensor b_nan = ttnn::isnan(value2, output_mem_config);
+
+        Tensor any_nan = ttnn::logical_or(a_nan, b_nan, std::nullopt, output_mem_config);
+        result = ttnn::where(any_nan, 0.f, result);
+        any_nan.deallocate();
+
+        if (equal_nan) {
+            Tensor both_nan = ttnn::logical_and(a_nan, b_nan, std::nullopt, output_mem_config);
+            result = ttnn::where(both_nan, 1.f, result);
+            both_nan.deallocate();
         }
-        if (!b_is_int) {
-            value2 = ttnn::where(ttnn::isnan(value2, output_mem_config), 0.0f, value2);
-        }
+        a_nan.deallocate();
+        b_nan.deallocate();
     }
-    Tensor is_close_lhs = ttnn::abs(ttnn::subtract(value1, value2, std::nullopt, output_mem_config), output_mem_config);
-    Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
-    Tensor is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
-    mul_result.deallocate();
-    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.f, 0.f);
-    is_close_lhs.deallocate();
-    is_close_rhs.deallocate();
     return result;
 }
 
