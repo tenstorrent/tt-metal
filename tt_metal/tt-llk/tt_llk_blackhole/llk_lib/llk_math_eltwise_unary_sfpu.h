@@ -42,6 +42,16 @@ inline void eltwise_unary_sfpu_configure_addrmod()
             .set(ADDR_MOD_6);
     }
 
+    if constexpr (sfpu_op == SfpuType::topk_xl_local_sort)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 16},
+        }
+            .set(ADDR_MOD_5);
+    }
+
     if constexpr (
         sfpu_op == SfpuType::reciprocal || sfpu_op == SfpuType::typecast || sfpu_op == SfpuType::unary_max || sfpu_op == SfpuType::unary_min ||
         sfpu_op == SfpuType::unary_max_int32 || sfpu_op == SfpuType::unary_min_int32 || sfpu_op == SfpuType::unary_max_uint32 ||

@@ -38,7 +38,7 @@ inline void load16_rows_x2()
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 12);
 }
 
-template <int group_2_offset = 16, bool inc_dst_addr_32 = false>
+template <int group_2_offset = 16, int inc_dst_addr = 0>
 inline void store16_rows_x2()
 {
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
@@ -48,13 +48,21 @@ inline void store16_rows_x2()
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 8);
-    if constexpr (inc_dst_addr_32)
+    if constexpr (inc_dst_addr == 32)
     {
         TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_6, group_2_offset + 12);
     }
-    else
+    else if constexpr (inc_dst_addr == 16)
+    {
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_5, group_2_offset + 12);
+    }
+    else if constexpr (inc_dst_addr == 0)
     {
         TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 12);
+    }
+    else
+    {
+        static_assert(false, "Invalid inc_dst_addr, must be 0, 16, or 32");
     }
 }
 
@@ -447,7 +455,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
             bitonic_sort_len_8(ascending);
             bitonic_sort_len_16();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             dir = !dir;
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -460,12 +468,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, true>();
+            store16_rows_x2<32, 32>();
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             dir = !dir;
@@ -475,10 +481,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             dir = !dir;
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -491,9 +497,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<64>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<64, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<64, 16>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         // each loop processes 64 / 128 rows
@@ -501,12 +505,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, true>();
+            store16_rows_x2<32, 32>();
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
         }
@@ -515,10 +517,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -539,9 +541,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     {
         load16_rows_x2<2>();
         bitonic_sort_len_k(dir);
-        store16_rows_x2<2, false>();
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        store16_rows_x2<2, 16>();
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // even/odd columns
@@ -552,9 +552,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<64>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<64, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<64, 16>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         // each loop processes 64 / 128 rows
@@ -562,12 +560,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, true>();
+            store16_rows_x2<32, 32>();
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
         }
@@ -576,10 +572,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -601,9 +597,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         load16_rows_x2<2>();
         TTI_SFPTRANSP(0, 0, 0, 0);
         bitonic_sort_len_4(dir);
-        store16_rows_x2<2, false>();
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        store16_rows_x2<2, 16>();
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // transpose DST faces back
@@ -618,9 +612,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<64>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<64, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<64, 16>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         // each loop processes 64 / 128 rows
@@ -628,12 +620,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, true>();
+            store16_rows_x2<32, 32>();
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
         }
@@ -642,10 +632,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -664,9 +654,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     {
         load16_rows_x2<2>();
         bitonic_sort_len_8(dir);
-        store16_rows_x2<2, false>();
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        store16_rows_x2<2, 16>();
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // transpose DST faces back
@@ -681,9 +669,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<64>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<64, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<64, 16>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         // each loop processes 64 / 128 rows
@@ -691,12 +677,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, true>();
+            store16_rows_x2<32, 32>();
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
         }
@@ -705,10 +689,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -727,9 +711,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     {
         load16_rows_x2<2>();
         bitonic_sort_len_16_alt(dir);
-        store16_rows_x2<2, false>();
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        store16_rows_x2<2, 16>();
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // transpose DST faces back
@@ -741,9 +723,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<64>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<64, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<64, 16>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         // each loop processes 64 / 128 rows
@@ -751,12 +731,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, true>();
+            store16_rows_x2<32, 32>();
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
         }
@@ -765,10 +743,10 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         {
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -800,9 +778,7 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
         {
             load16_rows_x2<distance>();
             bitonic_sort_len_k(ascending);
-            store16_rows_x2<distance, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<distance, 16>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -836,9 +812,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
     {
         load16_rows_x2<2>();
         bitonic_sort_len_16_alt(dir);
-        store16_rows_x2<2, false>();
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-        TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+        store16_rows_x2<2, 16>();
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // transpose DST faces back
@@ -850,9 +824,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         {
             load16_rows_x2<64>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<64, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<64, 16>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         // each loop processes 64 / 128 rows
@@ -860,12 +832,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         {
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, false>();
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
-            TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
+            store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
-            store16_rows_x2<32, true>();
+            store16_rows_x2<32, 32>();
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
             TTI_INCRWC(0, 8, 0, 0); // increment dst address by 8
         }
@@ -874,10 +844,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         {
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
             load16_rows_x2<consecutive_32_offset>();
             bitonic_sort_len_32(dir);
-            store16_rows_x2<consecutive_32_offset, true>();
+            store16_rows_x2<consecutive_32_offset, 32>();
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
