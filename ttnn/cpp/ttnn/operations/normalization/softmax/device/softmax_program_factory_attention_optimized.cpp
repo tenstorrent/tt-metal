@@ -373,9 +373,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
         });
     }
 
-    uint32_t src_addr = src0_buffer->address();
     uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer()->address() : 0;
-    uint32_t out_addr = out0_buffer->address();
 
     uint32_t curr_row = 0;
     uint32_t scale_value =
@@ -384,15 +382,13 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             if (attributes.is_causal_mask) {
-                reader_desc.runtime_args.emplace_back(
-                    core, KernelDescriptor::CoreRuntimeArgs{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+                reader_desc.emplace_runtime_args(core, {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u});
             } else {
-                reader_desc.runtime_args.emplace_back(
-                    core, KernelDescriptor::CoreRuntimeArgs{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+                reader_desc.emplace_runtime_args(core, {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u});
             }
 
-            softmax_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{0, 0, 0, 0, 0, 0, 0});
-            writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{0, 0, 0, 0, 0, 0});
+            softmax_desc.emplace_runtime_args(core, {0u, 0u, 0u, 0u, 0u, 0u, 0u});
+            writer_desc.emplace_runtime_args(core, {0u, 0u, 0u, 0u, 0u, 0u});
             continue;
         }
         uint32_t num_tile_rows_per_core = 0;
@@ -412,11 +408,14 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
                                ? ((mask_curr_ht * Wt) + mask_offset)
                                : (curr_row / Ht * Wt);  // causal mask start offset + causal mask batch offset
 
+        // NOTE: do not pass Buffer* here. scale_value and mask_addr depend on
+        // operation_attributes (scale + optional mask tensor); BufferBinding's
+        // fast cache-hit path skips create_descriptor() and would leave them stale.
         if (attributes.is_causal_mask) {
             reader_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
-                    src_addr,
+                    src0_buffer->address(),
                     block_size,
                     scale_value,
                     num_tile_rows_per_core,
@@ -433,7 +432,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
             reader_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
-                    src_addr,
+                    src0_buffer->address(),
                     block_size,
                     scale_value,
                     num_tile_rows_per_core,
@@ -446,21 +445,17 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
                     in0_t});
         }
 
-        softmax_desc.runtime_args.emplace_back(
+        softmax_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                num_tile_rows_per_core,
-                Ht,
-                Wt,
-                block_size,
-                curr_ht,
-                static_cast<uint32_t>(mask_padded_data),
-                cb_length});
+            {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, static_cast<uint32_t>(mask_padded_data), cb_length});
 
+        // NOTE: do not pass Buffer* here. mask_padded_data and num_datum_padded
+        // depend on attribute state; BufferBinding fast cache-hit path skips
+        // create_descriptor() and would leave them stale.
         writer_desc.runtime_args.emplace_back(
             core,
             KernelDescriptor::CoreRuntimeArgs{
-                out_addr,
+                out0_buffer->address(),
                 num_tile_rows_per_core * Wt,
                 tile_offset,
                 block_size,

@@ -1045,15 +1045,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
                 reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(mcast_sender_args));
             } else {  // mcast receiver
-                std::vector<uint32_t> mcast_receiver_args = {
-                    in0_dram_addr,
-                    out_dram_addr,
-                    in0_start_id,
-                    out_tile_start_id,
-                    Wt,
-                    static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
-                    static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)};
-                reader_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(mcast_receiver_args));
+                reader_mcast_receiver_desc.emplace_runtime_args(
+                    core,
+                    {a.buffer(),
+                     output.buffer(),
+                     in0_start_id,
+                     out_tile_start_id,
+                     Wt,
+                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
+                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)});
             }
         }
     }

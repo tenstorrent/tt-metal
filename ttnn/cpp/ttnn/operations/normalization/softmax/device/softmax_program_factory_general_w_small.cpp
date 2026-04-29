@@ -238,6 +238,9 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryGen
             mask_w = tile_width;
         }
 
+        // NOTE: do not pass Buffer* here. scaler is attribute-derived (changes between
+        // calls) and BufferBinding's fast cache-hit path skips create_descriptor(),
+        // leaving scaler stale.
         reader_desc.runtime_args.emplace_back(
             core,
             KernelDescriptor::CoreRuntimeArgs{

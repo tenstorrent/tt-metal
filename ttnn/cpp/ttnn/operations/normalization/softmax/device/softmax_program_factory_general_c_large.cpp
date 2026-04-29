@@ -203,20 +203,11 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryGen
             TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size});
+        reader_desc.emplace_runtime_args(
+            core, {input.buffer(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size});
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output_tensor.buffer()->address(),
-                num_tiles_per_core,
-                tile_offset,
-                outer_stride,
-                inner_size,
-                dim_size});
+        writer_desc.emplace_runtime_args(
+            core, {output_tensor.buffer(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size});
 
         tile_offset += num_tiles_per_core;
     }
