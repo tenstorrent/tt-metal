@@ -109,7 +109,13 @@ struct MatmulExpertCompressedDRAM {
         uint32_t num_subblocks_k_local_,
         // Dedicated global sem for K-reduction (passed as address). PACK on the reducer
         // polls it; NCRISC on senders increments. Separate from pipeline_sem (ring protocol).
-        uint32_t partial_sem_addr_>
+        uint32_t partial_sem_addr_,
+        // When 0, the kernel skips ``cb_wait_front(cb_index)`` and the L1 ``index_ptr``
+        // read entirely; ``raw_idx = exp_i`` is synthesized in-loop. Used by the dense-MLP
+        // TP8 path (``enable_routing=false``) where each device runs all chunks 0..N-1
+        // sequentially with no gate-routed indices. ``enable_routing=true`` (MoE) leaves
+        // it at the default and reads ``index_ptr[exp_i + index_offset]`` from L1 as before.
+        uint32_t enable_indexing_ = 1>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -158,6 +164,7 @@ struct MatmulExpertCompressedDRAM {
         // Only meaningful inside `if constexpr (inner_dim_reduction)` scope.
         static constexpr bool is_sender = !is_reducer;
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
+        static constexpr bool enable_indexing = enable_indexing_ != 0;
     };
 
     template <
@@ -192,7 +199,9 @@ struct MatmulExpertCompressedDRAM {
         // the post-reduction silu fast-path (tile shape = [silu_tile_h, tile_w]).
         // silu_tile_h is pre-padded by op.py to a valid face_r_dim ∈ {2,4,8,16}.
         uint32_t cb_out_silu_,
-        uint32_t silu_tile_h_>
+        uint32_t silu_tile_h_,
+        // Compute-side mirror of ``ReaderCTArgs::enable_indexing``. See doc there.
+        uint32_t enable_indexing_ = 1>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -230,6 +239,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
         static constexpr uint32_t cb_out_silu = cb_out_silu_;
         static constexpr uint32_t silu_tile_h = silu_tile_h_;
+        static constexpr bool enable_indexing = enable_indexing_ != 0;
     };
 
     struct WriterCTArgs {};
@@ -322,10 +332,19 @@ struct MatmulExpertCompressedDRAM {
             // Wait for the index mcast to land in L1 before reading.
             // Without this, NCRISC races ahead of the index mcast and reads stale
             // values (e.g. expert_idx=0), fetching the wrong expert's weights.
-            cb_wait_front(CTArgs::cb_index, 1);
+            // Skipped when ``enable_indexing=false`` — there is no mcast and
+            // ``raw_idx`` is synthesized from ``exp_i`` directly (dense-MLP TP8 path).
+            if constexpr (CTArgs::enable_indexing) {
+                cb_wait_front(CTArgs::cb_index, 1);
+            }
 
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                uint32_t raw_idx;
+                if constexpr (CTArgs::enable_indexing) {
+                    raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                } else {
+                    raw_idx = exp_i;  // sequential 0..N-1 (no SRAM bit, no L1 read)
+                }
                 if (is_sram_expert(raw_idx)) {
                     continue;  // bit15=1 → SRAM expert, skip
                 }
@@ -535,38 +554,53 @@ struct MatmulExpertCompressedDRAM {
             UNPACK(({ in0_cb_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
             UNPACK(({ in0_base = in0_cb_base + act_k_slice_byte_offset; }));
 
-            cb_wait_front(CTArgs::cb_index, 1);
+            // ``cb_wait_front(cb_index, 1)`` only matters when the kernel is going to
+            // dereference ``index_ptr``; the dense-MLP path (``enable_indexing=false``)
+            // synthesizes ``raw_idx = exp_i`` and never reads L1, so skip the wait.
+            if constexpr (CTArgs::enable_indexing) {
+                cb_wait_front(CTArgs::cb_index, 1);
+            }
 
             if constexpr (CTArgs::accum_experts) {
                 uint32_t num_dram_experts = 0;
-                for (uint32_t i = 0; i < num_active_experts; i++) {
-                    // cb_wait_front on TRISC is UNPACK-only; MATH/PACK never waited
-                    // for the mcast to land. Forward the value via mailbox so
-                    // MATH/PACK never read L1 directly.
-                    uint32_t raw_idx_i = 0;
-                    UNPACK(({
-                        raw_idx_i = static_cast<uint32_t>(index_ptr[i + CTArgs::index_offset]);
-                        mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx_i);
-                        mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx_i);
-                    }));
-                    MATH(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-                    PACK(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-                    if (!(is_sram_expert(raw_idx_i))) {
-                        num_dram_experts++;
+                if constexpr (CTArgs::enable_indexing) {
+                    for (uint32_t i = 0; i < num_active_experts; i++) {
+                        // cb_wait_front on TRISC is UNPACK-only; MATH/PACK never waited
+                        // for the mcast to land. Forward the value via mailbox so
+                        // MATH/PACK never read L1 directly.
+                        uint32_t raw_idx_i = 0;
+                        UNPACK(({
+                            raw_idx_i = static_cast<uint32_t>(index_ptr[i + CTArgs::index_offset]);
+                            mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx_i);
+                            mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx_i);
+                        }));
+                        MATH(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                        PACK(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                        if (!(is_sram_expert(raw_idx_i))) {
+                            num_dram_experts++;
+                        }
                     }
+                } else {
+                    // Sequential indices 0..N-1 are all DRAM (bit 15 clear) — no L1
+                    // read or mailbox forwarding needed.
+                    num_dram_experts = num_active_experts;
                 }
 
                 uint32_t fmt_slot = 0;
                 uint32_t dram_idx = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = 0;
-                    UNPACK(({
-                        raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                        mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
-                        mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
-                    }));
-                    MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-                    PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    if constexpr (CTArgs::enable_indexing) {
+                        UNPACK(({
+                            raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                            mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
+                            mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
+                        }));
+                        MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                        PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    } else {
+                        raw_idx = exp_i;  // synthesized; identical on UNPACK/MATH/PACK
+                    }
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
@@ -663,13 +697,17 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t dst_base = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = 0;
-                    UNPACK(({
-                        raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                        mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
-                        mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
-                    }));
-                    MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-                    PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    if constexpr (CTArgs::enable_indexing) {
+                        UNPACK(({
+                            raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                            mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
+                            mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
+                        }));
+                        MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                        PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    } else {
+                        raw_idx = exp_i;
+                    }
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
@@ -815,13 +853,17 @@ struct MatmulExpertCompressedDRAM {
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = 0;
-                    UNPACK(({
-                        raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                        mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
-                        mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
-                    }));
-                    MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-                    PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    if constexpr (CTArgs::enable_indexing) {
+                        UNPACK(({
+                            raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                            mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
+                            mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
+                        }));
+                        MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                        PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    } else {
+                        raw_idx = exp_i;
+                    }
 
                     if (is_sram_expert(raw_idx)) {
                         continue;
@@ -929,7 +971,9 @@ struct MatmulExpertCompressedDRAM {
                     cb_pop_front(CTArgs::cb_in0, num_tiles_k);
                 }
             }
-            if constexpr (pop_index) {
+            // Pair with the cb_wait_front(cb_index) at the top of compute — both gated
+            // on enable_indexing. With enable_indexing=false there's nothing to pop.
+            if constexpr (pop_index && CTArgs::enable_indexing) {
                 cb_pop_front(CTArgs::cb_index, 1);
             }
 #endif

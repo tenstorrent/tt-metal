@@ -614,13 +614,13 @@ def create_decoder_block_tensors(
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
-    # Routed weight tensors differ between MoE (list) and dense (single tensor).
-    # CompressedTensor lists are passed through as a list so MoeOp dispatches to
-    # setup_matmul_expert_dram (compressed_tp8 path); legacy uniform-bfp4_b lists
-    # of ttnn.Tensor still take [0] for the merged-DRAM-bank single-tensor path.
+    # Both dense and MoE routed weights are TP8 CompressedTensor lists — pass through
+    # so MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. The single-tensor
+    # ``setup_dram_matmul`` path is no longer supported by the kernel after the TP8
+    # changes; it raises in op.py if hit. The ``t[0]`` branch only fires for legacy
+    # MoE test paths that still pass ``compressed_tp8=False`` (and never reach the
+    # kernel build).
     def _routed_select(t):
-        if not is_moe:
-            return t
         if isinstance(t, list) and len(t) > 0 and isinstance(t[0], CompressedTensor):
             return t
         return t[0]

@@ -416,25 +416,6 @@ def moe_routed_expert_bspm_tp8_torch_for_cache(
     return stacked.contiguous(), np.ascontiguousarray(stacked_assignment)
 
 
-def mlp_routed_dense_stacked_torch_for_cache(
-    experts: torch.Tensor, num_banks: int, mesh_shape: tuple[int, int]
-) -> torch.Tensor:
-    """Stacked torch before ``from_torch`` in dense MLP routed ``upload`` (all experts on mesh)."""
-    tile_w = 32
-    mesh_rows, mesh_cols = mesh_shape
-    n_exp, K, N = experts.shape
-    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-    processed = []
-    for i in range(n_exp):
-        w = experts[i]
-        if N_padded != N:
-            w = torch.nn.functional.pad(w, (0, N_padded - N))
-        w_shuffled = shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
-        processed.append(w_shuffled.reshape(K, N_padded))
-    stacked = torch.stack(processed).reshape(mesh_rows, mesh_cols, K, N_padded)
-    return stacked.contiguous()
-
-
 def preprocess_gate_up(
     gate: torch.Tensor,
     up: torch.Tensor,
