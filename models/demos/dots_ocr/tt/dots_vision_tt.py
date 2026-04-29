@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
-import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -1153,15 +1152,18 @@ class DotsVisionTransformerTT(LightweightModule):
     def _cu_seqlens_ttnn_from_grid(self, grid_thw: torch.Tensor) -> ttnn.Tensor:
         g = grid_thw.unsqueeze(0) if grid_thw.dim() == 1 else grid_thw
         cu = torch.repeat_interleave(g[:, 1] * g[:, 2], g[:, 0], dim=0).cumsum(0, dtype=torch.int32)
-        cu = F.pad(cu, (1, 0), value=0)
-        return ttnn.from_torch(
+        # Prepends a leading 0 (same as ``F.pad(cu, (1, 0), value=0)`` on the host): pad last dim before.
+        cu_tt = ttnn.from_torch(
             cu.reshape(1, 1, 1, -1).to(torch.int32),
             dtype=ttnn.int32,
-            device=self.mesh,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
+        out = ttnn.pad(cu_tt, padding=((0, 0), (0, 0), (0, 0), (1, 0)), value=0)
+        ttnn.deallocate(cu_tt)
+        return out
 
     def _get_pos_ids_by_grid_ttnn(self, grid_thw_list: list[tuple[int, int, int]]) -> tuple[list[int], list[int]]:
         h_all: list[int] = []
