@@ -16,6 +16,9 @@ from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
 from models.demos.deepseek_v3_b1.model import DecodeResult, TokenType
 
 RUN_INFERENCE_TRACE_ENV = "DEEPSEEK_V3_B1_RUN_INFERENCE_TRACE"
+DEFAULT_RUN_INFERENCE_TRACE = (
+    Path(__file__).parent / "reference_data" / "reference_trace_spec_decode_5_tokens.json"
+)
 
 TOKEN_TYPE_BY_NAME = {
     "BASE": TokenType.BASE,
@@ -153,12 +156,13 @@ def _make_trace_backed_pipeline(trace: dict) -> tuple[ModelPipeline, _TraceBacke
 @pytest.fixture
 def run_inference_trace_path() -> Path:
     raw_path = os.getenv(RUN_INFERENCE_TRACE_ENV)
-    if raw_path is None or not raw_path.strip():
-        pytest.skip(f"Set {RUN_INFERENCE_TRACE_ENV}=/path/to/reference_trace.json to run this host-side replay test")
+    if raw_path and raw_path.strip():
+        trace_path = Path(raw_path.strip()).expanduser().resolve()
+    else:
+        trace_path = DEFAULT_RUN_INFERENCE_TRACE
 
-    trace_path = Path(raw_path.strip()).expanduser().resolve()
     if not trace_path.is_file():
-        pytest.fail(f"{RUN_INFERENCE_TRACE_ENV} does not point to a file: {trace_path}")
+        pytest.fail(f"run_inference trace does not point to a file: {trace_path}")
     return trace_path
 
 

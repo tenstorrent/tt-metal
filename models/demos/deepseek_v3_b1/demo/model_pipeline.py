@@ -304,11 +304,9 @@ class ModelPipeline:
             self.model.read_result()
             num_reads += 1
 
-        accepted_spec_tokens = base_accept
-        rejected_spec_tokens = base_reject
         self.last_inference_stats = {
-            "num_accepts": accepted_spec_tokens,
-            "num_rejects": rejected_spec_tokens,
+            "num_accepts": base_accept,
+            "num_rejects": base_reject,
         }
 
         end_time = time.time()
