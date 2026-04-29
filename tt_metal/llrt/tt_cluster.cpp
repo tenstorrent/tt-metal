@@ -576,6 +576,15 @@ ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) c
     return 0;
 }
 
+std::optional<ChipId> Cluster::try_get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const {
+    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
+        if (coord == eth_coord) {
+            return physical_chip_id;
+        }
+    }
+    return std::nullopt;
+}
+
 size_t Cluster::number_of_user_devices() const {
     if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
         const auto& chips = this->driver_->get_target_device_ids();

@@ -116,6 +116,10 @@ public:
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
+    // FIX PH (#42429): non-fatal variant — returns nullopt when the EthCoord is absent
+    // from chip_locations (e.g. YAML hardcoded coords don't match this hardware mapping).
+    std::optional<ChipId> try_get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
+
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor& get_soc_desc(ChipId chip) const;

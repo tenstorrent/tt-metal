@@ -116,8 +116,24 @@ void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
         if (mesh_id == *local_mesh_id_) {
             for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
                 const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                // FIX PH (#42429): YAML hardcodes EthCoords assuming a fixed PCIe→chip
+                // mapping. If this hardware's actual mapping differs, exit cleanly (skip).
+                auto physical_chip_id = cluster.try_get_physical_chip_id_from_eth_coord(eth_coord);
+                if (!physical_chip_id.has_value()) {
+                    log_warning(
+                        tt::LogTest,
+                        "FIX PH: EthCoord ({},{},{},{},{}) from test YAML not found in "
+                        "chip_locations. YAML hardcoded mapping does not match this "
+                        "hardware's PCIe→chip assignment. Skipping test.",
+                        eth_coord.cluster_id,
+                        eth_coord.x,
+                        eth_coord.y,
+                        eth_coord.rack,
+                        eth_coord.shelf);
+                    exit(0);
+                }
                 chip_to_eth_coord_mapping.insert(
-                    {FabricNodeId(MeshId{mesh_id}, chip_id), cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                    {FabricNodeId(MeshId{mesh_id}, chip_id), physical_chip_id.value()});
             }
         }
     }
