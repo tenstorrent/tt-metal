@@ -165,7 +165,8 @@
 - name: runtime_fd2
   cmd: |
     ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher
-    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher --gtest_filter='-*SlowDispatch*'
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher --gtest_filter='*SlowDispatch*'
   skus:
     wh_n150_civ2:
       timeout: 5
