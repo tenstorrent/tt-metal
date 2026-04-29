@@ -22,8 +22,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 # Fabric packet payload limits (conservative round values below hardware maximums).
-MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
-MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
+MAX_PAYLOAD_SIZE_BH = 2 * 1024  # Blackhole hardware max ~15232 B
+MAX_PAYLOAD_SIZE_WH = 2 * 1024  # Wormhole hardware max ~7616 B
 
 
 def get_max_payload_size() -> int:
