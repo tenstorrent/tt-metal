@@ -32,7 +32,7 @@ from models.tt_dit.pipelines.qwenimage.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils import cache
 from models.tt_dit.utils.mesh import reshape_device
-from models.tt_dit.utils.tensor import from_torch_to_devices
+from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices, rope_double_last_dim_device
 from models.tt_dit.utils.tracing import Tracer
 
 if TYPE_CHECKING:
@@ -458,21 +458,36 @@ class QwenImagePipeline(PipelineAPIMixin):
         txt_seq_lens = [prompt_sequence_length] * transformer_batch_size
         torch_latents_rope, torch_prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
 
-        torch_latents_rope_cos = torch_latents_rope.real.repeat_interleave(2, dim=-1)
-        torch_latents_rope_sin = torch_latents_rope.imag.repeat_interleave(2, dim=-1)
-        torch_prompt_rope_cos = torch_prompt_rope.real.repeat_interleave(2, dim=-1)
-        torch_prompt_rope_sin = torch_prompt_rope.imag.repeat_interleave(2, dim=-1)
+        # Upload half-dim cos/sin tensors; the per-axis repeat_interleave doubling
+        # happens on device via rope_double_last_dim_device to save host compute
+        # and halve the upload bandwidth.
+        torch_latents_rope_cos_half = torch_latents_rope.real
+        torch_latents_rope_sin_half = torch_latents_rope.imag
+        torch_prompt_rope_cos_half = torch_prompt_rope.real
+        torch_prompt_rope_sin_half = torch_prompt_rope.imag
 
         context = distribute_cfg(torch_context, devices=self._submesh_devices)
         latents = self._random_latents(batch_size=transformer_batch_size, seed=seed)
-        latents_rope_cos = from_torch_to_devices(
-            torch_latents_rope_cos, devices=self._submesh_devices, mesh_axes=[sp_axis, None]
-        )
-        latents_rope_sin = from_torch_to_devices(
-            torch_latents_rope_sin, devices=self._submesh_devices, mesh_axes=[sp_axis, None]
-        )
-        prompt_rope_cos = from_torch_to_devices(torch_prompt_rope_cos, devices=self._submesh_devices)
-        prompt_rope_sin = from_torch_to_devices(torch_prompt_rope_sin, devices=self._submesh_devices)
+        latents_rope_cos = [
+            rope_double_last_dim_device(
+                from_torch(torch_latents_rope_cos_half, device=d, mesh_axes=[sp_axis, None], on_host=False)
+            )
+            for d in self._submesh_devices
+        ]
+        latents_rope_sin = [
+            rope_double_last_dim_device(
+                from_torch(torch_latents_rope_sin_half, device=d, mesh_axes=[sp_axis, None], on_host=False)
+            )
+            for d in self._submesh_devices
+        ]
+        prompt_rope_cos = [
+            rope_double_last_dim_device(from_torch(torch_prompt_rope_cos_half, device=d, on_host=False))
+            for d in self._submesh_devices
+        ]
+        prompt_rope_sin = [
+            rope_double_last_dim_device(from_torch(torch_prompt_rope_sin_half, device=d, on_host=False))
+            for d in self._submesh_devices
+        ]
 
         logger.info("denoising...")
 

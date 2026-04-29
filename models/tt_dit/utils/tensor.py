@@ -681,6 +681,34 @@ def upsample(
     return x
 
 
+def rope_double_last_dim_device(tt_x: ttnn.Tensor) -> ttnn.Tensor:
+    if ttnn.has_storage_type_of(tt_x, ttnn.StorageType.HOST):
+        msg = "rope_double_last_dim_device requires device-backed input"
+        raise ValueError(msg)
+
+    shape = list(tt_x.shape)
+    last = shape[-1]
+    if last % 32 != 0:
+        msg = f"rope_double_last_dim_device requires last dim to be tile-aligned, got {last}"
+        raise ValueError(msg)
+
+    rank = len(shape)
+    expanded_shape = shape[:-1] + [2, last]
+    transposed_shape = shape[:-1] + [last, 2]
+    doubled_shape = shape[:-1] + [2 * last]
+
+    concatenated = ttnn.concat([tt_x, tt_x], dim=-1)
+    reshaped = ttnn.reshape(concatenated, expanded_shape)
+    transposed = ttnn.transpose(reshaped, rank - 1, rank)
+    if list(transposed.shape) != transposed_shape:
+        msg = (
+            f"rope_double_last_dim_device: transpose produced shape {list(transposed.shape)}, "
+            f"expected {transposed_shape}"
+        )
+        raise RuntimeError(msg)
+    return ttnn.reshape(transposed, doubled_shape)
+
+
 def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
     """Expands a dimension of the input tensor over multiple dimensions.
 
