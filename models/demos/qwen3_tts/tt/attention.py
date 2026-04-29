@@ -9,42 +9,6 @@ while TTNN rotary_embedding_llama uses interleaved format (pairs dims 2i and 2i+
 This module handles the necessary dimension rearrangement.
 
 Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
-
-WHY NOT SDPA:
-  ttnn.transformer.scaled_dot_product_attention requires bfloat16 inputs.
-  Qwen3-TTS uses QK-norm with k_norm gamma weights up to 68, amplifying K values
-  to ~260. In bfloat16 at magnitude 256, resolution is 2 units — enough precision
-  loss that the model takes completely wrong decoding paths (no EOS, loops to max
-  tokens). bfloat16 SDPA was tested and confirmed non-viable for this model.
-
-WHY FLOAT32 MATMUL:
-  ttnn.matmul supports float32 inputs/outputs. We typecast Q/K/V to float32 after
-  QK-norm, run matmul+softmax in float32, and typecast the result back to bfloat16
-  for the output projection. This matches PyTorch reference quality.
-
-GQA EXPANSION:
-  Unlike SDPA which handles GQA natively, manual matmul requires explicit head
-  expansion. We use ttnn.slice (fresh tensor per group) + ttnn.concat to expand
-  K/V from num_kv_heads to num_heads. Each group's slice is a distinct tensor object
-  to avoid duplicate-reference deadlocks in ttnn.concat (Wormhole B0 constraint).
-
-TRACE-COMPATIBLE DECODE:
-  Passing cur_pos_tensor (int32 device tensor [1]) enables trace-compatible decode:
-  - paged_update_cache uses cur_pos_tensor to write K/V at the correct position
-    without baking a Python scalar into the trace.
-  - Attention reads the FULL cache (fixed shape [1, kv_heads, max_seq, dim]) so
-    no dynamic slice is needed in the trace.
-  - decode_attn_mask (float32 [1, 1, 1, max_seq]) is pre-allocated on device and
-    updated outside the trace each step to mask out future positions.
-  When cur_pos_tensor is None, falls back to non-traceable update_cache+slice.
-
-LAYOUT / TILIZE (P2):
-  The hot path keeps activations TILE: wqkv linear → nlp_create_qkv_heads (TILE in/out)
-  → rms_norm on Q/K (TILE inputs required by ttnn.rms_norm) → rotary_embedding_llama (TILE).
-  Reducing ROW↔TILE churn between heads / RoPE / matmul would require TTNN API changes
-  (e.g. rotary_embedding_llama_fused_qk expects HEIGHT_SHARDED Q/K and decode-only shapes,
-  so it is not a drop-in here). Standard prefill causal masking avoids multi-kernel
-  mask construction where possible (see forward).
 """
 
 from typing import Optional, Tuple
@@ -318,6 +282,14 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        # RoPE (P3): default kernel was HiFi4; LoFi + explicit L1 matches linears and avoids DRAM spill.
+        self.rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         self.short_seq_limit = 32
         _grid = device.compute_with_storage_grid_size()
         _fp32_linear = self.compute_kernel_config.fp32_dest_acc_en
@@ -471,8 +443,24 @@ class Attention(LightweightModule):
         # Q/K are already in interleaved head-dim layout for rotary_embedding_llama.
         # This avoids per-call reshape/permute/reshape churn in decode/prefill.
         # Use is_decode_mode=False to work with DRAM layout for all sequence lengths.
-        q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, transformation_mat, is_decode_mode=False)
-        k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, transformation_mat, is_decode_mode=False)
+        q = ttnn.experimental.rotary_embedding_llama(
+            q,
+            cos,
+            sin,
+            transformation_mat,
+            is_decode_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.rope_compute_kernel_config,
+        )
+        k = ttnn.experimental.rotary_embedding_llama(
+            k,
+            cos,
+            sin,
+            transformation_mat,
+            is_decode_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.rope_compute_kernel_config,
+        )
         # Keep Q/K in interleaved layout after RoPE.
 
         k_seq = k.shape[2]
