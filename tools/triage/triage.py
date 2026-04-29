@@ -491,11 +491,12 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         utils.INFO(f"  skipped: {script.status_message}")
         return
     if result is None:
-        if len(failures) > 0 or script.failed:
+        script_failed = script is not None and script.failed
+        if len(failures) > 0 or script_failed:
             utils.ERROR("  fail")
             for failure in failures:
                 utils.ERROR(f"    {failure}")
-            if script.failed:
+            if script_failed:
                 utils.ERROR(f"    {script.status_message}")
 
                 import textwrap
@@ -736,7 +737,7 @@ def run_script(
 
     manager = TriageScriptManager()
     manager.load_script_with_dependencies(script_path)
-    manager.resolve_dependencies(missing_dep_marks_as_failed=False)
+    manager.resolve_dependencies()
 
     if args is None:
         args = parse_arguments(manager.scripts, script_path, argv)
@@ -744,7 +745,7 @@ def run_script(
         _enforce_dependencies(args)
         context = _init_ttexalens(args)
 
-    result = manager.execute_subgraph(args, context)
+    result = manager.execute_script(script_path, args, context)
 
     script = manager.scripts.get(script_path)
     if return_result:

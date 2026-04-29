@@ -133,17 +133,32 @@ class TriageScriptManager:
             if appended:
                 sys.path.remove(base_path)
 
-    def resolve_dependencies(self, missing_dep_marks_as_failed: bool = True) -> None:
-        """Wire up `depends=[...]` strings to TriageScript refs, then topo-sort into script_queue.
-        With missing_dep_marks_as_failed=True, unresolved deps mark the script failed instead of raising."""
+    def resolve_dependencies(self) -> None:
+        """Build the DAG and topo-sort into script_queue.
+        Scripts whose declared deps aren't in the registry are dropped (with a clear log
+        line) so they never enter the queue. Drops cascade: if A depends on B and B was
+        dropped, A is dropped too. By the time this returns, every script in script_queue
+        has all its deps wired up; failed/skipped are reserved for runtime outcomes."""
+        # Iteratively drop scripts whose deps cannot be resolved, until stable.
+        # Drops cascade: dropping A causes scripts that depended on A to drop too.
+        while True:
+            missing_by_path: dict[str, list[str]] = {}
+            for path, script in self.scripts.items():
+                unresolved = [dep for dep in script.config.depends if dep not in self.scripts]
+                if unresolved:
+                    missing_by_path[path] = unresolved
+            if not missing_by_path:
+                break
+            for path, unresolved in missing_by_path.items():
+                script = self.scripts[path]
+                missing = ", ".join(os.path.basename(d) for d in unresolved)
+                utils.ERROR(f"Dropping '{script.name}': missing dependencies: {missing}")
+                del self.scripts[path]
+
+        # Every surviving script has all its deps in the registry; wire them up.
         for script in self.scripts.values():
-            for dep_name in script.config.depends:
-                if dep_name in self.scripts:
-                    script.depends.append(self.scripts[dep_name])
-                elif missing_dep_marks_as_failed:
-                    utils.ERROR(f"Dependency {dep_name} for script {script.name} not found.")
-                    script.status = "failed"
-                    script.status_message = f"Dependency {dep_name} not found."
+            script.depends = [self.scripts[dep] for dep in script.config.depends]
+
         self.script_queue = _resolve_execution_order(self.scripts)
 
     def execute_all(
@@ -202,25 +217,29 @@ class TriageScriptManager:
 
         return total_time, serialization_time
 
-    def execute_subgraph(
+    def execute_script(
         self,
+        script_path: str,
         args: ScriptArguments,
         context: Context,
     ) -> Any:
-        """Run the loaded scripts with log_error=False (raises on failure).
-        Used by run_script(); returns the result of the last script in the queue."""
-        result: Any = None
+        """Run the loaded subgraph with log_error=False (raises on failure).
+        Returns the result of `script_path` specifically -- not the last script in
+        topological order, even though those happen to coincide today."""
+        results: dict[str, Any] = {}
         for script in self.script_queue:
             if self._propagate_skip_in_subgraph(script):
+                results[script.path] = None
                 continue
             if not all(not dep.failed for dep in script.depends):
                 raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.")
             result = script.run(args=args, context=context, log_error=False)
+            results[script.path] = result
             if script.skipped:
                 continue
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-        return result
+        return results.get(os.path.abspath(script_path))
 
     def build_summary(self) -> str:
         """One line per script: FAIL, SKIP, or pass (data providers' pass status is omitted)."""
@@ -286,7 +305,7 @@ def _resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScr
                 heapq.heappush(heap, (-dep_script.config.priority.value, dep_path, dep_script))
 
     if len(result) != len(scripts):
-        remaining = set(scripts.keys()) - {s.config.name for s in result}
+        remaining = set(scripts.keys()) - {s.path for s in result}
         raise ValueError(
             f"Bad dependency detected in scripts: {', '.join(remaining)}\n"
             f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
