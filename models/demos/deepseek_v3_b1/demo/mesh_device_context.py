@@ -14,20 +14,12 @@ from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS_DEFAULT = "30000"
-
-# Ethernet port used to initialize fabric router coordination.
 FABRIC_ROUTER_ETH_PORT = 15232
 
-# Default worker L1 size (bytes) for most ranks in pod pipeline demo runs.
+# TODO: Store these values inside the stages and fetch based on pipeline config
 DEFAULT_WORKER_L1_SIZE = 1431568
-
-# Larger worker L1 size (bytes) for LM-head/tail ranks that need extra L1.
 LM_HEAD_WORKER_L1_SIZE = 1499000
-
-# Mesh rank using LM-head/tail stage in 64-process topology.
 LM_HEAD_RANK_64_PROCS = 62
-
-# Mesh rank using LM-head/tail stage in 16-process topology.
 LM_HEAD_RANK_16_PROCS = 14
 
 
