@@ -12,6 +12,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
     build_cb_reconfig_tensor,
+    cb_descriptor_from_overlapped_tensor,
     cb_descriptor_from_overlapped_tensors,
     record_cb_metadata,
 )
@@ -170,7 +171,7 @@ class AttentionBlock:
         # KV Cache Branch
         dkv = input_layernorm @ dkv_matmul_weights_tensor
         kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
-        kv = rmsnorm_no_gamma(kv)
+        kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
         k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, position_ids).squeeze(0)
 
         # from 0 to position id, the kv cache is valid
@@ -951,6 +952,9 @@ class AttentionBlock:
         dkv_matmul_output_cb = matmul_output_cb  # Reuse matmul1 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_input_cb = rmsnorm2_input_cb  # Reuse rmsnorm2 input CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_output_cb = rmsnorm2_output_cb  # Reuse rmsnorm2 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
+        # kv_rmsnorm gamma CB: backed by dkv_rmsnorm_gamma_tensor on dkv_rmsnorm_grid;
+        # NCRISC sets it up via setup_sharded_buffer, TRISC reads it via cb_wait_front.
+        kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)
         # Per-dkv-core RMSNorm (deferred from input core) writes here before dkv_matmul reads it.
         # Reuses rmsnorm1 output CB ID since the input core no longer runs rmsnorm1 after the deferral
         # (disjoint grids: input core vs dkv cores rows 8-9).
@@ -1468,11 +1472,13 @@ class AttentionBlock:
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
+            ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
         ]
         kv_rmsnorm_trisc_named_compile_time_args = [
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
+            ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
         ]
 
         # ========================================================================
@@ -2021,6 +2027,7 @@ class AttentionBlock:
         # Reference tensors from device 0 for CB descriptor creation
         # (all devices have identical buffer addresses, sizes, and layouts)
         ref_input_tensor = input_tensors_per_device[0]
+        ref_gamma_fused_tensor = gamma_fused_tensors_per_device[0]
         ref_fused_weights_tensor = fused_weights_tensors_per_device[0]
         ref_kv_b12_fused_tensor = kv_b12_fused_tensors_per_device[0]
         ref_trans_mat_tensor = trans_mat_tensors_per_device[0]
@@ -2581,6 +2588,15 @@ class AttentionBlock:
             )
         ]
         attn_block_output_kv_cache_update_nope_running_offset += kv_rmsnorm_output_cb_descriptor.total_size
+
+        # KV RMSNorm gamma CB — backed by the OverlappedTensor view of
+        # dkv_rmsnorm_gamma inside the fused o_proj/gate/norms/q_ab/kv_a buffer.
+        # NCRISC stages it via setup_sharded_buffer; TRISC consumes via cb_wait_front.
+        kv_rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+            kv_rmsnorm_gamma_cb,
+            dkv_rmsnorm_gamma_tensor,
+            ref_gamma_fused_tensor,
+        )
         # CB 29: Cos (DRAM, read by NCRISC)
         krope_rope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         krope_cos_sin_cb_format = ttnn.CBFormatDescriptor(
@@ -3167,11 +3183,11 @@ class AttentionBlock:
             ("raw_input_rms_inv_dst_cb", raw_input_rms_inv_dst_cb),
         ]
 
-        # K-ROPE RMSApply: TRISC needs the destination CB and the per-core num_tiles to
-        # multiply dkv_matmul's output (dkv_matmul_out_w tiles) by the mcasted 1/RMS scalar.
+        # The krope-side dkv_matmul fuses the 1/RMS apply via FusedActivation::CUSTOM_SFPU
+        # (custom_sfpu_cb_ template arg points at raw_input_rms_inv_dst_cb), so TRISC
+        # needs that CB id resolvable as a named compile-time arg.
         krope_rms_apply_trisc_named_compile_time_args = [
             ("raw_input_rms_inv_dst_cb", raw_input_rms_inv_dst_cb),
-            ("krope_rms_apply_num_tiles", dkv_matmul_out_w),
         ]
 
         k_addr = ref_kv_cache_tensor.buffer_address()
@@ -3529,6 +3545,7 @@ class AttentionBlock:
             dkv_matmul_output_cb_descriptor,
             kv_rmsnorm_input_cb_descriptor,
             kv_rmsnorm_output_cb_descriptor,
+            kv_rmsnorm_gamma_cb_descriptor,
             krope_output_cb_descriptor,
             krope_cos_sin_cb_descriptor,
             create_q_heads_interm_cb_descriptor,
