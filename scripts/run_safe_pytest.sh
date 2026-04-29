@@ -12,14 +12,20 @@
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [-o FILE] <test_path> [extra_pytest_args...]
 #
 # Options:
-#   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
-#               sanitization), lightweight ebreak asserts, and auto-triage
-#               on hang with full triage + watcher log dump.
-#   --run-all   Run all tests instead of stopping on first failure (-x).
-#               Useful for eval scoring where you need full pass/fail counts.
+#   --dev           Enables polling watcher (NoC sanitizer, waypoints, CB
+#                   sanitization), lightweight ebreak asserts, and auto-triage
+#                   on hang with full triage + watcher log dump.
+#   --run-all       Run all tests instead of stopping on first failure (-x).
+#                   Useful for eval scoring where you need full pass/fail counts.
+#   -o, --output F  Tee all script output (banner, pytest, results) to file F
+#                   for external progress tracking (e.g. `tail -f F`). Forces
+#                   pytest `-v --capture=fd` so per-test `[ X% ]` markers
+#                   stream live (overriding the repo pytest.ini -s default).
+#                   File is appended to (use `: > F` first for a fresh run,
+#                   or pass a fifo for streaming).
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -52,6 +58,7 @@ fi
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+OUTPUT_FILE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -62,6 +69,14 @@ while [[ $# -gt 0 ]]; do
             FAIL_FAST=false
             shift
             ;;
+        -o|--output)
+            if [[ -z "${2:-}" ]]; then
+                echo "SAFE_PYTEST_ERROR: $1 requires a file path argument" >&2
+                exit 3
+            fi
+            OUTPUT_FILE="$2"
+            shift 2
+            ;;
         *)
             break
             ;;
@@ -71,7 +86,7 @@ done
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [-o FILE] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -106,6 +121,17 @@ if [[ -f python_env/bin/activate ]]; then
     fi
 else
     echo "SAFE_PYTEST: WARNING: python_env not found; using system Python" >&2
+fi
+
+# --- Output file setup ---
+# When -o FILE is set, tee everything to FILE so an external watcher can
+# `tail -f FILE` to monitor progress. Pytest's own per-test `[ X% ]` markers
+# (enabled by -v) provide the percentage display.
+if [[ -n "$OUTPUT_FILE" ]]; then
+    echo "SAFE_PYTEST: Output file: ${OUTPUT_FILE} (tail -f to monitor)" >&2
+    # Redirect script stdout+stderr through tee. Pytest output, banners, and
+    # SAFE_PYTEST_RESULT lines all land in both terminal and file.
+    exec > >(tee -a "$OUTPUT_FILE") 2>&1
 fi
 
 # --- Hang detection setup (hardware only) ---
@@ -173,9 +199,18 @@ fi
 # --- Run pytest ---
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
+# -v --capture=fd: forced when -o FILE is set so per-test `[ X% ]` markers
+#     stream to the output file. The repo's pytest.ini sets -s (capture=no),
+#     which causes test output to interleave with pytest's progress writes
+#     and suppresses the percent markers entirely. Re-enabling fd-level
+#     capture restores the clean `path::name PASSED [ 50%]` lines monitors
+#     need; captured test stdout is still surfaced on failure via -rA.
 PYTEST_CMD=(pytest "${TEST_PATH}")
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
+fi
+if [[ -n "$OUTPUT_FILE" ]]; then
+    PYTEST_CMD+=(-v --capture=fd)
 fi
 PYTEST_CMD+=("$@")
 
