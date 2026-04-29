@@ -757,6 +757,7 @@ class TTNNTurboQuantCache:
         layer_idx: int,
         current_pos,
         page_table: "ttnn.Tensor" = None,
+        ring_write_pos: "ttnn.Tensor" = None,
     ):
         """Quantize new K/V tokens and scatter into cache (no dequantize).
 
@@ -767,6 +768,11 @@ class TTNNTurboQuantCache:
             page_table: Required when cache is paged (paged_config was passed to
                 __init__). Int32 device tensor [B, max_pages_per_batch] mapping
                 virtual block → physical block. For contiguous caches, leave None.
+            ring_write_pos: Trace-input device int32 tensor holding
+                cur_pos % ring_W_padded. Required when recent_window > 0 to
+                avoid the per-step host sync that breaks trace capture. When
+                None, falls back to a one-time ttnn.to_torch read at
+                layer_idx==0 (cached for the rest of the layers).
         """
         if self.paged_config is not None and page_table is None:
             raise ValueError("page_table required for paged TQ cache")
@@ -819,22 +825,26 @@ class TTNNTurboQuantCache:
             ttnn.deallocate(v_ring_perm)
 
             # paged_update_cache requires update_idx within [0, cache_size).
-            # For the ring, that's cur_pos % ring_W_padded. Computing this needs
-            # a host sync; do it ONCE per step (at layer_idx == 0) and cache the
-            # result for the remaining 31 layers — reduces host syncs 32×.
-            # For full trace compatibility we'd need ring_pos as a model input;
-            # this is the cheaper interim fix.
-            if layer_idx == 0:
-                cur_pos_host = int(ttnn.to_torch(pos_tt).flatten()[0].item())
-                self._cached_cur_pos = cur_pos_host
-                self._cached_ring_pos = cur_pos_host % self.ring_W_padded
-            ring_idx_host = self._cached_ring_pos
-            ring_pos_tt = ttnn.from_torch(
-                torch.tensor([ring_idx_host], dtype=torch.int32),
-                device=self.device,
-                dtype=ttnn.int32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # For the ring, that's cur_pos % ring_W_padded. Trace-compatible
+            # path: ring_write_pos is a device tensor built host-side in
+            # prepare_decode_inputs_host. Fallback path: one-time host sync
+            # at layer_idx==0, cached for the remaining 31 layers.
+            if ring_write_pos is not None:
+                ring_pos_tt = ring_write_pos
+                _own_ring_pos_tt = False
+            else:
+                if layer_idx == 0:
+                    cur_pos_host = int(ttnn.to_torch(pos_tt).flatten()[0].item())
+                    self._cached_cur_pos = cur_pos_host
+                    self._cached_ring_pos = cur_pos_host % self.ring_W_padded
+                ring_idx_host = self._cached_ring_pos
+                ring_pos_tt = ttnn.from_torch(
+                    torch.tensor([ring_idx_host], dtype=torch.int32),
+                    device=self.device,
+                    dtype=ttnn.int32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                _own_ring_pos_tt = True
             ttnn.experimental.paged_update_cache(
                 self.k_ring_dev[layer_idx],
                 k_ring_sharded,
@@ -847,7 +857,8 @@ class TTNNTurboQuantCache:
                 update_idxs_tensor=ring_pos_tt,
                 page_table=self.ring_page_table_dev,
             )
-            ttnn.deallocate(ring_pos_tt)
+            if _own_ring_pos_tt:
+                ttnn.deallocate(ring_pos_tt)
             ttnn.deallocate(k_ring_sharded)
             ttnn.deallocate(v_ring_sharded)
 
@@ -991,37 +1002,69 @@ class TTNNTurboQuantCache:
         current_pos: "ttnn.Tensor",
         scale: float,
         page_table: "ttnn.Tensor",
+        ring_sdpa_pos: "ttnn.Tensor" = None,
+        old_pos: "ttnn.Tensor" = None,
     ) -> "ttnn.Tensor":
         """Sliding-window hybrid: TQ over old positions + BFP8 ring over recent W.
 
-        Runs the fused TQ SDPA kernel TWICE — once over the lossy TQ cache for
-        positions [0, cur_pos − W], once over the BFP8 ring (in `pre_rescaled`
-        mode = no dequant, just standard SDPA on BFP8 K/V) for positions
-        [cur_pos − W, cur_pos]. Each call returns (out, lse). Outputs are
-        merged on host via online softmax LSE math, mathematically equivalent
-        to one big SDPA over the union.
+        Runs the fused TQ SDPA kernel TWICE — once over the BFP8 ring (using
+        pre_rescaled=True so the kernel skips dequant) covering the most
+        recent W positions, once over the TQ cache covering older positions.
+        Each call returns (out, lse). Outputs are merged on device via online
+        softmax LSE math, mathematically equivalent to one big SDPA.
 
-        When cur_pos < W: only the ring is valid → single SDPA over the ring,
-        no combine needed.
+        Trace-compatible path: caller supplies ring_sdpa_pos = min(W-1, cur_pos)
+        and old_pos = max(0, cur_pos - W) as device int32 tensors built in
+        prepare_decode_inputs_host. We always run the combine — during warmup
+        (cur_pos < W) the math double-counts position 0, but warmup positions
+        sit below the eval split_point and don't affect accuracy.
+
+        Fallback path (ring_sdpa_pos / old_pos = None): legacy host-sync read
+        of current_pos and Python branching for the cur_pos < W edge case.
+        Used by tests that haven't yet been updated.
 
         Q must be pre-rotated by Π. See LSE_COMBINE_DESIGN.md.
         """
         _require_ttnn()
         assert self.recent_window > 0, "hybrid_sdpa_decode requires recent_window > 0"
         W = self.recent_window
-        W_padded = self.ring_W_padded
         centroids = get_codebook(self.head_dim, self.bits, device="cpu", dtype=torch.float32).centroids.tolist()
 
-        # Need cur_pos as a Python int to decide branch + compute split point.
-        # Read from the cached value populated by update_cache at layer_idx==0
-        # (avoids 32 host syncs per step). Falls back to live read if no cache.
+        # Trace-friendly fast path: ring_sdpa_pos + old_pos arrived as device
+        # tensors. Always run both halves + combine. No host sync.
+        if ring_sdpa_pos is not None and old_pos is not None:
+            outs_new = ttnn.experimental.turbo_quant_sdpa_decode(
+                q,
+                self.k_ring_dev[layer_idx],
+                self.k_norms_dev[layer_idx],
+                self.v_ring_dev[layer_idx],
+                self.v_norms_dev[layer_idx],
+                self.ring_page_table_dev,
+                ring_sdpa_pos,
+                centroids,
+                scale,
+                True,  # pre_rescaled — bypass dequant for the BFP8 ring
+                1,
+                True,  # always return_lse for the combine
+            )
+            out_new, lse_new = outs_new[0], outs_new[1]
+
+            out_old, lse_old = self.fused_sdpa_decode(
+                q,
+                layer_idx=layer_idx,
+                current_pos=old_pos,
+                scale=scale,
+                page_table=page_table,
+                num_cores_per_head=1,
+                return_lse=True,
+            )
+            return self._combine_lse(out_old, lse_old, out_new, lse_new)
+
+        # ── Legacy fallback: host-sync read + Python branch ──
         cur_pos_host = getattr(self, "_cached_cur_pos", None)
         if cur_pos_host is None:
             cur_pos_host = int(ttnn.to_torch(current_pos).flatten()[0].item())
 
-        # Ring covers the last W positions; clamped position for the ring SDPA
-        # is min(W − 1, cur_pos). For cur_pos ≥ W, ring stores positions
-        # [cur_pos − W + 1, cur_pos]; for cur_pos < W, ring stores [0, cur_pos].
         ring_pos_int = min(W - 1, cur_pos_host)
         ring_pos_dev = ttnn.from_torch(
             torch.tensor([ring_pos_int], dtype=torch.int32),
@@ -1030,11 +1073,6 @@ class TTNNTurboQuantCache:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # ── Recent-window SDPA: pre_rescaled TQ kernel over the BFP8 ring ──
-        # pre_rescaled=True bypasses dequant cascade; the kernel just calls
-        # sdpa_standard with the ring's BFP8 values typecast inline to BF16.
-        # We pass the existing k_norms_dev as a placeholder (unused by the
-        # pre_rescaled path; only its dtype/shape matter for CB allocation).
         outs_new = ttnn.experimental.turbo_quant_sdpa_decode(
             q,
             self.k_ring_dev[layer_idx],
@@ -1045,25 +1083,17 @@ class TTNNTurboQuantCache:
             ring_pos_dev,
             centroids,
             scale,
-            True,  # pre_rescaled — bypass dequant for the ring
-            1,  # num_cores_per_head (incompatible with return_lse > 1)
-            cur_pos_host >= W,  # return_lse only when we'll combine
+            True,
+            1,
+            cur_pos_host >= W,
         )
         ttnn.deallocate(ring_pos_dev)
 
         if cur_pos_host < W:
-            # Pure ring — no combine, no old-positions SDPA. The full attention
-            # window fits inside the ring, and pre_rescaled+std SDPA already
-            # gave the correct answer.
             return outs_new[0]
 
         out_new, lse_new = outs_new[0], outs_new[1]
 
-        # ── Old-positions SDPA: existing TQ FD path with cur_pos = cur_pos − W ──
-        # The TQ kernel reads valid_k_chunks based on cur_pos, so passing
-        # (cur_pos − W) makes it stop at cur_pos − W (covers positions
-        # [0, cur_pos − W] — note the inclusive end, leaves cur_pos − W + 1
-        # through cur_pos for the ring).
         old_pos_int = cur_pos_host - W
         old_pos_dev = ttnn.from_torch(
             torch.tensor([old_pos_int], dtype=torch.int32),
@@ -1082,14 +1112,21 @@ class TTNNTurboQuantCache:
         )
         ttnn.deallocate(old_pos_dev)
 
-        # ── Online softmax combine on device ──
-        # combined = out_old · w_old + out_new · w_new
-        #   where w_X = exp(lse_X − lse_max) / (exp(lse_old − lse_max) + exp(lse_new − lse_max))
-        #   and   lse_max = max(lse_old, lse_new)  (per-row max for numerical stability)
-        # LSE tensors are [B, NQH, 1, 32] — only column 0 is meaningful, the rest is
-        # padding from the broadcast pack. The per-element ttnn ops below operate
-        # over the full tile, but only column 0 carries information; broadcast onto
-        # the [B, NQH, 1, DH] output by repeat-multiplying.
+        return self._combine_lse(out_old, lse_old, out_new, lse_new)
+
+    def _combine_lse(self, out_old, lse_old, out_new, lse_new):
+        """Online-softmax combine of two SDPA halves on device.
+
+        combined = out_old · w_old + out_new · w_new
+          where w_X = exp(lse_X − lse_max) / (exp(lse_old − lse_max) + exp(lse_new − lse_max))
+          and   lse_max = max(lse_old, lse_new)  (per-row max for numerical stability)
+
+        LSE tensors are [B, NQH, 1, 32]: the kernel's matmul_reduce broadcasts
+        the LSE value to every column via cb_col_identity, so columns 0..31 all
+        hold the same value. We repeat 32→DH along the last dim to multiply
+        with the [B, NQH, 1, DH] outputs (ttnn.multiply doesn't support 32→128
+        broadcast directly).
+        """
         lse_max = ttnn.maximum(lse_old, lse_new)
         diff_old = ttnn.exp(ttnn.subtract(lse_old, lse_max))
         diff_new = ttnn.exp(ttnn.subtract(lse_new, lse_max))
@@ -1103,11 +1140,6 @@ class TTNNTurboQuantCache:
         ttnn.deallocate(lse_old)
         ttnn.deallocate(lse_new)
 
-        # w_old/w_new are [B, NQH, 1, 32]; out_* are [B, NQH, 1, DH=128].
-        # The kernel's LSE pack puts the same value in every column of row 0
-        # (matmul_reduce broadcasts via cb_col_identity), so we just need to
-        # repeat the LSE tile 4x along the last dim to span DH=128. ttnn.multiply
-        # doesn't support 32→128 broadcast directly.
         repeat_factor = self.head_dim // 32
         if repeat_factor > 1:
             w_old_full = ttnn.repeat(w_old, ttnn.Shape([1, 1, 1, repeat_factor]))

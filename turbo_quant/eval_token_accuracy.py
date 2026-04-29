@@ -226,15 +226,22 @@ def main():
             if args.tq_full_dequant:
                 layer.attention.tq_layer_idx = layer_idx
 
+        # Tell the model to build ring_pos / old_pos device tensors in
+        # prepare_decode_inputs_host (replaces the per-step host sync that
+        # used to break trace).
+        if args.tq_recent_window > 0:
+            tt_model.tq_ring_W = shared_tq.recent_window
+            tt_model.tq_ring_W_padded = shared_tq.ring_W_padded
+
     # ------------------------------------------------------------------ #
     # Teacher-forced decode: feed ref tokens one at a time, get top-5    #
     # ------------------------------------------------------------------ #
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=model_args.cluster_shape)
     page_table_cpu = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).unsqueeze(0)
 
-    # Warmup + trace capture (trace is incompatible with sliding-window's
-    # host-side ring_pos read — disable trace when --tq-recent-window > 0).
-    use_trace = args.tq_recent_window == 0
+    # Warmup + trace capture. The sliding-window path now ships ring_pos /
+    # old_pos as trace-input device tensors, so trace is fully compatible.
+    use_trace = True
     print("\nWarmup (compile decode programs)...")
     tokens_torch = torch.tensor([int(reference_tokens[0].item())], dtype=torch.int64)
     pos_torch = torch.tensor([0], dtype=torch.int64)
@@ -253,7 +260,6 @@ def main():
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         print("  Trace captured.")
     else:
-        print("Trace disabled (sliding-window mode requires host-side ring_pos read).")
         trace_id = None
         trace_inputs = None
         tt_out_trace = None

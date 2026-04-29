@@ -628,7 +628,16 @@ class Attention(LightweightModule):
         return q_heads_1QSD, k_heads_1KSD
 
     def forward_decode(
-        self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None, turbo_quant_cache=None
+        self,
+        x: ttnn.Tensor,
+        current_pos,
+        rot_mats=None,
+        page_table=None,
+        kv_cache=None,
+        turbo_quant_cache=None,
+        ring_sdpa_pos=None,
+        ring_write_pos=None,
+        old_pos=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -797,6 +806,7 @@ class Attention(LightweightModule):
                 layer_idx=_tq_layer_idx,
                 current_pos=current_pos,
                 page_table=_tq_page_table,
+                ring_write_pos=ring_write_pos,
             )
             ttnn.deallocate(k_for_tq)
             ttnn.deallocate(v_for_tq)
@@ -821,6 +831,8 @@ class Attention(LightweightModule):
                     current_pos=current_pos,
                     scale=self.scale,
                     page_table=_tq_page_table,
+                    ring_sdpa_pos=ring_sdpa_pos,
+                    old_pos=old_pos,
                 )
                 ttnn.deallocate(q_bqhd_h)
                 # Permute output [B, NQH, 1, DH] → [1, B, NQH, DH] to match downstream.
@@ -1355,6 +1367,9 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        ring_sdpa_pos=None,
+        ring_write_pos=None,
+        old_pos=None,
     ):
         if mode == Mode.PREFILL:
             return self.forward_prefill(
@@ -1374,6 +1389,9 @@ class Attention(LightweightModule):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 turbo_quant_cache=getattr(self, "tq_cache", None),
+                ring_sdpa_pos=ring_sdpa_pos,
+                ring_write_pos=ring_write_pos,
+                old_pos=old_pos,
             )
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):

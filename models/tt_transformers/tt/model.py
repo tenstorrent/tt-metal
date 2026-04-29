@@ -138,6 +138,14 @@ class Transformer(LightweightModule):
             prefetcher=prefetcher,
         )
 
+        # Sliding-window hybrid TQ inputs. When > 0, prepare_decode_inputs_host
+        # also builds ring_pos = current_pos % ring_W_padded and old_pos =
+        # max(0, current_pos - ring_W) as device tensors so update_cache and
+        # hybrid_sdpa_decode can run host-sync-free (and thus trace-compatible).
+        # Set externally by the eval harness after attaching the TQ cache.
+        self.tq_ring_W = 0
+        self.tq_ring_W_padded = 0
+
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
@@ -476,6 +484,41 @@ class Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
+
+        # Sliding-window hybrid: ship three derived position tensors so the TQ
+        # cache update + hybrid SDPA combine never need a host sync (i.e. trace
+        # capture works). Only built when the harness opts in via
+        # tt_model.tq_ring_W_padded > 0.
+        if self.tq_ring_W_padded > 0:
+            W = self.tq_ring_W
+            W_padded = self.tq_ring_W_padded
+            cur_pos_clamped = torch.maximum(current_pos, torch.tensor(0, dtype=current_pos.dtype))
+            # Ring write index = cur_pos % W_padded (slot in the cyclic buffer).
+            ring_write_pos_torch = (cur_pos_clamped % W_padded).to(torch.int32)
+            # Ring SDPA cur_pos = min(W-1, cur_pos): once the ring is full we
+            # always attend to all W slots; while it's filling we attend only
+            # to the populated prefix.
+            ring_sdpa_pos_torch = torch.minimum(cur_pos_clamped, torch.tensor(W - 1, dtype=current_pos.dtype)).to(
+                torch.int32
+            )
+            # Old SDPA cur_pos = max(0, cur_pos - W). Clamps to 0 during the
+            # warmup phase (cur_pos < W); harmless because warmup positions
+            # are below the eval split_point.
+            old_pos_torch = torch.maximum(cur_pos_clamped - W, torch.tensor(0, dtype=current_pos.dtype)).to(torch.int32)
+
+            mesh_mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, 0) if (self.args.is_galaxy and B > 1) else (None, None),
+                mesh_shape=self.args.cluster_shape,
+            )
+            ring_sdpa_pos_tt = ttnn.from_torch(
+                ring_sdpa_pos_torch, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper
+            )
+            ring_write_pos_tt = ttnn.from_torch(
+                ring_write_pos_torch, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper
+            )
+            old_pos_tt = ttnn.from_torch(old_pos_torch, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
+            return tokens, current_pos_tt, rope_idxs, page_table, ring_sdpa_pos_tt, ring_write_pos_tt, old_pos_tt
         return tokens, current_pos_tt, rope_idxs, page_table
 
     def _transform_decode_inputs_device(
@@ -610,6 +653,9 @@ class Transformer(LightweightModule):
         current_pos,
         rot_mat_idxs=None,
         page_table=None,
+        ring_sdpa_pos=None,
+        ring_write_pos=None,
+        old_pos=None,
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
@@ -617,6 +663,11 @@ class Transformer(LightweightModule):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
+
+        ring_sdpa_pos / ring_write_pos / old_pos: extra inputs only populated by
+        prepare_decode_inputs_host when sliding-window TQ is active. They let
+        the TQ cache update + hybrid SDPA combine run without per-step host
+        syncs (i.e. trace-compatible).
         """
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
@@ -631,6 +682,9 @@ class Transformer(LightweightModule):
             mode=Mode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
+            ring_sdpa_pos=ring_sdpa_pos,
+            ring_write_pos=ring_write_pos,
+            old_pos=old_pos,
         )
 
         if sampling_on_device and self.sampling is not None:
@@ -693,6 +747,9 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        ring_sdpa_pos=None,
+        ring_write_pos=None,
+        old_pos=None,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
@@ -726,6 +783,9 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
+                ring_sdpa_pos=ring_sdpa_pos,
+                ring_write_pos=ring_write_pos,
+                old_pos=old_pos,
             )
 
         if mode == Mode.DECODE:
