@@ -26,16 +26,18 @@ class RotarySetup(LightweightModule):
         head_dim: int,
         max_seq_len: int,
         rope_theta: float,
-        rope_scaling: Optional[RopeScaling],
+        rope_scaling: Optional[RopeScaling] = None,
         use_qk_fused: bool = False,  # For Qwen2.5 VL, we do not use qk fused ops (rotary embedding + paged cache update)
         datatype=ttnn.bfloat16,
         prefetcher: Optional[Prefetcher] = None,
+        partial_rotary_factor: float = 1.0,
     ):
         super().__init__()
 
         self.batch_size = batch_size
         self.rope_deltas = torch.zeros(batch_size, dtype=torch.int32)
         self.head_dim = head_dim
+        self.partial_rotary_factor = partial_rotary_factor
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
