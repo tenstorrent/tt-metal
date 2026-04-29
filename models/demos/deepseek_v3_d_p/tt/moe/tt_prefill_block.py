@@ -78,6 +78,7 @@ class TtPrefillBlock(LightweightModule):
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        num_dispatch_subgroups: int = 1,
     ):
         """
         Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
@@ -131,12 +132,17 @@ class TtPrefillBlock(LightweightModule):
             mesh_config = extract_mesh_config(mesh_device)
             sp_factor = mesh_device.shape[sp_axis]
             seq_len_per_chip = seq_len // sp_factor
+            # In subgroup mode, experts are sharded over a single subgroup
+            # (dispatch_group_size * num_dispatch_groups chips) and replicated
+            # across the remaining subgroups; mirror _build_moe's accounting.
+            dispatch_group_size = mesh_config.dispatch_group_size // num_dispatch_subgroups
+            subgroup_num_devices = dispatch_group_size * mesh_config.num_dispatch_groups
             experts_per_chip, _, _, _ = compute_constants(
                 seq_len_per_chip,
                 DeepSeekV3Config.NUM_ROUTED_EXPERTS,
                 DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
-                mesh_device.get_num_devices(),
-                mesh_config.dispatch_group_size,
+                subgroup_num_devices,
+                dispatch_group_size,
                 dispatch_buffer_capacity_factor,
             )
 
@@ -152,6 +158,7 @@ class TtPrefillBlock(LightweightModule):
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 cache_path=cache_path,
                 layer_idx=layer_idx,
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
         else:
             # Use static method (no device copy!)
@@ -183,6 +190,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
+        num_dispatch_subgroups: int = 1,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -249,6 +257,7 @@ class TtPrefillBlock(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
         else:
             self.ffn = TtFfn(
@@ -277,10 +286,19 @@ class TtPrefillBlock(LightweightModule):
         dispatch_buffer_capacity_factor,
         weight_cache_path=None,
         layer_idx=0,
+        num_dispatch_subgroups: int = 1,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
         seq_len_per_chip = seq_len // sp_factor
+
+        # In subgroup mode the mesh row axis is partitioned into
+        # `num_dispatch_subgroups` slices of `dispatch_group_size = sp_factor / N` chips,
+        # and each subgroup carries the full expert set. compute_constants takes the
+        # per-subgroup device count, not the mesh total.
+        dispatch_group_size = mesh_config.dispatch_group_size // num_dispatch_subgroups
+        num_dispatch_groups = mesh_config.num_dispatch_groups
+        subgroup_num_devices = dispatch_group_size * num_dispatch_groups
 
         (
             experts_per_chip,
@@ -291,15 +309,15 @@ class TtPrefillBlock(LightweightModule):
             seq_len_per_chip,
             DeepSeekV3Config.NUM_ROUTED_EXPERTS,
             DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
-            mesh_device.get_num_devices(),
-            mesh_config.dispatch_group_size,
+            subgroup_num_devices,
+            dispatch_group_size,
             dispatch_buffer_capacity_factor,
         )
 
         return TtMoe(
             mesh_device=mesh_device,
-            dispatch_group_size=mesh_config.dispatch_group_size,
-            num_dispatch_groups=mesh_config.num_dispatch_groups,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
             experts_per_chip=experts_per_chip,
             num_routed_experts=DeepSeekV3Config.NUM_ROUTED_EXPERTS,
             num_experts_per_tok=DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
@@ -321,6 +339,7 @@ class TtPrefillBlock(LightweightModule):
             gate_fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
+            num_dispatch_subgroups=num_dispatch_subgroups,
         )
 
     def forward(

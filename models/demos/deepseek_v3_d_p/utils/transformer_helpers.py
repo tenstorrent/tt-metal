@@ -320,6 +320,7 @@ def load_and_compute_layer_by_layer(
     shared_expert_activations_dtype=ttnn.bfloat16,
     shared_expert_weights_dtype=ttnn.bfloat8_b,
     causal_only=True,
+    num_dispatch_subgroups: int = 1,
 ) -> LayerByLayerResult:
     """
     Process layers one-at-a-time: load → compute reference → build cache → clear → next.
@@ -521,6 +522,7 @@ def load_and_compute_layer_by_layer(
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
 
             # Free layer_dict immediately!

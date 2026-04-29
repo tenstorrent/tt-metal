@@ -119,7 +119,7 @@ SEQ_LEN_25K = 25 * 1024
 )
 @pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links, topology, num_dispatch_subgroups",
     [
         pytest.param(
             (2, 4),
@@ -129,6 +129,7 @@ SEQ_LEN_25K = 25 * 1024
             },
             1,
             ttnn.Topology.Linear,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="mesh-2x4",
         ),
@@ -140,8 +141,21 @@ SEQ_LEN_25K = 25 * 1024
             },
             2,
             ttnn.Topology.Linear,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+            },
+            1,
+            ttnn.Topology.Linear,
+            4,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4-subgroups-4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -159,6 +173,7 @@ def test_prefill_transformer(
     gate_fallback_mode,
     num_links,
     topology,
+    num_dispatch_subgroups,
     pcc_validation,
     num_iterations,
     input_source,
@@ -192,10 +207,15 @@ def test_prefill_transformer(
 
     weight_type = "pretrained" if use_pretrained else "random"
 
-    # Only enable weight caching for pretrained runs
+    # Only enable weight caching for pretrained runs. Cache files differ by
+    # num_dispatch_subgroups (changes experts_per_chip + per-chip replication),
+    # so segregate by suffix to avoid collisions with the no-subgroup cache.
     if use_pretrained and weight_cache_path is not None:
         rows, cols = mesh_shape
-        effective_cache_path = weight_cache_path / f"{rows}x{cols}"
+        cache_subdir = f"{rows}x{cols}"
+        if num_dispatch_subgroups > 1:
+            cache_subdir += f"_sg{num_dispatch_subgroups}"
+        effective_cache_path = weight_cache_path / cache_subdir
         effective_cache_path.mkdir(parents=True, exist_ok=True)
     else:
         effective_cache_path = None
@@ -207,7 +227,7 @@ def test_prefill_transformer(
         f"dispatch_buffer_capacity_factor={dispatch_buffer_capacity_factor}, "
         f"gate_fallback_mode={gate_fallback_mode}, "
         f"input_source={input_source}, pcc_validation={pcc_validation}, "
-        f"weights={weight_type}"
+        f"weights={weight_type}, num_dispatch_subgroups={num_dispatch_subgroups}"
     )
 
     # --- Monkeypatch n_routed_experts ---
@@ -219,8 +239,11 @@ def test_prefill_transformer(
     # --- Cache-aware loading strategy ---
     profiler.start("cache_check")
 
-    # Check cache states
-    experts_per_chip = 256 // (mesh_shape[0] * mesh_shape[1]) if use_pretrained else 8
+    # Check cache states. In subgroup mode, experts are sharded over a single
+    # subgroup (sp_factor / N rows × tp_factor cols) and replicated across
+    # subgroups, so per-chip count grows by N.
+    subgroup_chips = (mesh_shape[0] // num_dispatch_subgroups) * mesh_shape[1]
+    experts_per_chip = 256 // subgroup_chips if use_pretrained else 8
     ttnn_cache_complete = (
         TtPrefillTransformer.check_cache_complete(effective_cache_path, num_layers, experts_per_chip)
         if effective_cache_path
@@ -333,6 +356,7 @@ def test_prefill_transformer(
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 gate_fallback_mode=gate_fallback_mode,
+                num_dispatch_subgroups=num_dispatch_subgroups,
             )
 
             # state_dict is always None (cache built to disk)
@@ -379,6 +403,7 @@ def test_prefill_transformer(
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
+        num_dispatch_subgroups=num_dispatch_subgroups,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
