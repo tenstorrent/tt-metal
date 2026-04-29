@@ -109,8 +109,8 @@ inline void llk_unpack_AB_matmul(
         unpack_dst_format[operandA_id],
         get_operand_face_r_dim(operandB_id),
         get_operand_face_r_dim(operandA_id),
-        partial_face_a ? 1 : get_operand_num_faces(operandB_id),
-        partial_face_b ? 1 : get_operand_num_faces(operandA_id));
+        get_operand_num_faces(operandB_id),
+        get_operand_num_faces(operandA_id));
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
