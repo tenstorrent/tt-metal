@@ -3,10 +3,9 @@
 """
 SwiGLU MLP implementation for Qwen3-TTS.
 """
-import math
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
 
 
 class MLP(LightweightModule):
@@ -122,56 +121,44 @@ class MLP(LightweightModule):
         )
         grid = device.compute_with_storage_grid_size()
         self.short_seq_limit = 32
+        _fp32 = self.compute_kernel_config.fp32_dest_acc_en
         # Targeted Stage-1 tuning:
         # dominant short-seq matmuls in decode/prefill32 are
         #   - hidden(2048) -> intermediate(6144)  [gate/up]
         #   - intermediate(6144) -> hidden(2048)  [down]
-        # Keep this narrow (seq <= 32) to avoid broad core forcing.
-        self._short_seq_gate_up_progcfg = self._make_linear_1d_program_config(
+        # Decode (seq_len == 1): use m=1 so per_core_M matches single-token rows.
+        # Short prefill (2 <= seq <= 32): keep m=32 (tile-era baseline) for stable PCC.
+        self._decode_gate_up_progcfg = make_linear_1d_program_config(
+            m=1,
+            k=hidden_size,
+            n=intermediate_size,
+            grid_x=grid.x,
+            grid_y=grid.y,
+            fp32_dest_acc_en=_fp32,
+        )
+        self._decode_down_progcfg = make_linear_1d_program_config(
+            m=1,
+            k=intermediate_size,
+            n=hidden_size,
+            grid_x=grid.x,
+            grid_y=grid.y,
+            fp32_dest_acc_en=_fp32,
+        )
+        self._short_seq_gate_up_progcfg = make_linear_1d_program_config(
             m=self.short_seq_limit,
             k=hidden_size,
             n=intermediate_size,
             grid_x=grid.x,
             grid_y=grid.y,
-            fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
+            fp32_dest_acc_en=_fp32,
         )
-        self._short_seq_down_progcfg = self._make_linear_1d_program_config(
+        self._short_seq_down_progcfg = make_linear_1d_program_config(
             m=self.short_seq_limit,
             k=intermediate_size,
             n=hidden_size,
             grid_x=grid.x,
             grid_y=grid.y,
-            fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
-        )
-
-    @staticmethod
-    def _make_linear_1d_program_config(
-        m: int, k: int, n: int, grid_x: int, grid_y: int, fp32_dest_acc_en: bool
-    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-        tile_h = 32
-        tile_w = 32
-        num_cores = max(1, grid_x * grid_y)
-
-        per_core_m = max(1, m // tile_h)
-        per_core_k = max(1, math.ceil((k / tile_w) / num_cores))
-        per_core_n = max(1, math.ceil((n / tile_w) / num_cores))
-
-        subblock_limit = 4 if fp32_dest_acc_en else 8
-        out_subblock_w = max(i for i in range(1, subblock_limit + 1) if per_core_n % i == 0)
-        out_subblock_h = max(
-            i for i in range(1, subblock_limit + 1) if per_core_m % i == 0 and i * out_subblock_w <= subblock_limit
-        )
-
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
-            in0_block_w=per_core_k,
-            out_subblock_h=out_subblock_h,
-            out_subblock_w=out_subblock_w,
-            per_core_M=per_core_m,
-            per_core_N=per_core_n,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
+            fp32_dest_acc_en=_fp32,
         )
 
     def forward(self, x: ttnn.Tensor, mode: str = "prefill") -> ttnn.Tensor:
@@ -195,8 +182,14 @@ class MLP(LightweightModule):
             mem_cfg = ttnn.L1_MEMORY_CONFIG
         else:
             mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        gate_up_progcfg = self._short_seq_gate_up_progcfg if seq_len <= self.short_seq_limit else None
-        down_progcfg = self._short_seq_down_progcfg if seq_len <= self.short_seq_limit else None
+        if mode == "decode" or seq_len == 1:
+            gate_up_progcfg = self._decode_gate_up_progcfg
+            down_progcfg = self._decode_down_progcfg
+        elif seq_len <= self.short_seq_limit:
+            gate_up_progcfg = self._short_seq_gate_up_progcfg
+            down_progcfg = self._short_seq_down_progcfg
+        else:
+            gate_up_progcfg = down_progcfg = None
 
         # Reshape for large sequences to fit on device
         if seq_len >= 1024:
