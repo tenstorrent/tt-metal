@@ -219,7 +219,7 @@ echo ""
 # Step 1: tt-smi reset
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
-    mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+    mpirun --host "$HOSTS" --mca btl_tcp_if_include ens5f0np0 tt-smi -glx_reset
 
     echo ""
     echo "Sleeping ${SLEEP_DURATION}s..."
@@ -247,7 +247,7 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
             "${VALIDATION_ARGS[@]}"
     else
         mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --mca btl_tcp_if_include ens5f0np0 \
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"
