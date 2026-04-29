@@ -2180,6 +2180,39 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
          fn_to_coord(hops[num_meshes - 1].second),
          fn_to_coord(*loopback_exit_fn)});
 
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+
+    for (std::size_t si = 0; si < stages.size(); si++) {
+        const auto& s = stages[si];
+        fmt::print(
+            "stage{}: MeshCoordinate([{}, {}]) -> MeshCoordinate([{}, {}])\n",
+            si,
+            s.entry_node_coord[0],
+            s.entry_node_coord[1],
+            s.exit_node_coord[0],
+            s.exit_node_coord[1]);
+
+        MeshId stage_mesh_id{static_cast<uint32_t>(s.stage_index)};
+        FabricNodeId entry_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.entry_node_coord));
+        FabricNodeId exit_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.exit_node_coord));
+
+        auto print_endpoint = [&](const FabricNodeId& fn, std::string_view label) {
+            const std::string hostname = topology_mapper.get_hostname_for_fabric_node_id(fn);
+            tt::tt_metal::TrayID tray_id = topology_mapper.get_tray_id_for_fabric_node_id(fn);
+            tt::tt_metal::ASICLocation asic_location = topology_mapper.get_asic_location_for_fabric_node_id(fn);
+            fmt::print(
+                "             {:9} hostname={} mesh_id={} tray_id={} asic_location={}\n",
+                label,
+                hostname,
+                *fn.mesh_id,
+                *tray_id,
+                *asic_location);
+        };
+
+        print_endpoint(entry_fn, "entry");
+        print_endpoint(exit_fn, "exit");
+    }
+
     validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
 }
 }  // namespace tt::tt_fabric::fabric_router_tests
