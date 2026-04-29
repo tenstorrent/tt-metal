@@ -89,8 +89,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         const uint32_t otw = tensor_args.tensor_spec().tile().get_width();
         TT_FATAL(
             program_grid.contains(output_shard_grid),
-            "Output shard grid {} must be contained in program core grid {} (expected shard ⊆ program ⊆ device per "
-            "issue #41957)",
+            "Output shard grid {} must be contained in program core grid {}",
             output_shard_grid,
             program_grid);
         TT_FATAL(
