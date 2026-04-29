@@ -217,25 +217,30 @@ inline void dequant_k_chunk(
     // idx in DST 0 across the loop and use copy_dest_values for the per-level
     // refresh into DST 2 (replaces re-reading idx from cb_dq_temp every level).
     // Net per level: 4 SFPU ops (was 6), saving ~33% of the cascade overhead.
+    //
+    // Tier 3A: hoist all SFPU *_init calls out of the per-tile and per-level
+    // loops. The init macros configure the SFPU dispatcher for an op type;
+    // once configured, subsequent calls of the same op don't need re-init.
+    // This drops ~480 init calls per chunk down to 6 (one per op type used).
     {
         // DeviceZoneScopedN("TQ_K_GATHER");
         mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
         cb_wait_front(cb_dq_temp, chunk_tiles);
         cb_wait_front(cb_k_norms, Sk_chunk_t);
+        copy_tile_to_dst_init_short(cb_dq_temp);
+        fill_tile_init();
+        copy_dest_values_init();
+        unary_ge_tile_init();
+        binop_with_scalar_tile_init();
+        add_binary_tile_init();
         for (uint32_t t = 0; t < chunk_tiles; t++) {
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_dq_temp);
             copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
-            fill_tile_init();
             fill_tile(1, centroids[0]);  // DST 1 = result, initialised to c[0]
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_dest_values_init();
                 copy_dest_values<DataFormat::Float16_b>(0, 2);  // DST 2 = idx
-                unary_ge_tile_init();
-                unary_ge_tile(2, level_bits[lev]);  // DST 2 = (idx >= lev)
-                binop_with_scalar_tile_init();
-                mul_unary_tile(2, delta_bits[lev]);  // DST 2 *= (c[lev] - c[lev-1])
-                add_binary_tile_init();
+                unary_ge_tile(2, level_bits[lev]);              // DST 2 = (idx >= lev)
+                mul_unary_tile(2, delta_bits[lev]);             // DST 2 *= (c[lev] - c[lev-1])
                 add_binary_tile(1, 2, 1);  // DST 1 += contribution
             }
             tile_regs_commit();
@@ -247,14 +252,15 @@ inline void dequant_k_chunk(
     }
 
     // Pass 2b: Norm bcast multiply + tile-grid transpose into cb_k_in.
+    // Tier 3A: hoist mul_bcast_cols_init_short outside the per-tile loops.
     {
         // DeviceZoneScopedN("TQ_K_NORM_TRANSPOSE");
         cb_reserve_back(cb_k_in, chunk_tiles);
+        mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
         for (uint32_t row = 0; row < Sk_chunk_t; row++) {
             for (uint32_t col = 0; col < DHt; col++) {
                 uint32_t src_tile = row * DHt + col;
                 tile_regs_acquire();
-                mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
                 mul_tiles_bcast_cols(cb_dq_temp, cb_k_norms, src_tile, row, 0);
                 tile_regs_commit();
                 tile_regs_wait();
@@ -303,25 +309,26 @@ inline void dequant_v_chunk(
     // Pass 2a: Centroid gather, in-place in cb_dq_temp. (See dequant_k_chunk
     // pass 2a for the rationale — same telescoping cascade with precomputed
     // deltas + copy_dest_values + mul_unary_tile, ~33% fewer SFPU ops/level.)
+    // Tier 3A: hoist all SFPU *_init calls out of the per-tile/per-level loops.
     {
         // DeviceZoneScopedN("TQ_V_GATHER");
         mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
         cb_wait_front(cb_dq_temp, chunk_tiles);
         cb_wait_front(cb_v_norms, Sk_chunk_t);
+        copy_tile_to_dst_init_short(cb_dq_temp);
+        fill_tile_init();
+        copy_dest_values_init();
+        unary_ge_tile_init();
+        binop_with_scalar_tile_init();
+        add_binary_tile_init();
         for (uint32_t t = 0; t < chunk_tiles; t++) {
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_dq_temp);
             copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
-            fill_tile_init();
             fill_tile(1, centroids[0]);  // DST 1 = result
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_dest_values_init();
                 copy_dest_values<DataFormat::Float16_b>(0, 2);
-                unary_ge_tile_init();
                 unary_ge_tile(2, level_bits[lev]);
-                binop_with_scalar_tile_init();
                 mul_unary_tile(2, delta_bits[lev]);
-                add_binary_tile_init();
                 add_binary_tile(1, 2, 1);
             }
             tile_regs_commit();
@@ -334,14 +341,15 @@ inline void dequant_v_chunk(
 
     // Pass 2b: Norm bcast multiply into cb_v_in (no output transpose — natural [Sk × vDHt]).
     // Sequential pack matches the row-major src layout.
+    // Tier 3A: hoist mul_bcast_cols_init_short outside the per-tile loops.
     {
         // DeviceZoneScopedN("TQ_V_NORM");
         cb_reserve_back(cb_v_in, chunk_tiles);
+        mul_bcast_cols_init_short(cb_dq_temp, cb_v_norms);
         for (uint32_t row = 0; row < Sk_chunk_t; row++) {
             for (uint32_t col = 0; col < vDHt; col++) {
                 uint32_t src_tile = row * vDHt + col;
                 tile_regs_acquire();
-                mul_bcast_cols_init_short(cb_dq_temp, cb_v_norms);
                 mul_tiles_bcast_cols(cb_dq_temp, cb_v_norms, src_tile, row, 0);
                 tile_regs_commit();
                 tile_regs_wait();

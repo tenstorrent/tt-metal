@@ -238,23 +238,46 @@ quantize/dequant inside the kernel at BF16. The fix would be
 F32 internal accumulation in the cascade — non-trivial kernel
 change.
 
+### Tier 3A landed (2026-04-29) — +3.8 % perf, no quality cost
+
+Hoisted all SFPU `*_init` calls in `dequant_k_chunk` and
+`dequant_v_chunk` out of the per-tile and per-level loops. Init
+macros configure the SFPU dispatcher; once configured, subsequent
+ops of the same type don't need re-init. Drops ~480 init calls
+per chunk to 6.
+
+N150 bench delta:
+
+| seq    | Pre-3A ms | Post-3A ms |  Δ    |
+|-------:|----------:|-----------:|------:|
+|   1024 |    2.23   |    2.16    | −3.1% |
+|   8192 |   17.76   |   17.05    | −4.0% |
+|  32768 |   70.68   |   67.96    | −3.8% |
+| 131072 |  282.31   |  271.69    | −3.8% |
+
+Correctness verified: 32-layer Llama-3.1-8B "Paris" answer
+unchanged. Implementation in commit (this branch). Smaller than
+the original tier estimate (5–10 %) but a clean, free win.
+
+### Sliding-window hybrid: design doc ready
+
+`turbo_quant/SLIDING_WINDOW_DESIGN.md` — full plan for keeping
+the most recent W tokens in a BFP8 ring while older tokens use
+the TQ cache. Hypothesis: attention mass concentrates on recent
+tokens, so high-precision K/V there + lossy K/V for old tokens
+recovers most of the −10 pp top-1 gap with minimal memory cost
+(~4 MB total ring at W=64). ~1.5-day implementation; ready to
+pick up.
+
 ### Open follow-ups
 
-- **Investigate `bits=4` regression** — `turbo_quant/codebook.py`
-  Lloyd-Max generation; compare 3-bit and 4-bit centroid arrays
-  on a unit-Gaussian sample, check the codebook reconstruction
-  MSE per bit-count.
-- **Sliding-window hybrid** for Track B — recent tokens stay
-  BFP8 (or BF16), older tokens compress to BFP4. Recovers
-  quality while keeping memory + per-call speed wins on older
-  tokens.
+- **Sliding-window hybrid implementation** (per design doc) —
+  the actual fix for Track A's quality gap.
 - **T3K K=14 + Track A accuracy** — same 1024-position run on
   T3K should give the same top-1/top-5 (numerics deterministic)
   at much lower latency.
 - **Add `--tq-full-dequant` row** to `bench_seqlen_sweep.py`
   with K=14 numbers when run on T3K.
-- **Try 6/8-bit TQ** if the 4-bit fix lifts quality back above
-  3-bit — might be a usable accuracy/memory point for production.
 
 ### N150 per-call SDPA latency sweep (2026-04-29, K=1)
 
