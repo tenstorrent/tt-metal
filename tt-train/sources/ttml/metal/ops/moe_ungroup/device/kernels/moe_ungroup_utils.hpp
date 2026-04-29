@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,12 +22,8 @@ inline CoreSlice slice_for_core(uint32_t total, uint32_t num_cores, uint32_t cor
     uint32_t per_core = (total + num_cores - 1U) / num_cores;
     uint32_t start = core_idx * per_core;
     uint32_t end = start + per_core;
-    if (end > total) {
-        end = total;
-    }
-    if (start > total) {
-        start = total;
-    }
+    end = std::min(end, total);
+    start = std::min(start, total);
     return {start, end - start};
 }
 

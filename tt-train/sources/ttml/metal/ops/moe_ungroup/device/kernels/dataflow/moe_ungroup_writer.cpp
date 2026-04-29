@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,8 +65,9 @@ inline void brisc_signal_done_wait_release() {
     volatile tt_l1_ptr uint32_t* brisc_release =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(brisc_release_sem_id));
     *brisc_done = 1U;
-    while (*brisc_release == 0U) {
-    }
+    do {
+        invalidate_l1_cache();
+    } while ((*brisc_release) == 0U);
     *brisc_release = 0U;
 }
 

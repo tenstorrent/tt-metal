@@ -346,7 +346,6 @@ class TestMoeUngroupDevice:
         rtol: float = 3e-2,
     ):
         D, B, S, H = dispatched.shape
-        E_local = int(local_expert_ids.numel())
 
         ungrouped_tt, grouped_t, counts_t, offsets_t, plan_t = TestMoeUngroupDevice._run_group_then_ungroup(
             dispatched, metadata, scores, local_expert_ids, k

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -81,8 +81,10 @@ inline void barrier_fanin_mcast(uint32_t my_core_idx) {
 inline void handshake_then_barrier_then_release(uint32_t my_core_idx) {
     volatile tt_l1_ptr uint32_t* brisc_done =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(brisc_done_sem_id));
-    while (*brisc_done == 0U) {
-    }
+    do {
+        invalidate_l1_cache();
+    } while ((*brisc_done) == 0U);
+
     *brisc_done = 0U;
 
     barrier_fanin_mcast(my_core_idx);

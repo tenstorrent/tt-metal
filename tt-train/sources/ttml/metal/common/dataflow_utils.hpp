@@ -16,6 +16,9 @@
 constexpr uint32_t onetile = 1U;
 
 inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
+    if ((b & (b - 1U)) == 0U) {
+        return (a + (b - 1U)) & -b;
+    }
     return ((a + b - 1U) / b) * b;
 }
 
