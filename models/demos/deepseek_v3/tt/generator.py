@@ -3057,8 +3057,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             return
 
         user_id = 0
+        original_sample_on_device = getattr(self, "sample_on_device", False)
         if sample_on_device is None or self.vllm_context:
-            sample_on_device_list = [False, True]
+            sample_on_device_list = [False, True] if can_sample_on_device else [False]
         else:
             sample_on_device_list = [sample_on_device]
 
@@ -3101,6 +3102,13 @@ class DeepseekGenerator(WarmupForwardMixin):
                     except Exception as e:
                         logger.warning(f"Failed to deallocate prefill logits: {e}")
 
+        if getattr(self, "sample_on_device", False) != original_sample_on_device:
+            # Warmup may initialize sampling internals; restore the caller's expected mode.
+            self._validate_and_initialize_sampling(
+                None,
+                original_sample_on_device,
+                enable_trace=enable_trace,
+            )
         # Warmup creates temporary page tables; clean them up to free memory.
         try:
             if self.page_tables_tt is not None:
