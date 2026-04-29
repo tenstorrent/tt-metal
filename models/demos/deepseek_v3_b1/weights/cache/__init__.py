@@ -61,15 +61,21 @@ class CacheConfig:
     context: CacheContext
 
     @classmethod
-    def ephemeral(cls, *, move_to_device: bool = True) -> CacheConfig:
-        """Config with in-memory cache only (no disk); used when callers omit ``cache_config``."""
+    def ephemeral(cls, *, move_to_device: bool = True, mesh_shape: tuple[int, int] = (1, 1)) -> CacheConfig:
+        """Config with in-memory cache only (no disk); used when callers omit ``cache_config``.
+
+        ``mesh_shape`` must match the actual device mesh — the TP8 cache helpers
+        (e.g. :func:`get_or_create_bspm_expert_tp8`) cross-check ``Fingerprint.mesh_shape``
+        against the runtime device mesh, so leaving the default ``(1, 1)`` on a
+        multi-device run will raise.
+        """
         return cls(
             cache=EphemeralTensorCache(move_to_device=move_to_device),
             context=CacheContext(
                 schema_version=0,
                 hf_model_id="ephemeral",
                 hf_revision="ephemeral",
-                mesh_shape=(1, 1),
+                mesh_shape=mesh_shape,
             ),
         )
 

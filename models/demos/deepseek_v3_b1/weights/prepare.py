@@ -515,6 +515,11 @@ def _key(layer_idx: int, suffix: str) -> str:
     return f"model.layers.{layer_idx}.{suffix}"
 
 
+def _device_mesh_shape(device) -> tuple[int, int]:
+    """Return ``(mesh_rows, mesh_cols)`` for ``device``, or ``(1, 1)`` for single device."""
+    return (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
+
+
 def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
     """Build gate_bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core, replicated across mesh.
 
@@ -668,7 +673,7 @@ def prepare_attention_weights(
 ) -> AttentionWeights:
     """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     mla_tp, _ = _tp_factors(device)
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
 
@@ -991,7 +996,7 @@ def prepare_shared_expert_weights(
 ) -> SharedExpertWeights:
     """Prepare shared expert weights (gate_up fusion group + shared_down_proj) for one layer."""
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.debug("Converting shared expert weights for layer {} (is_moe={})", layer_idx, is_moe)
     t0 = time.perf_counter()
     _, moe_tp = _tp_factors(device)
@@ -1257,7 +1262,7 @@ def prepare_moe_routed_experts_bspm_tp8(
     dramatically when ``bspm_path is None``.
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
 
     tile_w = 32
     bspm_data = None
@@ -1396,7 +1401,7 @@ def prepare_routed_expert_weights(
     TensorCache (variable-length tiles, no DRAM padding).
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     num_banks = device.dram_grid_size().x
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     if is_moe:
@@ -1726,7 +1731,7 @@ def prepare_embedding_weights(
 ) -> DeepSeekV3EmbeddingLayerWeights:
     """Prepare embedding weights from state dict (model.embed_tokens.weight)."""
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.info("Preparing embedding weights...")
     _src_key = "model.embed_tokens.weight"
 
@@ -1766,7 +1771,7 @@ def prepare_lm_head_weights(
     sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.info("Preparing LM head weights...")
     _lm_key = "lm_head.weight"
 
@@ -1850,7 +1855,7 @@ def prepare_shared_head_norm(
     omit ``cache_config`` and rely on the default ephemeral cache.
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
 
     _shared_norm_key = _key(mtp_layer_idx, "shared_head.norm.weight")
     shared_norm_target = _mtp_norm_target("shared_head_norm")
@@ -1904,7 +1909,7 @@ def prepare_mtp_weights(
     layer handled through ``prepare_moe_layer_weights``.
     """
     if cache_config is None:
-        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device, mesh_shape=_device_mesh_shape(device))
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
 
