@@ -2303,7 +2303,8 @@ def test_benchmark_gate_proj(device, formats_per_device, fmt_ratios):
     ids=["bfp4_bfp0", "bfp4_bfp2_bfp0"],
 )
 def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
-    """MoE up-proj shape: 8 experts, 8 selected (1 per device), K=7168, N=256, DRAM-only."""
+    """MoE up-proj shape matching TP8 setup_matmul_expert_dram: K=7168, N=256/device,
+    cores_per_dram_bank=1 (one streamer), num_subblocks_k=8, num_active_experts=8."""
     _run_hybrid_expert_multi_device(
         device,
         M=1,
@@ -2314,10 +2315,10 @@ def test_benchmark_up_proj(device, formats_per_device, fmt_ratios):
         dram_expert_ids=list(range(8)),
         active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
         formats_per_device=[formats_per_device],
-        num_subblocks_k=4,
+        num_subblocks_k=8,
         num_subblocks_n=1,
         n_parallel_per_bank=1,
-        k_parallel_per_bank=2,
+        k_parallel_per_bank=1,
         fmt_distribution="uniform",
         fmt_ratios=fmt_ratios,
         num_loop_iters=100,

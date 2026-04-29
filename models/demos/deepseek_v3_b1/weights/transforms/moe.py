@@ -27,13 +27,27 @@ def _tp_factors(device) -> tuple[int, int]:
     return 2, 8
 
 
-def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> torch.Tensor:
-    """Reorder tiles within each DRAM bank shard from row-major to column-major.
+def shuffle_dram_tiles(
+    tensor: torch.Tensor,
+    tile_size: int,
+    num_banks: int,
+    subblock_k: int | None = None,
+    subblock_n: int = 1,
+) -> torch.Tensor:
+    """Reorder tiles within each DRAM bank shard for the streaming matmul kernel.
 
-    WIDTH_SHARDED DRAM layout stores tiles row-major, but the streaming
-    matmul kernel expects K tiles contiguous for each N column.  This
-    function transposes the tile order within each shard so that the
-    kernel can linearly read K tiles at a time.
+    Within each bank shard, tiles are grouped into ``[subblock_k × subblock_n]``
+    blocks laid out K-outer / N-inner inside the block (matches LLK
+    ``compressed_custom_mm_block`` ct_dim walk). Block ordering inside the shard
+    is ``k_sub`` outer / ``n_group`` inner.
+
+    Defaults (``subblock_k=K_tiles``, ``subblock_n=1``) reproduce the original
+    column-major-per-N-column layout (block per N-col holds full K).
+
+    Note: when both ``num_subblocks_k > 1`` and ``num_n_groups > 1``, this
+    block-ordering is ``k_sub``-outer while the kernel's ``_compute_expert_subblock_metadata``
+    walks ``ng``-outer — only matches when ``num_subblocks_k == 1`` or
+    ``num_n_groups == 1``. All current production projections satisfy this.
     """
     orig_shape = tensor.shape
     K, N = orig_shape[-2], orig_shape[-1]
@@ -53,6 +67,23 @@ def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> 
     per_N_tiles = per_N // tile_size
     num_tiles_per_shard = K_tiles * per_N_tiles
 
+    if subblock_k is None:
+        subblock_k = K_tiles
+
+    if K_tiles % subblock_k != 0:
+        raise ValueError(f"K_tiles ({K_tiles}) must be divisible by subblock_k ({subblock_k})")
+    if per_N_tiles % subblock_n != 0:
+        raise ValueError(f"per_N_tiles ({per_N_tiles}) must be divisible by subblock_n ({subblock_n})")
+    # Block ordering inside the shard is k_sub-outer / n_group-inner; the kernel
+    # consumption order in `_compute_expert_subblock_metadata` is ng-outer /
+    # sb_k-inner. Both agree when at least one factor is 1; the both-split case
+    # would silently mis-order blocks and is intentionally disallowed.
+    assert (K_tiles // subblock_k) == 1 or (per_N_tiles // subblock_n) == 1, (
+        f"shuffle_dram_tiles: configs with both num_subblocks_k>1 ({K_tiles // subblock_k}) "
+        f"and num_n_groups>1 ({per_N_tiles // subblock_n}) are not supported — block ordering "
+        f"would not match the kernel's metadata walk. Pick subblock_k=K_tiles or subblock_n=per_N_tiles."
+    )
+
     tensor = tensor.reshape(batch_size, K, num_banks, per_N)
     tensor = tensor.permute(0, 2, 1, 3).contiguous()
     shards = tensor.reshape(-1, K, per_N)
@@ -61,8 +92,19 @@ def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> 
     tiles = tiles.permute(0, 1, 3, 2, 4).contiguous()
     tiles = tiles.reshape(-1, num_tiles_per_shard, tile_size, tile_size)
 
+    num_n_groups = per_N_tiles // subblock_n
+    block_size = subblock_k * subblock_n
+
     i = torch.arange(num_tiles_per_shard, device=tensor.device)
-    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+    block_idx = i // block_size
+    pos_in_block = i % block_size
+    local_k = pos_in_block // subblock_n
+    local_n = pos_in_block % subblock_n
+    n_group = block_idx % num_n_groups
+    k_sub = block_idx // num_n_groups
+    global_k = k_sub * subblock_k + local_k
+    global_n = n_group * subblock_n + local_n
+    source_idx = global_k * per_N_tiles + global_n
     shuffled_tiles = tiles[:, source_idx, :, :]
 
     shuffled_tiles = shuffled_tiles.reshape(-1, K_tiles, per_N_tiles, tile_size, tile_size)
@@ -79,12 +121,22 @@ def shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> 
     return shuffled.reshape(*orig_shape)
 
 
-def shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarray:
-    """Apply the same tile permutation as shuffle_dram_tiles to a BSPM assignment array.
+def shuffle_dram_assignment(
+    assignment: np.ndarray,
+    num_banks: int,
+    subblock_k: int | None = None,
+    subblock_n: int = 1,
+) -> np.ndarray:
+    """Apply the same tile permutation as :func:`shuffle_dram_tiles` to a BSPM assignment array.
+
+    Defaults (``subblock_k=K_tiles``, ``subblock_n=1``) reproduce the original
+    permutation. ``subblock_n > 1`` mirrors the parametric block-grouped layout.
 
     Args:
         assignment: ``(tiles_h, tiles_w)`` int8 tile format codes in logical order.
         num_banks: Number of DRAM banks (``device.dram_grid_size().x``).
+        subblock_k: K-tile dim of one matmul block (defaults to full K).
+        subblock_n: N-tile dim of one matmul block (default 1).
 
     Returns:
         ``(tiles_h, tiles_w)`` int8 array in DRAM-shuffled order — same counts, reordered.
@@ -99,8 +151,35 @@ def shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarra
     K_tiles = tiles_h
     num_tiles_per_shard = K_tiles * per_N_tiles
 
+    if subblock_k is None:
+        subblock_k = K_tiles
+
+    if K_tiles % subblock_k != 0:
+        raise ValueError(f"K_tiles ({K_tiles}) must be divisible by subblock_k ({subblock_k})")
+    if per_N_tiles % subblock_n != 0:
+        raise ValueError(f"per_N_tiles ({per_N_tiles}) must be divisible by subblock_n ({subblock_n})")
+    # See note in shuffle_dram_tiles: block ordering inside the shard is
+    # k_sub-outer / n_group-inner, which only matches the kernel's metadata walk
+    # when one factor is 1. Disallow the both-split case here too.
+    assert (K_tiles // subblock_k) == 1 or (per_N_tiles // subblock_n) == 1, (
+        f"shuffle_dram_assignment: configs with both num_subblocks_k>1 ({K_tiles // subblock_k}) "
+        f"and num_n_groups>1 ({per_N_tiles // subblock_n}) are not supported — block ordering "
+        f"would not match the kernel's metadata walk. Pick subblock_k=K_tiles or subblock_n=per_N_tiles."
+    )
+
+    num_n_groups = per_N_tiles // subblock_n
+    block_size = subblock_k * subblock_n
+
     i = np.arange(num_tiles_per_shard)
-    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+    block_idx = i // block_size
+    pos_in_block = i % block_size
+    local_k = pos_in_block // subblock_n
+    local_n = pos_in_block % subblock_n
+    n_group = block_idx % num_n_groups
+    k_sub = block_idx // num_n_groups
+    global_k = k_sub * subblock_k + local_k
+    global_n = n_group * subblock_n + local_n
+    source_idx = global_k * per_N_tiles + global_n
 
     result = np.empty_like(assignment)
     for b in range(num_banks):
@@ -206,6 +285,8 @@ def moe_routed_expert_bspm_tp8_torch_for_cache(
     num_banks: int,
     mesh_shape: tuple[int, int],
     shard_dim: int,
+    subblock_k: int | None = None,
+    subblock_n: int = 1,
 ) -> tuple[torch.Tensor, np.ndarray]:
     """TP-shard a routed expert and matching BSPM assignment across a 2D mesh.
 
@@ -258,14 +339,18 @@ def moe_routed_expert_bspm_tp8_torch_for_cache(
             if N_padded != per_device_N:
                 slc = torch.nn.functional.pad(slc, (0, N_padded - per_device_N))
             shuffled_slices.append(
-                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(K_per_device, N_padded)
+                shuffle_dram_tiles(
+                    slc.unsqueeze(0), tile_w, num_banks, subblock_k=subblock_k, subblock_n=subblock_n
+                ).reshape(K_per_device, N_padded)
             )
 
             tile_col_start = col_start // tile_w
             tile_col_end = col_end // tile_w
             assignment_slice = assignment[:, tile_col_start:tile_col_end]
             assignment_slice = _pad_assignment_cols(assignment_slice, assignment_cols)
-            shuffled_assignments.append(shuffle_dram_assignment(assignment_slice, num_banks))
+            shuffled_assignments.append(
+                shuffle_dram_assignment(assignment_slice, num_banks, subblock_k=subblock_k, subblock_n=subblock_n)
+            )
     elif shard_dim == 0:
         assert K % tp == 0, f"K={K} must be divisible by tp={tp} for row-parallel shard"
         per_device_K = K // tp
@@ -287,13 +372,17 @@ def moe_routed_expert_bspm_tp8_torch_for_cache(
             if N_padded != N:
                 slc = torch.nn.functional.pad(slc, (0, N_padded - N))
             shuffled_slices.append(
-                shuffle_dram_tiles(slc.unsqueeze(0), tile_w, num_banks).reshape(K_per_device, N_padded)
+                shuffle_dram_tiles(
+                    slc.unsqueeze(0), tile_w, num_banks, subblock_k=subblock_k, subblock_n=subblock_n
+                ).reshape(K_per_device, N_padded)
             )
 
             tile_row_start = row_start // tile_w
             tile_row_end = row_end // tile_w
             assignment_slice = assignment_padded[tile_row_start:tile_row_end, :]
-            shuffled_assignments.append(shuffle_dram_assignment(assignment_slice, num_banks))
+            shuffled_assignments.append(
+                shuffle_dram_assignment(assignment_slice, num_banks, subblock_k=subblock_k, subblock_n=subblock_n)
+            )
     else:
         raise ValueError(f"shard_dim must be 0 or 1, got {shard_dim}")
 

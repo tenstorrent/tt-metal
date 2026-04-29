@@ -462,6 +462,7 @@ class MoeRoutedExpertOp:
         mesh_device,
         cts_list,
         num_subblocks_k=4,
+        num_subblocks_n=1,
         num_active_experts=8,
         num_total_experts=None,
         cores_per_dram_bank=1,
@@ -529,6 +530,10 @@ class MoeRoutedExpertOp:
         ), f"per_device_tiles_w ({ct0._per_device_tiles_w}) must divide num_banks*cores_per_bank ({num_banks * cores_per_dram_bank})"
         assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks_k ({num_subblocks_k})"
         subblock_k = Kt // num_subblocks_k
+        assert (
+            per_core_n % num_subblocks_n == 0
+        ), f"per_core_n ({per_core_n}) must be divisible by num_subblocks_n ({num_subblocks_n})"
+        subblock_n = per_core_n // num_subblocks_n
 
         is_dram_flags = [1] * num_total_experts
 
@@ -541,6 +546,7 @@ class MoeRoutedExpertOp:
             n_parallel_per_bank=cores_per_dram_bank,
             num_total_experts=num_total_experts,
             is_dram_flags=is_dram_flags,
+            subblock_n=subblock_n,
             primary_worker_cores=primary_worker_cores,
         )
 
@@ -582,9 +588,8 @@ class MoeRoutedExpertOp:
         compute_cores_list = [c for (c, _) in per_core_values_per_device[first_coord_for_cores]["bank_id"]]
 
         # Fmt DRAM sizing: recompute here (matches helper's internals).
-        # Phase 1C: k_parallel_per_bank=1, subblock_n=1 (matches setup), so
+        # k_parallel_per_bank=1; subblock_n is derived from num_subblocks_n above so
         # num_subblocks_k_local == num_subblocks_k and fmt describes full K × N.
-        subblock_n = 1
         k_parallel_per_bank = 1
         num_subblocks_k_local = num_subblocks_k // k_parallel_per_bank
         _DRAM_ALIGNMENT = ttnn._ttnn.bfp_utils.get_dram_alignment()
@@ -618,9 +623,16 @@ class MoeRoutedExpertOp:
 
         # Legacy fields that _overlap_cbs_with_sdpa_buffer consumes (total size + tile
         # metadata to rebuild cb_in1 pointed at the SDPA backing buffer instead of the
-        # in1_backing_tensor we just allocated in L1 locally).
-        in1_block_size_bytes = subblock_k * max_tile_size
+        # in1_backing_tensor we just allocated in L1 locally). MUST include subblock_n
+        # so the L1 CB carved by `_overlap_cbs_with_sdpa_buffer` matches the per-slot
+        # bytes the streaming kernel actually writes (subblock_k × subblock_n × tile);
+        # otherwise NCRISC overruns the CB and corrupts adjacent L1 → NCRISC hang.
+        in1_block_size_bytes = subblock_k * subblock_n * max_tile_size
         in1_total_size = num_in1_buffers * in1_block_size_bytes
+        assert in1_total_size == cb_in1_dram_total_bytes, (
+            f"in1_total_size ({in1_total_size}) must equal cb_in1_dram_total_bytes "
+            f"({cb_in1_dram_total_bytes}); both must size the same CB."
+        )
 
         # Subblock width for compute kernel — mirrors setup_dram_matmul (fp32_dest_acc_en=False for MoE).
         max_subblock_w = 16 if per_core_n <= 16 else 8
@@ -1401,7 +1413,8 @@ class MoeRoutedExpertOp:
             gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=gate_proj_weights_tensor,
-                num_subblocks_k=8,
+                num_subblocks_k=4,
+                num_subblocks_n=1,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )
@@ -1423,7 +1436,8 @@ class MoeRoutedExpertOp:
             up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=up_proj_weights_tensor,
-                num_subblocks_k=8,
+                num_subblocks_k=4,
+                num_subblocks_n=1,
                 num_active_experts=8,
                 primary_worker_cores=gate_proj_worker_cores,
             )
@@ -1509,7 +1523,8 @@ class MoeRoutedExpertOp:
             down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=down_proj_weights_tensor,
-                num_subblocks_k=2,
+                num_subblocks_k=1,
+                num_subblocks_n=4,
                 num_active_experts=8,
                 accum_experts=1,
                 primary_worker_cores=gate_proj_worker_cores,

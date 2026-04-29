@@ -1272,17 +1272,20 @@ def prepare_moe_routed_experts_bspm_tp8(
         bspm_data = load_bspm_for_layer(str(bspm_path))
         logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
 
+    # (proj_name, shard_dim, subblock_n) — subblock_n must match the kernel's
+    # subblock_n in setup_matmul_expert_dram. gate/up use subblock_n=1; down_proj
+    # uses subblock_n=7 (per_core_N=28, num_subblocks_n=4 → subblock_n=7).
     proj_specs = [
-        ("gate_proj", 1),
-        ("up_proj", 1),
-        ("down_proj", 0),
+        ("gate_proj", 1, 1),
+        ("up_proj", 1, 1),
+        ("down_proj", 0, 7),
     ]
 
     mesh_rows, mesh_cols = mesh_shape
     tp = mesh_rows * mesh_cols
 
     results: list[list[CompressedTensor]] = [[], [], []]
-    for proj_idx, (proj_name, shard_dim) in enumerate(proj_specs):
+    for proj_idx, (proj_name, shard_dim, proj_subblock_n) in enumerate(proj_specs):
         keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
         sample_w = state_dict[keys[0]]
         K, N = sample_w.shape[1], sample_w.shape[0]
@@ -1350,6 +1353,7 @@ def prepare_moe_routed_experts_bspm_tp8(
                 shard_dim=shard_dim,
                 K_per_device=K_per_device,
                 N_padded_per_device=N_padded_per_device,
+                subblock_n=proj_subblock_n,
                 move_to_device=move_to_device,
             )
             results[proj_idx].append(ct)
