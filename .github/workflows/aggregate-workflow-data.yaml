@@ -342,21 +342,11 @@ jobs:
           echo "DEBUG: FAKE_HAS_FAILED='${FAKE_HAS_FAILED}' ANALYZE_HAS_FAILED='${ANALYZE_HAS_FAILED}' => HAS_FAILED='${HAS_FAILED}'"
           echo "DEBUG: FAKE_HAS_REGRESSIONS='${FAKE_HAS_REGRESSIONS}' ANALYZE_HAS_REGRESSIONS='${ANALYZE_HAS_REGRESSIONS}' => HAS_REGRESSIONS='${HAS_REGRESSIONS}'"
 
-  debug-outputs:
-    needs: analyze-data
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Print analyze-data outputs
-        run: |
-          echo "analyze-data result: ${{ needs.analyze-data.result }}"
-          echo "has_failed_workflows: '${{ needs.analyze-data.outputs.has_failed_workflows }}'"
-          echo "has_regressions: '${{ needs.analyze-data.outputs.has_regressions }}'"
-          echo "has_failed_workflows == true: ${{ needs.analyze-data.outputs.has_failed_workflows == 'true' }}"
-
   handle-failures:
-    needs: [analyze-data, debug-outputs]
-    if: ${{ always() && needs.analyze-data.outputs.has_failed_workflows == 'true' }}
+    needs: analyze-data
+    # always() is required: without it, GHA transitively skips this job when
+    # fetch-data (an indirect ancestor via analyze-data) is skipped in fake mode.
+    if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_failed_workflows == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
