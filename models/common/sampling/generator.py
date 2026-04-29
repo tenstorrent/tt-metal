@@ -448,6 +448,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         if temperature[i] == 0:
             temperature[i] = 1.0
             top_k[i] = 1
+            # Greedy: no nucleus filter; also required for TTSampling force-argmax (p must be 1.0).
+            top_p[i] = 1.0
         else:
             temperature[i] = 1 / temperature[i]
 

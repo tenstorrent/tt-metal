@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, SavedWeight, optimal_topology
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
@@ -109,6 +109,13 @@ def make_deepseek_sampling_args(
     per_device_vocab = int(math.ceil(vocab_size / num_tp))
     padded_per_device_vocab = int(math.ceil(per_device_vocab / ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
     padded_vocab_size = padded_per_device_vocab * num_tp
+    # Enable TTSampling force-argmax path (full-vocab gather + argmax) for deterministic greedy
+    # when format_sampling_params maps temperature==0 to k=1, p=1, temp=1.
+    sampling_ag_config = {
+        "allow_force_argmax": True,
+        "num_links": 1,
+        "topology": optimal_topology,
+    }
     return DeepseekSamplingArgs(
         vocab_size=vocab_size,
         padded_vocab_size=padded_vocab_size,
@@ -117,6 +124,7 @@ def make_deepseek_sampling_args(
         sampling_dp=sampling_dp,
         cluster_shape=cluster_shape,
         sampling_all_gather_axis=sampling_all_gather_axis,
+        model_config={"SAMPLING_AG_CONFIG": sampling_ag_config},
     )
 
 
