@@ -111,29 +111,37 @@ class TestFactory:
 def parametrize_mesh_with_fabric():
     """Universal mesh parametrization with automatic fabric setup.
 
-    Single-device runs (e.g. 1x1 Blackhole) disable fabric since there is no
-    inter-chip topology to ring around — mirrors the tt_transformers
-    conftest.py pattern where is_single_device sets fabric_config=None.
+    The mesh_device parameter has no explicit id — there's exactly one base
+    mesh per system (auto-selected from the available device count), so the
+    base-mesh id would be redundant in test names. Tests that exercise
+    multiple submesh shapes should additionally use ``parametrize_mesh_shapes``
+    (or a manual ``mesh_shape`` parametrize) and rely on its ids for
+    filtering. This avoids the ``mesh_1x2-...-mesh_1x1`` dual-id confusion
+    where the outer is just whatever base mesh the system happens to have.
+
+    Single-device / two-device runs (e.g. 1x1 Blackhole P150 or 1x2 P300)
+    disable fabric since there is no inter-chip topology to ring around —
+    mirrors the tt_transformers conftest.py pattern where is_single_device
+    sets fabric_config=None.
     """
     num_devices = ttnn.get_num_devices()
     if num_devices == 1:
-        mesh_params = [pytest.param((1, 1), id="mesh_1x1")]
+        mesh_params = [pytest.param((1, 1))]
         fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
     elif num_devices == 2:
-        # 2-card Blackhole (e.g. P300). Open a 1x2 base mesh; the test selects a
-        # submesh via the mesh_shape parametrize (use -k mesh_1x1 to run on a
-        # single card). Fabric stays disabled since 1x1 needs no CCL.
-        mesh_params = [pytest.param((1, 2), id="mesh_1x2")]
+        # 2-card Blackhole (e.g. P300). Open a 1x2 base mesh; the test selects
+        # a submesh via the mesh_shape parametrize.
+        mesh_params = [pytest.param((1, 2))]
         fabric_params = [pytest.param({"fabric_config": None, "trace_region_size": 30000000}, id="no_fabric")]
     elif num_devices == 8:
-        mesh_params = [pytest.param((1, 8), id="mesh_1x8")]
+        mesh_params = [pytest.param((1, 8))]
         fabric_params = [
             pytest.param(
                 {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
             ),
         ]
     elif num_devices == 32:
-        mesh_params = [pytest.param((4, 8), id="mesh_4x8")]
+        mesh_params = [pytest.param((4, 8))]
         fabric_params = [
             pytest.param(
                 {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
