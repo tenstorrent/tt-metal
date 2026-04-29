@@ -17,6 +17,7 @@ on:
   merge_group:
 
 permissions:
+  actions: read
   packages: write
 
 concurrency:
