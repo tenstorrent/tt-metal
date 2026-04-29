@@ -7,6 +7,10 @@
 #include "sanitizer/settings.h"
 #include "sanitizer/types.h"
 
+#if !defined(KERNEL_NAME)
+#define KERNEL_NAME "<unknown>"
+#endif
+
 #ifndef LLK_SAN_ENABLE
 
 #define LLK_SAN_ASSERT(condition, ...)
@@ -25,13 +29,13 @@
 
 #include "api/debug/device_print.h"
 
-#define LLK_SAN_ASSERT(condition, fmt, ...)                      \
-    do                                                           \
-    {                                                            \
-        if (!(condition))                                        \
-        {                                                        \
-            DEVICE_PRINT("llk::san | " fmt "\n", ##__VA_ARGS__); \
-        }                                                        \
+#define LLK_SAN_ASSERT(condition, fmt, ...)                                     \
+    do                                                                          \
+    {                                                                           \
+        if (!(condition))                                                       \
+        {                                                                       \
+            DEVICE_PRINT(KERNEL_NAME " | llk::san | " fmt "\n", ##__VA_ARGS__); \
+        }                                                                       \
     } while (0)
 
 #else

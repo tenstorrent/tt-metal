@@ -182,7 +182,6 @@ static inline void unpack_operand_check_impl(
         LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{} : executing init/execute/uninit before hwconfigure", function);
 
         LLK_SAN_ERROR_ASSERT(state.dest_width_32.assert_cond(dest_acc_en), "{} : dest_acc_en doesn't match state.dest_width_32", function);
-
         LLK_SAN_ERROR_ASSERT(state.src_a.input_format.assert_cond(src_fmt_A), "{} : src_fmt_A doesn't match state.src_a.input_format", function);
         LLK_SAN_ERROR_ASSERT(state.src_b.input_format.assert_cond(src_fmt_B), "{} : src_fmt_B doesn't match state.src_b.input_format", function);
         LLK_SAN_ERROR_ASSERT(state.src_a.output_format.assert_cond(dst_fmt_A), "{} : dst_fmt_A doesn't match state.src_a.output_format", function);
