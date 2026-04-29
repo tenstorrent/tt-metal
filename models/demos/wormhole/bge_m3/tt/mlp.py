@@ -14,6 +14,7 @@ from models.demos.wormhole.bge_m3.tt.device_kernels import (
     bge_m3_mlp_wi_compute_kernel_config,
     bge_m3_mlp_wi_output_memory_config,
     bge_m3_mlp_wo_compute_kernel_config,
+    bge_m3_mlp_wo_output_memory_config,
     bge_m3_weight_dram_memory_config,
 )
 
@@ -202,12 +203,13 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
 
     act_mem = bge_m3_linear_activation_memory_config(max_seq, max_batch)
     wi_out_mem = bge_m3_mlp_wi_output_memory_config(max_seq, max_batch, mesh_device)
+    wo_out_mem = bge_m3_mlp_wo_output_memory_config(max_seq, max_batch, mesh_device)
     if config.activation_memcfg is None:
         to_set["activation_memcfg"] = act_mem
     if config.wi_memcfg is None:
         to_set["wi_memcfg"] = wi_out_mem
     if config.wo_memcfg is None:
-        to_set["wo_memcfg"] = act_mem
+        to_set["wo_memcfg"] = wo_out_mem
 
     if config.wi_compute_kernel_cfg is None:
         to_set["wi_compute_kernel_cfg"] = bge_m3_mlp_wi_compute_kernel_config(
