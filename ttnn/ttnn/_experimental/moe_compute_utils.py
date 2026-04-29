@@ -352,6 +352,12 @@ def prepare_w0_w1_tensor_for_moe_compute(
     """
     import torch
 
+    # Check that K and N are divisible by ttnn.TILE_SIZE
+    if K % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"K dimension ({K}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
+    if N % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"N dimension ({N}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
+
     Nt = N // ttnn.TILE_SIZE
     # in general, pad K up to a factor of transaction size (32*7)
     Kp = math.ceil(K // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
@@ -432,6 +438,12 @@ def prepare_w2_tensor_for_moe_compute(
         torch_w2_reordered: Reordered tensor of shape (L, E, N_padded, 7680)
     """
     import torch
+
+    # Check that N and K are divisible by ttnn.TILE_SIZE
+    if N % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"N dimension ({N}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
+    if K % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"K dimension ({K}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
 
     Kt = K // ttnn.TILE_SIZE
     num_cores = len(w2_shard_map)
@@ -537,6 +549,12 @@ def prepare_w0_w1_tensor_with_bias(
     """
     import torch
 
+    # Check that K and N are divisible by ttnn.TILE_SIZE
+    if K % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"K dimension ({K}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
+    if N % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"N dimension ({N}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
+
     # This constant must match moe_ring_common.h — it determines the DRAM read block alignment.
     K_tiles = K // ttnn.TILE_SIZE
     K_tiles_with_bias = K_tiles + 1
@@ -552,7 +570,6 @@ def prepare_w0_w1_tensor_with_bias(
     torch_w1_b1 = torch.cat([torch_w1, torch_b1_tiled], dim=2)  # (L, E, K+32, N)
 
     return prepare_w0_w1_tensor_for_moe_compute(torch_w0_b0, torch_w1_b1, L, E, K_with_bias, N, shard_map)
-    return
 
 
 def prepare_w2_tensor_with_bias(
@@ -591,6 +608,12 @@ def prepare_w2_tensor_with_bias(
         moe_ring_common.h; ``prepare_w2_tensor_for_moe_compute`` for the non-bias path.
     """
     import torch
+
+    # Check that N and K are divisible by ttnn.TILE_SIZE
+    if N % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"N dimension ({N}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
+    if K % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"K dimension ({K}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
 
     Kt = K // ttnn.TILE_SIZE
     Nt = N // ttnn.TILE_SIZE
@@ -694,8 +717,6 @@ def get_weight_core_shard_maps(mesh_device, pad_cores, w0_w1_shard_vals, w2_shar
     for dram_bank_id, core_coords in enumerate(in0_core_coords):
         core2dram[core_coords] = dram_bank_id
 
-    in0_num_cores = len(in0_core_coords)
-
     # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
     in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
 
@@ -736,6 +757,14 @@ def get_weight_mem_configs(
             - K_for_shard: The padded K dimension for W0/W1
             - w2_N_total: The padded N dimension for W2
     """
+
+    # Check that hidden_size and intermediate_size are divisible by ttnn.TILE_SIZE
+    if hidden_size % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"hidden_size ({hidden_size}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})")
+    if intermediate_size % ttnn.TILE_SIZE != 0:
+        raise ValueError(
+            f"intermediate_size ({intermediate_size}) must be divisible by ttnn.TILE_SIZE ({ttnn.TILE_SIZE})"
+        )
 
     # Calculate K dimension for W0/W1
     if has_bias:

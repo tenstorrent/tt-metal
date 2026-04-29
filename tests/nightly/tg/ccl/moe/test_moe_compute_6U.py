@@ -452,11 +452,11 @@ def validate_matmul(
                     f" Allclose passed: {allclose_passed}"
                 )
 
-            #  if not allclose_passed:
-            #                     mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
-            #                     logger.warning(
-            #                         f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
-            #                     )
+                if not allclose_passed:
+                    mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
+                    logger.warning(
+                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
+                    )
             else:
                 logger.info(
                     f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
@@ -541,7 +541,6 @@ def create_torch_w0(L, E, K, N):
         torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w0: RANDOM - mode={mode}")
 
-    # return torch.ones_like(torch_w0)
     return torch_w0
 
 
@@ -574,7 +573,6 @@ def create_torch_w1(L, E, K, N):
         # Use random weights for w1
         torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w1: RANDOM - mode={mode}")
-    # return torch.ones_like(torch_w1)
 
     return torch_w1
 
@@ -608,10 +606,6 @@ def create_torch_w2(L, E, N, K):
         # Use random weights for w2
         torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
-
-    # torch_w2 = torch.ones_like(torch_w2)
-    #     for i in range(N//32):
-    #         torch_w2[:,:,32*i:32*(i+1),:]*=i
 
     return torch_w2
 
@@ -705,9 +699,6 @@ def gen_sparse_buffer_and_indices(
     # original_tokens = torch.ones(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     # original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype) - 0.5
-
-    # for i in range(hidden_size//32):
-    #    original_tokens[:,:,32*i:32*(i+1)]*=i
 
     # Generate expert indices for each token
     # Shape: [num_dispatch_devices, tokens_per_device, selected_experts_k]
