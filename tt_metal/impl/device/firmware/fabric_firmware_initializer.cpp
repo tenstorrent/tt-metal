@@ -1610,6 +1610,65 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
 
+    // FIX M2 (#42429): Secondary check — for MMIO device channels showing 0x49706550 whose
+    // peer non-MMIO device is already confirmed dead-relay, allow a hard soft-reset instead
+    // of skipping.
+    //
+    // FIX M skips soft reset for channels in base_umd_channels_map to avoid halting the ETH
+    // relay BRISC while non-MMIO devices depend on it for relay reads.  This protection is
+    // correct when the peer non-MMIO device is alive and issuing relay reads.  But when the
+    // peer device is in dead_relay_devices_ (confirmed unreachable, no firmware loaded), the
+    // relay on that specific channel has NOTHING to serve.  Removing it from base_umd_channels
+    // lets configure_fabric_cores() perform a normal ERISC0 soft-reset, giving a clean slate.
+    //
+    // NOTE: We do NOT add these channels to probe_dead_channels_map.  Soft-reset (assert +
+    // deassert ERISC0) is safe here — the peer is dead, no relay reads are in flight by the
+    // time we reach PHASE 2 configure.  After reset, write_launch_msg_to_core loads fabric
+    // firmware; FIX I handles the fact that the peer handshake will never complete.
+    if (!dead_relay_devices_.empty()) {
+        const auto& eth_connections_m2 = cluster_.get_ethernet_connections();
+        for (auto* dev : compiled_devices) {
+            if (!dev) {
+                continue;
+            }
+            // Only MMIO devices can have base-UMD relay channels.
+            if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
+                continue;
+            }
+            auto& base_umd_chans = base_umd_channels_map[dev->id()];
+            if (base_umd_chans.empty()) {
+                continue;
+            }
+            auto dev_conn_it = eth_connections_m2.find(dev->id());
+            if (dev_conn_it == eth_connections_m2.end()) {
+                continue;
+            }
+            std::vector<uint32_t> to_force_reset;
+            for (const uint32_t chan : base_umd_chans) {
+                auto chan_conn_it = dev_conn_it->second.find(static_cast<int>(chan));
+                if (chan_conn_it == dev_conn_it->second.end()) {
+                    continue;
+                }
+                const ChipId peer_chip_id = std::get<0>(chan_conn_it->second);
+                if (dead_relay_devices_.count(peer_chip_id) > 0) {
+                    to_force_reset.push_back(chan);
+                    log_warning(
+                        tt::LogMetal,
+                        "compile_and_configure_fabric: FIX M2 (#42429) — Device {} chan={} "
+                        "shows 0x49706550 (base-UMD relay) but peer Device {} is confirmed "
+                        "dead-relay. Removing from base_umd_channels so configure_fabric_cores() "
+                        "performs a hard soft-reset instead of skipping (relay has nothing to serve).",
+                        dev->id(),
+                        chan,
+                        peer_chip_id);
+                }
+            }
+            for (const uint32_t chan : to_force_reset) {
+                base_umd_chans.erase(chan);
+            }
+        }
+    }
+
     // PHASE 2: Configure ALL devices now that probing is complete.
     // configure_fabric() switches ETH channels from base UMD firmware to fabric firmware.
     // configure_fabric_cores() performs ERISC0 soft reset (assert_risc_reset_at_core /

@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -587,7 +587,7 @@ else:
 echo ""
 
 # ─── DISPATCH CASCADE (FIX PA/PB/PC) ───
-echo "=== DISPATCH CASCADE (500ms fw_launch_addr stale — FIX PA/PB/PC) ==="
+echo "=== DISPATCH CASCADE (500ms fw_launch_addr stale — FIX PA/PB/PC/PD) ==="
 python3 -c "
 import re, sys, collections
 with open('$CLEAN') as f:
@@ -651,6 +651,33 @@ else:
         print('  If FIX PC is present and cascade persists, check: write_core_immediate')
         print('  failed silently for affected channel coordinates (catch(...) swallows it).')
 "
+echo ""
+
+# ─── DISPATCH CQ DEADLOCK ───
+echo "=== DISPATCH CQ DEADLOCK (fetch_queue_reserve_back timeout — GAP-58) ==="
+grep -E 'fetch_queue_reserve_back|cq_id=.*in_flight=128|Timeout detected' "$CLEAN" | \
+python3 -c "
+import sys, re, signal
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+lines = [l.rstrip() for l in sys.stdin]
+cq_timeouts = [l for l in lines if 'fetch_queue_reserve_back timeout' in l]
+if not cq_timeouts:
+    print('  (no fetch_queue_reserve_back timeout detected — dispatch CQ appears healthy)')
+else:
+    print(f'  [CQ DEADLOCK DETECTED] {len(cq_timeouts)} fetch_queue_reserve_back timeout(s)')
+    for l in cq_timeouts[:5]:
+        m = re.search(r'cq_id=(\d+) in_flight=(\d+) ptrs=(0x[0-9a-f]+) fences=(0x[0-9a-f]+)', l)
+        if m:
+            cq_id, inflight, ptrs, fences = m.group(1), m.group(2), m.group(3), m.group(4)
+            print(f'  cq_id={cq_id} in_flight={inflight} write_ptr={ptrs} completion_ptr={fences}')
+        else:
+            print(f'  {l[-120:]}')
+    print()
+    print('  Root cause: Dispatch CQ filled to 128 in-flight commands; device stopped consuming.')
+    print('  Likely fabric/dispatch deadlock: dispatch waiting for fabric, fabric waiting for dispatch.')
+    print('  This is GAP-58 — the actual race condition being hunted (cascade was masking this).')
+    print('  Next: Investigate system_memory_manager.cpp:fetch_queue_reserve_back + AllGather interaction.')
+" || true
 echo ""
 
 # ─── ERRORS/WARNINGS ───
@@ -842,6 +869,13 @@ FIX_NU_COORD=$(grep -cE 'FIX NU: Captured EthCoord|Captured EthCoord.*MMIO.*befo
 #   CI ref: run 25086219070 (job 73503180670): 6 channels × 5s = 30s → GHA 5-min action timeout.
 FIX_NX_THROWS=$(grep -cE 'FIX NX: write_core.*threw|Marking relay broken \(FIX NX\+NY\)' "$CLEAN" 2>/dev/null || echo 0)
 FIX_NY_SKIPS=$(grep -cE 'FIX NY: write_core.*skipped.*relay already known broken' "$CLEAN" 2>/dev/null || echo 0)
+# FIX M2 (#42429): Secondary check in compile_and_configure_fabric() — channel showed 0x49706550 (base-UMD relay)
+# but peer non-MMIO device is confirmed dead-relay → remove from base_umd_channels so configure_fabric_cores()
+# performs a hard soft-reset (no relay reads in flight, safe to reset).
+FIX_M2_FIRES=$(grep -cE 'FIX M2.*dead-relay|compile_and_configure_fabric: FIX M2' "$CLEAN" 2>/dev/null || echo 0)
+# FIX PL (#42429): opt-in timeout guards on l1_barrier / dram_barrier / read_core for non-MMIO chips.
+# Fires when the ERISC relay path is dead and the barrier/read would otherwise hang indefinitely.
+FIX_PL_FIRES=$(grep -cE 'clear_l1_state: l1_barrier timed out.*dead ERISC relay|clear_dram_state: dram_barrier timed out|terminate_active_ethernet_cores_on_all_chips: l1_barrier timed out|WriteInitMagic: read_core timed out' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
@@ -999,6 +1033,22 @@ elif [ "${FIX_NX_THROWS:-0}" -gt 0 ]; then
     echo "     If testee took >35s for MetalContext::initialize, FIX NY may be missing/reverted."
     echo "     CI ref: run 25086219070 (job 73503180670): 6 FIX NX throws at 5s intervals = 30s stall."
     echo "     FIX NY fix: relay_broken_chips_ unordered_set in Cluster; check before write_to_device()."
+fi
+if [ "${FIX_M2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX M2] compile_and_configure_fabric: secondary base-UMD channel check fired (${FIX_M2_FIRES} channel(s))."
+    echo "     Channel(s) showed 0x49706550 sentinel (base-UMD relay active) BUT peer non-MMIO device was"
+    echo "     already in dead_relay_devices_ (confirmed unreachable by PHASE 1 probe). FIX M2 removes these"
+    echo "     channels from base_umd_channels_map so configure_fabric_cores() performs a hard soft-reset"
+    echo "     (assert+deassert ERISC0) instead of skipping — safe because no relay reads are in flight."
+    echo "     FIX I handles the resulting dead-peer sync handshake skip in PHASE 2."
+fi
+if [ "${FIX_PL_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX PL] Non-MMIO relay barrier/read timed out (${FIX_PL_FIRES} occurrence(s))."
+    echo "     Affected call sites: clear_l1_state l1_barrier, clear_dram_state dram_barrier,"
+    echo "     terminate_active_ethernet_cores_on_all_chips l1_barrier, WriteInitMagic read_core."
+    echo "     All four routes through the ERISC relay on non-MMIO chips — when the relay is dead,"
+    echo "     the call would hang indefinitely without the FIX PL timeout guard."
+    echo "     Each timed-out call logs a warning and continues (best-effort, no throw)."
 fi
 echo ""
 echo "========================================================================"

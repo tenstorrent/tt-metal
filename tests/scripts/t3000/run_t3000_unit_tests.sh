@@ -103,13 +103,51 @@ run_t3000_ttnn_tests() {
   # rather than letting the whole test script hang forever.
   timeout 30 tt-smi -r || true
 
+  # T3K topology sanity check — fail immediately if fewer than 8 chips are visible.
+  # A degraded N300 host (FIX AQ path) shrinks the topology to 4 MMIO-only chips.
+  # T3K multi-chip GTest fixtures call GTEST_SKIP() on a 4-chip topology and exit 0 —
+  # CI then appears green even though every T3K-specific test was skipped.
+  # This pre-check catches the degraded state before any test runs so CI reports a
+  # real failure and the on-call engineer knows hardware needs attention.
+  local n_chips
+  n_chips=$(python3 -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>&1 || echo "ERROR")
+  if ! [[ "$n_chips" =~ ^[0-9]+$ ]]; then
+    echo "LOG_METAL: ERROR — T3K topology check failed to query device count (python output: ${n_chips})" >&2
+    exit 1
+  fi
+  if [[ "$n_chips" -lt 8 ]]; then
+    echo "LOG_METAL: ERROR — T3K topology check FAILED: only ${n_chips}/8 chips visible." >&2
+    echo "LOG_METAL: Hardware is degraded (N300 host-side failure or missing chips)." >&2
+    echo "LOG_METAL: T3K tests would silently SKIP rather than run — failing fast." >&2
+    exit 1
+  fi
+  echo "LOG_METAL: T3K topology OK — ${n_chips}/8 chips visible."
+
   # Per-test-failure hardware reset hook.
   # Call immediately after each test line: `cmd; record_test`
   # Captures $? from the preceding command, accumulates into $fail, and
   # triggers tt-smi -r on any individual failure so subsequent tests start
   # from a clean hardware state rather than inheriting stale ERISC/ETH residue.
+  #
+  # Skip-count guard: if a GTest binary wrote /tmp/gtest_last_result.xml (via
+  # GTEST_OUTPUT env var), parse the skip count and treat non-zero skips as failure.
+  # This catches the case where T3K fixtures call GTEST_SKIP() when topology is
+  # degraded mid-run but exit 0 (GTest exits 0 on all-skipped by default).
   record_test() {
     local rc=$?
+    # Check GTest XML for skip-only passes if the XML output file is present.
+    # GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" must be set before each GTest invocation.
+    if [[ $rc -eq 0 && -f /tmp/gtest_last_result.xml ]]; then
+      local total_skipped
+      total_skipped=$(grep -oP '(?<=skipped=")[0-9]+' /tmp/gtest_last_result.xml \
+                        | awk '{s+=$1} END {print s+0}' 2>/dev/null || echo 0)
+      if [[ "${total_skipped:-0}" -gt 0 ]]; then
+        echo "LOG_METAL: ERROR — exit 0 but ${total_skipped} test(s) SKIPPED in GTest XML." >&2
+        echo "LOG_METAL: T3K topology may have degraded mid-run — treating as failure." >&2
+        rc=1
+      fi
+      rm -f /tmp/gtest_last_result.xml
+    fi
     fail+=$rc
     if [[ $rc -ne 0 ]]; then
       echo "LOG_METAL: test returned rc=$rc — resetting hardware via tt-smi"
@@ -141,11 +179,12 @@ run_t3000_ttnn_tests() {
   # below at full coverage. Running it twice (641s each) consumed the entire
   # budget before unit_tests_ttnn could complete.
   ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
-  timeout 900 ./build/test/ttnn/unit_tests_ttnn ; record_test
-  timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; record_test
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
+  # GTEST_OUTPUT writes skip counts to XML so record_test can detect all-skipped passes.
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/ttnn/unit_tests_ttnn ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
   # Disabled: ManualPagesIterationInterleaved rank_6+ hangs with unsafe NOC read on T3K (issue #42195)
   # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; record_test
   #
@@ -166,7 +205,7 @@ run_t3000_ttnn_tests() {
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0CQ1" \
       "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksMultithreadCQ0"; do
       echo "LOG_METAL: running test_ccl_multi_cq_multi_device --gtest_filter=${ccl_mcq_test}"
-      timeout 600 ./build/test/ttnn/test_ccl_multi_cq_multi_device --gtest_filter="${ccl_mcq_test}"
+      GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/test_ccl_multi_cq_multi_device --gtest_filter="${ccl_mcq_test}"
       record_test
       sleep 1
   done
@@ -232,7 +271,7 @@ run_t3000_ttnn_tests() {
   #   (6 ETH channels × 5s UMD timeout each). FIX NY caches the first failure in
   #   relay_broken_chips_ so channels 2-6 return immediately (0ms). Primary check
   #   is TIMING (35s budget); FIX NX regression shows as exit non-zero.
-  timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
     --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*' ; record_test
 
   # GAP regression tests — validate race condition / ETH hang fixes.
