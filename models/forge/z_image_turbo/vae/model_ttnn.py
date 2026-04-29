@@ -5,8 +5,6 @@ from vae.params import load_weights
 
 import ttnn
 
-DRAM_RM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
-
 
 class LightweightModule:
     def __call__(self, *args, **kwargs):
@@ -19,7 +17,7 @@ class VaeDecoderTTNN(LightweightModule):
     def __init__(self, mesh_device):
         self.device = mesh_device
         pt = VaeDecoderPT()
-        self.ce_cache, self.attn_args = load_weights(pt.state_dict, self.device)
+        self.weights = load_weights(pt.state_dict, self.device)
         del pt
 
     def forward(self, raw_latents):
@@ -30,22 +28,21 @@ class VaeDecoderTTNN(LightweightModule):
             dtype=ttnn.DataType.BFLOAT16,
             layout=ttnn.Layout.ROW_MAJOR,
             device=self.device,
-            memory_config=DRAM_RM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
         var_0 = latent
-        var_1 = self.ce_cache["main_const_eval_13"][0]
-        var_2 = self.ce_cache["main_const_eval_81"]
-        var_3 = var_2[0]
-        var_4 = var_2[1]
-        var_5 = self.ce_cache["main_const_eval_91"][0]
-        var_6 = self.ce_cache["main_const_eval_94"][0]
-        var_7 = self.ce_cache["main_const_eval_103"][0]
-        var_8 = self.ce_cache["main_const_eval_104"][0]
-        var_9 = self.ce_cache["main_const_eval_106"][0]
-        var_10 = self.ce_cache["main_const_eval_119"][0]
-        var_11 = self.ce_cache["main_const_eval_124"][0]
-        var_12 = self.ce_cache["main_const_eval_126"][0]
+        var_1 = self.weights["_gn_eps_large"]
+        var_3 = self.weights["_ones_4d"]
+        var_4 = self.weights["_ones_2d"]
+        var_5 = self.weights["_gn_eps"]
+        var_6 = self.weights["_gn_inv_256x512"]
+        var_7 = self.weights["_gn_inv_512x128"]
+        var_8 = self.weights["_upsample_256_512"]
+        var_9 = self.weights["_gn_inv_512x64"]
+        var_10 = self.weights["_upsample_128_256"]
+        var_11 = self.weights["_gn_inv_512x256"]
+        var_12 = self.weights["_upsample_64_128"]
         device = self.device
         ttnn_to_layout_130 = ttnn.to_layout(var_0, ttnn.Layout.TILE, None, memory_config=None)
         ttnn.deallocate(var_0, False)
@@ -64,7 +61,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_161, False)
         ttnn_conv2d_0 = ttnn.conv2d(
             input_tensor=ttnn_reshape_173,
-            weight_tensor=self.ce_cache["main_const_eval_0"][0],
+            weight_tensor=self.weights["conv_in.weight"],
             device=device,
             in_channels=16,
             out_channels=512,
@@ -76,7 +73,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_55"][0],
+            bias_tensor=self.weights["conv_in.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -179,14 +176,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_0, False)
         ttnn_multiply_4 = ttnn.multiply(
             ttnn_multiply_3,
-            self.ce_cache["main_const_eval_75"][0],
+            self.weights["mid_block.resnets.0.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_3, False)
         ttnn_add_1 = ttnn.add(
             ttnn_multiply_4,
-            self.ce_cache["main_const_eval_120"][0],
+            self.weights["mid_block.resnets.0.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -223,7 +220,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_163, False)
         ttnn_conv2d_1 = ttnn.conv2d(
             input_tensor=ttnn_reshape_177,
-            weight_tensor=self.ce_cache["main_const_eval_40"][0],
+            weight_tensor=self.weights["mid_block.resnets.0.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -235,7 +232,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_136"][0],
+            bias_tensor=self.weights["mid_block.resnets.0.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -339,14 +336,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_1, False)
         ttnn_multiply_9 = ttnn.multiply(
             ttnn_multiply_8,
-            self.ce_cache["main_const_eval_14"][0],
+            self.weights["mid_block.resnets.0.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_8, False)
         ttnn_add_3 = ttnn.add(
             ttnn_multiply_9,
-            self.ce_cache["main_const_eval_23"][0],
+            self.weights["mid_block.resnets.0.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -383,7 +380,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_165, False)
         ttnn_conv2d_2 = ttnn.conv2d(
             input_tensor=ttnn_reshape_181,
-            weight_tensor=self.ce_cache["main_const_eval_102"][0],
+            weight_tensor=self.weights["mid_block.resnets.0.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -395,7 +392,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_80"][0],
+            bias_tensor=self.weights["mid_block.resnets.0.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -513,14 +510,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_2, False)
         ttnn_multiply_14 = ttnn.multiply(
             ttnn_multiply_13,
-            self.ce_cache["main_const_eval_63"][0],
+            self.weights["mid_block.attentions.0.group_norm.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_13, False)
         ttnn_add_6 = ttnn.add(
             ttnn_multiply_14,
-            self.ce_cache["main_const_eval_133"][0],
+            self.weights["mid_block.attentions.0.group_norm.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -552,8 +549,8 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_167, False)
         ttnn_linear_0 = ttnn.linear(
             ttnn_reshape_185,
-            self.attn_args[134],
-            bias=self.attn_args[133],
+            self.weights["mid_block.attentions.0.to_q.weight"],
+            bias=self.weights["mid_block.attentions.0.to_q.bias"],
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -576,8 +573,8 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_typecast_69, False)
         ttnn_linear_1 = ttnn.linear(
             ttnn_reshape_185,
-            self.attn_args[132],
-            bias=self.attn_args[131],
+            self.weights["mid_block.attentions.0.to_k.weight"],
+            bias=self.weights["mid_block.attentions.0.to_k.bias"],
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -600,8 +597,8 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_typecast_70, False)
         ttnn_linear_2 = ttnn.linear(
             ttnn_reshape_185,
-            self.attn_args[128],
-            bias=self.attn_args[127],
+            self.weights["mid_block.attentions.0.to_v.weight"],
+            bias=self.weights["mid_block.attentions.0.to_v.bias"],
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -674,8 +671,8 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_typecast_76, False)
         ttnn_linear_3 = ttnn.linear(
             ttnn_reshape_189,
-            self.attn_args[126],
-            bias=self.attn_args[125],
+            self.weights["mid_block.attentions.0.to_out.0.weight"],
+            bias=self.weights["mid_block.attentions.0.to_out.0.bias"],
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -796,14 +793,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_3, False)
         ttnn_multiply_19 = ttnn.multiply(
             ttnn_multiply_18,
-            self.ce_cache["main_const_eval_18"][0],
+            self.weights["mid_block.resnets.1.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_18, False)
         ttnn_add_9 = ttnn.add(
             ttnn_multiply_19,
-            self.ce_cache["main_const_eval_29"][0],
+            self.weights["mid_block.resnets.1.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -840,7 +837,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_169, False)
         ttnn_conv2d_3 = ttnn.conv2d(
             input_tensor=ttnn_reshape_194,
-            weight_tensor=self.ce_cache["main_const_eval_30"][0],
+            weight_tensor=self.weights["mid_block.resnets.1.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -852,7 +849,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_48"][0],
+            bias_tensor=self.weights["mid_block.resnets.1.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -956,14 +953,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_4, False)
         ttnn_multiply_24 = ttnn.multiply(
             ttnn_multiply_23,
-            self.ce_cache["main_const_eval_73"][0],
+            self.weights["mid_block.resnets.1.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_23, False)
         ttnn_add_11 = ttnn.add(
             ttnn_multiply_24,
-            self.ce_cache["main_const_eval_66"][0],
+            self.weights["mid_block.resnets.1.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1000,7 +997,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_171, False)
         ttnn_conv2d_4 = ttnn.conv2d(
             input_tensor=ttnn_reshape_198,
-            weight_tensor=self.ce_cache["main_const_eval_110"][0],
+            weight_tensor=self.weights["mid_block.resnets.1.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -1012,7 +1009,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_22"][0],
+            bias_tensor=self.weights["mid_block.resnets.1.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -1130,14 +1127,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_5, False)
         ttnn_multiply_29 = ttnn.multiply(
             ttnn_multiply_28,
-            self.ce_cache["main_const_eval_2"][0],
+            self.weights["up_blocks.0.resnets.0.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_28, False)
         ttnn_add_14 = ttnn.add(
             ttnn_multiply_29,
-            self.ce_cache["main_const_eval_24"][0],
+            self.weights["up_blocks.0.resnets.0.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1174,7 +1171,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_173, False)
         ttnn_conv2d_5 = ttnn.conv2d(
             input_tensor=ttnn_reshape_202,
-            weight_tensor=self.ce_cache["main_const_eval_52"][0],
+            weight_tensor=self.weights["up_blocks.0.resnets.0.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -1186,7 +1183,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_123"][0],
+            bias_tensor=self.weights["up_blocks.0.resnets.0.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -1290,14 +1287,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_6, False)
         ttnn_multiply_34 = ttnn.multiply(
             ttnn_multiply_33,
-            self.ce_cache["main_const_eval_72"][0],
+            self.weights["up_blocks.0.resnets.0.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_33, False)
         ttnn_add_16 = ttnn.add(
             ttnn_multiply_34,
-            self.ce_cache["main_const_eval_122"][0],
+            self.weights["up_blocks.0.resnets.0.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1334,7 +1331,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_175, False)
         ttnn_conv2d_6 = ttnn.conv2d(
             input_tensor=ttnn_reshape_206,
-            weight_tensor=self.ce_cache["main_const_eval_41"][0],
+            weight_tensor=self.weights["up_blocks.0.resnets.0.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -1346,7 +1343,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_36"][0],
+            bias_tensor=self.weights["up_blocks.0.resnets.0.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -1464,14 +1461,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_7, False)
         ttnn_multiply_39 = ttnn.multiply(
             ttnn_multiply_38,
-            self.ce_cache["main_const_eval_5"][0],
+            self.weights["up_blocks.0.resnets.1.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_38, False)
         ttnn_add_19 = ttnn.add(
             ttnn_multiply_39,
-            self.ce_cache["main_const_eval_58"][0],
+            self.weights["up_blocks.0.resnets.1.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1508,7 +1505,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_177, False)
         ttnn_conv2d_7 = ttnn.conv2d(
             input_tensor=ttnn_reshape_210,
-            weight_tensor=self.ce_cache["main_const_eval_137"][0],
+            weight_tensor=self.weights["up_blocks.0.resnets.1.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -1520,7 +1517,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_60"][0],
+            bias_tensor=self.weights["up_blocks.0.resnets.1.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -1624,14 +1621,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_8, False)
         ttnn_multiply_44 = ttnn.multiply(
             ttnn_multiply_43,
-            self.ce_cache["main_const_eval_86"][0],
+            self.weights["up_blocks.0.resnets.1.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_43, False)
         ttnn_add_21 = ttnn.add(
             ttnn_multiply_44,
-            self.ce_cache["main_const_eval_97"][0],
+            self.weights["up_blocks.0.resnets.1.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1668,7 +1665,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_179, False)
         ttnn_conv2d_8 = ttnn.conv2d(
             input_tensor=ttnn_reshape_214,
-            weight_tensor=self.ce_cache["main_const_eval_32"][0],
+            weight_tensor=self.weights["up_blocks.0.resnets.1.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -1680,7 +1677,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_11"][0],
+            bias_tensor=self.weights["up_blocks.0.resnets.1.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -1798,14 +1795,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_9, False)
         ttnn_multiply_49 = ttnn.multiply(
             ttnn_multiply_48,
-            self.ce_cache["main_const_eval_10"][0],
+            self.weights["up_blocks.0.resnets.2.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_48, False)
         ttnn_add_24 = ttnn.add(
             ttnn_multiply_49,
-            self.ce_cache["main_const_eval_132"][0],
+            self.weights["up_blocks.0.resnets.2.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1842,7 +1839,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_181, False)
         ttnn_conv2d_9 = ttnn.conv2d(
             input_tensor=ttnn_reshape_218,
-            weight_tensor=self.ce_cache["main_const_eval_45"][0],
+            weight_tensor=self.weights["up_blocks.0.resnets.2.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -1854,7 +1851,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_82"][0],
+            bias_tensor=self.weights["up_blocks.0.resnets.2.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -1958,14 +1955,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_10, False)
         ttnn_multiply_54 = ttnn.multiply(
             ttnn_multiply_53,
-            self.ce_cache["main_const_eval_98"][0],
+            self.weights["up_blocks.0.resnets.2.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_53, False)
         ttnn_add_26 = ttnn.add(
             ttnn_multiply_54,
-            self.ce_cache["main_const_eval_42"][0],
+            self.weights["up_blocks.0.resnets.2.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2002,7 +1999,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_183, False)
         ttnn_conv2d_10 = ttnn.conv2d(
             input_tensor=ttnn_reshape_222,
-            weight_tensor=self.ce_cache["main_const_eval_117"][0],
+            weight_tensor=self.weights["up_blocks.0.resnets.2.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -2014,7 +2011,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_4"][0],
+            bias_tensor=self.weights["up_blocks.0.resnets.2.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -2132,7 +2129,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_187, False)
         ttnn_conv2d_11 = ttnn.conv2d(
             input_tensor=ttnn_reshape_228,
-            weight_tensor=self.ce_cache["main_const_eval_49"][0],
+            weight_tensor=self.weights["up_blocks.0.upsamplers.0.conv.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -2144,7 +2141,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_95"][0],
+            bias_tensor=self.weights["up_blocks.0.upsamplers.0.conv.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -2247,14 +2244,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_11, False)
         ttnn_multiply_59 = ttnn.multiply(
             ttnn_multiply_58,
-            self.ce_cache["main_const_eval_88"][0],
+            self.weights["up_blocks.1.resnets.0.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_58, False)
         ttnn_add_29 = ttnn.add(
             ttnn_multiply_59,
-            self.ce_cache["main_const_eval_107"][0],
+            self.weights["up_blocks.1.resnets.0.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2291,7 +2288,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_189, False)
         ttnn_conv2d_12 = ttnn.conv2d(
             input_tensor=ttnn_reshape_232,
-            weight_tensor=self.ce_cache["main_const_eval_53"][0],
+            weight_tensor=self.weights["up_blocks.1.resnets.0.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -2303,7 +2300,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_7"][0],
+            bias_tensor=self.weights["up_blocks.1.resnets.0.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -2407,14 +2404,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_12, False)
         ttnn_multiply_64 = ttnn.multiply(
             ttnn_multiply_63,
-            self.ce_cache["main_const_eval_51"][0],
+            self.weights["up_blocks.1.resnets.0.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_63, False)
         ttnn_add_31 = ttnn.add(
             ttnn_multiply_64,
-            self.ce_cache["main_const_eval_105"][0],
+            self.weights["up_blocks.1.resnets.0.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2451,7 +2448,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_191, False)
         ttnn_conv2d_13 = ttnn.conv2d(
             input_tensor=ttnn_reshape_236,
-            weight_tensor=self.ce_cache["main_const_eval_93"][0],
+            weight_tensor=self.weights["up_blocks.1.resnets.0.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -2463,7 +2460,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_83"][0],
+            bias_tensor=self.weights["up_blocks.1.resnets.0.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -2581,14 +2578,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_13, False)
         ttnn_multiply_69 = ttnn.multiply(
             ttnn_multiply_68,
-            self.ce_cache["main_const_eval_127"][0],
+            self.weights["up_blocks.1.resnets.1.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_68, False)
         ttnn_add_34 = ttnn.add(
             ttnn_multiply_69,
-            self.ce_cache["main_const_eval_67"][0],
+            self.weights["up_blocks.1.resnets.1.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2625,7 +2622,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_193, False)
         ttnn_conv2d_14 = ttnn.conv2d(
             input_tensor=ttnn_reshape_240,
-            weight_tensor=self.ce_cache["main_const_eval_128"][0],
+            weight_tensor=self.weights["up_blocks.1.resnets.1.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -2637,7 +2634,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_12"][0],
+            bias_tensor=self.weights["up_blocks.1.resnets.1.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -2741,14 +2738,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_14, False)
         ttnn_multiply_74 = ttnn.multiply(
             ttnn_multiply_73,
-            self.ce_cache["main_const_eval_31"][0],
+            self.weights["up_blocks.1.resnets.1.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_73, False)
         ttnn_add_36 = ttnn.add(
             ttnn_multiply_74,
-            self.ce_cache["main_const_eval_111"][0],
+            self.weights["up_blocks.1.resnets.1.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2785,7 +2782,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_195, False)
         ttnn_conv2d_15 = ttnn.conv2d(
             input_tensor=ttnn_reshape_244,
-            weight_tensor=self.ce_cache["main_const_eval_78"][0],
+            weight_tensor=self.weights["up_blocks.1.resnets.1.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -2797,7 +2794,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_131"][0],
+            bias_tensor=self.weights["up_blocks.1.resnets.1.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -2915,14 +2912,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_15, False)
         ttnn_multiply_79 = ttnn.multiply(
             ttnn_multiply_78,
-            self.ce_cache["main_const_eval_65"][0],
+            self.weights["up_blocks.1.resnets.2.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_78, False)
         ttnn_add_39 = ttnn.add(
             ttnn_multiply_79,
-            self.ce_cache["main_const_eval_115"][0],
+            self.weights["up_blocks.1.resnets.2.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2959,7 +2956,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_197, False)
         ttnn_conv2d_16 = ttnn.conv2d(
             input_tensor=ttnn_reshape_248,
-            weight_tensor=self.ce_cache["main_const_eval_6"][0],
+            weight_tensor=self.weights["up_blocks.1.resnets.2.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -2971,7 +2968,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_37"][0],
+            bias_tensor=self.weights["up_blocks.1.resnets.2.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -3075,14 +3072,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_16, False)
         ttnn_multiply_84 = ttnn.multiply(
             ttnn_multiply_83,
-            self.ce_cache["main_const_eval_108"][0],
+            self.weights["up_blocks.1.resnets.2.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_83, False)
         ttnn_add_41 = ttnn.add(
             ttnn_multiply_84,
-            self.ce_cache["main_const_eval_59"][0],
+            self.weights["up_blocks.1.resnets.2.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -3119,7 +3116,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_199, False)
         ttnn_conv2d_17 = ttnn.conv2d(
             input_tensor=ttnn_reshape_252,
-            weight_tensor=self.ce_cache["main_const_eval_139"][0],
+            weight_tensor=self.weights["up_blocks.1.resnets.2.conv2.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -3131,7 +3128,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_62"][0],
+            bias_tensor=self.weights["up_blocks.1.resnets.2.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -3249,7 +3246,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_203, False)
         ttnn_conv2d_18 = ttnn.conv2d(
             input_tensor=ttnn_reshape_258,
-            weight_tensor=self.ce_cache["main_const_eval_21"][0],
+            weight_tensor=self.weights["up_blocks.1.upsamplers.0.conv.weight"],
             device=device,
             in_channels=512,
             out_channels=512,
@@ -3261,7 +3258,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_3"][0],
+            bias_tensor=self.weights["up_blocks.1.upsamplers.0.conv.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -3276,7 +3273,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_reshape_258, False)
         ttnn_conv2d_19 = ttnn.conv2d(
             input_tensor=ttnn_conv2d_18,
-            weight_tensor=self.ce_cache["main_const_eval_19"][0],
+            weight_tensor=self.weights["up_blocks.2.resnets.0.conv_shortcut.weight"],
             device=device,
             in_channels=512,
             out_channels=256,
@@ -3288,7 +3285,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[0, 0, 0, 0],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_38"][0],
+            bias_tensor=self.weights["up_blocks.2.resnets.0.conv_shortcut.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -3391,14 +3388,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_17, False)
         ttnn_multiply_89 = ttnn.multiply(
             ttnn_multiply_88,
-            self.ce_cache["main_const_eval_70"][0],
+            self.weights["up_blocks.2.resnets.0.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_88, False)
         ttnn_add_44 = ttnn.add(
             ttnn_multiply_89,
-            self.ce_cache["main_const_eval_90"][0],
+            self.weights["up_blocks.2.resnets.0.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -3435,7 +3432,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_205, False)
         ttnn_conv2d_20 = ttnn.conv2d(
             input_tensor=ttnn_reshape_262,
-            weight_tensor=self.ce_cache["main_const_eval_35"][0],
+            weight_tensor=self.weights["up_blocks.2.resnets.0.conv1.weight"],
             device=device,
             in_channels=512,
             out_channels=256,
@@ -3447,7 +3444,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_25"][0],
+            bias_tensor=self.weights["up_blocks.2.resnets.0.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -3551,14 +3548,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_18, False)
         ttnn_multiply_94 = ttnn.multiply(
             ttnn_multiply_93,
-            self.ce_cache["main_const_eval_61"][0],
+            self.weights["up_blocks.2.resnets.0.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_93, False)
         ttnn_add_46 = ttnn.add(
             ttnn_multiply_94,
-            self.ce_cache["main_const_eval_135"][0],
+            self.weights["up_blocks.2.resnets.0.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -3595,7 +3592,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_207, False)
         ttnn_conv2d_21 = ttnn.conv2d(
             input_tensor=ttnn_reshape_266,
-            weight_tensor=self.ce_cache["main_const_eval_84"][0],
+            weight_tensor=self.weights["up_blocks.2.resnets.0.conv2.weight"],
             device=device,
             in_channels=256,
             out_channels=256,
@@ -3607,7 +3604,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_76"][0],
+            bias_tensor=self.weights["up_blocks.2.resnets.0.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -3725,14 +3722,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_19, False)
         ttnn_multiply_99 = ttnn.multiply(
             ttnn_multiply_98,
-            self.ce_cache["main_const_eval_96"][0],
+            self.weights["up_blocks.2.resnets.1.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_98, False)
         ttnn_add_49 = ttnn.add(
             ttnn_multiply_99,
-            self.ce_cache["main_const_eval_44"][0],
+            self.weights["up_blocks.2.resnets.1.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -3769,7 +3766,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_209, False)
         ttnn_conv2d_22 = ttnn.conv2d(
             input_tensor=ttnn_reshape_270,
-            weight_tensor=self.ce_cache["main_const_eval_9"][0],
+            weight_tensor=self.weights["up_blocks.2.resnets.1.conv1.weight"],
             device=device,
             in_channels=256,
             out_channels=256,
@@ -3781,7 +3778,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_64"][0],
+            bias_tensor=self.weights["up_blocks.2.resnets.1.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -3885,14 +3882,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_20, False)
         ttnn_multiply_104 = ttnn.multiply(
             ttnn_multiply_103,
-            self.ce_cache["main_const_eval_112"][0],
+            self.weights["up_blocks.2.resnets.1.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_103, False)
         ttnn_add_51 = ttnn.add(
             ttnn_multiply_104,
-            self.ce_cache["main_const_eval_50"][0],
+            self.weights["up_blocks.2.resnets.1.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -3929,7 +3926,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_211, False)
         ttnn_conv2d_23 = ttnn.conv2d(
             input_tensor=ttnn_reshape_274,
-            weight_tensor=self.ce_cache["main_const_eval_99"][0],
+            weight_tensor=self.weights["up_blocks.2.resnets.1.conv2.weight"],
             device=device,
             in_channels=256,
             out_channels=256,
@@ -3941,7 +3938,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_100"][0],
+            bias_tensor=self.weights["up_blocks.2.resnets.1.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -4059,14 +4056,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_21, False)
         ttnn_multiply_109 = ttnn.multiply(
             ttnn_multiply_108,
-            self.ce_cache["main_const_eval_47"][0],
+            self.weights["up_blocks.2.resnets.2.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_108, False)
         ttnn_add_54 = ttnn.add(
             ttnn_multiply_109,
-            self.ce_cache["main_const_eval_130"][0],
+            self.weights["up_blocks.2.resnets.2.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -4103,7 +4100,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_213, False)
         ttnn_conv2d_24 = ttnn.conv2d(
             input_tensor=ttnn_reshape_278,
-            weight_tensor=self.ce_cache["main_const_eval_68"][0],
+            weight_tensor=self.weights["up_blocks.2.resnets.2.conv1.weight"],
             device=device,
             in_channels=256,
             out_channels=256,
@@ -4115,7 +4112,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_125"][0],
+            bias_tensor=self.weights["up_blocks.2.resnets.2.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -4219,14 +4216,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_22, False)
         ttnn_multiply_114 = ttnn.multiply(
             ttnn_multiply_113,
-            self.ce_cache["main_const_eval_39"][0],
+            self.weights["up_blocks.2.resnets.2.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_113, False)
         ttnn_add_56 = ttnn.add(
             ttnn_multiply_114,
-            self.ce_cache["main_const_eval_89"][0],
+            self.weights["up_blocks.2.resnets.2.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -4263,7 +4260,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_215, False)
         ttnn_conv2d_25 = ttnn.conv2d(
             input_tensor=ttnn_reshape_282,
-            weight_tensor=self.ce_cache["main_const_eval_77"][0],
+            weight_tensor=self.weights["up_blocks.2.resnets.2.conv2.weight"],
             device=device,
             in_channels=256,
             out_channels=256,
@@ -4275,7 +4272,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_54"][0],
+            bias_tensor=self.weights["up_blocks.2.resnets.2.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -4393,7 +4390,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_219, False)
         ttnn_conv2d_26 = ttnn.conv2d(
             input_tensor=ttnn_reshape_288,
-            weight_tensor=self.ce_cache["main_const_eval_56"][0],
+            weight_tensor=self.weights["up_blocks.2.upsamplers.0.conv.weight"],
             device=device,
             in_channels=256,
             out_channels=256,
@@ -4405,7 +4402,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_16"][0],
+            bias_tensor=self.weights["up_blocks.2.upsamplers.0.conv.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -4420,7 +4417,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_reshape_288, False)
         ttnn_conv2d_27 = ttnn.conv2d(
             input_tensor=ttnn_conv2d_26,
-            weight_tensor=self.ce_cache["main_const_eval_26"][0],
+            weight_tensor=self.weights["up_blocks.3.resnets.0.conv_shortcut.weight"],
             device=device,
             in_channels=256,
             out_channels=128,
@@ -4432,7 +4429,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[0, 0, 0, 0],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_101"][0],
+            bias_tensor=self.weights["up_blocks.3.resnets.0.conv_shortcut.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -4535,14 +4532,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_23, False)
         ttnn_multiply_119 = ttnn.multiply(
             ttnn_multiply_118,
-            self.ce_cache["main_const_eval_74"][0],
+            self.weights["up_blocks.3.resnets.0.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_118, False)
         ttnn_add_59 = ttnn.add(
             ttnn_multiply_119,
-            self.ce_cache["main_const_eval_138"][0],
+            self.weights["up_blocks.3.resnets.0.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -4579,7 +4576,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_221, False)
         ttnn_conv2d_28 = ttnn.conv2d(
             input_tensor=ttnn_reshape_292,
-            weight_tensor=self.ce_cache["main_const_eval_43"][0],
+            weight_tensor=self.weights["up_blocks.3.resnets.0.conv1.weight"],
             device=device,
             in_channels=256,
             out_channels=128,
@@ -4591,7 +4588,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_17"][0],
+            bias_tensor=self.weights["up_blocks.3.resnets.0.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -4695,14 +4692,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_24, False)
         ttnn_multiply_124 = ttnn.multiply(
             ttnn_multiply_123,
-            self.ce_cache["main_const_eval_33"][0],
+            self.weights["up_blocks.3.resnets.0.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_123, False)
         ttnn_add_61 = ttnn.add(
             ttnn_multiply_124,
-            self.ce_cache["main_const_eval_27"][0],
+            self.weights["up_blocks.3.resnets.0.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -4739,7 +4736,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_223, False)
         ttnn_conv2d_29 = ttnn.conv2d(
             input_tensor=ttnn_reshape_296,
-            weight_tensor=self.ce_cache["main_const_eval_113"][0],
+            weight_tensor=self.weights["up_blocks.3.resnets.0.conv2.weight"],
             device=device,
             in_channels=128,
             out_channels=128,
@@ -4751,7 +4748,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_79"][0],
+            bias_tensor=self.weights["up_blocks.3.resnets.0.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -4869,14 +4866,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_25, False)
         ttnn_multiply_129 = ttnn.multiply(
             ttnn_multiply_128,
-            self.ce_cache["main_const_eval_134"][0],
+            self.weights["up_blocks.3.resnets.1.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_128, False)
         ttnn_add_64 = ttnn.add(
             ttnn_multiply_129,
-            self.ce_cache["main_const_eval_46"][0],
+            self.weights["up_blocks.3.resnets.1.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -4913,7 +4910,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_225, False)
         ttnn_conv2d_30 = ttnn.conv2d(
             input_tensor=ttnn_reshape_300,
-            weight_tensor=self.ce_cache["main_const_eval_116"][0],
+            weight_tensor=self.weights["up_blocks.3.resnets.1.conv1.weight"],
             device=device,
             in_channels=128,
             out_channels=128,
@@ -4925,7 +4922,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_34"][0],
+            bias_tensor=self.weights["up_blocks.3.resnets.1.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -5029,14 +5026,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_26, False)
         ttnn_multiply_134 = ttnn.multiply(
             ttnn_multiply_133,
-            self.ce_cache["main_const_eval_28"][0],
+            self.weights["up_blocks.3.resnets.1.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_133, False)
         ttnn_add_66 = ttnn.add(
             ttnn_multiply_134,
-            self.ce_cache["main_const_eval_118"][0],
+            self.weights["up_blocks.3.resnets.1.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -5073,7 +5070,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_227, False)
         ttnn_conv2d_31 = ttnn.conv2d(
             input_tensor=ttnn_reshape_304,
-            weight_tensor=self.ce_cache["main_const_eval_57"][0],
+            weight_tensor=self.weights["up_blocks.3.resnets.1.conv2.weight"],
             device=device,
             in_channels=128,
             out_channels=128,
@@ -5085,7 +5082,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_71"][0],
+            bias_tensor=self.weights["up_blocks.3.resnets.1.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -5203,14 +5200,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_27, False)
         ttnn_multiply_139 = ttnn.multiply(
             ttnn_multiply_138,
-            self.ce_cache["main_const_eval_85"][0],
+            self.weights["up_blocks.3.resnets.2.norm1.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_138, False)
         ttnn_add_69 = ttnn.add(
             ttnn_multiply_139,
-            self.ce_cache["main_const_eval_114"][0],
+            self.weights["up_blocks.3.resnets.2.norm1.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -5247,7 +5244,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_229, False)
         ttnn_conv2d_32 = ttnn.conv2d(
             input_tensor=ttnn_reshape_308,
-            weight_tensor=self.ce_cache["main_const_eval_20"][0],
+            weight_tensor=self.weights["up_blocks.3.resnets.2.conv1.weight"],
             device=device,
             in_channels=128,
             out_channels=128,
@@ -5259,7 +5256,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_1"][0],
+            bias_tensor=self.weights["up_blocks.3.resnets.2.conv1.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -5363,14 +5360,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_28, False)
         ttnn_multiply_144 = ttnn.multiply(
             ttnn_multiply_143,
-            self.ce_cache["main_const_eval_121"][0],
+            self.weights["up_blocks.3.resnets.2.norm2.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_143, False)
         ttnn_add_71 = ttnn.add(
             ttnn_multiply_144,
-            self.ce_cache["main_const_eval_69"][0],
+            self.weights["up_blocks.3.resnets.2.norm2.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -5407,7 +5404,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_231, False)
         ttnn_conv2d_33 = ttnn.conv2d(
             input_tensor=ttnn_reshape_312,
-            weight_tensor=self.ce_cache["main_const_eval_129"][0],
+            weight_tensor=self.weights["up_blocks.3.resnets.2.conv2.weight"],
             device=device,
             in_channels=128,
             out_channels=128,
@@ -5419,7 +5416,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_87"][0],
+            bias_tensor=self.weights["up_blocks.3.resnets.2.conv2.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
@@ -5538,14 +5535,14 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_subtract_29, False)
         ttnn_multiply_149 = ttnn.multiply(
             ttnn_multiply_148,
-            self.ce_cache["main_const_eval_92"][0],
+            self.weights["conv_norm_out.weight"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_multiply_148, False)
         ttnn_add_74 = ttnn.add(
             ttnn_multiply_149,
-            self.ce_cache["main_const_eval_109"][0],
+            self.weights["conv_norm_out.bias"],
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -5582,7 +5579,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(ttnn_permute_233, False)
         ttnn_conv2d_34 = ttnn.conv2d(
             input_tensor=ttnn_reshape_316,
-            weight_tensor=self.ce_cache["main_const_eval_15"][0],
+            weight_tensor=self.weights["conv_out.weight"],
             device=device,
             in_channels=128,
             out_channels=3,
@@ -5594,7 +5591,7 @@ class VaeDecoderTTNN(LightweightModule):
             padding=[1, 1, 1, 1],
             dilation=[1, 1],
             groups=1,
-            bias_tensor=self.ce_cache["main_const_eval_8"][0],
+            bias_tensor=self.weights["conv_out.bias"],
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=ttnn.DataType.BFLOAT16,
                 deallocate_activation=True,
