@@ -324,7 +324,12 @@ def _forward_prefill_deepseek_chunk(
     memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     if pw.w1_w3_fused is not None:
-        w1_w3_out = ttnn.matmul(buf_tiled, pw.w1_w3_fused, memory_config=memory_config)
+        m_tokens = buf_tiled.shape[-2]
+        n_w1w3 = pw.w1_w3_fused.shape[-1]
+        w1w3_pc = (
+            program_config.get_prefill_fused_gate_up_config(n_w1w3, m_tokens) if program_config is not None else None
+        )
+        w1_w3_out = ttnn.matmul(buf_tiled, pw.w1_w3_fused, program_config=w1w3_pc, memory_config=memory_config)
         ttnn.deallocate(buf_tiled)
         ttnn.add(w1_w3_out, pw.w1_w3_bias_fused, output_tensor=w1_w3_out)
         shape = w1_w3_out.shape
@@ -347,7 +352,9 @@ def _forward_prefill_deepseek_chunk(
 
     activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
 
-    expert_output = ttnn.matmul(activated, pw.w2, memory_config=memory_config)
+    n_w2 = pw.w2.shape[-1]
+    w2_pc = program_config.get_prefill_down_config(n_w2, activated.shape[-2]) if program_config is not None else None
+    expert_output = ttnn.matmul(activated, pw.w2, program_config=w2_pc, memory_config=memory_config)
     ttnn.deallocate(activated)
     ttnn.add(expert_output, pw.w2_bias, output_tensor=expert_output)
 

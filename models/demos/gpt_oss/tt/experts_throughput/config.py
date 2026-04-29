@@ -168,6 +168,15 @@ class ThroughputProgramConfig:
     fused_out_subblock_h: int | None = 1  # M is small
     fused_out_subblock_w: int | None = 3  # Wider output (N=180) benefits from larger subblock
 
+    # Prefill matmul parameters. M is large (~8 tiles per chip for seq_len_per_chip=1024
+    # with 4 experts batched). Sweep on Galaxy 4x8 with bf16 acts + bf4_b weights:
+    #   W1+W3 fused (1D mcast 8x8 blkw=18 sh=1 sw=3): 0.701 ms (vs 0.955 default)
+    #   W2 down       (2D mcast 8x8 blkw=18 sh=1 sw=3): 0.408 ms (vs 0.510 best 1D)
+    prefill_in0_block_w: int = 18
+    prefill_out_subblock_h: int = 1
+    prefill_out_subblock_w: int = 3
+    prefill_cores: tuple[int, int] = (8, 8)
+
     def __post_init__(self):
         """Validate configuration."""
         self._validate_cores("gate_up_cores", self.gate_up_cores)
@@ -279,6 +288,63 @@ class ThroughputProgramConfig:
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
+        )
+
+    def _clamp_subblock(self, sub: int, dim: int) -> int:
+        """Clamp out_subblock dim so it divides per_core dim."""
+        s = max(1, min(sub, max(1, dim)))
+        while s > 1 and dim % s != 0:
+            s -= 1
+        return s
+
+    def get_prefill_fused_gate_up_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+        """Prefill 1D-mcast config for the fused W1+W3 matmul.
+
+        Sweep winner on (M=256, K=2880, N=5760) per chip.
+        """
+        core_x, core_y = self.prefill_cores
+        n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
+        per_core_N = max(1, math.ceil(n_tiles / (core_x * core_y)))
+        per_core_M = max(1, m_tiles)
+        sub_h = self._clamp_subblock(self.prefill_out_subblock_h, per_core_M)
+        sub_w = self._clamp_subblock(self.prefill_out_subblock_w, per_core_N)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=self.prefill_in0_block_w,
+            out_subblock_h=sub_h,
+            out_subblock_w=sub_w,
+            out_block_h=per_core_M,
+            out_block_w=per_core_N,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def get_prefill_down_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+        """Prefill 2D-mcast config for the W2 (down) matmul.
+
+        Sweep winner on (M=256, K=2880, N=2880) per chip — 2D beat 1D by ~20%.
+        """
+        core_x, core_y = self.prefill_cores
+        n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
+        per_core_M = max(1, math.ceil(m_tiles / core_y))
+        per_core_N = max(1, math.ceil(n_tiles / core_x))
+        sub_h = self._clamp_subblock(self.prefill_out_subblock_h, per_core_M)
+        sub_w = self._clamp_subblock(self.prefill_out_subblock_w, per_core_N)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=self.prefill_in0_block_w,
+            out_subblock_h=sub_h,
+            out_subblock_w=sub_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
         )
 
 
