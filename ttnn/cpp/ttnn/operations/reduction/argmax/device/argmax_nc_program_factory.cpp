@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
@@ -119,8 +120,11 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/argmax_nc_compute.cpp";
 
-    const std::vector<uint32_t> reader_compile_args;
-    const std::vector<uint32_t> writer_compile_args;
+    std::vector<uint32_t> reader_compile_args;
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    std::vector<uint32_t> writer_compile_args;
+    tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_args);
+
     const KernelHandle reader_kernel_id =
         CreateKernel(program, reader_kernel_file, all_cores, ReaderDataMovementConfig(reader_compile_args));
 
@@ -184,9 +188,6 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
             TT_THROW("argmax_nc: core not in any core group");
         }
 
-        const uint32_t input_in_dram = input.buffer()->buffer_type() == BufferType::DRAM ? 1u : 0u;
-        const uint32_t output_in_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1u : 0u;
-
         SetRuntimeArgs(
             program,
             reader_kernel_id,
@@ -197,14 +198,9 @@ ArgMaxNCProgramFactory::cached_program_t ArgMaxNCProgramFactory::create(
              num_reduce_tiles,
              reduce_tile_size,
              inner_tile_size,
-             dim_is_zero,
-             input_in_dram});
+             dim_is_zero});
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output.buffer()->address(), num_tiles_this_core, tile_offset, output_in_dram});
+        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_tiles_this_core, tile_offset});
 
         tile_offset += num_tiles_this_core;
     }
@@ -232,9 +228,7 @@ void ArgMaxNCProgramFactory::override_runtime_arguments(
     auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
     for (const auto& core : ordered_cores) {
         reader_args_by_core[core.x][core.y][0] = input_buffer->address();
-        reader_args_by_core[core.x][core.y][7] = input_buffer->buffer_type() == BufferType::DRAM ? 1u : 0u;
         writer_args_by_core[core.x][core.y][0] = output_buffer->address();
-        writer_args_by_core[core.x][core.y][3] = output_buffer->buffer_type() == BufferType::DRAM ? 1u : 0u;
     }
 }
 

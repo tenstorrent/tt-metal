@@ -40,7 +40,6 @@ inline void push_fp32_fill_tile(uint32_t cb_id, float fill_val) {
     cb_push_back(cb_id, 1);
 }
 
-template <bool is_dram>
 inline void read_reduce_loop(
     const uint32_t input_addr,
     const uint32_t num_output_tiles,
@@ -53,14 +52,8 @@ inline void read_reduce_loop(
     constexpr uint32_t cb_in1 = 1;
     constexpr uint32_t onetile = 1;
 
-    const uint32_t input_tile_bytes = get_tile_size(cb_in0);
-    const auto input_dataformat = get_dataformat(cb_in0);
-
-    const InterleavedAddrGenFast<is_dram> s0 = {
-        .bank_base_address = input_addr,
-        .page_size = input_tile_bytes,
-        .data_format = input_dataformat,
-    };
+    constexpr auto input_tensor_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(input_tensor_args, input_addr);
 
     for (uint32_t out_i = 0; out_i < num_output_tiles; ++out_i) {
         const uint32_t output_tile_id = start_id + out_i;
@@ -91,25 +84,7 @@ void kernel_main() {
     const uint32_t reduce_tile_size = get_arg_val<uint32_t>(4);
     const uint32_t inner_tile_size = get_arg_val<uint32_t>(5);
     const uint32_t dim_is_zero = get_arg_val<uint32_t>(6);
-    const bool input_in_dram = get_arg_val<uint32_t>(7) != 0;
 
-    if (input_in_dram) {
-        read_reduce_loop<true>(
-            input_addr,
-            num_output_tiles,
-            start_id,
-            num_reduce_tiles,
-            reduce_tile_size,
-            inner_tile_size,
-            dim_is_zero != 0);
-    } else {
-        read_reduce_loop<false>(
-            input_addr,
-            num_output_tiles,
-            start_id,
-            num_reduce_tiles,
-            reduce_tile_size,
-            inner_tile_size,
-            dim_is_zero != 0);
-    }
+    read_reduce_loop(
+        input_addr, num_output_tiles, start_id, num_reduce_tiles, reduce_tile_size, inner_tile_size, dim_is_zero != 0);
 }
