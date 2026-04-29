@@ -27,6 +27,7 @@ template <
     OutputLayout layout,
     matmul_config::InitMode init_mode,
     bool retain_in0,
+    bool retain_in1,
     typename PostComputeFn,
     typename PreKBlockFn,
     typename Buf>
@@ -349,7 +350,17 @@ ALWI void matmul_block(
                     in0_buf.pop_front(in0_block_num_tiles);
                 }
             }
-            in1_buf.pop_front(in1_block_num_tiles);
+            // retain_in1: conv3d reuses weights across multiple matmul invocations
+            // (each invocation has num_k_blocks=1, last_out is always true on its only
+            // K-block, so retain_in1=true makes the helper never pop in1). Intermediate
+            // K-blocks within a multi-K-block invocation still pop.
+            if constexpr (!retain_in1) {
+                in1_buf.pop_front(in1_block_num_tiles);
+            } else {
+                if (!last_out) {
+                    in1_buf.pop_front(in1_block_num_tiles);
+                }
+            }
         }
     }
 }

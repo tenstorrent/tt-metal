@@ -160,6 +160,9 @@ struct NoPreKBlock {
  *                     Controls whether the helper itself calls mm_block_init / _short.
  *   retain_in0        When true, skip popping in0 on the last K-block so the caller
  *                     retains the data (SDPA reuses Q across K chunks). (default: false)
+ *   retain_in1        When true, skip popping in1 on the last K-block so the caller
+ *                     retains the data (conv3d reuses weights across multiple matmul
+ *                     invocations within an output block). (default: false)
  *   PostComputeFn     Functor called per output sub-block on the last K-block,
  *                     after matmul but before packing. Receives out_subblock_num_tiles.
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
@@ -226,9 +229,9 @@ struct NoPreKBlock {
  *   // pair externally (for ordering parity with matmul_reduce_inplace.inl and
  *   // OptionalMaskPostCompute), so the helper is invoked with init_mode=None.
  *   // Template slot order: transpose, packer_l1_acc, last_block_target, layout,
- *   // init_mode, retain_in0, PostComputeFn.
+ *   // init_mode, retain_in0, retain_in1, PostComputeFn.
  *   matmul_block<transpose, false, LastBlockTarget::Out, OutputLayout::RowMajor,
- *                matmul_config::InitMode::None, true,
+ *                matmul_config::InitMode::None, true, false,
  *                OptionalMaskPostCompute>(
  *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
@@ -241,7 +244,7 @@ struct NoPreKBlock {
  *   // DRAM-sharded passes explicit in1_per_core_w (shard width) and
  *   // out_row_width (padded pack width).
  *   matmul_block<in1_transpose_tile, l1_acc, LastBlockTarget::Interm,
- *                output_layout, matmul_config::InitMode::Full, false,
+ *                output_layout, matmul_config::InitMode::Full, false, false,
  *                PostFn, PreFn>(
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
@@ -258,6 +261,7 @@ template <
     OutputLayout layout = OutputLayout::SubblockMajor,
     matmul_config::InitMode init_mode = matmul_config::InitMode::Full,
     bool retain_in0 = false,
+    bool retain_in1 = false,
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock,
     typename Buf = ::experimental::CircularBuffer>

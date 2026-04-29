@@ -234,6 +234,7 @@ void kernel_main() {
                         output_layout,
                         matmul_config::InitMode::Full,
                         /*retain_in0=*/false,
+                        /*retain_in1=*/false,
                         PostFn,
                         XposeFn>(
                         in0_buf,
@@ -253,6 +254,7 @@ void kernel_main() {
                         output_layout,
                         matmul_config::InitMode::Full,
                         /*retain_in0=*/false,
+                        /*retain_in1=*/false,
                         PostFn,
                         NoPreKBlock>(
                         in0_buf,

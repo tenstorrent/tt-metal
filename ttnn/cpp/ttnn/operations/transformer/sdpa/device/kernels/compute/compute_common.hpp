@@ -1253,6 +1253,7 @@ ALWI void matmul_blocks(
         compute_kernel_lib::OutputLayout::RowMajor,
         compute_kernel_lib::matmul_config::InitMode::None,
         /*retain_in0=*/true,
+        /*retain_in1=*/false,
         OptionalMaskPostCompute,
         compute_kernel_lib::NoPreKBlock>(
         in0_buf,
