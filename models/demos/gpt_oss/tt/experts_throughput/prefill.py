@@ -165,6 +165,7 @@ def forward_prefill_deepseek(
     ccl_manager=None,
     weights=None,
     program_config=None,
+    use_routed_expert_ffn_op=False,
 ):
     """DeepSeek prefill MoE with seq-dim chunking.
 
@@ -193,6 +194,7 @@ def forward_prefill_deepseek(
             ccl_manager,
             weights,
             program_config,
+            use_routed_expert_ffn_op=use_routed_expert_ffn_op,
         )
 
     assert seq_per_device % chunk == 0, (
@@ -221,6 +223,7 @@ def forward_prefill_deepseek(
             ccl_manager,
             weights,
             program_config,
+            use_routed_expert_ffn_op=use_routed_expert_ffn_op,
         )
         ttnn.deallocate(h)
         ttnn.deallocate(i)
@@ -248,6 +251,7 @@ def _forward_prefill_deepseek_chunk(
     ccl_manager=None,
     weights=None,
     program_config=None,
+    use_routed_expert_ffn_op=False,
 ):
     """One-shot DeepSeek prefill — input seq must equal prefill_config.seq_len_per_chip."""
     pc = prefill_config
@@ -323,7 +327,28 @@ def _forward_prefill_deepseek_chunk(
 
     memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    if pw.w1_w3_fused is not None:
+    if use_routed_expert_ffn_op:
+        # Fused L1-sharded path: gate/up matmuls write block-sharded L1, the
+        # GPT-OSS clamped SwiGLU SFPU runs on those shards in place, and the
+        # down matmul reads the same L1 shard as in0 — no DRAM round-trip on
+        # the intermediate. Requires unfused weights (separate w1, w3, w2).
+        assert pw.w1 is not None and pw.w3 is not None, (
+            "use_routed_expert_ffn_op requires unfused weights — set "
+            "use_fused_gate_up=False on ThroughputExpertConfig."
+        )
+        mode = ttnn._ttnn.operations.experimental.RoutedExpertMode.GPT_OSS_SWIGLU
+        expert_output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+            buf_tiled,
+            pw.w1,
+            pw.w3,
+            pw.w2,
+            mode=mode,
+            gate_bias=pw.w1_bias,
+            up_bias=pw.w3_bias,
+            down_bias=pw.w2_bias,
+        )
+        ttnn.deallocate(buf_tiled)
+    elif pw.w1_w3_fused is not None:
         m_tokens = buf_tiled.shape[-2]
         n_w1w3 = pw.w1_w3_fused.shape[-1]
         w1w3_pc = (
@@ -350,13 +375,16 @@ def _forward_prefill_deepseek_chunk(
         ttnn.deallocate(buf_tiled)
         ttnn.add(w3_out, pw.w3_bias, output_tensor=w3_out)
 
-    activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+    if not use_routed_expert_ffn_op:
+        activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
 
-    n_w2 = pw.w2.shape[-1]
-    w2_pc = program_config.get_prefill_down_config(n_w2, activated.shape[-2]) if program_config is not None else None
-    expert_output = ttnn.matmul(activated, pw.w2, program_config=w2_pc, memory_config=memory_config)
-    ttnn.deallocate(activated)
-    ttnn.add(expert_output, pw.w2_bias, output_tensor=expert_output)
+        n_w2 = pw.w2.shape[-1]
+        w2_pc = (
+            program_config.get_prefill_down_config(n_w2, activated.shape[-2]) if program_config is not None else None
+        )
+        expert_output = ttnn.matmul(activated, pw.w2, program_config=w2_pc, memory_config=memory_config)
+        ttnn.deallocate(activated)
+        ttnn.add(expert_output, pw.w2_bias, output_tensor=expert_output)
 
     expert_out_rm = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(expert_output)
