@@ -7,6 +7,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
+from models.tt_transformers.tt.common import sample_top_p
 from models.tt_transformers.tt.model import Transformer
 
 
@@ -187,3 +188,24 @@ class TtGemmaModel(Transformer):
         combined_vision_output = ttnn.concat(vision_outputs, dim=1)
         logger.info(f"Vision encoder done")
         return combined_vision_output
+
+    def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
+        vocab_size = tt_input.shape[-1]
+        pt_input = tt_input[..., :vocab_size]
+        # [B, 1, V] -> [B, V] so softmax / top-p / argmax are batch-correct (avoid blind squeeze())
+        if pt_input.dim() == 3 and pt_input.shape[1] == 1:
+            pt_input = pt_input.squeeze(1)
+
+        if temperature > 0:
+            probs = torch.softmax(pt_input / temperature, dim=-1)
+            pt_out = sample_top_p(probs, top_p)
+        else:
+            pt_out = torch.argmax(pt_input, dim=-1)
+
+        if pt_out.dim() == 0:
+            pt_out = pt_out.unsqueeze(0)
+        elif pt_out.dim() == 1 and pt_input.dim() >= 2 and pt_input.shape[0] > 1:
+            pass  # [B] next tokens
+        elif pt_out.dim() == 1:  # single sequence: re-add batch dim
+            pt_out = pt_out.unsqueeze(0)
+        return None, pt_out
