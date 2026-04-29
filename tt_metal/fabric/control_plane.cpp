@@ -129,23 +129,32 @@ get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(MeshId mesh_id, const 
     std::vector<AsicPosition> node0_positions;
     node0_positions.emplace_back(AsicPosition{1, 1});
     node0_positions.emplace_back(AsicPosition{1, 3});
-    node0_positions.emplace_back(AsicPosition{2, 4});
-    node0_positions.emplace_back(AsicPosition{2, 2});
 
-    std::vector<AsicPosition> node3_positions;
-    node3_positions.emplace_back(AsicPosition{3, 1});
-    node3_positions.emplace_back(AsicPosition{3, 3});
-    node3_positions.emplace_back(AsicPosition{4, 4});
-    node3_positions.emplace_back(AsicPosition{4, 2});
+    std::vector<AsicPosition> node1_positions;
+    node1_positions.emplace_back(AsicPosition{1, 2});
+    node1_positions.emplace_back(AsicPosition{1, 4});
+
+    std::vector<AsicPosition> node2_positions;
+    node2_positions.emplace_back(AsicPosition{1, 5});
+    node2_positions.emplace_back(AsicPosition{1, 7});
+
+    std::vector<AsicPosition> node5_positions;
+    node5_positions.emplace_back(AsicPosition{4, 5});
+    node5_positions.emplace_back(AsicPosition{4, 7});
+
+    std::vector<AsicPosition> node6_positions;
+    node6_positions.emplace_back(AsicPosition{4, 2});
+    node6_positions.emplace_back(AsicPosition{4, 4});
 
     std::vector<AsicPosition> node7_positions;
-    node7_positions.emplace_back(AsicPosition{3, 2});
-    node7_positions.emplace_back(AsicPosition{3, 4});
-    node7_positions.emplace_back(AsicPosition{4, 3});
     node7_positions.emplace_back(AsicPosition{4, 1});
+    node7_positions.emplace_back(AsicPosition{4, 3});
 
     fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 0}, std::move(node0_positions));
-    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 6}, std::move(node3_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 1}, std::move(node1_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 2}, std::move(node2_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 5}, std::move(node5_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 6}, std::move(node6_positions));
     fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 7}, std::move(node7_positions));
     return fixed_asic_position_pinnings;
 }
