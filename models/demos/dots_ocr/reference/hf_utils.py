@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+from huggingface_hub import snapshot_download
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
@@ -58,13 +59,73 @@ def load_processor_and_model(spec: HFLoadSpec):
 
     from transformers import AutoModelForCausalLM, AutoProcessor
 
-    processor = AutoProcessor.from_pretrained(
-        spec.model_id,
-        revision=spec.revision,
-        cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
-        trust_remote_code=spec.trust_remote_code,
-        use_fast=spec.use_fast_processor if spec.use_fast_processor is not None else True,
-    )
+    cache_dir = str(spec.cache_dir) if spec.cache_dir else None
+    model_id = spec.model_id
+    model_path = Path(model_id).expanduser()
+    looks_like_local_path = model_id.startswith(("/", "./", "../", "~"))
+
+    # Prefer loading from a local snapshot path for Hub ids. This avoids dynamic-module
+    # namespace edge cases for dotted repo names and keeps trust_remote_code behavior stable.
+    model_source: str
+    model_revision: Optional[str]
+    if model_path.exists():
+        model_source = str(model_path.resolve())
+        model_revision = None
+    elif looks_like_local_path:
+        raise FileNotFoundError(
+            f"HF model path does not exist: {model_path}. "
+            "Set HF_MODEL to a valid local model directory or a Hub id like 'rednote-hilab/dots.mocr'."
+        )
+    else:
+        try:
+            model_source = snapshot_download(
+                repo_id=model_id,
+                revision=spec.revision,
+                cache_dir=cache_dir,
+            )
+            model_revision = None
+        except Exception as exc:
+            logger.warning(
+                "snapshot_download failed for '%s' (%s); falling back to direct from_pretrained with repo id",
+                model_id,
+                exc,
+            )
+            model_source = model_id
+            model_revision = spec.revision
+
+    processor_kwargs = {
+        "revision": model_revision,
+        "cache_dir": cache_dir,
+        "trust_remote_code": spec.trust_remote_code,
+        "use_fast": spec.use_fast_processor if spec.use_fast_processor is not None else True,
+    }
+    try:
+        processor = AutoProcessor.from_pretrained(model_source, **processor_kwargs)
+    except TypeError as exc:
+        # Newer transformers validates that Qwen2.5-VL-style processors receive a
+        # BaseVideoProcessor. Some Dots remote processor revisions still omit this arg.
+        if "video_processor" not in str(exc):
+            raise
+        from transformers import AutoImageProcessor, AutoTokenizer, AutoVideoProcessor
+        from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor
+
+        logger.warning(
+            "AutoProcessor construction failed due to missing video_processor; "
+            "falling back to manual Qwen2_5_VLProcessor assembly."
+        )
+        image_processor = AutoImageProcessor.from_pretrained(model_source, **processor_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_source, **processor_kwargs)
+        video_processor = AutoVideoProcessor.from_pretrained(model_source, **processor_kwargs)
+        processor = Qwen2_5_VLProcessor(
+            image_processor=image_processor,
+            tokenizer=tokenizer,
+            video_processor=video_processor,
+            chat_template=getattr(tokenizer, "chat_template", None),
+        )
+        if not hasattr(tokenizer, "image_token"):
+            processor.image_token = "<|imgpad|>"
+        if not hasattr(tokenizer, "image_token_id"):
+            processor.image_token_id = 151665
 
     # Transformers kwargs around dtype have changed across versions:
     # - some accept `torch_dtype=...`
@@ -72,9 +133,9 @@ def load_processor_and_model(spec: HFLoadSpec):
     # Try `dtype` first (newer warning suggests this), fall back to `torch_dtype`.
     try:
         model = AutoModelForCausalLM.from_pretrained(
-            spec.model_id,
-            revision=spec.revision,
-            cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
+            model_source,
+            revision=model_revision,
+            cache_dir=cache_dir,
             dtype=spec.dtype,
             trust_remote_code=spec.trust_remote_code,
             _attn_implementation="eager",
@@ -82,9 +143,9 @@ def load_processor_and_model(spec: HFLoadSpec):
         )
     except TypeError:
         model = AutoModelForCausalLM.from_pretrained(
-            spec.model_id,
-            revision=spec.revision,
-            cache_dir=str(spec.cache_dir) if spec.cache_dir else None,
+            model_source,
+            revision=model_revision,
+            cache_dir=cache_dir,
             torch_dtype=spec.dtype,
             trust_remote_code=spec.trust_remote_code,
             _attn_implementation="eager",
