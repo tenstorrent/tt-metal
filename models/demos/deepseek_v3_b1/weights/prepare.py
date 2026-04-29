@@ -1593,10 +1593,18 @@ def _build_l1_compressed_tensor_width_sharded_shared_down(
 # Combined per-core cap for persistent attention weights + SRAM-hot experts.
 # Applies to every core in the SRAM binding set (gate ∪ up ∪ down grids):
 # ``attn_bytes[c] + sram_hot_expert_bytes[c] <= _COMBINED_ATTN_SRAM_CAP_BYTES``.
-# The residual ``worker_l1_size - cap`` (≈ 471 KiB at 960 KiB) is reserved for
-# runtime scratch (CBs, activation shards, allocator bookkeeping) -- raise the
-# cap only if scratch headroom measurements confirm it's safe.
+# Shared expert L1 weights are intentionally *not* counted here -- they are
+# staged after the SRAM trim runs and land below the SRAM band in the
+# ``worker_l1_size - cap`` reserve along with runtime scratch (CBs, activation
+# shards, allocator bookkeeping).  Raise the cap only if scratch + shared
+# headroom measurements confirm it's safe.
 _COMBINED_ATTN_SRAM_CAP_BYTES = 960 * 1024
+
+
+# Dataclass field names of the shared expert L1 weights inside
+# ``DeepSeekV3MoELayerWeights`` -- skipped by ``eager_upload_l1_lockstep`` so
+# they don't contribute to the SRAM trim's per-core ``initial_lowest_addr``.
+_SHARED_EXPERT_FIELDS = ("shared_gate_proj", "shared_up_proj", "shared_down_proj")
 
 
 def _tensor_l1_per_core_footprint(tt_tensor: ttnn.Tensor) -> tuple[int, list[tuple[int, int]]]:
@@ -1826,7 +1834,7 @@ def _compute_sram_trim_budget(
     """Compute ``(boundary_addr, initial_lowest_addr, l1_top_addr)`` for the
     address-based SRAM expert trim.
 
-    Walks ``persistent_tensors`` (attention + shared + routed reservations)
+    Walks ``persistent_tensors`` (the persistent attention reservations)
     restricted to the SRAM binding cores (gate ∪ up ∪ down), queries the
     allocator for its worker-L1 base, and turns the combined attn+SRAM cap
     into a hard floor address:
@@ -1835,12 +1843,19 @@ def _compute_sram_trim_budget(
         boundary_addr  = l1_top_addr - combined_attn_sram_cap_bytes
 
     ``initial_lowest_addr`` is bootstrapped from real allocator addresses
-    of the persistent attn/shared L1 tensors -- callers must therefore
+    of the persistent attention L1 tensors -- callers must therefore
     ensure those tensors are on device *before* invoking this helper
     (cache-backed providers go through :func:`eager_upload_l1_lockstep`
     in :func:`prepare_moe_layer_weights`).  This guarantees the
     "attn-first, SRAM-below" allocation order the per-core invariant
     ``attn[c] + sram[c] <= cap`` relies on.
+
+    Shared expert L1 weights are deliberately *not* in scope here: they
+    are uploaded after SRAM and land below ``boundary_addr`` in the
+    ``worker_l1_size - cap`` reserve.  Host-staged tensors passed in are
+    silently ignored by the underlying address query, so leaving shared
+    fields out of ``persistent_tensors`` is just a clarity-of-intent
+    decision rather than a correctness one.
 
     The returned triple is the input contract of
     :func:`prepare_compressed_sram_slots`.
@@ -2815,11 +2830,19 @@ def prepare_moe_layer_weights(
         assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
         assert worker_l1_size is not None, "worker_l1_size required when sram_hot_experts specifies this layer"
 
-        # Attn-first regime: stage the persistent L1 lockstep tensors on
-        # device *now* so the SRAM trim sees real allocator addresses.
-        # DRAM tensors stay host-staged for the caller's two_phase_upload.
+        # Attn-first regime: stage attention's L1 lockstep tensors on device
+        # *now* so the SRAM trim sees real allocator addresses for them.
+        # Shared expert L1 weights are intentionally kept host-staged so they
+        # don't count against the (attn + SRAM) cap; they get uploaded later
+        # by two_phase_upload and land below the SRAM band in the
+        # `worker_l1_size - cap` reserve (top-down L1 allocation).  DRAM
+        # tensors also stay host-staged for the caller's two_phase_upload.
         if not move_to_device:
-            result = eager_upload_l1_lockstep(device, result)
+            result = eager_upload_l1_lockstep(
+                device,
+                result,
+                skip_fields=_SHARED_EXPERT_FIELDS,
+            )
 
         persistent_attn_tensors = [
             result.q_a_proj,
@@ -2834,12 +2857,6 @@ def prepare_moe_layer_weights(
             result.gate_bias,
             result.kv_b1_proj,
             result.kv_b2_proj,
-            result.shared_gate_proj,
-            result.shared_up_proj,
-            result.shared_down_proj,
-            result.routed_gate_proj,
-            result.routed_up_proj,
-            result.routed_down_proj,
         ]
         boundary_addr, attn_lowest_addr, l1_top_addr = _compute_sram_trim_budget(
             device,
@@ -2849,18 +2866,22 @@ def prepare_moe_layer_weights(
             combined_attn_sram_cap_bytes,
         )
         initial_min_addr = min(attn_lowest_addr.values(), default=l1_top_addr)
+        attn_max_per_core = l1_top_addr - initial_min_addr
+        sram_headroom = initial_min_addr - boundary_addr
+        below_cap_reserve = max(0, worker_l1_size - combined_attn_sram_cap_bytes)
         logger.info(
-            "SRAM L1 budget (layer {}): cap={} bytes/core, l1_top={} (worker_l1_size={}), "
-            "scratch_reserve~={} bytes/core, boundary_addr={}, "
-            "initial_min_lowest_addr={} (initial headroom={} bytes)",
+            "SRAM L1 budget (layer {}): cap={} bytes/core (attn+SRAM only), "
+            "l1_top={} (worker_l1_size={}), boundary_addr={}, "
+            "attn_max~={} bytes/core, sram_headroom={} bytes/core, "
+            "below_cap_reserve={} bytes/core (shared experts + runtime scratch)",
             layer_idx,
             combined_attn_sram_cap_bytes,
             l1_top_addr,
             worker_l1_size,
-            max(0, worker_l1_size - combined_attn_sram_cap_bytes),
             boundary_addr,
-            initial_min_addr,
-            initial_min_addr - boundary_addr,
+            attn_max_per_core,
+            sram_headroom,
+            below_cap_reserve,
         )
 
         sram_slots = prepare_compressed_sram_slots(

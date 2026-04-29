@@ -17,10 +17,10 @@ WeightTensor = ttnn.Tensor | OverlappedTensor
 
 
 class Uploadable(Protocol):
-    def backing_tensors(self) -> list[ttnn.Tensor]:
+    def backing_tensors(self, *, skip_fields: tuple[str, ...] | set[str] | None = None) -> list[ttnn.Tensor]:
         ...
 
-    def with_device_tensors(self, tensor_map: TensorMap):
+    def with_device_tensors(self, tensor_map: TensorMap, *, allow_unmapped: bool = False):
         ...
 
 
@@ -40,11 +40,14 @@ class UploadableMixin:
     later for the remaining host-staged tensors.
     """
 
-    def backing_tensors(self) -> list[ttnn.Tensor]:
+    def backing_tensors(self, *, skip_fields: tuple[str, ...] | set[str] | None = None) -> list[ttnn.Tensor]:
+        skip = set(skip_fields) if skip_fields else set()
         out: list[ttnn.Tensor] = []
         seen_ids: set[TensorKey] = set()
         hints = get_type_hints(type(self))
         for field in fields(self):
+            if field.name in skip:
+                continue
             annotation = hints[field.name]
             value = getattr(self, field.name)
             kind, allows_none = _classify_annotation(annotation)
@@ -272,21 +275,32 @@ def two_phase_upload(device: ttnn.MeshDevice, host_weights: Uploadable):
     return host_weights.with_device_tensors(host_to_device)
 
 
-def eager_upload_l1_lockstep(device: ttnn.MeshDevice, host_weights: Uploadable):
+def eager_upload_l1_lockstep(
+    device: ttnn.MeshDevice,
+    host_weights: Uploadable,
+    *,
+    skip_fields: tuple[str, ...] | set[str] | None = None,
+):
     """Upload only the L1-lockstep host tensors and return ``host_weights``
     with those fields swapped to device-resident tensors.
 
     Used to give the SRAM hot expert trim real allocator addresses for the
-    persistent attention/shared L1 weights *before* it runs, restoring the
-    "attn-first then SRAM" allocation order assumed by the trim's per-core
-    invariant ``attn[c] + sram[c] <= cap``.
+    attention L1 weights *before* it runs, so the trim sees the "attn first,
+    SRAM below" allocation order its per-core invariant
+    ``attn[c] + sram[c] <= cap`` relies on.
+
+    ``skip_fields`` lets the caller exclude specific dataclass fields from
+    the eager upload -- typically the shared expert weights, which live on
+    the same SRAM cores but should *not* count against the SRAM cap (they
+    get uploaded later by :func:`two_phase_upload` and land below the SRAM
+    band in the ``worker_l1_size - cap`` reserve).
 
     DRAM tensors and per-core L1 passthrough fields (e.g. SRAM compressed
     expert slots) are left untouched and stay host-staged for the caller's
     later :func:`two_phase_upload` call.  Already-on-device tensors are
     skipped silently.
     """
-    host_tensors = host_weights.backing_tensors()
+    host_tensors = host_weights.backing_tensors(skip_fields=skip_fields)
     l1_lockstep = [t for t in host_tensors if t.memory_config().buffer_type == ttnn.BufferType.L1]
     if not l1_lockstep:
         return host_weights
