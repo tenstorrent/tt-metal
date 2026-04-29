@@ -110,42 +110,10 @@ class Attention(LightweightModule):
         _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
         _dram = ttnn.DRAM_MEMORY_CONFIG
         _fused_qkv = (num_heads + 2 * num_kv_heads) * head_dim
-        # Q/K/V from state_dict are torch.Tensor (checkpoint); ttnn.concat needs device ttnn.Tensor.
-        q_tt = ttnn.from_torch(
-            q_proj_weight,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=_dram,
-            mesh_mapper=_mesh_mapper,
-        )
-        k_tt = ttnn.from_torch(
-            k_proj_weight,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=_dram,
-            mesh_mapper=_mesh_mapper,
-        )
-        v_tt = ttnn.from_torch(
-            v_proj_weight,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=_dram,
-            mesh_mapper=_mesh_mapper,
-        )
-        qkv_cat = ttnn.concat([q_tt, k_tt, v_tt], dim=0, memory_config=_dram)
-        ttnn.deallocate(q_tt)
-        ttnn.deallocate(k_tt)
-        ttnn.deallocate(v_tt)
-        qkv_tx = ttnn.transpose(qkv_cat, -2, -1, memory_config=_dram)
-        ttnn.deallocate(qkv_cat)
-        qkv_4d = ttnn.reshape(qkv_tx, [1, 1, hidden_size, _fused_qkv], memory_config=_dram)
-        # to_torch before deallocate(qkv_tx): reshape may alias qkv_tx; freeing qkv_tx first leaves qkv_4d unallocated.
-        _wqkv_host = ttnn.to_torch(qkv_4d).contiguous()
-        ttnn.deallocate(qkv_4d)
-        ttnn.deallocate(qkv_tx)
+        # Fused QKV on host, single upload (same pattern as MLP): stable [1,1,hidden,fused] DRAM weights for traces.
+        qkv_2d = torch.cat([q_proj_weight, k_proj_weight, v_proj_weight], dim=0)
+        assert int(qkv_2d.shape[0]) == _fused_qkv
+        _wqkv_host = qkv_2d.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
         _wqkv_cache = get_cache_name("wqkv")
         if _wqkv_cache is not None:
             self.wqkv = ttnn.as_tensor(
@@ -158,7 +126,6 @@ class Attention(LightweightModule):
                 mesh_mapper=_mesh_mapper,
             )
         else:
-            # Re-upload from logical host tensor so linear() matches the old as_tensor(from_torch) layout.
             self.wqkv = ttnn.from_torch(
                 _wqkv_host,
                 dtype=weight_dtype,
@@ -181,21 +148,7 @@ class Attention(LightweightModule):
         # )
 
         _o_rows = num_heads * head_dim
-        o_tt = ttnn.from_torch(
-            o_proj_weight,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=_dram,
-            mesh_mapper=_mesh_mapper,
-        )
-        o_tx = ttnn.transpose(o_tt, -2, -1, memory_config=_dram)
-        ttnn.deallocate(o_tt)
-        o_4d = ttnn.reshape(o_tx, [1, 1, _o_rows, hidden_size], memory_config=_dram)
-        # Same as wqkv: to_torch before deallocate(o_tx) if reshape aliases transpose buffer.
-        _wo_host = ttnn.to_torch(o_4d).contiguous()
-        ttnn.deallocate(o_4d)
-        ttnn.deallocate(o_tx)
+        _wo_host = o_proj_weight.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
         _wo_cache = get_cache_name("wo")
         if _wo_cache is not None:
             self.wo = ttnn.as_tensor(

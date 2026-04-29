@@ -65,24 +65,33 @@ class CodePredictor(LightweightModule):
         _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
         _dram = ttnn.DRAM_MEMORY_CONFIG
 
-        def _linear_weight_to_matmul_4d_ttnn(w_2d) -> ttnn.Tensor:
-            """Checkpoint linear weight [out, in] -> device [1, 1, in, out] TILE for ttnn.linear (transpose on DRAM, no host round-trip)."""
-            out_f, in_f = int(w_2d.shape[0]), int(w_2d.shape[1])
-            w_tt = ttnn.from_torch(
-                w_2d,
+        def _cp_cache(name: str):
+            if weight_cache_path is None:
+                return None
+            return weight_cache_path / name.replace(".", "_")
+
+        def _linear_weight_to_matmul_4d(w_2d, cache_name: Optional[str] = None) -> ttnn.Tensor:
+            """Checkpoint [out, in] -> device [1, 1, in, out] TILE (transpose on CPU; one upload; optional disk cache)."""
+            w_host = w_2d.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+            cf = _cp_cache(cache_name) if cache_name else None
+            if cf is not None:
+                return ttnn.as_tensor(
+                    w_host,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=_dram,
+                    mesh_mapper=_mesh_mapper,
+                    cache_file_name=cf,
+                )
+            return ttnn.from_torch(
+                w_host,
                 device=device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=_dram,
                 mesh_mapper=_mesh_mapper,
             )
-            w_tx = ttnn.transpose(w_tt, -2, -1, memory_config=_dram)
-            ttnn.deallocate(w_tt)
-            w_4d = ttnn.reshape(w_tx, [1, 1, in_f, out_f], memory_config=_dram)
-            out_w = ttnn.clone(w_4d, memory_config=_dram, dtype=ttnn.bfloat16)
-            ttnn.deallocate(w_4d)
-            ttnn.deallocate(w_tx)
-            return out_w
 
         # Input projection (if Talker and CodePredictor have different hidden sizes)
         # The projection is called "small_to_mtp_projection" in HuggingFace model
@@ -91,7 +100,7 @@ class CodePredictor(LightweightModule):
             # Project from talker hidden size to code predictor hidden size
             proj_key = "talker.code_predictor.small_to_mtp_projection.weight"
             if proj_key in state_dict:
-                self.input_proj = _linear_weight_to_matmul_4d_ttnn(state_dict[proj_key])
+                self.input_proj = _linear_weight_to_matmul_4d(state_dict[proj_key], "cp_small_to_mtp_projection")
                 # Also load bias if present
                 bias_key = "talker.code_predictor.small_to_mtp_projection.bias"
                 if bias_key in state_dict:
@@ -158,7 +167,7 @@ class CodePredictor(LightweightModule):
         for g in range(self.num_code_groups - 1):  # 15 LM heads
             lm_head_key = f"talker.code_predictor.lm_head.{g}.weight"
             if lm_head_key in state_dict:
-                self.lm_heads.append(_linear_weight_to_matmul_4d_ttnn(state_dict[lm_head_key]))
+                self.lm_heads.append(_linear_weight_to_matmul_4d(state_dict[lm_head_key], f"cp_lm_head_{g}"))
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
