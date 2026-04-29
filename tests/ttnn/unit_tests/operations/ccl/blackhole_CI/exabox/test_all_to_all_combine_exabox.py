@@ -5,10 +5,18 @@
 """All-to-all combine (MoE) tests for multi-galaxy exabox mesh configurations (DUAL_BH / QUAD_BH).
 
 Tests cover:
-- all_to_all_combine on submeshes from 16x4 and 32x4 meshes
-- Both cluster axes (0 and 1) via submesh creation
+- Sync API (ttnn.all_to_all_combine) on full 16x4 and 32x4 meshes
+- cluster_axis=1 only (matches all other multi-host all_to_all_combine tests in
+  the repo: test_all_to_all_combine_6U.py::test_all_to_all_combine_8x8_dual_galaxy,
+  ::test_all_to_all_combine_quad_host_mesh, and test_selective_combine_6U.py
+  all parametrize cluster_axis=[1] only)
+- L1 memory configs
+- bfloat16 dtype
 - MoE-specific parameters (experts, batches, select_k, local_reduce)
-- FABRIC_1D + Linear topology
+
+The underlying op + golden helper (run_all_to_all_combine_test) is reused from
+tests/nightly/t3000/ccl/test_all_to_all_combine.py — it already seeds torch and
+random internally so multi-host MPI ranks generate consistent goldens.
 """
 
 import pytest
@@ -16,6 +24,21 @@ import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
 
+# ---------------------------------------------------------------------------
+# Fabric / topology parametrize combos (reused by multiple tests)
+# ---------------------------------------------------------------------------
+
+FABRIC_TOPOLOGY_COMBOS = [
+    pytest.param(
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 90112,
+        },
+        ttnn.Topology.Linear,
+        id="fabric_1d-linear",
+    ),
+]
 
 # ---------------------------------------------------------------------------
 # Test: all_to_all_combine on 16x4 mesh (DUAL_BH)
@@ -24,29 +47,20 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combi
 
 @pytest.mark.requires_device(["DUAL_BH"])
 @pytest.mark.parametrize(
-    "device_params, num_links, topology",
-    [
-        pytest.param(
-            {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
-            ttnn.Topology.Linear,
-            id="fabric_1d-linear",
-        ),
-    ],
+    "device_params, topology",
+    FABRIC_TOPOLOGY_COMBOS,
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
-@pytest.mark.parametrize(
-    "num_devices, mesh_shape, cluster_axis",
-    [
-        pytest.param(16, (16, 1), 0, id="axis0_16dev"),
-        pytest.param(4, (1, 4), 1, id="axis1_4dev"),
-    ],
-)
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
-@pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("cluster_axis", [pytest.param(1, id="axis1")])
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+# Per-device params reduced from t3000 defaults (batches_per_device=8, experts_per_device=8,
+# hidden_size=7000) because the full 64-device mesh would scale the aggregate batch and
+# experts to 512 each, overflowing per-device L1.
+@pytest.mark.parametrize("batches_per_device", [2])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("select_experts_k", [2])
+@pytest.mark.parametrize("hidden_size", [1024])
 @pytest.mark.parametrize("seq", [2])
 @pytest.mark.parametrize("local_reduce", [False, True])
 @pytest.mark.parametrize("scheme", ["random"])
@@ -56,8 +70,6 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combi
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_16x4(
     mesh_device,
-    mesh_shape,
-    num_devices,
     cluster_axis,
     batches_per_device,
     seq,
@@ -73,15 +85,15 @@ def test_all_to_all_combine_16x4(
     topology,
     dtype,
 ):
+    mesh_shape = tuple(mesh_device.shape)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
     mesh_device.disable_and_clear_program_cache()
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     run_all_to_all_combine_test(
-        submesh,
+        mesh_device,
         mesh_shape,
         cluster_axis,
         batch,
@@ -107,29 +119,18 @@ def test_all_to_all_combine_16x4(
 
 @pytest.mark.requires_device(["QUAD_BH"])
 @pytest.mark.parametrize(
-    "device_params, num_links, topology",
-    [
-        pytest.param(
-            {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
-            ttnn.Topology.Linear,
-            id="fabric_1d-linear",
-        ),
-    ],
+    "device_params, topology",
+    FABRIC_TOPOLOGY_COMBOS,
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((32, 4), id="32x4_grid")], indirect=True)
-@pytest.mark.parametrize(
-    "num_devices, mesh_shape, cluster_axis",
-    [
-        pytest.param(32, (32, 1), 0, id="axis0_32dev"),
-        pytest.param(4, (1, 4), 1, id="axis1_4dev"),
-    ],
-)
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
-@pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("cluster_axis", [pytest.param(1, id="axis1")])
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+# Per-device params reduced for the same reason as the 16x4 test (128 devices on QUAD_BH).
+@pytest.mark.parametrize("batches_per_device", [2])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("select_experts_k", [2])
+@pytest.mark.parametrize("hidden_size", [1024])
 @pytest.mark.parametrize("seq", [2])
 @pytest.mark.parametrize("local_reduce", [False, True])
 @pytest.mark.parametrize("scheme", ["random"])
@@ -139,8 +140,6 @@ def test_all_to_all_combine_16x4(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_32x4(
     mesh_device,
-    mesh_shape,
-    num_devices,
     cluster_axis,
     batches_per_device,
     seq,
@@ -156,15 +155,15 @@ def test_all_to_all_combine_32x4(
     topology,
     dtype,
 ):
+    mesh_shape = tuple(mesh_device.shape)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
     mesh_device.disable_and_clear_program_cache()
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     run_all_to_all_combine_test(
-        submesh,
+        mesh_device,
         mesh_shape,
         cluster_axis,
         batch,
