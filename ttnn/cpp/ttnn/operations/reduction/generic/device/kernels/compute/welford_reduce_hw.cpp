@@ -149,6 +149,9 @@ void kernel_main() {
                         mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                         mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                         cb_in_obj.pop_front(1);
+
+                        // Reconfigure the compute setup from scalar-multiply mode back to the
+                        // SFPU state that Welford expects.
                         welford_reinit(cb_in);
                     } else {
                         cb_in_obj.wait_front(onetile);

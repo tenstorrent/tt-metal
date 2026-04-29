@@ -139,6 +139,9 @@ void kernel_main() {
                 tile_regs_acquire();
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
+
+                // Reconfigure the compute setup from scalar-multiply mode back to the
+                // SFPU state that Welford expects.
                 welford_reinit(cb_in);
             } else {
                 copy_tile(cb_in, 0, input_dst);
