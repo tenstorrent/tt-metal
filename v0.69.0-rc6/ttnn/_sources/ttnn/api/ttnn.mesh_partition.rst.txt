@@ -1,0 +1,8 @@
+﻿ttnn.mesh\_partition
+====================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.mesh_partition:
+
+.. autooperation:: ttnn.mesh_partition

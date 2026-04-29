@@ -1,0 +1,8 @@
+﻿ttnn.erf
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.erf:
+
+.. autooperation:: ttnn.erf
