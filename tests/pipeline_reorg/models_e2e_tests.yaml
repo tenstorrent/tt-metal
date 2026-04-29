@@ -228,7 +228,7 @@
 
 - name: Qwen3-Embedding-4B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen3-Embedding-4B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-Embedding-4B MESH_DEVICE=N150
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3-Embedding-4B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-Embedding-4B MESH_DEVICE=N150
     pytest --timeout 210 models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -k "dp1-batch1-seq128"
   model: qwen3-embedding-4b
   skus:
@@ -240,7 +240,7 @@
 
 - name: Qwen3-Embedding-0.6B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen3-Embedding-0.6B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=N150
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3-Embedding-0.6B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=N150
     pytest --timeout 210 models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -k "dp1-batch1-seq128"
   model: qwen3-embedding-0.6b
   skus:
