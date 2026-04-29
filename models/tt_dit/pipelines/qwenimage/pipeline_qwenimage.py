@@ -33,6 +33,7 @@ from ...parallel.config import (
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
+from .qwen_pos_embed_tt import QwenPosEmbedTT
 
 if TYPE_CHECKING:
     pass
@@ -158,6 +159,14 @@ class QwenImagePipeline:
         self._transformer_state_dict = torch_transformer.state_dict()
         self._padding_config = padding_config
         self._pos_embed = torch_transformer.pos_embed
+        # Device-side RoPE builder; used when sp_factor == 1 (output is replicated).
+        # Falls back to the host builder above for sp_factor > 1 because we do not
+        # yet have a ttnn primitive for replicated->SP-sharded resharding along the
+        # sequence axis.
+        self._pos_embed_tt = QwenPosEmbedTT(
+            torch_pos_embed=torch_transformer.pos_embed,
+            submesh_devices=self._submesh_devices,
+        )
 
         # Initialize the transformers. Loading logic comes after.
         self.transformers = []
@@ -528,15 +537,19 @@ class QwenImagePipeline:
             p = self._patch_size
             img_shapes = [[(1, latents_height // p, latents_width // p)]] * transformer_batch_size
             txt_seq_lens = [prompt_sequence_length] * transformer_batch_size
-            spatial_rope, prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
 
-            # Upload half-dim cos/sin tensors; the per-axis repeat_interleave doubling
-            # happens on device via rope_double_last_dim_device to save host compute
-            # and halve the upload bandwidth.
-            spatial_rope_cos_half = spatial_rope.real
-            spatial_rope_sin_half = spatial_rope.imag
-            prompt_rope_cos_half = prompt_rope.real
-            prompt_rope_sin_half = prompt_rope.imag
+            # When sp_factor == 1 the per-submesh RoPE tensors are replicated, so we
+            # assemble them on device via QwenPosEmbedTT. For sp_factor > 1 we still
+            # need to shard along the sequence axis at upload time, so we fall back to
+            # the host builder (no ttnn replicated->SP-sharded reshard primitive yet).
+            sp_factor = self._parallel_config.sequence_parallel.factor
+            use_device_pos_embed = sp_factor == 1
+            if not use_device_pos_embed:
+                spatial_rope, prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
+                spatial_rope_cos_half = spatial_rope.real
+                spatial_rope_sin_half = spatial_rope.imag
+                prompt_rope_cos_half = prompt_rope.real
+                prompt_rope_sin_half = prompt_rope.imag
 
             tt_prompt_embeds_device_list = []
             tt_prompt_embeds_list = []
@@ -561,22 +574,33 @@ class QwenImagePipeline:
                     latents, device=submesh_device, on_host=False, mesh_axes=[None, sp_axis, None]
                 )
 
-                tt_spatial_rope_cos = tensor.rope_double_last_dim_device(
-                    tensor.from_torch(
-                        spatial_rope_cos_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
+                if use_device_pos_embed:
+                    cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
+                        submesh_index=i,
+                        img_shapes_per_batch=img_shapes[0],
+                        max_txt_seq_len=txt_seq_lens[0],
                     )
-                )
-                tt_spatial_rope_sin = tensor.rope_double_last_dim_device(
-                    tensor.from_torch(
-                        spatial_rope_sin_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
+                    tt_spatial_rope_cos = tensor.rope_double_last_dim_device(cos_half)
+                    tt_spatial_rope_sin = tensor.rope_double_last_dim_device(sin_half)
+                    tt_prompt_rope_cos = tensor.rope_double_last_dim_device(txt_cos_half)
+                    tt_prompt_rope_sin = tensor.rope_double_last_dim_device(txt_sin_half)
+                else:
+                    tt_spatial_rope_cos = tensor.rope_double_last_dim_device(
+                        tensor.from_torch(
+                            spatial_rope_cos_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
+                        )
                     )
-                )
-                tt_prompt_rope_cos = tensor.rope_double_last_dim_device(
-                    tensor.from_torch(prompt_rope_cos_half, device=submesh_device, on_host=False)
-                )
-                tt_prompt_rope_sin = tensor.rope_double_last_dim_device(
-                    tensor.from_torch(prompt_rope_sin_half, device=submesh_device, on_host=False)
-                )
+                    tt_spatial_rope_sin = tensor.rope_double_last_dim_device(
+                        tensor.from_torch(
+                            spatial_rope_sin_half, device=submesh_device, on_host=False, mesh_axes=[sp_axis, None]
+                        )
+                    )
+                    tt_prompt_rope_cos = tensor.rope_double_last_dim_device(
+                        tensor.from_torch(prompt_rope_cos_half, device=submesh_device, on_host=False)
+                    )
+                    tt_prompt_rope_sin = tensor.rope_double_last_dim_device(
+                        tensor.from_torch(prompt_rope_sin_half, device=submesh_device, on_host=False)
+                    )
 
                 if traced:
                     if self._traces is None:
