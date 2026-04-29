@@ -1,5 +1,5 @@
 training_config:
-  project_name: "tt_train_tinyllama_slimpajama"
+  project_name: "tt_train_tinyllama_slimpajama-6B"
   seed: 5489
   model_save_interval: 1000
   # Recipe A: paper-exact global batch of 512.
