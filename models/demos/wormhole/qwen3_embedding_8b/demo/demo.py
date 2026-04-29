@@ -50,6 +50,75 @@ _DEFAULT_HF_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 MODEL_NAME = (os.environ.get("HF_MODEL") or _DEFAULT_HF_MODEL).strip() or _DEFAULT_HF_MODEL
 BLOCK_SIZE = 32
 
+
+def _hf_hub_cache_dir() -> str:
+    """Directory where huggingface_hub stores snapshots (align with HF_HUB_CACHE / HF_HOME)."""
+    if os.environ.get("HF_HUB_CACHE"):
+        return os.environ["HF_HUB_CACHE"]
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return os.path.join(hf_home, "hub")
+    return os.path.join(os.path.expanduser("~/.cache/huggingface"), "hub")
+
+
+def prefetch_qwen3_models() -> None:
+    """Download and cache Qwen3 embedding-related HF repos before tests or standalone runs.
+
+    Helps environments that later load with ``local_files_only=True`` (e.g. CI) once the hub
+    cache is populated. Failures are logged but do not abort the session.
+    """
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        logger.warning("huggingface_hub not available; skipping Qwen3 model pre-cache")
+        return
+
+    candidates: list[str] = []
+    if MODEL_NAME:
+        candidates.append(MODEL_NAME)
+    candidates.extend(
+        [
+            "Qwen/Qwen3-Embedding-0.6B",
+            "Qwen/Qwen3-0.6B",
+        ]
+    )
+    if "Embedding-4B" in MODEL_NAME or "embedding-4b" in MODEL_NAME.lower():
+        candidates.extend(["Qwen/Qwen3-Embedding-4B", "Qwen/Qwen3-4B"])
+
+    seen: set[str] = set()
+    models_to_cache: list[str] = []
+    for r in candidates:
+        if r and r not in seen:
+            seen.add(r)
+            models_to_cache.append(r)
+
+    cache_dir = _hf_hub_cache_dir()
+    dl_kwargs: dict = {
+        "cache_dir": cache_dir,
+        "local_files_only": False,
+    }
+    hf_token = os.environ.get("HF_TOKEN")
+    if hf_token:
+        dl_kwargs["token"] = hf_token
+
+    logger.info(f"Pre-caching Qwen3-related HF models under {cache_dir} ...")
+    for model_name in models_to_cache:
+        try:
+            logger.info(f"Caching {model_name} ...")
+            snapshot_download(model_name, **dl_kwargs)
+            logger.info(f"Successfully cached {model_name}")
+        except Exception as e:
+            logger.warning(f"Failed to cache {model_name}: {e}")
+    logger.info("Qwen3 model pre-cache pass completed")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cache_qwen3_models_session():
+    """Session autouse: warm HF hub cache once before any test in this module."""
+    prefetch_qwen3_models()
+    yield
+
+
 INSTRUCTION = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
 
 SAMPLE_TEXTS = [
@@ -709,6 +778,7 @@ if __name__ == "__main__":
     import argparse
 
     os.environ.setdefault("HF_MODEL", _DEFAULT_HF_MODEL)
+    prefetch_qwen3_models()
 
     parser = argparse.ArgumentParser(description="Qwen3-Embedding-8B performance demo")
     parser.add_argument("--batch-size", type=int, default=1, help="Global batch size")
