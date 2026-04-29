@@ -37,9 +37,19 @@ TRACE-COMPATIBLE DECODE:
   - decode_attn_mask (float32 [1, 1, 1, max_seq]) is pre-allocated on device and
     updated outside the trace each step to mask out future positions.
   When cur_pos_tensor is None, falls back to non-traceable update_cache+slice.
+
+LAYOUT / TILIZE (P2):
+  The hot path keeps activations TILE: wqkv linear → nlp_create_qkv_heads (TILE in/out)
+  → rms_norm on Q/K (TILE inputs required by ttnn.rms_norm) → rotary_embedding_llama (TILE).
+  Reducing ROW↔TILE churn between heads / RoPE / matmul would require TTNN API changes
+  (e.g. rotary_embedding_llama_fused_qk expects HEIGHT_SHARDED Q/K and decode-only shapes,
+  so it is not a drop-in here). Standard prefill causal masking avoids multi-kernel
+  mask construction where possible (see forward).
 """
 
 from typing import Optional, Tuple
+
+import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -689,41 +699,20 @@ class Attention(LightweightModule):
             # positions; padding query rows and empty cache columns are -inf.
             scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
         elif q_seq == k_seq and q_seq > 1:
-            # Causal mask for standard prefill (full sequence self-attention)
-            # Torch reference:
-            # causal_mask = torch.triu(torch.full((1, 1, q_seq, k_seq), float("-inf")), diagonal=1)
-            # mask_tt = ttnn.from_torch(causal_mask, dtype=ttnn.float32, device=self.device, ...)
-            # ttnn.triu is multiply(mask, x); triu(full(-inf)) gives 0*(-inf)->NaN. Use where(triu(ones), -inf, 0).
-
-            _cm_shape = [1, 1, q_seq, k_seq]
-            _cm_ones = ttnn.ones(
-                _cm_shape,
+            # Causal mask for standard prefill: add -inf strictly above the diagonal, 0 elsewhere.
+            # Build on host then one from_torch (single tilize) instead of ones/triu/where on device
+            # to cut Tilize/Ternary/eltwise churn (P2 layout tax).
+            mask_cpu = torch.triu(
+                torch.full((q_seq, k_seq), float("-inf"), dtype=torch.float32),
+                diagonal=1,
+            ).reshape(1, 1, q_seq, k_seq)
+            mask_tt = ttnn.from_torch(
+                mask_cpu,
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            _cm_upper = ttnn.triu(_cm_ones, diagonal=1)
-            ttnn.deallocate(_cm_ones)
-            _cm_zeros = ttnn.zeros(
-                _cm_shape,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            _cm_neg_inf = ttnn.full(
-                _cm_shape,
-                float("-inf"),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            mask_tt = ttnn.where(_cm_upper, _cm_neg_inf, _cm_zeros)
-            ttnn.deallocate(_cm_upper)
-            ttnn.deallocate(_cm_zeros)
-            ttnn.deallocate(_cm_neg_inf)
             scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(mask_tt)
 
