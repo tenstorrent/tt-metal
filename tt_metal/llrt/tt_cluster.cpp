@@ -912,6 +912,23 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
+    // FIX NZ (#42429): For non-MMIO chips with a known-broken relay, skip read_from_device
+    // entirely. Without this guard, read_from_device -> read_non_mmio enters a 5s polling loop
+    // per read.  wait_until_cores_done in initialize_and_launch_firmware polls all worker cores
+    // (64+ on a full Wormhole tensix grid) on each device — a single pass over 64 cores on one
+    // dead-relay non-MMIO device blocks for 64 × 5 s = 320 s, well over the GHA 5-min timeout.
+    // Throwing immediately (same exception type UMD would eventually throw) allows callers such
+    // as reset_cores (try/catch around erisc_app_still_running) to handle the failure quickly.
+    // run_launch_phase checks is_relay_broken() to skip initialize_and_launch_firmware for
+    // these devices entirely, so in the normal degraded-init path this guard is a belt-and-
+    // suspenders safety net — no read should reach here for relay-broken non-MMIO devices.
+    if (this->cluster_desc_->is_chip_remote(chip_id) && this->relay_broken_chips_.count(chip_id)) {
+        throw std::runtime_error(fmt::format(
+            "FIX NZ: read_core(chip {}) skipped — relay already known broken. "
+            "Would have blocked for 5 s in read_non_mmio.",
+            chip_id));
+    }
+
     if (rtoptions_.get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(
             soc_desc,

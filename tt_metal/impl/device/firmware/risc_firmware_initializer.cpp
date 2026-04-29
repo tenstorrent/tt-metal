@@ -192,9 +192,26 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     if (!cluster_.is_mock_or_emulated()) {
         terminate_active_ethernet_cores_on_all_chips();
 
+        const auto mmio_ids_set = cluster_.mmio_chip_ids();
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
             reset_cores(device_id);
+            // FIX NZ (#42429): skip initialize_and_launch_firmware for non-MMIO devices with a
+            // known-broken relay.  initialize_and_launch_firmware calls write_core (guarded by
+            // FIX NY) and wait_until_cores_done, which polls worker cores via read_core.  For a
+            // remote chip with a dead relay, each read_core blocks for 5 s; a full 64-core tensix
+            // grid = 64 × 5 s = 320 s before the GHA 5-minute action timeout fires.  FIX NZ
+            // (read_core throw) is a belt-and-suspenders guard, but skipping here is cleaner:
+            // the fabric firmware initializer will handle the dead relay cleanly on the next
+            // run (terminate_stale_erisc_routers rebuilds state from scratch).
+            if (!mmio_ids_set.count(device_id) && cluster_.is_relay_broken(device_id)) {
+                log_warning(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX NZ — skipping initialize_and_launch_firmware for "
+                    "non-MMIO device {} (relay broken). Firmware will be loaded on next clean init. (#42429)",
+                    device_id);
+                continue;
+            }
             initialize_and_launch_firmware(device_id);
         }
     }

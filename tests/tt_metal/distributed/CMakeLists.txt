@@ -44,6 +44,7 @@ target_sources(
         test_gap44_fixnx_write_core_relay_guard.cpp
         test_gap45_fixx_ext_eth_training_fabric_erisc.cpp
         test_gap46_fixny_relay_broken_chips_cache.cpp
+        test_gap47_fixnz_read_core_relay_guard.cpp
         test_dispatch_context.cpp
         utils.cpp
 )

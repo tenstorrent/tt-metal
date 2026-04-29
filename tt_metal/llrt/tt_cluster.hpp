@@ -84,6 +84,12 @@ public:
 
     std::set<ChipId> mmio_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
+    // FIX NZ (#42429): Returns true if chip is a non-MMIO device whose relay is known broken
+    // at the tt-metal level (populated by write_core FIX NX). Used by run_launch_phase to skip
+    // initialize_and_launch_firmware for unreachable devices, and by read_core to avoid
+    // per-read 5s timeouts in wait_until_cores_done.
+    bool is_relay_broken(ChipId chip_id) const { return relay_broken_chips_.count(chip_id) > 0; }
+
     size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
