@@ -36,8 +36,7 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
-    // arg 24: use_streaming_compute (reader doesn't use it, present in args for alignment)
-    constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
+    constexpr uint32_t num_readers = get_compile_time_arg_val(25);
 
     constexpr auto q_args = TensorAccessorArgs<26>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -189,7 +188,7 @@ void kernel_main() {
     constexpr uint32_t q_heads_per_k = NH / NHK;
 
     // Throttle Q DRAM reads so many readers don't saturate the NoC outstanding-read budget.
-    constexpr uint32_t q_barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_q_readers>();
+    constexpr uint32_t q_barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_readers>();
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto local_k_reader = TensorAccessor(k_args, k_addr);
@@ -427,8 +426,8 @@ void kernel_main() {
                                 q_end_seq_tile,
                                 cb_q_in,
                                 q_tile_bytes,
-                                false /*transpose*/
-                            );
+                                false /*transpose*/,
+                                q_barrier_threshold);
                         }
                     } else {
                         read_block(
@@ -437,8 +436,8 @@ void kernel_main() {
                             q_end_seq_tile,
                             cb_q_in,
                             q_tile_bytes,
-                            false /*transpose*/
-                        );
+                            false /*transpose*/,
+                            q_barrier_threshold);
                     }
                     q_pushed = true;
                 }
