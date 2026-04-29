@@ -231,11 +231,14 @@ class TtDPTFusionStage:
     upsample the running feature, add the projected scale feature, then
     apply two residual conv blocks.
 
-    Each scale goes through two linear ops:
-      1. neck_conv:   C_i -> 256  (the normalization from DPTNeck.convs)
-      2. projection:  256 -> 256  (the fusion layer's own 1x1 conv)
+    Each scale goes through:
+      1. neck_conv:   C_i -> 256  (3x3 conv from DPTNeck.convs)
+      2. projection:  256 -> 256  (1x1 conv from fusion layer, done as linear)
     Without step 1, the matmul crashes because C_i=1024 != weight_rows=256.
     """
+
+    # Input channel counts for each reassembly output level
+    NECK_IN_CHANNELS = [256, 512, 1024, 1024]
 
     def __init__(self, parameters, device):
         self.parameters = parameters
@@ -288,20 +291,27 @@ class TtDPTFusionStage:
         for i in range(3, -1, -1):
             params = self.parameters.layers[i]
             feat_i = features[i]  # (B, C_i, H_i, W_i)
+            batch_size, in_ch, h_i, w_i = feat_i.shape
 
-            # Transpose to (B, H, W, C_i) for linear ops
-            feat_i = ttnn.transpose(feat_i, -2, -1)  # (B, C_i, W_i, H_i)
-            feat_i = ttnn.transpose(feat_i, -3, -1)  # (B, H_i, W_i, C_i)
-
-            # Step 1: neck_conv -- channel normalizer  C_i -> 256
-            feat_i = ttnn.linear(
+            # Step 1: neck_conv -- 3x3 conv: C_i -> 256
+            feat_i = ttnn.to_layout(feat_i, ttnn.ROW_MAJOR_LAYOUT)
+            feat_i, [h_i, w_i] = ttnn_conv2d(
                 feat_i,
                 params.neck_conv.weight,
-                bias=params.neck_conv.bias,
+                params.neck_conv.bias,
+                self.device,
+                self.NECK_IN_CHANNELS[i],
+                256,
+                batch_size,
+                h_i,
+                w_i,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # Step 2: fusion projection  256 -> 256
+            # Step 2: fusion projection  256 -> 256 (1x1 conv as linear)
+            feat_i = _dram_tile(feat_i)  # ensure TILE layout for linear
+            # Reshape from conv output (B*H*W, 256) to (B, H*W, 256)
+            feat_i = ttnn.reshape(feat_i, (batch_size, h_i * w_i, 256))
             feat_i = ttnn.linear(
                 feat_i,
                 params.projection.weight,
@@ -310,8 +320,8 @@ class TtDPTFusionStage:
             )
 
             # Back to (B, 256, H_i, W_i)
-            feat_i = ttnn.transpose(feat_i, -3, -1)  # (B, 256, W_i, H_i)
-            feat_i = ttnn.transpose(feat_i, -2, -1)  # (B, 256, H_i, W_i)
+            feat_i = ttnn.reshape(feat_i, (batch_size, h_i, w_i, 256))
+            feat_i = ttnn.permute(feat_i, (0, 3, 1, 2))  # (B, 256, H_i, W_i)
 
             if x is None:
                 # Deepest level -- nothing to add yet.
@@ -943,16 +953,17 @@ def custom_preprocessor(torch_model, name):
     # The missing neck.convs caused: TT_FATAL width=1024 height=256
 
     for i, layer in enumerate(torch_model.neck.fusion_stage.layers):
-        # neck.convs[i]: (256, neck_hidden_sizes[i], 1, 1) -> permute -> (in_ch, 256)
-        nc_w = torch_model.neck.convs[i].weight.permute(1, 2, 3, 0).reshape(-1, 256)
+        # neck.convs[i]: Conv2d with shape (256, in_ch, 3, 3)
+        # Keep as conv weight: bfloat16 ROW_MAJOR (NOT bfloat8_b which is invalid for conv)
+        nc_w = torch_model.neck.convs[i].weight
 
         # fusion projection: (256, 256, 1, 1) -> permute -> (256, 256)
         fproj_w = layer.projection.weight.permute(1, 2, 3, 0).reshape(-1, 256)
 
         fp = {
-            # Channel normalizer: neck_hidden_sizes[i] -> 256 (applied first)
+            # Channel normalizer: neck_hidden_sizes[i] -> 256 (3x3 conv)
             "neck_conv": {
-                "weight": _tile(nc_w, dtype=ttnn.bfloat8_b),
+                "weight": _rm(nc_w, dtype=ttnn.bfloat16),
                 "bias": _rm(torch_model.neck.convs[i].bias),
             },
             # Fusion projection: 256 -> 256
