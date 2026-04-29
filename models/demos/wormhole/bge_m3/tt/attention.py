@@ -100,6 +100,17 @@ def _sdpa_program_config_for_seq_len(
     )
 
 
+def _attention_output_memory_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    mesh_device: ttnn.MeshDevice | None,
+) -> ttnn.MemoryConfig:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return ttnn.L1_MEMORY_CONFIG
+    return bge_m3_linear_activation_memory_config(max_seq_len, max_batch)
+
+
 @dataclass
 class BgeM3AttentionConfig:
     # Required weights
@@ -438,7 +449,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     if config.score_memcfg is None:
         to_set["score_memcfg"] = act_mem
     if config.output_memcfg is None:
-        to_set["output_memcfg"] = act_mem
+        to_set["output_memcfg"] = _attention_output_memory_config(max_seq, max_batch, mesh_device)
 
     if config.score_prg_config is None:
         q0, k0 = _sdpa_chunks_for_seq_len(128)
