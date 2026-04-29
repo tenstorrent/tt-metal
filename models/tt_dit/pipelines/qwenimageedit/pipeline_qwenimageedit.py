@@ -342,6 +342,10 @@ class QwenImageEditPipeline:
             self._vae_encoder = None
 
         self._traces = None
+        # First traced call records its prompt seq length here; every later call
+        # must pad up to the same length so the trace's prompt-input placeholder
+        # keeps a stable shape. See ``__call__`` for the enforcement logic.
+        self._prompt_pad_seq_len: int | None = None
 
         logger.info("warming up for tracing...")
         self.run_single_edit(prompt="test edit", image=None, num_inference_steps=1, seed=0, traced=False, skip_vae=True)
@@ -703,6 +707,36 @@ class QwenImageEditPipeline:
                         profiler_iteration=profiler_iteration,
                     )
             _, prompt_sequence_length, _ = prompt_embeds.shape
+
+            # The image path (``_encode_prompts_with_images``) pads prompt embeds
+            # only to the per-call batch max, so two consecutive prompts with
+            # different token counts produce tensors of different seq length. The
+            # traced prompt-input placeholder is bound to whatever shape was used
+            # when the trace was captured, so any later call with a different
+            # length would fail the ``copy_host_to_device_tensor`` shape check
+            # (``host_tensor.logical_shape() == device_tensor.logical_shape()``).
+            # To make interactive (multi-prompt) traced runs work we cache the
+            # first call's length and pad every subsequent call up to it. The
+            # text-only path already encodes to a fixed length, so this is a
+            # no-op for it.
+            if traced:
+                if self._prompt_pad_seq_len is None:
+                    self._prompt_pad_seq_len = prompt_sequence_length
+                pad_target = self._prompt_pad_seq_len
+                if prompt_sequence_length > pad_target:
+                    msg = (
+                        f"Prompt sequence length {prompt_sequence_length} exceeds the traced "
+                        f"placeholder length {pad_target}; recreate the pipeline to recapture "
+                        f"the trace with a longer prompt."
+                    )
+                    raise ValueError(msg)
+                if prompt_sequence_length < pad_target:
+                    pad_amt = pad_target - prompt_sequence_length
+                    prompt_embeds = torch.nn.functional.pad(
+                        prompt_embeds, (0, 0, 0, pad_amt), mode="constant", value=0.0
+                    )
+                    prompt_mask = torch.nn.functional.pad(prompt_mask, (0, pad_amt), mode="constant", value=0)
+                    prompt_sequence_length = pad_target
 
             self.prepare_transformers()
 
