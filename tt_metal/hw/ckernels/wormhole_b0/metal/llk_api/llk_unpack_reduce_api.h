@@ -37,6 +37,8 @@ inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t t
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
 
+    LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");
+
     WAYPOINT("UPRW");
     _llk_unpack_reduce_<type, dim>(address);
     WAYPOINT("UPRD");

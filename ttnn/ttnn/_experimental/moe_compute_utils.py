@@ -1,7 +1,73 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python helper utilities for ttnn.experimental.moe_compute """
+"""Python helper utilities for ttnn.experimental.moe_compute.
+
+This module provides reference implementations for preparing weight tensors
+for the fused MoE compute operation. The functions here are "executable
+specifications" that produce the exact byte layout the kernels expect.
+
+**Weight tensor layout overview**
+
+``ttnn.experimental.moe_compute`` takes **two packed weight tensor arguments**
+that contain **three logical expert weight matrices**:
+
+- ``matmul_w0_w1_tensor``: W0 (gate) and W1 (up) weights interleaved/packed.
+- ``matmul_w2_tensor``: W2 (down projection) weights.
+
+The layout is highly specific to the MoE ring-all-to-all kernel implementation.
+Constants defined here must stay in sync with
+``moe_ring_common.h`` (TILE_SIZE=32, W0_W1_TILES_PER_TXN=14, etc.).
+
+**Constants (must match moe_ring_common.h)**
+
+- ``NUM_W0_W1_TILES_H = 224`` (tiles) -> 7168 elements for the reference hidden size
+- ``NUM_W2_TILES_H = 64`` (tiles) -> 2048 elements
+- ``W0_W1_TILES_PER_TXN = 14``
+- ``W2_TILES_PER_TXN = 14``
+- ``W2_TXNS_PER_BLOCK = 2``
+- ``W2_BLOCKS_PER_EXPERT = 50``
+
+**Bias support (``has_bias=True``)**
+
+When bias is enabled, callers must pack bias values into the weight tensors
+in a kernel-specific format and set ``has_bias=True`` on the ``moe_compute`` call:
+
+- **W0/W1 bias (b0, b1)**: PyTorch format is ``(L, E, N)`` where L=layers, E=experts,
+  N=intermediate dim. This is expanded to tile format ``(L, E, 32, N)`` with only
+  row 0 populated, concatenated **after** W0/W1 along the K (input) dimension, then
+  K is padded to a multiple of 14 tiles (W0_W1_TILES_PER_TXN). For the reference
+  config (hidden=7168), K grows from 224 to 225 tiles, padded to 238 tiles (7616
+  elements).
+
+- **W2 bias (b2)**: PyTorch format is ``(L, E, K)``. Expanded to tile format
+  ``(L, E, 32, K)`` with row 0 populated, K-column-sharded like W2, appended along
+  the N (intermediate) axis **without** ring-rotation (matching GPT-OSS behavior).
+  N+32 is then padded to 70 tiles (2240 elements) to align DRAM reads.
+
+**Output shapes (reference config)**
+
+- ``prepare_w0_w1_tensor_for_moe_compute``: ``(num_cores, L, E, 3, K, 4*TILE_SIZE)``
+- ``prepare_w0_w1_tensor_with_bias``: K becomes ``K_padded`` (e.g., 7616)
+- ``prepare_w2_tensor_for_moe_compute``: ``(num_cores, L, E, 5, N+192, 4*TILE_SIZE)``
+- ``prepare_w2_tensor_with_bias``: N+192 becomes N_target (e.g., 2240)
+
+The leading ``num_cores`` dimension (typically 12) corresponds to DRAM bank layout.
+
+**DRAM sharding**
+
+Callers must create DRAM-sharded memory configs with heights derived from the
+padded dimensions above. See ``test_moe_compute_6U.py`` for the exact shard
+spec calculations using ``K_for_shard`` and ``w2_N_total``.
+
+**Available functions**
+
+- Non-bias: ``prepare_w0_w1_tensor_for_moe_compute``, ``prepare_w2_tensor_for_moe_compute``
+- With bias: ``prepare_w0_w1_tensor_with_bias``, ``prepare_w2_tensor_with_bias``
+- Helpers: ``cluster_distance``, ``map_shared_experts``, ``add_shared_expert_weights``
+
+See individual function docstrings for argument details and layout invariants.
+"""
 
 from __future__ import annotations
 
@@ -391,3 +457,202 @@ def prepare_w2_tensor_for_moe_compute(
     padding = torch.zeros(12, L, E, 5, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
     all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 5, N + 192, 128)
     return all_groups_per_bank
+
+
+def prepare_w0_w1_tensor_with_bias(
+    torch_w0: "torch.Tensor",
+    torch_w1: "torch.Tensor",
+    torch_b0: "torch.Tensor",
+    torch_b1: "torch.Tensor",
+    L: int,
+    E: int,
+    K: int,
+    N: int,
+    ring2cores: dict[int, tuple[tuple[int, int], int, bool]],
+):
+    """
+    Prepare the w0_w1 tensor with bias by concatenating bias rows along K dimension,
+    padding to transaction-aligned height, then delegating to prepare_w0_w1_tensor_for_moe_compute.
+
+    Converts true PyTorch bias format (L, E, N) to kernel tile format (L, E, 32, N) with
+    only the first row populated, then concatenates to weights along K dimension.
+
+    The kernel reads W0/W1 in blocks of (W0_W1_TILES_PER_TXN * 2) tiles.
+    With bias, K goes from K/32 tiles to (K/32 + 1) tiles. If (K/32 + 1) is not divisible by
+    TILES_PER_TXN, the kernel reads extra padding tiles. The weight tensor must contain those
+    padding tiles (zeros) so the DRAM reads don't overrun the expert boundary.
+
+    Args:
+        torch_w0: Weight tensor of shape (L, E, K, N)
+        torch_w1: Weight tensor of shape (L, E, K, N)
+        torch_b0: Bias tensor of shape (L, E, N) -- true PyTorch format
+        torch_b1: Bias tensor of shape (L, E, N) -- true PyTorch format
+        L: Number of layers
+        E: Number of experts
+        K: Input dimension
+        N: Output dimension
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
+
+    Returns:
+        torch_w0_w1_paired: Prepared tensor with bias of shape (12, L, E, 3, K_padded, 4*ttnn.TILE_SIZE)
+
+    See also:
+        Module docstring for full layout contract and constants that must match
+        moe_ring_common.h; ``prepare_w0_w1_tensor_for_moe_compute`` for the non-bias path.
+    """
+    import torch
+
+    # This constant must match moe_ring_common.h — it determines the DRAM read block alignment.
+    W0_W1_TILES_PER_TXN = 14
+
+    K_tiles = K // ttnn.TILE_SIZE  # 224
+    K_tiles_with_bias = K_tiles + 1  # 225
+    # Pad K to a transaction boundary so dm0 reads complete blocks.
+    # K_padded (in tiles) = ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN
+    # = ceil(225/14) * 14 = 17 * 14 = 238.
+    K_tiles_padded = math.ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN  # 238
+    K_padded = K_tiles_padded * ttnn.TILE_SIZE  # 7616
+
+    # Convert true PyTorch bias (L, E, N) to kernel tile format (L, E, 32, N) with only row 0 populated.
+    torch_b0_tiled = torch.zeros(L, E, ttnn.TILE_SIZE, N, dtype=torch_b0.dtype)
+    torch_b0_tiled[:, :, 0, :] = torch_b0
+    torch_b1_tiled = torch.zeros(L, E, ttnn.TILE_SIZE, N, dtype=torch_b1.dtype)
+    torch_b1_tiled[:, :, 0, :] = torch_b1
+
+    torch_w0_b0 = torch.cat([torch_w0, torch_b0_tiled], dim=2)  # (L, E, K+32, N)
+    torch_w1_b1 = torch.cat([torch_w1, torch_b1_tiled], dim=2)  # (L, E, K+32, N)
+
+    # Pad K from K+32 to K_padded with zeros
+    K_pad_amount = K_padded - (K + ttnn.TILE_SIZE)  # 7616 - 7200 = 416
+    if K_pad_amount > 0:
+        padding = torch.zeros(L, E, K_pad_amount, N, dtype=torch_w0.dtype)
+        torch_w0_b0 = torch.cat([torch_w0_b0, padding], dim=2)
+        torch_w1_b1 = torch.cat([torch_w1_b1, padding], dim=2)
+
+    return prepare_w0_w1_tensor_for_moe_compute(torch_w0_b0, torch_w1_b1, L, E, K_padded, N, ring2cores)
+
+
+def prepare_w2_tensor_with_bias(
+    torch_w2: "torch.Tensor",
+    torch_b2: "torch.Tensor",
+    L: int,
+    E: int,
+    N: int,
+    K: int,
+    ring2cores: dict[int, tuple[tuple[int, int], int, bool]],
+) -> "torch.Tensor":
+    """
+    Prepare the w2 tensor with bias. The bias tile row is concatenated along N,
+    but only the weight tiles are ring-rotated — the bias tile stays fixed at
+    position N/32 for all cores (matching GPT-OSS behavior).
+
+    Converts true PyTorch bias format (L, E, K) to kernel tile format (L, E, 32, K)
+    with only the first row populated, then performs K-column sharding.
+
+    Args:
+        torch_w2: Weight tensor of shape (L, E, N, K)
+        torch_b2: Bias tensor of shape (L, E, K) -- true PyTorch format
+        L: Number of layers
+        E: Number of experts
+        N: Intermediate dimension
+        K: Output dimension
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
+
+    Returns:
+        N_with_bias: Prepared tensor of shape (num_cores, L, E, 5, N_target, 4*ttnn.TILE_SIZE)
+
+    See also:
+        Module docstring for full layout contract and constants that must match
+        moe_ring_common.h; ``prepare_w2_tensor_for_moe_compute`` for the non-bias path.
+    """
+    import torch
+
+    num_cores = len(ring2cores)
+
+    # Convert true PyTorch bias (L, E, K) to kernel tile format (L, E, 32, K) with only row 0 populated.
+    torch_b2_tiled = torch.zeros(L, E, ttnn.TILE_SIZE, K, dtype=torch_b2.dtype)
+    torch_b2_tiled[:, :, 0, :] = torch_b2
+
+    # Column-shard K dimension (same as non-bias prepare_w2_tensor)
+    each_shard = []
+    start_col = 0
+    for ring_pos in range(num_cores):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+        last_group_tiles = 3 if pad_flag else 2
+        last_group_pad_tiles = 1 if pad_flag else 2
+
+        each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
+        start_col += 4 * 4 * ttnn.TILE_SIZE
+        each_shard.append(torch_w2[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
+        start_col += last_group_tiles * ttnn.TILE_SIZE
+        each_shard.append(torch.zeros(L, E, N, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
+
+    torch_w2_reordered = torch.cat(each_shard, dim=-1)
+    all_groups_per_bank = torch_w2_reordered.view(L, E, N, num_cores, -1, 4 * ttnn.TILE_SIZE)
+    all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)  # (12, L, E, 5, N, 128)
+
+    # Group N in terms of tiles (weight tiles only, no bias yet)
+    Nt = N // ttnn.TILE_SIZE  # 64
+    N_grouped = all_groups_per_bank.view(
+        num_cores, L, E, 5, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE
+    )  # (12, L, E, 5, 64, 32, 128)
+
+    # Ring-rotate weight tiles only
+    core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
+    chunk_sizes = [5 if ring2cores[ring_pos][2] else 6 for ring_pos in range(num_cores)]
+    chunk_start_positions = torch.cat(
+        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
+    )
+
+    each_shard = []
+    for core_id in range(num_cores):
+        each_chunk = []
+        for chunk_id in core_chunk_order:
+            start_pos = chunk_start_positions[chunk_id]
+            end_pos = chunk_start_positions[chunk_id + 1]
+            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
+            each_chunk.append(this_chunk)
+        each_shard.append(torch.cat(each_chunk, dim=3))
+        core_chunk_order = core_chunk_order.roll(1)
+
+    N_reordered = torch.stack(each_shard).view(num_cores, L, E, 5, -1, 4 * ttnn.TILE_SIZE)
+    # N_reordered shape: (12, L, E, 5, N, 128) — ring-rotated weight tiles
+
+    # Now prepare bias tile row with the same K-column sharding
+    b2_each_shard = []
+    start_col = 0
+    for ring_pos in range(num_cores):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+        last_group_tiles = 3 if pad_flag else 2
+        last_group_pad_tiles = 1 if pad_flag else 2
+
+        b2_each_shard.append(torch_b2_tiled[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
+        start_col += 4 * 4 * ttnn.TILE_SIZE
+        b2_each_shard.append(torch_b2_tiled[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
+        start_col += last_group_tiles * ttnn.TILE_SIZE
+        b2_each_shard.append(
+            torch.zeros(L, E, ttnn.TILE_SIZE, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_b2_tiled.dtype)
+        )
+
+    torch_b2_reordered = torch.cat(b2_each_shard, dim=-1)
+    b2_groups_per_bank = torch_b2_reordered.view(L, E, ttnn.TILE_SIZE, num_cores, -1, 4 * ttnn.TILE_SIZE)
+    b2_groups_per_bank = b2_groups_per_bank.permute(3, 0, 1, 4, 2, 5)  # (12, L, E, 5, 32, 128)
+
+    # Concatenate bias tile row after weight tiles (NOT ring-rotated)
+    N_with_bias = torch.cat([N_reordered, b2_groups_per_bank], dim=4)  # (12, L, E, 5, N+32, 128)
+
+    # Pad "N+32" dimension so total height matches what dm0 expects.
+    # dm0 uses w2_dram_tiles_h = num_w2_tiles_h + 1 = 65 tiles = 2080 elements.
+    # We need to pad to make the total divisible by tiles_per_txn (14 tiles = 448 elements)
+    # for the pipelined DRAM reads.
+    N_total = N + ttnn.TILE_SIZE  # N + 32 = 2080 (65 tiles)
+    # Pad to match the non-bias layout's total height alignment.
+    # Non-bias: 70 tiles * 32 = 2240. With bias: we need ceil(65 / 14) * 14 = 70 tiles * 32 = 2240.
+    W2_TILES_PER_TXN = 14  # Must match moe_ring_common.h::W2_TILES_PER_TXN
+    N_target = math.ceil((Nt + 1) / W2_TILES_PER_TXN) * W2_TILES_PER_TXN * ttnn.TILE_SIZE
+    N_padding = N_target - N_total
+    if N_padding > 0:
+        padding = torch.zeros(num_cores, L, E, 5, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
+        N_with_bias = torch.cat([N_with_bias, padding], dim=4)
+
+    return N_with_bias

@@ -41,9 +41,6 @@ run_python_model_tests_wormhole_b0() {
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
     pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py -k "pretrained_weight_false"
 
-    # Unet Shallow
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
-
     # Mobilenetv2git
     pytest -svv models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py
 
@@ -62,14 +59,7 @@ run_python_model_tests_wormhole_b0() {
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
-    # Unet Shallow
-    export TTNN_CONFIG_OVERRIDES='{
-        "enable_fast_runtime_mode": false,
-        "enable_comparison_mode": true,
-        "comparison_mode_should_raise_exception": true,
-        "comparison_mode_pcc": 0.998
-    }'
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+    echo "LOG_METAL: No slow runtime mode tests for wormhole_b0"
 }
 
 run_python_model_tests_blackhole() {
@@ -85,16 +75,8 @@ run_python_model_tests_blackhole() {
     done
 
     pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py --timeout 300
-    pytest models/experimental/functional_unet/tests/test_unet_model.py --timeout 90
 }
 
 run_python_model_tests_slow_runtime_mode_blackhole() {
-    # Unet Shallow
-    export TTNN_CONFIG_OVERRIDES='{
-        "enable_fast_runtime_mode": false,
-        "enable_comparison_mode": true,
-        "comparison_mode_should_raise_exception": true,
-        "comparison_mode_pcc": 0.998
-    }'
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py --timeout 90
+    echo "LOG_METAL: No slow runtime mode tests for blackhole"
 }

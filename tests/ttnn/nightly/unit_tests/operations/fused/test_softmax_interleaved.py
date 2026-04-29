@@ -18,6 +18,8 @@ from models.common.utility_functions import print_diff_argmax
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize(
     "dtype",
@@ -29,12 +31,13 @@ def test_softmax(device, inplace, dtype):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
+    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
 
         tt_input_tensor = ttnn.from_torch(input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
         if dtype == ttnn.float32:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -74,12 +77,13 @@ def test_softmax_with_program_cache(device, inplace):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
+    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
 
         tt_input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
         tt_output_tensor_on_device = sm_op(tt_input_tensor)
         tt_output_tensor = ttnn.to_layout(tt_output_tensor_on_device, ttnn.ROW_MAJOR_LAYOUT)
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
@@ -108,12 +112,13 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
-    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32)]
+    input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
     for input_shape in input_shapes:
         input_tensor = torch.randn(input_shape).bfloat16()
 
         tt_input_tensor = ttnn.from_torch(input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
         tt_output_tensor_on_device = sm_op(tt_input_tensor)
         tt_output_tensor = ttnn.to_layout(tt_output_tensor_on_device, ttnn.ROW_MAJOR_LAYOUT)
         tt_output_tensor = ttnn.from_device(tt_output_tensor)

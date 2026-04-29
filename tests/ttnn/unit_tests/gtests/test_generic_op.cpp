@@ -223,14 +223,15 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     };
 
     const KernelDescriptor::CompileTimeArgs reader_ct_args = {(std::uint32_t)in_cb_id};
-    const KernelDescriptor::CompileTimeArgs compute_ct_args = {1, num_tile_per_core};
 
     // calculate data movement runtime arguments: every core has the same runtime args
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core;
+    KernelDescriptor::RuntimeArgs compute_rt_args_per_core;
     for (uint32_t i = 0; i < num_cores_x * num_cores_y; i++) {
         uint32_t core_x = i / num_cores_y;
         uint32_t core_y = i % num_cores_y;
         reader_rt_args_per_core.push_back({{core_x, core_y}, {num_tile_per_core}});
+        compute_rt_args_per_core.push_back({{core_x, core_y}, {num_tile_per_core}});
     }
 
     KernelDescriptor reader_kernel_descriptor = {
@@ -244,8 +245,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     KernelDescriptor compute_kernel_descriptor = {
         .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         .core_ranges = all_cores,
-        .compile_time_args = compute_ct_args,
+        .compile_time_args = {},
         .defines = defines_relu,
+        .runtime_args = compute_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{},
     };
@@ -913,6 +915,125 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
         this->device_->num_program_cache_entries() == 2,
         "Expected 2 cache entries after cache hit with new addresses, got {}",
         this->device_->num_program_cache_entries());
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
+    // Regression test: apply_descriptor_runtime_args must update common_runtime_args
+    // in-place on cache hits.  SetCommonRuntimeArgs has a TT_FATAL requiring the
+    // args to be empty, so calling it on a reused program crashes.
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    const std::vector<std::pair<std::string, std::string>> sfpu_defines = {
+        {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
+
+    ttnn::Shape shape{1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+
+    Tensor input_tensor_1 = ttnn::random::random(shape, DataType::BFLOAT16);
+    Tensor device_input_tensor_1 = input_tensor_1.to_layout(Layout::TILE).to_device(this->device_);
+    Tensor device_output_tensor_1 =
+        tt::tt_metal::create_device_tensor(device_input_tensor_1.tensor_spec(), this->device_);
+
+    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_1.dtype());
+    uint32_t num_tiles = device_input_tensor_1.physical_volume() / tt::constants::TILE_HW;
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+    tt::CBIndex cb_in_id = tt::CBIndex::c_0;
+    tt::CBIndex cb_out_id = tt::CBIndex::c_16;
+
+    CBDescriptor input_cb_descriptor = {
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
+        .core_ranges = device_cores,
+        .format_descriptors = {{cb_in_id, input_cb_data_format, tt::tile_size(input_cb_data_format)}},
+    };
+    CBDescriptor output_cb_descriptor = {
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
+        .core_ranges = device_cores,
+        .format_descriptors = {{cb_out_id, input_cb_data_format, tt::tile_size(input_cb_data_format)}},
+    };
+
+    KernelDescriptor::CompileTimeArgs reader_ct_args;
+    TensorAccessorArgs(*device_input_tensor_1.buffer()).append_to(reader_ct_args);
+    KernelDescriptor::CompileTimeArgs writer_ct_args = {(uint32_t)cb_out_id};
+    TensorAccessorArgs(*device_output_tensor_1.buffer()).append_to(writer_ct_args);
+
+    // Use common_runtime_args on the reader kernel — the kernel reads per-core
+    // args for the buffer address, and the common args are unused padding, but
+    // the descriptor infrastructure must handle them on cache hits without crashing.
+    ProgramDescriptor program_descriptor = {
+        .kernels =
+            {{
+                 .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                  "reader_unary_interleaved_start_id.cpp",
+                 .core_ranges = device_cores,
+                 .compile_time_args = reader_ct_args,
+                 .runtime_args = {{{0, 0}, {device_input_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .common_runtime_args = {device_input_tensor_1.buffer()->address(), num_tiles, 0u},
+                 .config = tt::tt_metal::ReaderConfigDescriptor{},
+             },
+             {
+                 .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                  "writer_unary_interleaved_start_id.cpp",
+                 .core_ranges = device_cores,
+                 .compile_time_args = writer_ct_args,
+                 .runtime_args = {{{0, 0}, {device_output_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .common_runtime_args = {device_output_tensor_1.buffer()->address(), num_tiles, 0u},
+                 .config = tt::tt_metal::WriterConfigDescriptor{},
+             },
+             {
+                 .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                 .core_ranges = device_cores,
+                 .compile_time_args = {num_tiles, 1},
+                 .defines = sfpu_defines,
+                 .runtime_args = {{{0, 0}, {}}},
+                 .config = tt::tt_metal::ComputeConfigDescriptor{},
+             }},
+        .semaphores = {},
+        .cbs = {input_cb_descriptor, output_cb_descriptor},
+    };
+
+    // Run 1: Cache miss — creates program, sets common_runtime_args for the first time
+    log_info(tt::LogTest, "Run 1: Cache miss with common_runtime_args");
+    ttnn::generic_op(std::vector{device_input_tensor_1, device_output_tensor_1}, program_descriptor);
+    Tensor golden_1 = ttnn::exp(device_input_tensor_1);
+    TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "First run correctness failed");
+
+    // Run 2: Cache hit — apply_descriptor_runtime_args must update common_runtime_args
+    // in-place.  Before the fix, this would crash with:
+    //   TT_FATAL: "Illegal Common Runtime Args: Can only set common runtime args once."
+    log_info(tt::LogTest, "Run 2: Cache hit with common_runtime_args (regression check)");
+    ttnn::generic_op(std::vector{device_input_tensor_1, device_output_tensor_1}, program_descriptor);
+    TT_FATAL(
+        ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()),
+        "Second run (cache hit) correctness failed — common_runtime_args update broken");
+
+    // Run 3: Cache hit with different buffer addresses in common_runtime_args
+    log_info(tt::LogTest, "Run 3: Cache hit with updated common_runtime_args addresses");
+    auto dummy_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), ttnn::Shape({1, 1, 32, 32}))
+                            .to_layout(Layout::TILE)
+                            .to_device(this->device_);
+
+    Tensor input_tensor_2 = ttnn::random::random(shape, DataType::BFLOAT16);
+    Tensor device_input_tensor_2 = input_tensor_2.to_layout(Layout::TILE).to_device(this->device_);
+    Tensor device_output_tensor_2 =
+        tt::tt_metal::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
+
+    // Update both per-core and common runtime args with new addresses
+    program_descriptor.kernels[0].runtime_args[0].second = {
+        device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].common_runtime_args = {
+        device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].runtime_args[0].second = {
+        device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].common_runtime_args = {
+        device_output_tensor_2.buffer()->address(), num_tiles, 0};
+
+    ttnn::generic_op(std::vector{device_input_tensor_2, device_output_tensor_2}, program_descriptor);
+    Tensor golden_2 = ttnn::exp(device_input_tensor_2);
+    TT_FATAL(
+        ttnn::allclose<bfloat16>(golden_2.cpu(), device_output_tensor_2.cpu()),
+        "Third run with updated common_runtime_args addresses failed");
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {

@@ -180,7 +180,7 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
 
     // High-level API function
     void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        MATH(_llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0));
+        MATH(_llk_math_eltwise_binary_sfpu_params_(add_tile_face, idx_dst0, idx_dst1, idx_out0));
     }
 
 

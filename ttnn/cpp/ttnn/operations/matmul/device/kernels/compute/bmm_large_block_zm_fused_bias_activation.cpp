@@ -15,12 +15,15 @@
 #include "api/compute/bcast.h"
 #endif
 
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
 // when making any changes to this file.
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
+// With FUSE_BIAS: row_broadcast_bias (row-broadcast vs elementwise add_tiles) is compile-time arg 18 here;
+// the perf copy uses index 14 (different compile-time arg layout).
 
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
@@ -195,7 +198,10 @@ void kernel_main() {
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
+    constexpr uint32_t bias_ntiles = get_named_compile_time_arg_val("bias_ntiles");
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
+    // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
+    constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
     experimental::CircularBuffer bias_cb(bias_cb_id);
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
@@ -231,7 +237,6 @@ void kernel_main() {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 bool enable_reload = false;
-                uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
 #ifdef PACK_RELU
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
@@ -275,6 +280,10 @@ void kernel_main() {
 
                     in0_cb.wait_front(in0_block_num_tiles);
                     in1_cb.wait_front(in1_block_num_tiles);
+
+                    if (block == 0 && !last_out) {
+                        out_cb.reserve_back(out_block_num_tiles);
+                    }
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -358,13 +367,6 @@ void kernel_main() {
 
                             } else {
                                 tile_regs_commit();
-                                // Wait for tiles in output buffer to be written out since interm and output share
-                                // memory
-                                if (block == 0) {
-                                    out_cb.reserve_back(out_num_tiles_to_wait);
-                                    out_num_tiles_to_wait += out_subblock_num_tiles;
-                                }
-                                // Move partial result to interm buffer
                                 mm_partials_cb.reserve_back(out_subblock_num_tiles);
                                 tile_regs_wait();
 
@@ -395,18 +397,24 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
-                        // Wait for l1 accumulation to populate interm buffer,
-                        // then pop to update fifo rd pointer
-                        mm_partials_cb.wait_front(out_block_num_tiles);
-                        mm_partials_cb.pop_front(out_block_num_tiles);
+                        // Wait/pop in subblock-sized steps so the step size
+                        // matches the bias section's wait_front(out_subblock_num_tiles),
+                        // satisfying the CB API requirement that all wait_front
+                        // increments on a given CB are identical.
+                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                            mm_partials_cb.wait_front(out_subblock_num_tiles);
+                            mm_partials_cb.pop_front(out_subblock_num_tiles);
+                        }
                     }
                     // never reload when with bias, bias uses interm buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
-                        mm_partials_cb.wait_front(out_block_num_tiles);
-                        mm_partials_cb.pop_front(out_block_num_tiles);
+                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                            mm_partials_cb.wait_front(out_subblock_num_tiles);
+                            mm_partials_cb.pop_front(out_subblock_num_tiles);
+                        }
                     }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
@@ -433,11 +441,17 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
-                // reconfigure unpacker df for src B
-                bias_cb.wait_front(in1_block_w);
+                if constexpr (row_broadcast_bias) {
+                    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+                } else {
+                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
+                }
+                // Reader only pushes bias once when num_blocks_w_dim == 1;
+                // the tiles stay in the CB for reuse across bh/batch iterations.
+                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    bias_cb.wait_front(bias_ntiles);
+                }
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
@@ -445,10 +459,14 @@ void kernel_main() {
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                            uint32_t bcast_tile_idx = in1_index_subblock_offset;
+                            uint32_t bias_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
-                                bcast_tile_idx++;
+                                if constexpr (row_broadcast_bias) {
+                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                } else {
+                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                }
+                                bias_tile_idx++;
                             }
                         }
 // if there's no SFPU fusion, we commit the regs so packer can start packing
@@ -479,7 +497,7 @@ void kernel_main() {
                     }
                 }
                 if constexpr (num_blocks_w_dim > 1) {
-                    bias_cb.pop_front(in1_block_w);
+                    bias_cb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
                 if constexpr (untilize_out) {

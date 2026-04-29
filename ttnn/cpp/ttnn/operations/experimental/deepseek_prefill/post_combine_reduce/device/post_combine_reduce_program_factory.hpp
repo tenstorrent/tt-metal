@@ -18,6 +18,10 @@ struct PostCombineReduceProgramFactory {
         tt::tt_metal::KernelHandle writer_kernel_id;
         tt::tt_metal::CBHandle output_cb_handle;
         std::vector<tt::tt_metal::CoreCoord> cores;
+        // Tracks whether this program was built with the DeepSeek (dispatch
+        // table) skip path so override_runtime_arguments can thread the
+        // dispatch_table / indices addresses only when they exist.
+        bool use_dispatch_table_skip;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

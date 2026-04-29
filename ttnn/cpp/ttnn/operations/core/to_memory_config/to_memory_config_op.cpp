@@ -86,7 +86,16 @@ bool can_use_interleaved_to_sharded(
     //***  Check if the CB size is too large for the L1. If so, reroute this to use the default ttnn::copy ***//
 
     // CB L1 capacity check
-    auto shard_spec = output_mem_config.shard_spec().value();
+    // When the MemoryConfig was created with an nd_shard_spec, the legacy shard_spec is not populated.
+    // Construct the output TensorSpec to get the normalized memory config with the legacy shard_spec.
+    auto resolved_mem_config = output_mem_config;
+    if (!output_mem_config.shard_spec().has_value()) {
+        auto output_spec = ttnn::prim::InterleavedToShardedDeviceOperation::compute_output_specs(
+            ttnn::prim::InterleavedToShardedParams{output_mem_config, resolved_dtype, false},
+            ttnn::prim::InterleavedToShardedInputs{input_tensor, output_tensor});
+        resolved_mem_config = output_spec.memory_config();
+    }
+    auto shard_spec = resolved_mem_config.shard_spec().value();
     bool convert_df = input_tensor.dtype() != resolved_dtype;
     bool dst_is_dram = output_mem_config.buffer_type() == BufferType::DRAM;
 

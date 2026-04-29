@@ -38,6 +38,15 @@ on:
         required: false
         default: false
         type: boolean
+      demo_upr_mode:
+        description: 'UPR variant for demo and stress tests'
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - 32
+          - 8
       recalculate_weights_cache:
         description: 'Recalculate weights cache in a new directory'
         required: false
@@ -170,6 +179,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -194,6 +204,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -219,6 +230,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -243,6 +255,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -268,6 +281,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -302,6 +316,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -337,6 +352,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -348,7 +364,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload dual demo output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo || github.event_name == 'schedule') }}
@@ -357,7 +373,7 @@ jobs:
           name: dual-demo-output-${{ github.run_id }}
           path: |
             generated/artifacts/dual_demo_output.log
-            generated/artifacts/dual_demo_full_results.json
+            generated/artifacts/dual_demo_full_results*.json
           if-no-files-found: warn
 
       - name: Run dual MTP demo parity smoke test
@@ -371,6 +387,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -405,6 +422,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -416,7 +434,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload quad demo output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo }}
@@ -425,7 +443,7 @@ jobs:
           name: quad-demo-output-${{ github.run_id }}
           path: |
             generated/artifacts/quad_demo_output.log
-            generated/artifacts/quad_demo_full_results.json
+            generated/artifacts/quad_demo_full_results*.json
           if-no-files-found: warn
 
       - name: Run quad MTP demo parity smoke test
@@ -439,6 +457,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -474,6 +493,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -485,7 +505,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload dual demo stress output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo_stress || github.event_name == 'schedule') }}
@@ -494,7 +514,7 @@ jobs:
           name: dual-demo-stress-output-${{ github.run_id }}
           path: |
             generated/artifacts/dual_demo_stress_output.log
-            generated/artifacts/dual_demo_stress_results.json
+            generated/artifacts/dual_demo_stress_results*.json
           if-no-files-found: warn
 
       - name: Run quad demo stress test (56 prompts, 20 batches)
@@ -508,6 +528,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
@@ -519,7 +540,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload quad demo stress output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo_stress }}
@@ -528,5 +549,5 @@ jobs:
           name: quad-demo-stress-output-${{ github.run_id }}
           path: |
             generated/artifacts/quad_demo_stress_output.log
-            generated/artifacts/quad_demo_stress_results.json
+            generated/artifacts/quad_demo_stress_results*.json
           if-no-files-found: warn

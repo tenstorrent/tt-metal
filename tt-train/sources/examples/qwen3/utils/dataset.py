@@ -113,7 +113,7 @@ def load_text_datasets(dataset_path):
         ds = load_dataset(
             "Salesforce/wikitext",
             "wikitext-2-raw-v1",
-            ignore_verifications=True,
+            trust_remote_code=False,
         )
         train_texts = [t for t in ds["train"]["text"] if t.strip()]
         val_texts = [t for t in ds["validation"]["text"] if t.strip()]
@@ -128,7 +128,7 @@ def load_text_datasets(dataset_path):
         from datasets import load_dataset
 
         print(f"Loading dataset '{dataset_path}' from HuggingFace...")
-        ds = load_dataset(dataset_path, ignore_verifications=True)
+        ds = load_dataset(dataset_path, trust_remote_code=False)
         if "train" in ds:
             train_texts = [str(t) for t in ds["train"]["text"] if str(t).strip()]
         else:

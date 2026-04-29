@@ -175,16 +175,76 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
             }
         }
         if (!kernel.common_runtime_args.empty()) {
-            SetCommonRuntimeArgs(program, k, kernel.common_runtime_args);
+            // Cannot use SetCommonRuntimeArgs here — it calls
+            // Kernel::set_common_runtime_args which has a TT_FATAL requiring
+            // common_runtime_args_ to be empty.  On cache hits the program is
+            // reused, so the args are already populated from the initial
+            // create().  Update in-place instead (same pattern used for
+            // per-core runtime_args above).
+            auto& common_args = GetCommonRuntimeArgs(program, k);
+            for (uint32_t i = 0; i < static_cast<uint32_t>(kernel.common_runtime_args.size()); ++i) {
+                common_args[i] = kernel.common_runtime_args[i];
+            }
         }
     }
 
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         if (desc.cbs[ci].buffer) {
-            UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *desc.cbs[ci].buffer);
+            UpdateDynamicCircularBufferAddress(
+                program, program_cbs[ci]->id(), *desc.cbs[ci].buffer, desc.cbs[ci].address_offset);
         }
     }
+}
+
+template <typename Range>
+static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& core, const Range& args) {
+    KernelDescriptor::CoreRuntimeArgs values;
+    values.reserve(args.size());
+    for (const auto& arg : args) {
+        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
+            kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
+            values.push_back((*buf)->address());
+        } else {
+            values.push_back(std::get<uint32_t>(arg));
+        }
+    }
+    kd.runtime_args.emplace_back(core, std::move(values));
+}
+
+template <typename Range>
+static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& args) {
+    kd.common_runtime_args.reserve(args.size());
+    for (const auto& arg : args) {
+        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
+            kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), *buf});
+            kd.common_runtime_args.push_back((*buf)->address());
+        } else {
+            kd.common_runtime_args.push_back(std::get<uint32_t>(arg));
+        }
+    }
+}
+
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    emplace_runtime_args_impl(*this, core, args);
+}
+
+void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, const RTArgList& args) {
+    emplace_runtime_args_impl(*this, core, args.items_);
+}
+
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, const std::vector<std::variant<uint32_t, Buffer*>>& args) {
+    emplace_runtime_args_impl(*this, core, args);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    emplace_common_runtime_args_impl(*this, args);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(const RTArgList& args) {
+    emplace_common_runtime_args_impl(*this, args.items_);
 }
 
 }  // namespace tt::tt_metal

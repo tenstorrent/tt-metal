@@ -21,9 +21,11 @@ ttnn::Tensor rotary_embedding(
 
     using tt::tt_metal::PadValue;
     TT_FATAL(
-        input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
-        "Input X dimension ({}) must be divisible by {} for tiling.",
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dimension ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint "
+        "must align with a tile boundary).",
         input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
         TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];

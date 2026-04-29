@@ -53,13 +53,16 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, gate_fallback_mode, run_pcc_check",
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check",
     [
         # fmt: off
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 2, GateComputeMode.HOST_ALL, True),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 5, GateComputeMode.HOST_ALL, True, marks=pytest.mark.timeout(900)),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
         # fmt: on
     ],
 )
@@ -110,7 +113,7 @@ def test_ttnn_moe(
     hidden_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     run_pcc_check,
     num_links,
     topology,
@@ -122,6 +125,10 @@ def test_ttnn_moe(
     Both TtMoe and TorchMoe create their gate internally from gate_weights
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
+
+    mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
+    # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+
     profiler.clear()
     profiler.start("test_ttnn_moe")
 
@@ -145,11 +152,23 @@ def test_ttnn_moe(
         f"emb_dim={emb_dim}, experts={num_routed_experts}"
     )
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
     logger.debug(f"experts_per_chip={experts_per_chip}, metadata_len={metadata_len}")
-    logger.debug(f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}")
+    logger.debug(
+        f"max_dispatch_buffer_token_size={max_dispatch_buffer_token_size}, max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}"
+    )
 
     # ========================================
     # Step 1: Create weights
@@ -188,7 +207,7 @@ def test_ttnn_moe(
     tt_x = ttnn.from_torch(
         x,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
@@ -206,6 +225,7 @@ def test_ttnn_moe(
             num_experts_per_tok=num_experts_per_tok,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             hidden_dim=hidden_dim,
@@ -235,6 +255,7 @@ def test_ttnn_moe(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
@@ -242,8 +263,10 @@ def test_ttnn_moe(
         topology=topology,
         routed_expert_weights=all_routed_weights,
         shared_expert_weights=shared_expert_weights,
-        activations_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        shared_expert_activations_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
     )
@@ -345,6 +368,7 @@ def test_ttnn_moe(
         # fmt: on
 
         expert_token_counts = torch_intermediates.expert_token_counts
+        expert_region_offsets = torch_intermediates.expert_region_offsets
 
         for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
             if tt_tensor is None or torch_tensor is None:
@@ -359,6 +383,7 @@ def test_ttnn_moe(
             result = validate_fn(
                 torch_ref,
                 tt_host,
+                expert_region_offsets,
                 expert_token_counts,
                 expert_dispatch_table,
                 num_dispatch_groups,

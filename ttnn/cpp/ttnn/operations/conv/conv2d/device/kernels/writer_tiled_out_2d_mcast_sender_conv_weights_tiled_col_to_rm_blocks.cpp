@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 
 #define ENABLE_DEBUG 0
@@ -58,23 +58,17 @@ void kernel_main() {
     // When the split reader CB is shared, both readers write to the same circular buffer.
     // Synchronization is required: the main reader signals when CB space is reserved,
     // and the second reader signals when it has finished writing its portion.
-    const uint32_t act_split_reader_reserve_done_semaphore_addr =
-        (split_reader_cb_shared) ? get_semaphore(get_compile_time_arg_val(32)) : 0;
-    const uint32_t act_split_reader_write_done_semaphore_addr =
-        (split_reader_cb_shared) ? get_semaphore(get_compile_time_arg_val(33)) : 0;
+    experimental::Semaphore<> reserve_done_sem((split_reader_cb_shared) ? get_compile_time_arg_val(32) : 0);
+    experimental::Semaphore<> write_done_sem((split_reader_cb_shared) ? get_compile_time_arg_val(33) : 0);
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(34);
     constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(35);
 
-    volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_reserve_done_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* act_split_reader_write_done_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
-
+    experimental::CB cb_act_second_obj(cb_id_act_second_reader);
     const uint32_t split_reader_cb_write_addr =
-        (split_reader_cb_shared) ? get_write_ptr(cb_id_act_second_reader) + act_write_offset : 0;
+        (split_reader_cb_shared) ? cb_act_second_obj.get_write_ptr() + act_write_offset : 0;
     // In case of double buffering the split reader can write to two different addresses
     const uint32_t split_reader_cb_write_addr_last =
-        (split_reader_cb_shared) ? get_write_ptr(cb_id_act_second_reader) + act_write_offset_last : 0;
+        (split_reader_cb_shared) ? cb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
     constexpr uint32_t ct_arg_idx = 36;
@@ -89,14 +83,28 @@ void kernel_main() {
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
 
     // mcast args
-    const uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
-    const uint32_t weights_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i++);
-    const uint32_t weights_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i++);
-    const uint32_t weights_mcast_dest_noc_end_y = get_arg_val<uint32_t>(i++);
+    const McastRect mcast_rect = {
+        get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++)};
     const uint32_t weights_mcast_num_dests = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i++);
-    const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
-    const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
+
+    // Experimental API objects
+    experimental::Noc noc;
+    experimental::Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
+    experimental::Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    experimental::MulticastEndpoint mcast_ep;
+    experimental::CB cb_weight_obj(cb_id_weight);
+    experimental::CB cb_bias_obj(bias_cb_id);
+    experimental::CB cb_reader_indices_obj(cb_reader_indices);
+    experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+    // Pre-built mcast destination; .addr is updated per mcast call
+    McastDst mcast_dst = {
+        .noc_x_start = mcast_rect.noc_x_start,
+        .noc_y_start = mcast_rect.noc_y_start,
+        .noc_x_end = mcast_rect.noc_x_end,
+        .noc_y_end = mcast_rect.noc_y_end,
+        .addr = 0};
+
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
     const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
 
@@ -107,16 +115,16 @@ void kernel_main() {
     // Split reader configuration
     if constexpr (split_reader_enabled) {
 #ifdef CONFIG_TENSOR_IN_DRAM
-        cb_wait_front(cb_reader_indices, 1);
+        cb_reader_indices_obj.wait_front(1);
 #endif
         if constexpr (needs_act_block_zero_out) {
-            zero_out_tiles<cb_id_act_second_reader>();
+            zero_out_tiles<cb_id_act_second_reader>(noc, cb_act_second_obj);
         }
     }
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         (split_reader_enabled && is_sender_core)
-            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices))
+            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr())
             : nullptr;
     // Initial setup for second reader (starting from second reader's data)
     // Only read reader indices on cores that have sharded input (is_sender_core).
@@ -130,24 +138,13 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
-    const uint32_t act_l1_read_addr = split_reader_enabled ? get_read_ptr(cb_id_sharded_act) : 0;
+    const uint32_t act_l1_read_addr = split_reader_enabled ? cb_sharded_act_obj.get_read_ptr() : 0;
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
-    *(weights_mcast_receiver_semaphore_addr_ptr) = VALID;
+    weights_mcast_receiver_sem.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    volatile tt_l1_ptr uint32_t* weights_mcast_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_sender_semaphore_addr);
-
-    const uint64_t weights_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        weights_mcast_dest_noc_start_x,
-        weights_mcast_dest_noc_start_y,
-        weights_mcast_dest_noc_end_x,
-        weights_mcast_dest_noc_end_y,
-        weights_mcast_receiver_semaphore_addr);
 #endif
 
     // read in bias if enabled (done only once for all batches)
@@ -181,16 +178,17 @@ void kernel_main() {
                 if constexpr (split_reader_enabled) {
                     reader_idx = start_reader_idx;
                     if constexpr (!split_reader_cb_shared) {
-                        cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                        cb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
                     }
                     if (is_sender_core) {
                         if constexpr (split_reader_cb_shared) {
-                            wait_reserve_done(act_split_reader_reserve_done_semaphore_addr_ptr);
+                            reserve_done_sem.wait(VALID);
+                            reserve_done_sem.set(INVALID);
                             prev_addr = l1_write_addr_act;
                         } else {
-                            l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+                            l1_write_addr_act = cb_act_second_obj.get_write_ptr();
                         }
-                        noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+                        experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
                         read_activation_data<
                             sliced_inner_dim,
                             dilation_w,
@@ -202,6 +200,7 @@ void kernel_main() {
                             stride_w,
                             weight_size_h,
                             window_outer_offset>(
+                            noc,
                             packed_reader_indices_ptr,
                             reader_offset,
                             l1_write_addr_act,
@@ -212,11 +211,11 @@ void kernel_main() {
                             // in case of shared cb we update the write address (it will remain the same if double
                             // buffering is not enabled)
                             l1_write_addr_act = split_reader_cb_write_addr_sum - prev_addr;
-                            signal_write_done(act_split_reader_write_done_semaphore_addr_ptr);
+                            write_done_sem.set(VALID);
                         }
                     }
                     if constexpr (!split_reader_cb_shared) {
-                        cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                        cb_act_second_obj.push_back(act_block_num_tiles_split_last);
                     }
                     if (skip_work) {
                         continue;
@@ -226,45 +225,45 @@ void kernel_main() {
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
-                    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-                    uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
+                    cb_weight_obj.reserve_back(weight_block_num_tiles);
 
                     const uint32_t outer_block_offset = weight_tile_h_outer_i * tiles_per_full_block;
                     uint32_t tile_id = weight_start_tile_id + height_block_offset + outer_block_offset;
-                    // mcast args
-                    uint32_t weights_start_address = weight_write_l1_addr;
+                    uint32_t weight_write_offset = 0;
                     for (uint32_t block_weight_h = 0; block_weight_h < weight_block_height_ntiles; block_weight_h++) {
                         uint32_t weight_tile_id = tile_id;
 
                         for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
                              ++weight_tile_w_i) {
-                            noc_async_read_tile(weight_tile_id++, s_weight, weight_write_l1_addr);
-                            weight_write_l1_addr += weight_tile_nbytes;
+                            noc.async_read(
+                                s_weight,
+                                cb_weight_obj,
+                                weight_tile_nbytes,
+                                {.page_id = weight_tile_id++},
+                                {.offset_bytes = weight_write_offset});
+                            weight_write_offset += weight_tile_nbytes;
                         }
                         tile_id += weight_stride_h;
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
 
 #ifndef SKIP_MCAST
                     // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
                     // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
-                    noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
-                    noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
+                    weights_mcast_sender_sem.wait(weights_mcast_num_dests);
+                    weights_mcast_sender_sem.set(0);
 
                     // Now we have the block in the CB address, we can mcast to dests!
-                    uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
-                        weights_mcast_dest_noc_start_x,
-                        weights_mcast_dest_noc_start_y,
-                        weights_mcast_dest_noc_end_x,
-                        weights_mcast_dest_noc_end_y,
-                        weights_start_address);
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_async_write_multicast(
-                        weights_start_address,
-                        weights_multicast_data_addr,
+                    mcast_dst.addr = cb_weight_obj.get_write_ptr();
+                    noc.async_write_multicast(
+                        experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_weight_obj),
+                        mcast_ep,
                         weights_block_size_bytes,
                         weights_mcast_num_cores,
+                        {},
+                        mcast_dst,
                         true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
@@ -272,12 +271,15 @@ void kernel_main() {
                     // (using NOC_CMD_STATIC_VC).
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(
-                        weights_mcast_receiver_semaphore_addr,
-                        weights_mcast_receiver_semaphore_noc_addr,
+                    weights_mcast_receiver_sem.set_multicast(
+                        noc,
+                        mcast_rect.noc_x_start,
+                        mcast_rect.noc_y_start,
+                        mcast_rect.noc_x_end,
+                        mcast_rect.noc_y_end,
                         weights_mcast_num_cores);
 #endif
-                    cb_push_back(cb_id_weight, weight_block_num_tiles);
+                    cb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }
             if constexpr (split_reader_enabled) {
@@ -293,41 +295,41 @@ void kernel_main() {
             }
             if constexpr (fuse_bias) {
                 if (load_bias) {
-                    cb_reserve_back(bias_cb_id, bias_ntiles);
-                    uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
+                    cb_bias_obj.reserve_back(bias_ntiles);
 
-                    // mcast args
-                    uint32_t bias_start_address = bias_l1_addr;
+                    uint32_t bias_write_offset = 0;
                     uint32_t bias_block_size_bytes = 0;
                     for (uint32_t bias_tile = bias_tile_offset; bias_tile < bias_tile_offset + bias_ntiles;
                          ++bias_tile) {
-                        noc_async_read_tile(bias_tile, s_bias, bias_l1_addr);
-                        bias_l1_addr += bias_pagesize;
+                        noc.async_read(
+                            s_bias,
+                            cb_bias_obj,
+                            bias_pagesize,
+                            {.page_id = bias_tile},
+                            {.offset_bytes = bias_write_offset});
+                        bias_write_offset += bias_pagesize;
                         bias_block_size_bytes += bias_pagesize;
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
 
 // MCAST BIAS (shares some mcast args with weights)
 #ifndef SKIP_MCAST
                     // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
                     // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
-                    noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
-                    noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
+                    weights_mcast_sender_sem.wait(weights_mcast_num_dests);
+                    weights_mcast_sender_sem.set(0);
 
                     // Now we have the block in the CB address, we can mcast to dests!
-                    uint64_t bias_multicast_data_addr = get_noc_multicast_addr(
-                        weights_mcast_dest_noc_start_x,
-                        weights_mcast_dest_noc_start_y,
-                        weights_mcast_dest_noc_end_x,
-                        weights_mcast_dest_noc_end_y,
-                        bias_start_address);
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_async_write_multicast(
-                        bias_start_address,
-                        bias_multicast_data_addr,
+                    mcast_dst.addr = cb_bias_obj.get_write_ptr();
+                    noc.async_write_multicast(
+                        experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_bias_obj),
+                        mcast_ep,
                         bias_block_size_bytes,
                         weights_mcast_num_cores,
+                        {},
+                        mcast_dst,
                         true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
@@ -335,13 +337,16 @@ void kernel_main() {
                     // (using NOC_CMD_STATIC_VC).
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(
-                        weights_mcast_receiver_semaphore_addr,
-                        weights_mcast_receiver_semaphore_noc_addr,
+                    weights_mcast_receiver_sem.set_multicast(
+                        noc,
+                        mcast_rect.noc_x_start,
+                        mcast_rect.noc_y_start,
+                        mcast_rect.noc_x_end,
+                        mcast_rect.noc_y_end,
                         weights_mcast_num_cores);
 #endif
 
-                    cb_push_back(bias_cb_id, bias_ntiles);
+                    cb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
                 }
             }
@@ -352,5 +357,5 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
     }  // out_num_blocks_w
 
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }
