@@ -416,6 +416,22 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
             coord_str(s.entry_node_coord));
     }
 
+    // 1b. Entry and exit on different mesh columns (coord[1]) when coordinates are 2D: coord[1] is the LINE axis
+    // (second MGD dim, e.g. width 2 in blitz decode 4x2). Skip for 1D meshes (no coord[1]).
+    for (std::size_t i = 0; i < check_distinct_until; i++) {
+        const auto& s = stages[i];
+        if (s.entry_node_coord.dims() < 2) {
+            continue;
+        }
+        TT_FATAL(
+            s.entry_node_coord[1] != s.exit_node_coord[1],
+            "Stage [{}] (stage_index={}) entry and exit must use different mesh columns (coord[1]): entry {} exit {}",
+            i,
+            s.stage_index,
+            coord_str(s.entry_node_coord),
+            coord_str(s.exit_node_coord));
+    }
+
     // 2. No coord is reused across stages (no overlapping nodes).
     // Skip the last stage's exit when !initialize_loopback — it has no downstream exit.
     std::set<std::pair<std::size_t, std::pair<uint32_t, uint32_t>>> used_coords;

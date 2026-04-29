@@ -1342,6 +1342,17 @@ void validate_sp5_blitz_decode_pipeline_stages(
             << coord_str(s.entry_node_coord);
     }
 
+    // 1b. Entry and exit on different columns: for 2D meshes coord[1] is the LINE axis (second MGD dim, width 2 in
+    // blitz decode 4x2); endpoints must not share the same column.
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        EXPECT_NE(s.entry_node_coord[1], s.exit_node_coord[1])
+            << "Stage [" << i << "] (stage_index=" << s.stage_index
+            << ") entry and exit must use different mesh "
+               "columns (coord[1]): entry "
+            << coord_str(s.entry_node_coord) << " exit " << coord_str(s.exit_node_coord);
+    }
+
     // 2. No coord is reused across stages
     std::set<std::pair<std::size_t, std::pair<uint32_t, uint32_t>>> used_coords;
     for (std::size_t i = 0; i < stages.size(); i++) {
