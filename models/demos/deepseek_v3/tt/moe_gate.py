@@ -420,12 +420,15 @@ class MoEGate(AbstractModule):
             output_tensor = ttnn.concat(output_list, 0)
             output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
         mesh_device = cfg["mesh_device"]
+        # torch version postprocessing
+        """
         temp = ttnn.to_torch(
             output_tensor,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-1, -2), mesh_shape=tuple(mesh_device.shape)),
         )
         temp = temp[:32, :384]
         temp1, temp2 = prepare_output_tensor(temp, RING2CORES)
+        """
 
         output_tensor = ttnn.view(output_tensor, (-1, batch_size_per_iter, output_tensor.shape[-1]))
         assert SEND_CORES == (0, 3, 6, 9), "SEND_CORES should be (0, 3, 6, 9)"
