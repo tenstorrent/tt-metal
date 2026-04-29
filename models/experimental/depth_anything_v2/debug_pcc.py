@@ -108,7 +108,7 @@ def main():
 
     with torch.no_grad():
         pt_fc1_raw = pt_layer.mlp.fc1(pt_ln2)
-        pt_gelu = pt_layer.mlp.act(pt_fc1_raw)
+        pt_gelu = pt_layer.mlp.activation(pt_fc1_raw)
     print(f"FC1+GELU PCC: {pcc(pt_gelu[0, 1:1370, :].numpy(), tt_fc1[0, 32:32+1369, :].numpy()):.6f}")
     print(f"  FC1+GELU shapes: TT={tt_fc1.shape}, PT={pt_gelu.shape}")
 
