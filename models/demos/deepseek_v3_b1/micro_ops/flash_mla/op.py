@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
 def get_noc_max_page_size() -> int:
-    """Get NOC max page size for Blackhole architecture."""
+    """Get NOC max page size (16KB for both Blackhole and Wormhole B0)."""
     return 16384
 
 
@@ -219,6 +219,123 @@ class FlashMLAOptimalGridNOC0:
         return (first_physical.x, first_physical.y, last_physical.x, last_physical.y, num_mcast_dests)
 
 
+class FlashMLAOptimalGridNOC0_WH:
+    """
+    S block grid layout for Wormhole B0 (N150/N300: 8x8 worker grid).
+
+    Each S block has 4 cores (1 row × 4 columns). 8 S-blocks total.
+    S1-S4 occupy rows 1-4 on columns 0-3 (left half).
+    S5-S8 occupy rows 1-4 on columns 4-7 (right half).
+
+    Tree reduction uses the same 3-step structure as the Blackhole version.
+    DRAM bank order is sequential (bank 0-7) as a reasonable default.
+    """
+
+    # S block definitions: (cores, optimal_dram_bank)
+    # S1-S4: left half (cols 0-3), S5-S8: right half (cols 4-7)
+    # Each row of 4 cores forms one S-block, giving B <= 4 Q shards.
+    BLOCKS = (
+        (((0, 1), (1, 1), (2, 1), (3, 1)), 0),  # S1: row 1, cols 0-3
+        (((0, 2), (1, 2), (2, 2), (3, 2)), 2),  # S2: row 2, cols 0-3
+        (((0, 3), (1, 3), (2, 3), (3, 3)), 4),  # S3: row 3, cols 0-3
+        (((0, 4), (1, 4), (2, 4), (3, 4)), 6),  # S4: row 4, cols 0-3
+        (((4, 1), (5, 1), (6, 1), (7, 1)), 1),  # S5: row 1, cols 4-7
+        (((4, 2), (5, 2), (6, 2), (7, 2)), 3),  # S6: row 2, cols 4-7
+        (((4, 3), (5, 3), (6, 3), (7, 3)), 5),  # S7: row 3, cols 4-7
+        (((4, 4), (5, 4), (6, 4), (7, 4)), 7),  # S8: row 4, cols 4-7
+    )
+
+    NUM_BLOCKS = len(BLOCKS)
+    CORES_PER_BLOCK = len(BLOCKS[0][0])
+
+    OPTIMAL_DRAM_BANK_ORDER = tuple(block[1] for block in BLOCKS)
+
+    TREE_REDUCTION_ORDER = (
+        ((0, 1), (2, 3), (4, 5), (6, 7)),
+        ((0, 2), (4, 6)),
+        ((0, 4),),
+    )
+
+    NUM_TREE_REDUCTION_STEPS = len(TREE_REDUCTION_ORDER)
+
+    @classmethod
+    def get_tree_reduction_role(cls, s_block_idx: int) -> list:
+        roles = []
+        for step in cls.TREE_REDUCTION_ORDER:
+            role = "idle"
+            partner = -1
+            for dst, src in step:
+                if s_block_idx == dst:
+                    role = "receiver"
+                    partner = src
+                    break
+                elif s_block_idx == src:
+                    role = "sender"
+                    partner = dst
+                    break
+            roles.append((role, partner))
+        return roles
+
+    @classmethod
+    def is_tree_reduction_receiver(cls, s_block_idx: int) -> bool:
+        for role, _ in cls.get_tree_reduction_role(s_block_idx):
+            if role == "receiver":
+                return True
+        return False
+
+    @classmethod
+    def is_tree_reduction_sender(cls, s_block_idx: int) -> bool:
+        for role, _ in cls.get_tree_reduction_role(s_block_idx):
+            if role == "sender":
+                return True
+        return False
+
+    @classmethod
+    def get_tree_reduction_partner_coords(cls, device, s_block_idx: int, batch_idx: int) -> list:
+        roles = cls.get_tree_reduction_role(s_block_idx)
+        result = []
+        for role, partner_s_block_idx in roles:
+            if role == "idle" or partner_s_block_idx < 0:
+                result.append((0, 0, 0, 0))
+            else:
+                partner_cores = cls.get_cores(partner_s_block_idx)
+                partner_x, partner_y = partner_cores[batch_idx]
+                partner_physical = device.worker_core_from_logical_core(ttnn.CoreCoord(partner_x, partner_y))
+                role_code = 1 if role == "sender" else 2
+                result.append((role_code, partner_s_block_idx, partner_physical.x, partner_physical.y))
+        return result
+
+    @classmethod
+    def optimal_dram_grid(cls) -> "ttnn.CoreRangeSet":
+        core_ranges = [
+            ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
+            for bank_id in cls.OPTIMAL_DRAM_BANK_ORDER
+        ]
+        return ttnn.CoreRangeSet(core_ranges)
+
+    @classmethod
+    def get_cores(cls, s_block_idx: int) -> tuple:
+        return cls.BLOCKS[s_block_idx][0]
+
+    @classmethod
+    def output_cores(cls, s_block_idx: int, num_cores: int) -> tuple:
+        return cls.BLOCKS[s_block_idx][0][:num_cores]
+
+    @classmethod
+    def physical_multicast_coords(cls, device, s_block_idx: int) -> tuple:
+        cores = cls.BLOCKS[s_block_idx][0]
+        first_x, first_y = cores[0]
+        last_x, last_y = cores[-1]
+
+        first_logical = ttnn.CoreCoord(first_x, first_y)
+        last_logical = ttnn.CoreCoord(last_x, last_y)
+        first_physical = device.worker_core_from_logical_core(first_logical)
+        last_physical = device.worker_core_from_logical_core(last_logical)
+
+        num_mcast_dests = len(cores) - 1
+        return (first_physical.x, first_physical.y, last_physical.x, last_physical.y, num_mcast_dests)
+
+
 def get_interleaved_tensor_accessor_args(tensor):
     """
     Construct tensor accessor compile-time args for interleaved tensors (DRAM or L1).
@@ -387,11 +504,19 @@ class FlashMLADecode:
         k_chunk_size = program_config.k_chunk_size
         grid = program_config.grid
 
-        # Validate device has sufficient grid size for hard-coded S block layout
-        # S blocks use columns 0-3 and 7-10 (11 cols), rows 0-9 (10 rows)
         device_grid = device.compute_with_storage_grid_size()
-        assert device_grid.x >= 11, f"Device must have at least 11 columns, got {device_grid.x}"
-        assert device_grid.y == 10, f"Device must have exactly 10 rows, got {device_grid.y}"
+        arch = device.arch()
+
+        # Validate device grid is sufficient for the chosen S block layout.
+        # Auto-select default grid if none specified in program_config.
+        if grid is FlashMLAOptimalGridNOC0:
+            # Blackhole: S blocks span columns 0-3 and 7-10 (11 cols), rows 0-9 (10 rows)
+            assert device_grid.x >= 11, f"Blackhole grid requires at least 11 columns, got {device_grid.x}"
+            assert device_grid.y == 10, f"Blackhole grid requires exactly 10 rows, got {device_grid.y}"
+        elif grid is FlashMLAOptimalGridNOC0_WH:
+            # Wormhole B0: S blocks span columns 0-7 (8 cols), rows 1-4 (need >= 5 rows)
+            assert device_grid.x >= 8, f"Wormhole B0 grid requires at least 8 columns, got {device_grid.x}"
+            assert device_grid.y >= 5, f"Wormhole B0 grid requires at least 5 rows, got {device_grid.y}"
 
         full_device_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))
 

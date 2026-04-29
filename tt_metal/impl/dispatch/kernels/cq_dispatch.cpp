@@ -37,6 +37,9 @@ constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
 constexpr uint32_t downstream_cb_size = DOWNSTREAM_CB_SIZE;
 constexpr uint32_t my_downstream_cb_sem_id = MY_DOWNSTREAM_CB_SEM_ID;
 constexpr uint32_t downstream_cb_sem_id = DOWNSTREAM_CB_SEM_ID;
+#ifndef SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE
+#define SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE 0
+#endif
 constexpr uint32_t split_dispatch_page_preamble_size = SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE;
 constexpr uint32_t split_prefetch = SPLIT_PREFETCH;
 constexpr uint32_t prefetch_h_noc_xy = PREFETCH_H_NOC_XY;

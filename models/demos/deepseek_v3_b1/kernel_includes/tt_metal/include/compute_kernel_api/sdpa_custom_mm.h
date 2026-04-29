@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#ifdef ARCH_BLACKHOLE
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_custom_mm_api.h"
 #endif
@@ -12,6 +13,15 @@
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_custom_mm_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_sdpa_custom_mm_api.h"
 #endif
+#elif defined(ARCH_WORMHOLE_B0)
+#ifdef TRISC_MATH
+#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_sdpa_custom_mm_api.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_custom_mm_api.h"
+#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_sdpa_custom_mm_api.h"
+#endif
+#endif  // ARCH
 namespace ckernel {
 
 template <bool transpose = false>

@@ -14,6 +14,7 @@
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 
+#ifdef ARCH_BLACKHOLE
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
@@ -30,6 +31,24 @@
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
+#elif defined(ARCH_WORMHOLE_B0)
+#ifdef TRISC_MATH
+#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
+#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
+#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_A_sdpa_api.h"
+#endif
+#ifdef TRISC_PACK
+#include "../../../../kernel_includes/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
+#endif  // ARCH
 
 namespace ckernel {
 
