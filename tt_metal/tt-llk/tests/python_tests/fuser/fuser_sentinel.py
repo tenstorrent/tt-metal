@@ -322,7 +322,7 @@ class FuserSentinel:
 
         new_fmt = self._compute_format_config(config, operation, compute_node)
 
-        if self._math_format.pack_src == new_fmt.pack_src:
+        if self._math_format.math == new_fmt.math:
             return ""
 
         dest_acc = config.dest_acc.cpp_enum_value
