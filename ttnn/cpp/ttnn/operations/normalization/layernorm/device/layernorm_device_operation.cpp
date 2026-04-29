@@ -192,9 +192,15 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 program_grid.y,
                 device_grid.x,
                 device_grid.y);
+
+            const auto shard_offset = bbox.start_coord;
+            const CoreRange shifted_shard_bbox(
+                CoreCoord{0, 0}, CoreCoord{bbox.end_coord.x - shard_offset.x, bbox.end_coord.y - shard_offset.y});
             TT_FATAL(
-                program_range.contains(shard_grid),
-                "shard_spec.grid is not contained within program_config grid ({}x{})",
+                program_range.contains(shifted_shard_bbox),
+                "shard_spec.grid size {}x{} does not fit within program_config grid {}x{}",
+                bbox.end_coord.x - bbox.start_coord.x + 1,
+                bbox.end_coord.y - bbox.start_coord.y + 1,
                 program_grid.x,
                 program_grid.y);
 
