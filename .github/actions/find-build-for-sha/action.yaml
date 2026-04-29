@@ -9,10 +9,9 @@ description: >
 inputs:
   tracy:
     description: >
-      Whether the caller needs a profiler-enabled build. When 'true', only
-      profiler artifacts are accepted. When 'false' (default), BOTH profiler
-      and non-profiler artifacts are accepted because a profiler build is a
-      superset that can run non-profiler tests.
+      Whether to look for a profiler-enabled build artifact.
+      Must match the 'true'/'false' string value of the calling workflow's
+      tracy input so the correct artifact variant is selected.
     required: false
     default: 'false'
   distributed:
@@ -64,7 +63,6 @@ runs:
 
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
           console.log(`Config: tracy=${tracy}, distributed=${distributed}, check-wheel=${checkWheel}`);
-          console.log(`Profiler matching: ${tracy ? 'require profiler build' : 'accept any (profiler builds are a superset)'}`);
 
           // Artifact names follow the pattern:
           //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{SHA}_{RUN_ID}
@@ -108,13 +106,9 @@ runs:
 
                 // Check for C++ build artifact
                 if (!foundBuild && artifact.name.startsWith('TTMetal_build_any')) {
-                  // Match tracy/profiler variant.
-                  // A profiler build is a superset of a non-profiler build — it can
-                  // run both profiler and non-profiler tests. So when the caller wants
-                  // tracy=false, we accept EITHER variant. When the caller wants
-                  // tracy=true, we require the profiler build specifically.
+                  // Match tracy/profiler variant
                   const hasProfiler = artifact.name.includes('_profiler');
-                  if (tracy && !hasProfiler) continue;
+                  if (tracy !== hasProfiler) continue;
 
                   // Match distributed variant
                   const hasNoDistributed = artifact.name.includes('_no_distributed');
@@ -125,12 +119,11 @@ runs:
 
                 // Check for wheel artifact (only if requested)
                 if (checkWheel && !foundWheel && artifact.name.startsWith('ttnn-dist-cp')) {
-                  // Match profiler variant: wheel names use '-profiler-' when tracy is enabled.
-                  // Same superset logic: profiler wheels work for non-profiler callers,
-                  // but non-profiler wheels don't work for profiler callers.
+                  // Match profiler variant: wheel names use '-profiler-' when tracy is enabled
                   const wheelHasProfiler = artifact.name.includes('-profiler-');
-                  if (tracy && !wheelHasProfiler) continue;
-                  foundWheel = artifact;
+                  if (tracy === wheelHasProfiler) {
+                    foundWheel = artifact;
+                  }
                 }
 
                 // Early exit if we found everything we need
