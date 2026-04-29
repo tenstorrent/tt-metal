@@ -413,8 +413,8 @@ class Generator(WarmupForwardMixin):
                 chunk_start_block = num_cached_tokens // block_size
                 chunk_end_block = (num_cached_tokens + prefill_seq_len) // block_size
                 chunk_page_table = page_table[:, chunk_start_block:chunk_end_block]
-            chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-            chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
+                chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+                chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
 
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
