@@ -100,6 +100,14 @@ DataFormat check_valid_formats_in_out_data_formats(std::span<const DataFormat> d
 
 ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats) {
     DataFormat last_valid_format = check_consistent_format_across_buffers(data_formats);
+    if (last_valid_format == DataFormat::Invalid) {
+        // No valid format found (e.g. all CBs are Float32 or integer formats, which
+        // check_consistent_format_across_buffers skips). tt-metal does not ship A-family
+        // floats (Float16/Bfp8/Bfp4/Bfp2), so default to B so the conditional unpack-dst
+        // selection picks Float16_b instead of Float16. Float16 has a 5-bit exponent that
+        // would silently cap fp32 magnitudes when paired with fp32 src (issue #43229).
+        return ExpPrecision::B;
+    }
     return get_exp_precision(last_valid_format);
 }
 
@@ -128,7 +136,7 @@ DataFormat get_single_unpack_dst_format(
                 (unpack_conditional_dst_format == DataFormat::Float16_b) ||
                 (unpack_conditional_dst_format == DataFormat::Tf32) ||
                 (unpack_conditional_dst_format == DataFormat::Float32),
-            "fp32 conditional format can only be fp16a/b or fp32");
+            "fp32 conditional format can only be fp16a/b, tf32, or fp32");
         dst_format = unpack_conditional_dst_format;
     }
 
