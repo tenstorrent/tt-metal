@@ -10,7 +10,7 @@
 #include "experimental/noc_semaphore.h"
 #include "experimental/endpoints.h"
 #include "experimental/core_local_mem.h"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 // split REDUCE across cores
 void kernel_main() {

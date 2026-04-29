@@ -4,7 +4,7 @@
 
 #include "groupnorm_mcast_program_factory.hpp"
 #include "groupnorm_program_utils.hpp"
-#include "groupnorm_constants.hpp"
+#include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
 #include <string>

@@ -12,7 +12,7 @@
 #include "experimental/endpoints.h"
 #include "experimental/core_local_mem.h"
 #include "groupnorm_zero_fill.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
     // clang-format off

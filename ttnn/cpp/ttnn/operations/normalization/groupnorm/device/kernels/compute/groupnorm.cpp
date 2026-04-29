@@ -18,7 +18,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
     // clang-format off
