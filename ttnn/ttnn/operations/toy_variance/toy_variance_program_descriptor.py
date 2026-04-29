@@ -8,8 +8,11 @@ Computes per-row population variance Var(x) = E[(x - E[x])^2] using a
 two-pass streaming algorithm:
     Pass 1: stream x → cb_mean = E[x]            via accumulate_reduce
     Pass 2: stream x → cb_variance = E[(x-mean)^2] via sub<COL> + square + accumulate_reduce_block
-The reduction axis is chunked into NUM_BLOCKS blocks of BLOCK_SIZE tiles each
-so W can be arbitrarily wide (e.g. 32 x 64000) without exceeding L1.
+
+The compute kernel runs both passes per row in an outer loop, so the helpers
+see Ht=1 in their BlockShapes. CB footprints are O(BLOCK_SIZE) — independent
+of Ht — and the reduction axis is chunked into NUM_BLOCKS blocks of BLOCK_SIZE
+tiles each, so W can be arbitrarily wide (e.g. 32 x 64000) without exceeding L1.
 
 Restricted to NC=1 (no leading batch tile rows beyond the H direction) since
 binary_op_helpers' BinaryInputBlockShape carries no NC dimension.
@@ -91,24 +94,17 @@ def create_program_descriptor(
     CB_VARIANCE = 4
     CB_OUT = 16
 
-    # cb_in: per-tile streaming for both passes. Double-buffer one block of
-    # work for reader/compute pipelining.
-    tiles_per_block = Ht * BLOCK_SIZE
-    cb_in_pages = 2 * tiles_per_block
+    # Per-row outer loop in compute → CBs hold a single row's working set.
+    # cb_in / cb_centered_sq: one block of BLOCK_SIZE tiles, double-buffered.
+    cb_in_pages = 2 * BLOCK_SIZE
+    cb_centered_sq_pages = 2 * BLOCK_SIZE
 
-    # cb_centered_sq: holds (x - mean)^2 tiles for one block. The sub helper
-    # (PerTile output) pushes them sequentially; the streaming reduce pops
-    # them one at a time. Both are sequential within compute, so a single
-    # block's worth of pages is sufficient; 2x for headroom.
-    cb_centered_sq_pages = 2 * tiles_per_block
+    # cb_mean: one tile per row, held across that row's pass 2 (WaitUpfrontNoPop)
+    # then popped before the next row's pass 1. Double-buffered for pipelining.
+    cb_mean_pages = 2
 
-    # cb_mean: persistent across all of pass 2 (WaitUpfrontNoPop). After pass
-    # 1 holds Ht tiles; capacity must be >= Ht.
-    cb_mean_pages = max(2 * Ht, 2)
-
-    # cb_variance: streaming reduce accumulator for pass 2. Pop-1/push-1 per
-    # ht per block, so capacity >= Ht. 2x for safety.
-    cb_variance_pages = max(2 * Ht, 2)
+    # cb_variance: one tile per row, drained immediately to cb_out by copy_tiles.
+    cb_variance_pages = 2
 
     cbs = [
         ttnn.CBDescriptor(
@@ -167,11 +163,14 @@ def create_program_descriptor(
     ]
 
     # --- Reader ---
+    # The reader's outer loop walks [preserved_start, preserved_end) along the
+    # preserved (H) axis. For single-core today this is (0, Ht). When this op
+    # goes multicore, only this RT-arg computation changes — the kernel itself
+    # is multicore-ready as written.
     reader_ct_args = [
         Ht,
         Wt,
         BLOCK_SIZE,
-        NUM_BLOCKS,
         inv_N_bits,
         1 if has_partial_w else 0,
         partial_w if has_partial_w else TILE_DIM,
@@ -179,7 +178,7 @@ def create_program_descriptor(
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
-    reader_rt_args[core.x][core.y] = [input_tensor.buffer_address()]
+    reader_rt_args[core.x][core.y] = [input_tensor.buffer_address(), 0, Ht]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "reader.cpp"),
