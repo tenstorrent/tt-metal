@@ -260,18 +260,30 @@ class TensorCache:
         # ``per_core`` is a MemoryConfig flag that the tensor flatbuffer does
         # not currently serialize, so it would be silently dropped by a plain
         # ``ttnn.load_tensor(device=...)`` call.  When the cached spec was
-        # ``per_core=True``, load to host first, re-flag the MemoryConfig, then
-        # ``to_device`` so the device-side buffer uses
-        # :func:`experimental::per_core_allocation::set_per_core_allocation`
-        # instead of the global lockstep allocator.  Old caches without
-        # ``per_core`` in metadata default to ``False`` (lockstep), preserving
-        # backward compatibility.
+        # ``per_core=True`` we must rebuild the device tensor from a fresh
+        # ``MemoryConfig`` (with the per-core flag re-applied) and use the
+        # explicit allocate-then-copy upload pattern: ``ttnn.to_device`` keeps
+        # the host tensor's existing spec around and the per-core flag does
+        # not survive the round-trip cleanly, whereas
+        # ``allocate_tensor_on_device(shape, dtype, layout, device, memory_config=mc)``
+        # constructs a brand-new ``TensorSpec`` straight from ``mc`` and goes
+        # through :func:`MeshBuffer::create`'s per-core allocation path.
+        # This mirrors the upload pattern used by SRAM-expert weights.
+        # Old caches without ``per_core`` in metadata default to ``False``
+        # (lockstep), preserving backward compatibility.
         per_core = bool(meta.get("per_core", False))
         if move_to_device and device is not None and per_core:
-            fused = ttnn.load_tensor(paths.data_path, device=None)
-            mc = fused.memory_config()
+            host_fused = ttnn.load_tensor(paths.data_path, device=None)
+            mc = host_fused.memory_config()
             mc.experimental_set_per_core_allocation(True)
-            fused = ttnn.to_device(fused, device, memory_config=mc)
+            fused = ttnn.allocate_tensor_on_device(
+                host_fused.shape,
+                host_fused.dtype,
+                host_fused.layout,
+                device,
+                memory_config=mc,
+            )
+            ttnn.copy_host_to_device_tensor(host_fused, fused)
         else:
             fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
         # If the loaded fused buffer ended up per-core allocated, verify that its
