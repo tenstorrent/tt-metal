@@ -368,14 +368,14 @@ class TtDPTHead:
         batch_size, channels, h, w = x.shape
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Conv 1: channels -> 256
+        # Conv 1: 256 -> 128
         x, [h, w] = ttnn_conv2d(
             x,
             self.parameters.conv1.weight,
             self.parameters.conv1.bias,
             self.device,
             channels,
-            256,
+            128,
             batch_size,
             h,
             w,
@@ -387,14 +387,14 @@ class TtDPTHead:
         x = ttnn_upsample(x, scale_factor=2)
         h, w = h * 2, w * 2
 
-        # Conv 2: 256 -> 128
+        # Conv 2: 128 -> 32
         x, [h, w] = ttnn_conv2d(
             x,
             self.parameters.conv2.weight,
             self.parameters.conv2.bias,
             self.device,
-            256,
             128,
+            32,
             batch_size,
             h,
             w,
@@ -402,13 +402,13 @@ class TtDPTHead:
         )
         x = ttnn.relu(x)
 
-        # Conv 3: 128 -> 1  (1x1 depth prediction)
+        # Conv 3: 32 -> 1  (1x1 depth prediction)
         x, [h, w] = ttnn_conv2d(
             x,
             self.parameters.conv3.weight,
             self.parameters.conv3.bias,
             self.device,
-            128,
+            32,
             1,
             batch_size,
             h,
