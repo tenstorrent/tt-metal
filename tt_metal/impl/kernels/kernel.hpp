@@ -100,7 +100,7 @@ public:
 
     ~Kernel() override = default;
 
-    std::string name() const;
+    std::string name() const override;
 
     const KernelSource& kernel_source() const { return kernel_src_; }
 

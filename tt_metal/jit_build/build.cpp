@@ -527,6 +527,8 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     }
 
     if (settings) {
+        defines += fmt::format("-DKERNEL_NAME=\"\\\"{}\\\"\" ", settings->name());
+
         // Append user args
         if (process_defines_at_compile_) {
             settings->process_defines([&defines](const string& define, const string& value) {
