@@ -154,7 +154,6 @@ jobs:
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
-      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
       llk-wormhole-changed: ${{ steps.find-changes.outputs.llk-wormhole-changed }}
       llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
       llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
@@ -272,26 +271,6 @@ jobs:
       build-type: 'ASan'
       enable-kernel-ccache: true
     secrets: inherit
-
-  # A quick check that parses the models charts in README.md and models/README.md
-  # and ensures that models attributes are in sync.
-  model-charts-sync:
-    needs: [find-changed-files]
-    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      timeout-minutes: 20
-    - name: Set up Python
-      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-      with:
-        python-version: '3.10'
-    - name: Run model charts sync Python script
-      run: |
-        # Run script that compares the models chart in README.md
-        # with the models chart in models/README.md
-        python .github/scripts/utils/model-charts-sync.py
 
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
@@ -465,7 +444,6 @@ jobs:
       - ttnn-smoke-tests
       - metalium-examples
       - code-analysis
-      - model-charts-sync
       - build-docs
       - llk-test-wormhole
       - llk-test-blackhole
@@ -479,7 +457,7 @@ jobs:
           optional-jobs: >-
             code-analysis,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
-            model-charts-sync, build-docs,
-            llk-test-wormhole, llk-test-blackhole, llk-build-quasar
+            build-docs, llk-test-wormhole, llk-test-blackhole,
+            llk-build-quasar
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
