@@ -539,10 +539,17 @@ void kernel_main() {
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             // ══════════════════════════════════════════════════════════════
-            // Pre-rescaled path: cb_k_in/cb_v_in are filled by reader (BFP4
-            // pre-rescaled values). Standard SDPA consumes directly. Unchanged.
+            // Pre-rescaled fast path: cb_k_in/cb_v_in are filled by reader
+            // (BFP4 pre-rescaled values). Standard SDPA consumes directly.
+            // Used when LSE export is NOT requested.
+            //
+            // When return_lse=True we fall through to the unified Flash
+            // Attention loop below (with `if constexpr (!pre_rescaled)`
+            // guards on the dequant steps), because sdpa_standard does not
+            // expose internal max/sum and the writer would deadlock waiting
+            // for cb_lse_out tiles that compute never pushes.
             // ══════════════════════════════════════════════════════════════
-            if constexpr (pre_rescaled) {
+            if constexpr (pre_rescaled && !return_lse) {
                 mm_init(cb_q_in, cb_k_in, cb_out);
                 sdpa_standard<
                     cb_qk_im,
@@ -654,12 +661,15 @@ void kernel_main() {
                     for (uint32_t k_chunk = k_chunk_start_for_core; k_chunk < k_chunk_end_for_core; ++k_chunk) {
                         DeviceZoneScopedN("TQ_K_CHUNK_TOTAL");
                         // ── Step 0: Typecast BFP8 norms → BF16 (when stored as BFP8) ──
-                        if constexpr (norms_are_bfp8) {
+                        // Skipped in pre_rescaled mode (no norms — values already include them).
+                        if constexpr (!pre_rescaled && norms_are_bfp8) {
                             typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_k_norms_in, cb_k_norms_bf16);
                         }
 
                         // ── Step 1: Dequantize K chunk → cb_k_in (transposed layout) ──
-                        {
+                        // Skipped in pre_rescaled mode (reader fills cb_k_in directly with
+                        // pre-rescaled BFP4 values in the transposed layout matmul expects).
+                        if constexpr (!pre_rescaled) {
                             // DeviceZoneScopedN("TQ_DEQUANT_K");
                             dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
                                 cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr, delta_bits_arr);
@@ -705,10 +715,11 @@ void kernel_main() {
                         }
 
                         // ── Step 4: Dequantize V chunk → cb_v_in (natural layout) ──
-                        if constexpr (norms_are_bfp8) {
+                        // Skipped in pre_rescaled mode (reader fills cb_v_in directly).
+                        if constexpr (!pre_rescaled && norms_are_bfp8) {
                             typecast_norms_bfp8_to_bf16<Sk_chunk_t>(cb_v_norms_in, cb_v_norms_bf16);
                         }
-                        {
+                        if constexpr (!pre_rescaled) {
                             // DeviceZoneScopedN("TQ_DEQUANT_V");
                             dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
                                 cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr, delta_bits_arr);

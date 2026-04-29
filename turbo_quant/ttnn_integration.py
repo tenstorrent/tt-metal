@@ -1049,10 +1049,17 @@ class TTNNTurboQuantCache:
             )
             out_new, lse_new = outs_new[0], outs_new[1]
 
+            # Old SDPA: full Track A attention over [0, cur_pos] (NOT truncated to
+            # cur_pos-W). The TQ kernel rounds valid_k_chunks up to chunk boundary,
+            # so passing cur_pos-W would produce ~31-position overlap with the ring
+            # — and the LSE-aware combine assumes disjoint coverage. Using the full
+            # range makes the combine an "emphasis blend" instead of a mathematical
+            # equivalent: the ring's output gets up-weighted via LSE so recent
+            # tokens contribute more than their proportional share.
             out_old, lse_old = self.fused_sdpa_decode(
                 q,
                 layer_idx=layer_idx,
-                current_pos=old_pos,
+                current_pos=current_pos,
                 scale=scale,
                 page_table=page_table,
                 num_cores_per_head=1,
@@ -1121,11 +1128,14 @@ class TTNNTurboQuantCache:
           where w_X = exp(lse_X − lse_max) / (exp(lse_old − lse_max) + exp(lse_new − lse_max))
           and   lse_max = max(lse_old, lse_new)  (per-row max for numerical stability)
 
-        LSE tensors are [B, NQH, 1, 32]: the kernel's matmul_reduce broadcasts
-        the LSE value to every column via cb_col_identity, so columns 0..31 all
-        hold the same value. We repeat 32→DH along the last dim to multiply
-        with the [B, NQH, 1, DH] outputs (ttnn.multiply doesn't support 32→128
-        broadcast directly).
+        LSE tensors are [B, NQH, 1, 32]: the kernel's writer packs one BF16 LSE
+        value at column 0 of row 0; columns 1..31 contain garbage from the
+        matmul_reduce + log_tile pipeline (e.g. log(0)=-inf for the rowsum
+        tile's empty cols, plus uninitialised values from the max tile). We
+        therefore do the per-element math across all 32 columns (the col-0
+        result is correct even when garbage is present in cols 1-31, since the
+        ops are local) and then BROADCAST col 0 of the resulting weight tile
+        to every column of the [B, NQH, 1, DH] output before multiplying.
         """
         lse_max = ttnn.maximum(lse_old, lse_new)
         diff_old = ttnn.exp(ttnn.subtract(lse_old, lse_max))
@@ -1140,15 +1150,20 @@ class TTNNTurboQuantCache:
         ttnn.deallocate(lse_old)
         ttnn.deallocate(lse_new)
 
-        repeat_factor = self.head_dim // 32
-        if repeat_factor > 1:
-            w_old_full = ttnn.repeat(w_old, ttnn.Shape([1, 1, 1, repeat_factor]))
-            w_new_full = ttnn.repeat(w_new, ttnn.Shape([1, 1, 1, repeat_factor]))
-            ttnn.deallocate(w_old)
-            ttnn.deallocate(w_new)
-        else:
-            w_old_full = w_old
-            w_new_full = w_new
+        # Slice col 0 only (avoid garbage in cols 1-31), then broadcast to head_dim.
+        # ttnn.slice on TILE_LAYOUT keeps tile boundaries; the result is a
+        # [B, NQH, 1, 1] tensor (or with tile padding) holding only valid LSE.
+        B = w_old.shape[0]
+        NQH = w_old.shape[1]
+        w_old_col0 = ttnn.slice(w_old, [0, 0, 0, 0], [B, NQH, 1, 1])
+        w_new_col0 = ttnn.slice(w_new, [0, 0, 0, 0], [B, NQH, 1, 1])
+        ttnn.deallocate(w_old)
+        ttnn.deallocate(w_new)
+        # Broadcast 1 → head_dim (e.g. 1 → 128) by repeating.
+        w_old_full = ttnn.repeat(w_old_col0, ttnn.Shape([1, 1, 1, self.head_dim]))
+        w_new_full = ttnn.repeat(w_new_col0, ttnn.Shape([1, 1, 1, self.head_dim]))
+        ttnn.deallocate(w_old_col0)
+        ttnn.deallocate(w_new_col0)
         out_old_w = ttnn.multiply(out_old, w_old_full)
         out_new_w = ttnn.multiply(out_new, w_new_full)
         ttnn.deallocate(out_old)
