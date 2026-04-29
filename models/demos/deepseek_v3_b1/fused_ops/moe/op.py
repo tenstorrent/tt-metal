@@ -4387,12 +4387,13 @@ class MoeOp:
                     bcast_writer_rt_args_ref = kernel.runtime_args[bcast_worker_core.x][bcast_worker_core.y]
                     payload = []
                     for dst_node in self.bcast_dst_nodes:
-                        payload.append(int(dst_node.mesh_id))
-                        payload.append(int(dst_node.chip_id))
                         setup_args = ttnn.setup_fabric_connection(
                             self.bcast_fabric_node_id, dst_node, 0, program, bcast_worker_core
                         )
                         payload.extend(setup_args)
+                    for dst_node in self.bcast_dst_nodes:
+                        payload.append(int(dst_node.mesh_id))
+                        payload.append(int(dst_node.chip_id))
                     bcast_writer_rt_args_ref.extend([len(payload)] + payload)
                     break
 

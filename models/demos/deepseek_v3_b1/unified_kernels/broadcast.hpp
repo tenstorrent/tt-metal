@@ -147,12 +147,8 @@ struct Broadcast {
                     sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
 
-                std::array<uint32_t, CTArgs::num_neighbors> dst_mesh_ids = {};
-                std::array<uint32_t, CTArgs::num_neighbors> dst_chip_ids = {};
                 size_t arg_idx = args.per_core_rta_arg_idx_offset;
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
-                    dst_mesh_ids[neighbor_idx] = get_arg_val<uint32_t>(arg_idx++);
-                    dst_chip_ids[neighbor_idx] = get_arg_val<uint32_t>(arg_idx++);
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
                         connections[connection_idx] =
@@ -163,11 +159,12 @@ struct Broadcast {
                 }
 
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+                    const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
                         headers[connection_idx] = PacketHeaderPool::allocate_header();
-                        fabric_set_single_hop_unicast_route(
-                            headers[connection_idx], dst_chip_ids[neighbor_idx], dst_mesh_ids[neighbor_idx]);
+                        fabric_set_single_hop_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
                         headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 dst_noc_base, sem_nocs[link_idx], 1, false},
