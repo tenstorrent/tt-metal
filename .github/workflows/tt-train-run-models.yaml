@@ -109,6 +109,12 @@ jobs:
           echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
           echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
 
+      - name: Install Python dependencies
+        run: |
+          # Install minimal dependencies for processing metrics
+          uv pip list
+          uv pip install "gitpython==3.1.41" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
+
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

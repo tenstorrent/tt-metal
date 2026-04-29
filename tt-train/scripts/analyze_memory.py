@@ -506,7 +506,7 @@ def main(raw_args=None):
     if device_memory_bytes is None:
         # Try to get from first summary with device memory
         for name, metrics, num_params, device_memory in summaries:
-            if device_memory:
+            if device_memory is not None:
                 # device_memory arg is in bytes, so match that
                 device_memory_bytes = device_memory * (1024 * 1024)
                 print(f"Available device memory, calculated from logs: {device_memory:.2f} MB")

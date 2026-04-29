@@ -47,13 +47,15 @@ def get_git_commit_hash() -> str:
 
 
 def get_card_type() -> str:
-    """Get the card type by reading from the sysfs. Return exception if failure."""
+    """Get the card type by reading from the sysfs or from CI_RUNNER_LABEL. Return exception if fails."""
     tt_card_type = Path("/sys/class/tenstorrent/tenstorrent!0/tt_card_type")
     if tt_card_type.exists() and tt_card_type.is_file():
         with open(tt_card_type, "r") as card_type:
-            return card_type.read().rstrip()
+            return card_type.read().strip().lower()
+    elif card_type := get_env("CI_RUNNER_LABEL", required=False):
+        return card_type.read().strip().lower()
     else:
-        raise Exception(f"Cannot read {tt_card_type}.")
+        raise Exception(f"Cannot read {tt_card_type} and CI_RUNNER_LABEL is empty.")
 
 
 def run_and_save_log(cmd: list[str], log_path: Path) -> int:
@@ -154,7 +156,7 @@ def main() -> int:
     git_commit_hash = get_git_commit_hash()
 
     # Get additional metadata
-    arch_name = get_env("ARCH_NAME", required=False)
+    arch_name = get_env("CI_ARCH_NAME", required=False)
     card_type = get_card_type()
 
     # Create output directory to store metrics
@@ -201,7 +203,7 @@ def main() -> int:
         # Check if model should be skipped
         if (skip_cards := model.get("skip-card")) is not None:
             skip_card = skip_cards if isinstance(skip_cards, list) else [skip_cards]
-            if any(a in card_type for a in skip_card):
+            if any(card.strip().lower() in card_type for card in skip_card):
                 print(f"Skipping {model_filename}")
                 continue
 
