@@ -281,15 +281,6 @@
     background: linear-gradient(135deg, rgba(124, 92, 255, 0.55), rgba(91, 61, 214, 0.45));
     border-color: var(--accent);
     color: #f0eaff;
-    box-shadow: 0 0 12px rgba(124, 92, 255, 0.45),
-                inset 0 0 14px rgba(124, 92, 255, 0.18);
-    animation: chipPulse 2.4s ease-in-out infinite;
-  }
-  @keyframes chipPulse {
-    0%, 100% { box-shadow: 0 0 8px rgba(124, 92, 255, 0.30),
-                           inset 0 0 10px rgba(124, 92, 255, 0.14); }
-    50%      { box-shadow: 0 0 18px rgba(124, 92, 255, 0.65),
-                           inset 0 0 18px rgba(124, 92, 255, 0.28); }
   }
   .galaxy-tiles {
     margin-top: 10px;
@@ -375,21 +366,24 @@
   }
   .slice-cell-overlay.hidden { display: none; }
 
-  /* Stream-group labels overlaying rows of the Galaxy chip grid (multi-
-     stream mode only). One per stream, spans 4 chips in one row. Uses a
-     teal-ish accent so it reads as distinct from the active-chip purple. */
+  /* Stream-group bands overlaying rows of the Galaxy chip grid (multi-
+     stream mode only). One per stream, spans 4 chips in one row. The
+     translucent fill is colored per stream (see [data-stream="N"] rules
+     below) and is light enough to keep the underlying chip glyphs
+     readable. The label sits in the bottom-inside of the band, lifted a
+     few pixels off the bottom border so it floats above the line. */
   .stream-group {
     position: absolute;
     left: 10px; right: 10px;
     pointer-events: none;
-    border: 1px dashed rgba(92, 184, 255, 0.55);
+    border: 3px dashed rgba(92, 184, 255, 0.55);
     border-radius: 5px;
+    box-sizing: border-box;
     background: rgba(92, 184, 255, 0.06);
-    /* Label centred horizontally and pinned to the top of the row so it
-       lines up with the top edge of the chips it groups (Stream 1 sits at
-       the top of chips 1–4, etc.). */
-    display: flex; align-items: flex-start; justify-content: center;
-    padding-top: 2px;
+    /* Label aligned to the bottom edge of the band, padded up so it
+       hovers JUST above the bottom border instead of sitting on it. */
+    display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: 4px;
     color: rgba(180, 220, 255, 0.95);
     font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
     letter-spacing: 0.4px;
@@ -397,6 +391,37 @@
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
   }
   .stream-group.hidden { display: none; }
+
+  /* Per-stream color palette.  Eight Tailwind-500 shades chosen for high
+     mutual contrast on the dark UI.  Anything (chip, stream-group label,
+     stream-cell HUD) with a [data-stream="N"] attribute inherits the
+     matching --stream-rgb value, which downstream rules consume via
+     rgba(var(--stream-rgb), <alpha>). */
+  [data-stream="0"] { --stream-rgb: 239, 68, 68; }   /* red    */
+  [data-stream="1"] { --stream-rgb: 249, 115, 22; }  /* orange */
+  [data-stream="2"] { --stream-rgb: 234, 179, 8; }   /* yellow */
+  [data-stream="3"] { --stream-rgb: 34, 197, 94; }   /* green  */
+  [data-stream="4"] { --stream-rgb: 6, 182, 212; }   /* cyan   */
+  [data-stream="5"] { --stream-rgb: 59, 130, 246; }  /* blue   */
+  [data-stream="6"] { --stream-rgb: 168, 85, 247; }  /* purple */
+  [data-stream="7"] { --stream-rgb: 236, 72, 153; }  /* pink   */
+
+  /* Row-band label on the chip grid colored per stream (chips themselves
+     keep the default purple — only the row band fill, border, and label
+     get the stream's color, plus the stream-cell HUD pill). The fill
+     alpha is intentionally low so chips 1–4 / 5–8 / … remain visible
+     under the colored band. */
+  .stream-group[data-stream] {
+    border-color: rgba(var(--stream-rgb), 0.75);
+    background: transparent;
+    color: rgb(var(--stream-rgb));
+  }
+
+  /* Stream-N pill on the per-stream video tile, tinted to match its chips. */
+  .stream-hud .hud-left[data-stream] {
+    background: rgba(var(--stream-rgb), 0.75);
+    color: #fff;
+  }
   .caption {
     margin-top: 10px;
     font: 15px ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -712,17 +737,26 @@ function updateGalaxyActive(nTiles) {
   const n = Math.max(0, Math.min(N_GALAXY_CHIPS, nTiles | 0));
   _activeChipCount = n;
   const chips = document.querySelectorAll("#galaxyGrid .chip");
-  chips.forEach((c, i) => c.classList.toggle("active", i < n));
+  const isMulti = currentMode === "multi";
+  chips.forEach((c, i) => {
+    c.classList.toggle("active", i < n);
+    // Always clear any stale per-stream chip color (kept here in case an
+    // earlier build set it — chips themselves are now the same purple in
+    // every mode; the per-stream color is applied only to the row band
+    // and the stream-cell HUD pill).
+    delete c.dataset.stream;
+  });
   const tilesEl = document.getElementById("galaxyTiles");
   if (tilesEl) {
     tilesEl.textContent = n > 0
       ? `${n} of ${N_GALAXY_CHIPS} chips active`
       : "— chips active";
   }
-  // Stream-group labels are only meaningful in multi-stream mode AND only
-  // shown when the Slice Overlay toggle is on (matches the per-cell sub-tile
-  // overlay that gets drawn at the same time).
-  updateGalaxyStreamGroups(currentMode === "multi" && sliceOverlayOn);
+  // Stream-group row labels: always shown in multi mode now (was previously
+  // gated on the Slice Overlay toggle — labels are useful even without the
+  // per-tile slicing overlay because they call out which chips serve which
+  // stream).
+  updateGalaxyStreamGroups(isMulti);
 }
 
 // 8 stream labels (one per row) overlaid on the chip grid. Each spans
@@ -734,27 +768,36 @@ function updateGalaxyStreamGroups(showStreams) {
   // Clear any existing groups; rebuild only when in multi-stream mode.
   grid.querySelectorAll(".stream-group").forEach(n => n.remove());
   if (!showStreams) return;
-  // The grid uses padding:10px and its content area maps to 8 rows. Each
-  // row is (100% - 20px) / 8 in height. We position groups in % so they
-  // resize with the grid. Top + height computed against the grid's
-  // total height; the 10 px padding is preserved by `top` offset math.
-  // The grid has 10 px inner padding, then 8 rows fill the remaining
-  // (100% - 20px) of height. Compute one row's height once, then stack
-  // groups by multiplying.
-  const rowH = `calc((100% - 20px) / 8)`;
+  // The galaxy chip grid uses: padding:10px on every side, 8 rows of
+  // equal height with `gap: 6px` between them. So the available
+  // vertical space for chip rows = (100% - 20px padding) - (7 gaps × 6 px) =
+  // (100% - 62 px). Each chip row therefore occupies (100% - 62 px) / 8.
+  // To make a band's outer rect line up exactly with chip-row N's outer
+  // rect, position it at top = 10 px + N × (rowH + 6 px) and give it
+  // height = rowH.  With box-sizing: border-box, the band's 3 px dashed
+  // border draws inward from those edges so it traces the chip row.
+  // Adjacent bands sit in adjacent chip rows separated by the 6 px
+  // grid gap — no overlap, no shared border line.
+  const ROW_GAP_PX = 6;     // matches .galaxy-grid `gap: 6px`
+  const PAD_PX = 10;        // matches .galaxy-grid `padding: 10px`
+  const rowH = `calc((100% - ${2 * PAD_PX}px - ${7 * ROW_GAP_PX}px) / 8)`;
   for (let s = 0; s < 8; s++) {
     const g = document.createElement("div");
     g.className = "stream-group";
-    g.style.top    = `calc(10px + ${rowH} * ${s})`;
+    g.dataset.stream = s;  // drives per-stream color via the [data-stream] CSS rules
+    g.style.top    = `calc(${PAD_PX}px + (${rowH} + ${ROW_GAP_PX}px) * ${s})`;
     g.style.height = rowH;
     g.textContent = `Stream ${s + 1}`;
     grid.appendChild(g);
   }
 }
 
-// Per-mode description shown above the chip grid. Phrasing matches the
-// transport so the panel reads as a sentence describing what the user is
-// looking at right now.
+// Per-mode description shown above the chip grid. 5-line layout:
+//   line 1  source kind   (e.g. "FHD Live Camera")
+//   line 2  source resolution
+//   line 3  "running"
+//   line 4  model + tile resolution
+//   line 5  active-chip count
 function setGalaxyMeta(status) {
   if (!status) return;
   const descEl = document.getElementById("galaxyDesc");
@@ -762,24 +805,27 @@ function setGalaxyMeta(status) {
   const t = status.transport;
   const w = status.frame_w | 0, h = status.frame_h | 0;
   const n = status.n_tiles | 0;
-  // 3-line layout: input dims on top, big arrow centered on its own
-  // line, output slices below. Multi-stream prefixes the input with the
-  // parallel-stream count.
-  let topLine;
-  if (t === "multi") {
+  let kindLine;
+  if (t === "camera") {
+    kindLine = "FHD Live Camera";
+  } else if (t === "video") {
+    kindLine = "4k Video";
+  } else if (t === "multi") {
     const ns = status.n_streams || 8;
-    topLine = `${ns} × ${w}×${h}`;
-  } else if (t === "camera" || t === "video") {
-    topLine = `${w}×${h}`;
+    kindLine = `${ns} Parallel Stream`;
   } else {
     descEl.textContent = "—";
     return;
   }
-  const bottomLine = `${n} × YOLOv8L 640×640`;
+  const resLine = `(${w}x${h} resolution)`;
+  const modelLine = "Yolov8L (640x640 resolution)";
+  const chipsLine = `on ${n} chips`;
   descEl.innerHTML =
-    `<div class="d-line">${topLine}</div>` +
-    `<div class="arrow">↓</div>` +
-    `<div class="d-line">${bottomLine}</div>`;
+    `<div class="d-line">${kindLine}</div>` +
+    `<div class="d-line">${resLine}</div>` +
+    `<div class="d-line">running</div>` +
+    `<div class="d-line">${modelLine}</div>` +
+    `<div class="d-line">${chipsLine}</div>`;
 }
 
 // Galaxy panel is now CSS-only — chips animate via the chipPulse keyframes
@@ -946,9 +992,9 @@ function setSliceOverlay(on) {
   document.querySelectorAll(".stream-cell .slice-cell-overlay").forEach(o => {
     o.classList.toggle("hidden", !sliceOverlayOn);
   });
-  // Stream-group labels on the Galaxy chip grid follow the same toggle —
-  // hidden by default, shown only with Slice Overlay on (multi mode).
-  updateGalaxyStreamGroups(currentMode === "multi" && sliceOverlayOn);
+  // Stream-group row labels on the Galaxy chip grid are now always shown
+  // in multi mode, independent of the Slice Overlay toggle.
+  updateGalaxyStreamGroups(currentMode === "multi");
   if (sliceOverlayOn) rebuildSliceOverlay();
   // Reset main-video badges if turning off (rAF won't run for them).
   if (!sliceOverlayOn) {
@@ -1774,6 +1820,7 @@ function buildStreamsGrid(forceRebuild = false) {
     hud.className = "stream-hud";
     const hudLeft = document.createElement("span");
     hudLeft.className = "hud-left";
+    hudLeft.dataset.stream = i;  // matches the chip-row + chip-grid label color
     hudLeft.textContent = `Stream ${i + 1}`;
     const hudRight = document.createElement("span");
     hudRight.className = "hud-right";
