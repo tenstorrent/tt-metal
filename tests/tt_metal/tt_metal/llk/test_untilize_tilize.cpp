@@ -667,8 +667,13 @@ static void run_quasar_tilize_untilize_test(
     }
     detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, (uint32_t)0, num_tiles});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
+    // This test configures the DRAM buffers as a single whole-buffer page, so
+    // aligned_page_size() returns the whole-buffer stride rather than per-tile.
+    // Compute the real per-tile DRAM stride directly from the buffer size.
+    const uint32_t src_tile_stride_bytes = src_dram_buffer_size / num_tiles;
+    const uint32_t dst_tile_stride_bytes = dst_dram_buffer_size / num_tiles;
+    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, (uint32_t)0, num_tiles, src_tile_stride_bytes});
+    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles, dst_tile_stride_bytes});
 
     detail::LaunchProgram(dev, program, true);
 

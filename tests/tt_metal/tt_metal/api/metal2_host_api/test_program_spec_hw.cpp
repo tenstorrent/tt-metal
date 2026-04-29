@@ -33,7 +33,7 @@ namespace {
 using test_helpers::BindDFBToKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
-using test_helpers::MakeMinimalWorker;
+using test_helpers::MakeMinimalWorkUnit;
 
 // ============================================================================
 // Test Fixture
@@ -96,27 +96,26 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     spec.program_id = "dfb_accessor_loopback";
 
     // Producer: BRISC reads from DRAM → DFB
-    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp"};
     producer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // Consumer: NCRISC reads DFB → DRAM
-    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp"};
     consumer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // DFB: both kernels bind it, with different local accessor names
-    auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries);
+    auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     BindDFBToKernel(producer, "loopback_dfb", "my_local_dfb_name", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "loopback_dfb", "a_dfb_named_bob", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"}, {"loopback_dfb"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     // -------------------------------------------------------
     // Create Program
@@ -228,7 +227,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     // Producer: BRISC reads DRAM → DFB. 1 named RTA, 1 named CRTA, 2 named CTAs, 3 RTA
     // varargs, 1 CRTA vararg.
-    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp"};
     producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
@@ -240,7 +239,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     // Consumer: NCRISC reads DFB → DRAM. Uses default `args` namespace, 1 named RTA,
     // 1 named CRTA, 2 named CTAs, 2 RTA varargs (note: different count from producer —
     // this verifies the named_rta_words offset is baked per-kernel), 1 CRTA vararg.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp"};
     consumer.runtime_arguments_schema.named_runtime_args = {"dst_addr"};
@@ -249,15 +248,14 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     consumer.runtime_arguments_schema.num_common_runtime_varargs = 1;
     consumer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
 
-    auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries_in_dfb);
+    auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries_in_dfb);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     BindDFBToKernel(producer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::CONSUMER);
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"}, {"loopback_dfb"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(spec);
 
@@ -348,7 +346,6 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .source =
             KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp"},
-        .target_nodes = node,
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
         .config_spec =
@@ -364,7 +361,6 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .source =
             KernelSpec::SourceFilePath{
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp"},
-        .target_nodes = node,
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
         .config_spec =
@@ -376,11 +372,10 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             },
     };
 
-    // A WorkerSpec ties together the kernels, DFBs, and semaphores that share a node.
-    WorkerSpec worker{
-        .unique_id = "worker_0",
+    // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
+    WorkUnitSpec work_unit{
+        .unique_id = "work_unit_0",
         .kernels = {"producer", "consumer"},
-        .semaphores = {"only_sem"},
         .target_nodes = node,
     };
 
@@ -389,7 +384,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .program_id = "semaphore_accessor_loopback",
         .kernels = {producer, consumer},
         .semaphores = {sem},
-        .workers = std::vector<WorkerSpec>{worker},
+        .work_units = std::vector<WorkUnitSpec>{work_unit},
     };
 
     Program program = MakeProgramFromSpec(spec);

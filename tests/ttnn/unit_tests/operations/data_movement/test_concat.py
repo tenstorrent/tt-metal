@@ -446,4 +446,4 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     output = ttnn.concat([in1, in2], dim=dim, memory_config=memory_config, sub_core_grids=sub_core_grids)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_equal(torch_output_tensor, output)
