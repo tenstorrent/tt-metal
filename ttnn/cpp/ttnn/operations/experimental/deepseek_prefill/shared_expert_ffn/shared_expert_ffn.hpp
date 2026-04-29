@@ -7,6 +7,7 @@
 #include <optional>
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -33,7 +34,8 @@ ttnn::Tensor shared_expert_ffn(
     uint32_t tp_axis_size,
     uint32_t num_links = 1,
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn
 

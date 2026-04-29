@@ -159,6 +159,7 @@ class TtSharedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        subdevice_id: Optional[ttnn.SubDeviceId] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -186,6 +187,7 @@ class TtSharedExpert(LightweightModule):
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
+        self.subdevice_id = subdevice_id
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
 
@@ -339,6 +341,7 @@ class TtSharedExpert(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
             compute_kernel_config=self.compute_kernel_config,
+            subdevice_id=self.subdevice_id,
         )
         logger.debug(f"After shared_expert_ffn: {output.shape}")
 

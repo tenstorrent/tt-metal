@@ -43,6 +43,7 @@ void bind_shared_expert_ffn(nb::module_& mod) {
             num_links (int, optional): Number of ethernet links for CCL. Defaults to 1.
             topology (ttnn.Topology, optional): CCL topology. Defaults to Linear.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel config. Defaults to None.
+            subdevice_id (ttnn.SubDeviceId, optional): Sub-device whose Tensix cores will run the matmuls and reduce_scatter. Defaults to None (uses the first sub-device).
 
         Returns:
             ttnn.Tensor: Output tensor.
@@ -64,7 +65,8 @@ void bind_shared_expert_ffn(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("num_links") = 1,
         nb::arg("topology") = tt::tt_fabric::Topology::Linear,
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("subdevice_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::shared_expert_ffn::detail

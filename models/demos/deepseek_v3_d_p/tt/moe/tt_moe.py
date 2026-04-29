@@ -20,6 +20,7 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -150,6 +151,7 @@ class TtMoe(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
+        dispatch_sd_rows: int = 2,
     ):
         """
         Initialize TtMoe module.
@@ -250,6 +252,33 @@ class TtMoe(LightweightModule):
             mesh_device, expert_dispatch_table, dispatch_axis=0
         )
 
+        # ========================================
+        # Sub-devices: split the user Tensix grid into a "dispatch" strip and a
+        # "shared expert" strip so the two ops run on disjoint cores and the
+        # Fast-Dispatch per-sub-device counters let them overlap on-chip.
+        #   sub-device 0 (dispatch_sd):     rows [0, dispatch_sd_rows)
+        #   sub-device 1 (shared_sd):       rows [dispatch_sd_rows, grid_y)
+        # ========================================
+        grid = mesh_device.compute_with_storage_grid_size()
+        grid_x, grid_y = grid.x, grid.y
+        assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
+        dispatch_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dispatch_sd_rows - 1))}
+        )
+        shared_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
+        )
+        dispatch_sd = ttnn.SubDevice([dispatch_cores])
+        shared_sd = ttnn.SubDevice([shared_cores])
+        self.sd_manager_id = mesh_device.create_sub_device_manager([dispatch_sd, shared_sd], 0)
+        mesh_device.load_sub_device_manager(self.sd_manager_id)
+        self.dispatch_sd_id = ttnn.SubDeviceId(0)
+        self.shared_sd_id = ttnn.SubDeviceId(1)
+        logger.debug(
+            f"Sub-devices: grid={grid_x}x{grid_y}, dispatch=rows[0,{dispatch_sd_rows}), "
+            f"shared=rows[{dispatch_sd_rows},{grid_y})"
+        )
+
         # Initialize dispatch module (row axis: axis 0)
         self.dispatch_module = TtDispatchModule(
             mesh_device=mesh_device,
@@ -264,6 +293,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
+            subdevice_id=self.dispatch_sd_id,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -325,6 +355,7 @@ class TtMoe(LightweightModule):
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+            subdevice_id=self.shared_sd_id,
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
@@ -429,6 +460,8 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        signpost("shared_expert_and_dispatch_start")
+
         # ========================================
         # Step 1: Shared expert (enabled)
         # ========================================
@@ -455,6 +488,8 @@ class TtMoe(LightweightModule):
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
+
+        signpost("shared_expert_and_dispatch_end")
 
         # ========================================
         # Step 3: Routed experts (enabled)
