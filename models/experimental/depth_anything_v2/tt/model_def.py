@@ -879,14 +879,14 @@ def custom_preprocessor(torch_model, name):
             },
             "attention": {
                 "qkv": {
-                    "weight": _tile(qkv_w, dtype=ttnn.bfloat8_b),
+                    "weight": _tile(qkv_w, dtype=ttnn.bfloat16),
                     "bias": _tile(qkv_b),
                 },
                 "output": {
                     "dense": {
                         "weight": _tile(
                             layer.attention.output.dense.weight.transpose(0, 1),
-                            dtype=ttnn.bfloat8_b,
+                            dtype=ttnn.bfloat16,
                         ),
                         "bias": _rm(layer.attention.output.dense.bias),
                     }
@@ -898,13 +898,13 @@ def custom_preprocessor(torch_model, name):
             },
             "intermediate": {
                 "dense": {
-                    "weight": _tile(layer.mlp.fc1.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
+                    "weight": _tile(layer.mlp.fc1.weight.transpose(0, 1), dtype=ttnn.bfloat16),
                     "bias": _rm(layer.mlp.fc1.bias),
                 }
             },
             "output": {
                 "dense": {
-                    "weight": _tile(layer.mlp.fc2.weight.transpose(0, 1), dtype=ttnn.bfloat8_b),
+                    "weight": _tile(layer.mlp.fc2.weight.transpose(0, 1), dtype=ttnn.bfloat16),
                     "bias": _rm(layer.mlp.fc2.bias),
                 }
             },
@@ -929,7 +929,7 @@ def custom_preprocessor(torch_model, name):
 
         rp = {
             "projection": {
-                "weight": _tile(proj_w, dtype=ttnn.bfloat8_b),
+                "weight": _tile(proj_w, dtype=ttnn.bfloat16),
                 "bias": _rm(layer.projection.bias),
             }
         }
@@ -970,7 +970,7 @@ def custom_preprocessor(torch_model, name):
             },
             # Fusion projection: 256 -> 256
             "projection": {
-                "weight": _tile(fproj_w, dtype=ttnn.bfloat8_b),
+                "weight": _tile(fproj_w, dtype=ttnn.bfloat16),
                 "bias": _rm(layer.projection.bias),
             },
             "residual_layer1": {
