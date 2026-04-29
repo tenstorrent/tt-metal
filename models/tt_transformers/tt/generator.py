@@ -57,13 +57,14 @@ def _get_max_blocks_prefill(kv_cache) -> int:
 
 
 def _pad_or_create_page_table(table, target_blocks: int):
+    aligned_blocks = ((target_blocks + 7) // 8) * 8
     if table is not None:
-        num_pad = target_blocks - table.shape[1]
+        num_pad = aligned_blocks - table.shape[1]
         if num_pad > 0:
             padding = torch.zeros(1, num_pad, dtype=torch.int32)
             return torch.cat([table, padding], dim=-1)
         return table
-    return torch.ones(1, target_blocks, dtype=torch.int32) * -1
+    return torch.ones(1, aligned_blocks, dtype=torch.int32) * -1
 
 
 class Generator(WarmupForwardMixin):
@@ -841,9 +842,7 @@ class Generator(WarmupForwardMixin):
                     )
                     continue
                 else:
-                    logits = self.model[model_id].process_logits_after_prefill_trace(
-                        logits, last_token_idx_for_trace
-                    )
+                    logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_for_trace)
             else:
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
