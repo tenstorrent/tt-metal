@@ -108,5 +108,5 @@ jobs:
           check_name: Quasar Compile Tests
           detailed_summary: true
           job_summary: false
-          include_passed: true
+          include_passed: false
           fail_on_failure: false
