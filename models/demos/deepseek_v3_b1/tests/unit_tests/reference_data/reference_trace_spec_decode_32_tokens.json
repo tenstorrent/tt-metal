@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "spec_decode_host_fsm_case",
   "metadata": {
-    "num_accepts": 31,
+    "num_accepts": 16,
     "num_rejects": 0
   },
   "params": {
