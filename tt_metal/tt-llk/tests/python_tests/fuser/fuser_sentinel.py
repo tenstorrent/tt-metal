@@ -126,7 +126,7 @@ class FuserSentinel:
 
     @property
     def math_format(self) -> str:
-        return self._fmt(self._math_format.pack_src)
+        return self._fmt(self._math_format.math)
 
     @property
     def pack_src_format(self) -> str:
@@ -291,7 +291,7 @@ class FuserSentinel:
         dest_acc = config.dest_acc.cpp_enum_value
         return (
             f"_llk_math_hw_configure_<{dest_acc}>(\n"
-            f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_src)}\n"
+            f"    {self._fmt(fmt.math)}, {self._fmt(fmt.math)}\n"
             f");\n"
         )
 
@@ -324,7 +324,7 @@ class FuserSentinel:
         dest_acc = config.dest_acc.cpp_enum_value
         code = (
             f"_llk_math_reconfig_data_format_<{dest_acc}, false>(\n"
-            f"    {self._fmt(new_fmt.pack_src)}, {self._fmt(new_fmt.pack_src)}\n"
+            f"    {self._fmt(new_fmt.math)}, {self._fmt(new_fmt.math)}\n"
             f");\n"
         )
         self._math_format = new_fmt
@@ -394,9 +394,9 @@ class FuserSentinel:
                 f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}, {face_r_dim}, TILE_C_DIM, {num_faces}\n"
                 f");\n"
             )
-        else:
-            return (
-                f"_llk_pack_hw_configure_<{dest_acc}, false>(\n"
-                f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
-                f");\n"
-            )
+
+        return (
+            f"_llk_pack_hw_configure_<{dest_acc}, false>(\n"
+            f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
+            f");\n"
+        )
