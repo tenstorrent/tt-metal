@@ -7,13 +7,15 @@ Run DeepSeek CCL trace tests under tracy for per-CCL parameter sweeps, then
 summarize top-level zone durations from profile_log_device.csv.
 
 Op time definition:
-- Most CCLs parse only trace id 1 from profile_log_device.csv.
+- Most CCLs parse only trace id 1 from profile_log_device.csv and group
+  per-launch samples by `run host ID`.
 - Most CCLs: for each top-level (RISC processor type, zone) bucket, average
   across all devices; op time is the max of those per-bucket averages.
 - reduce_to_one uses a fixed rotated fresh-trace benchmark: capture one
   single-iteration trace per root per sample, replay once with blocking=True,
   interleave roots across samples, then report the trimmed mean of the
   interleaved cycle means after dropping the single highest and lowest means.
+  Its per-sample grouping uses `trace id counter`.
 """
 
 import argparse
@@ -86,6 +88,7 @@ class CCLConfig:
     supported_compute_block_sizes: tuple[int, ...] = ()
     op_time_aggregation: str = "cross_device_bucket_avg"
     render_cross_device_bucket_averages: bool = True
+    iter_key_source: str = "run_host_id"
 
 
 @dataclass(frozen=True)
@@ -169,6 +172,30 @@ CCL_CONFIGS = {
             "CCL_COMPUTE": "compute",
         },
     ),
+    "broadcast": CCLConfig(
+        title="CCL broadcast trace perf matrix",
+        test_target=("models/demos/deepseek_v3_b1/tests/unit_tests/test_ccl_broadcast.py::" "test_ccl_broadcast"),
+        benchmark_shape=(1, 7168),
+        default_num_links=(1, 2),
+        supported_num_links=(1, 2),
+        transport_mode="configurable (1 or 2 links)",
+        env_num_links="CCL_BROADCAST_NUM_LINKS",
+        env_max_payload_size="CCL_BROADCAST_MAX_PAYLOAD_SIZE_BYTES",
+        top_level_zones=(
+            "CCL_BROADCAST_READER",
+            "CCL_BROADCAST_TRANSPORT",
+        ),
+        zone_labels={
+            "CCL_BROADCAST_READER": "reader",
+            "CCL_BROADCAST_TRANSPORT": "transport",
+        },
+        fixed_setup_description=(
+            "2D neighbor-exchange tree broadcast on a 4x2 submesh from sender=(1,0), "
+            "using one worker core per device."
+        ),
+        op_time_aggregation="max_device_bucket",
+        render_cross_device_bucket_averages=False,
+    ),
     "reduce_to_one": CCLConfig(
         title="Reduce-to-one trace perf matrix",
         test_target=(
@@ -199,6 +226,7 @@ CCL_CONFIGS = {
         show_num_links_in_report=False,
         op_time_aggregation="max_device_bucket",
         render_cross_device_bucket_averages=False,
+        iter_key_source="trace_counter",
     ),
     "sdpa_reduce_to_all": CCLConfig(
         title="SDPA reduce-to-all trace perf matrix",
@@ -652,16 +680,22 @@ def drop_extrema(values: list[float], *, count_per_side: int) -> list[float]:
     return sorted_values[count_per_side:-count_per_side]
 
 
-def resolve_profile_iter_key(trace_counter: str, run_host_id: str, fallback: str) -> tuple[str, int | None]:
-    # `trace id counter` tracks replay iteration for a captured trace. Prefer it
-    # when present so one replay stays one sample; `run host ID` can vary per
-    # device stream and would otherwise collapse multiple replays into a single
-    # pseudo-sample.
-    if trace_counter:
-        return trace_counter, parse_int(trace_counter)
-    if run_host_id:
-        return run_host_id, parse_int(run_host_id)
-    return fallback, None
+def resolve_profile_iter_key(
+    config: CCLConfig, trace_counter: str, run_host_id: str, fallback: str
+) -> tuple[str, int | None]:
+    if config.iter_key_source == "trace_counter":
+        if trace_counter:
+            return trace_counter, parse_int(trace_counter)
+        if run_host_id:
+            return run_host_id, parse_int(run_host_id)
+        return fallback, None
+    if config.iter_key_source == "run_host_id":
+        if run_host_id:
+            return run_host_id, parse_int(run_host_id)
+        if trace_counter:
+            return trace_counter, parse_int(trace_counter)
+        return fallback, None
+    raise ValueError(f"Unsupported iter_key_source: {config.iter_key_source}")
 
 
 def summarize_profile_log(
@@ -730,6 +764,7 @@ def summarize_profile_log(
             trace_counter = row[header_index["trace id counter"]].strip()
             run_host_id = row[run_host_idx].strip() if run_host_idx is not None and run_host_idx < len(row) else ""
             iter_key, _sample_index = resolve_profile_iter_key(
+                config,
                 trace_counter,
                 run_host_id,
                 row[header_index["time[cycles since reset]"]].strip(),
