@@ -4,6 +4,14 @@ VGGT (Visual Geometry Grounded Deep Structure From Motion) is a transformer mode
 
 This directory contains a ttnn port of [facebook/VGGT-1B](https://huggingface.co/facebook/VGGT-1B) targeting the Tenstorrent Blackhole p150a chip.
 
+## Sample outputs
+
+| Input frame | Predicted depth | Reprojected point cloud |
+|:-----------:|:---------------:|:-----------------------:|
+| ![Input](media/input.png) | ![Depth](media/depth.png) | ![Point cloud](media/point_cloud_reprojected.png) |
+
+All outputs produced by the ttnn port on Blackhole p150a (B=1, S=1, 518×518). PCC vs PyTorch reference ≥ 0.9957 across all output channels.
+
 ## Architecture
 
 ```
