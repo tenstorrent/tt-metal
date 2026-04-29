@@ -45,6 +45,25 @@ I read the milestones doc and the 4 refactoring epics (tt-metal#33823, tt-llk#91
 - [tt-metal#35020](https://github.com/tenstorrent/tt-metal/issues/35020) — "trigger the pipelines and verify my hunch" — exploratory.
 - [tt-metal#26202](https://github.com/tenstorrent/tt-metal/issues/26202), [#28870](https://github.com/tenstorrent/tt-metal/issues/28870), [tt-llk#1287](https://github.com/tenstorrent/tt-llk/issues/1287) — need human design call before any code change.
 
+## Visibility-First Picks — Making the Refactoring Tangible
+
+The refactoring effort so far (HW-config unification, uninit standardization, LLK contract definition) is real and valuable, but much of it lives inside the plumbing and is hard to show externally. The table below selects items whose completion produces a *visible before/after* — something a compute-kernel writer encounters directly, or that can be put on a slide as a concrete diff.
+
+Selection criteria: (1) the change is user-facing or callsite-visible, (2) it directly demonstrates one of the three prior-work pillars, (3) a clean before/after story exists.
+
+| Issue | Visible Change | Prior Work It Showcases | Pillar |
+|---|---|---|---|
+| [tt-metal#22946](https://github.com/tenstorrent/tt-metal/issues/22946) — matmul init consolidation | `mm_init` + `mm_init_short` → single canonical init; full doc block on `matmul.h`; obsolete APIs removed | The LLK contract's hw_start_init → op_init → execute pattern is now *demonstrated* in the most-used compute op | **LLK Contract** |
+| [tt-metal#40510](https://github.com/tenstorrent/tt-metal/issues/40510) — remove `face_r_dim`/`num_faces` from hw_configure/inits | `hw_configure` and init signatures shrink; callers no longer supply face geometry manually | "We unified HW configs so callers don't need to know about face layout" — the payoff of the HW-config unification is a simpler signature | **HW-Config Unification** |
+| [tt-metal#34587](https://github.com/tenstorrent/tt-metal/issues/34587) — pack tilize/untilize bools → `PackMode` enum | `tilize=true, untilize=false` → `PackMode::TILIZE` at every pack callsite | API redesign is visible at every callsite; has a pre-written Claude Code plan — easy to ship fast | **Clean API** |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `BroadcastType` → `enum class` | `BROADCAST_ROW` → `BroadcastType::ROW` across the whole codebase (~widest sweep) | Compiler now enforces enum qualification; before/after diff is a compelling "this is what type-safety looks like in practice" slide | **Type Safety** |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `EltwiseBinaryType` → `enum class` | `ELWADD` → `EltwiseBinaryType::ELWADD` (~197 callsites); BH/WH-only ops (`ELWDIV`, `ELWLESS`) become clearly scoped | Also surfaces HW variance: makes it visible that BH/WH have ops Quasar lacks | **Type Safety + HW variance** |
+| [tt-metal#23995](https://github.com/tenstorrent/tt-metal/issues/23995) — remove default CB-id values from `llk_math_*unary_*` | Every caller must now pass the CB id explicitly — no hidden state | "No implicit state" is a core LLK contract principle; this is its most legible expression in real code | **LLK Contract** |
+| [tt-metal#18347](https://github.com/tenstorrent/tt-metal/issues/18347) — doc strings for compute kernel APIs | Every API in the compute layer has a doc block; the programming model is readable without diving into source | Turns the LLK contract from an internal document into a living, browsable spec | **LLK Contract** |
+| [tt-metal#34495](https://github.com/tenstorrent/tt-metal/issues/34495) — drop `tile_size` param from `llk_unpack_AB_matmul_init` | Init signatures shrink by one redundant parameter | Another piece of HW-config unification: tile size is now derived, not passed | **HW-Config Unification** |
+
+**Recommended showcase order:** Start with #22946 (matmul — the flagship op, directly shows the contract) and #40510 (HW-config unification payoff). Then use the enum-class sweeps (#43036) for the "scale" story — hundreds of callsites touched by the same clean rule. #23995 and #18347 round out the "contract is now legible" narrative.
+
 ## Suggested pilot
 
 Start with **#34587** (has a prewritten plan and an explicit "consider using Claude Code" note — lowest-risk way to prove the loop end-to-end) and **#23995** (good-first-issue with a trivial DoD — great for validating the agent's CI-iteration loop on APC/BPC). Both give measurable signal in a few days before committing agents to the Tier‑2 sweep.
