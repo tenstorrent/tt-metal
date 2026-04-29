@@ -8,7 +8,7 @@ import torch
 from .bfp_format_utils import bfp4b_to_float16b
 from .deprecation import deprecated
 from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
-from .llk_params import format_dict
+from .llk_params import MathOperation, format_dict
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
@@ -835,6 +835,175 @@ def apply_log_uniform_magnitudes(
     values = signs * magnitudes
     values = torch.clamp(values, -max_magnitude, max_magnitude)
     return values.to(format_dict[cast_to_format])
+
+
+def prepare_inputs_for_operation(
+    src_A: torch.Tensor,
+    mathop: MathOperation,
+    input_format: DataFormat,
+    output_format: DataFormat = None,
+) -> torch.Tensor:
+    """
+    Prepare input tensor for specific operation with safe value ranges.
+
+    Args:
+        src_A: Source tensor A
+        mathop: Math operation to prepare inputs for
+        input_format: Input data format
+        output_format: Output data format, used for operations where safe ranges depend on the destination format
+    Returns:
+        Prepared tensor with safe values for the operation
+    """
+    torch_format = format_dict[input_format]
+
+    if mathop == MathOperation.Exp:
+        # Scale to range [-10, 10] for exp - avoids overflow while testing meaningful range
+        # exp(-10) ≈ 0.000045, exp(10) ≈ 22026
+        min_val = -10.0
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Gelu:
+        # Scale to range [-10, 10] for gelu - covers meaningful range without saturation
+        # Symmetric range ensures balanced coverage of negative, near-zero, and positive behaviour
+        min_val = -10.0
+        max_val = 10.0
+        src_A = torch.empty_like(src_A, dtype=torch.float32).uniform_(min_val, max_val)
+    elif mathop == MathOperation.Relu:
+        # Scale to range including negative and positive values for ReLU testing
+        finfo = torch.finfo(torch_format)
+        min_val = finfo.min / 2  # Use half range to avoid extremes
+        max_val = finfo.max / 2
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Sqrt:
+        # Scale to positive range using log-uniform distribution
+        # sqrt only accepts non-negative inputs
+        finfo = torch.finfo(torch_format)
+        min_val = max(1e-6, finfo.tiny * 100)
+        # Determine max value based on both input and output formats
+        # When output is Float16, limit input range so sqrt results fit well in Float16
+        # CRITICAL: The golden generator converts input to output format FIRST, then computes sqrt
+        # So we must ensure input values fit in output format when converted
+        if output_format:
+            output_torch_format = format_dict[output_format]
+            output_finfo = torch.finfo(output_torch_format)
+            # For Float16 output, we need to ensure:
+            # 1. Input fits in output format (doesn't overflow when converted)
+            # 2. sqrt(input) fits in output format
+            if output_torch_format in (torch.float16, torch.bfloat16):
+                # CRITICAL: The golden generator converts input -> Float16 FIRST, then computes sqrt
+                # So input must fit in Float16 when converted (this is the primary constraint!)
+                # For Float16_b input -> Float16 output, Float16_b can represent much larger values
+                # but they overflow Float16 when converted, causing sqrt(inf) = inf
+                max_input_for_format = (
+                    output_finfo.max
+                )  # Input must fit in Float16 (~65504)
+                # Also ensure sqrt(input) fits in Float16
+                max_safe_sqrt = output_finfo.max * 0.95  # Leave 5% headroom
+                max_input_for_sqrt = max_safe_sqrt**2  # Max input so sqrt fits (~3.9e9)
+                # Use the more restrictive limit - input format max is usually larger, so this
+                # will be limited by max_input_for_format (Float16.max)
+                max_val = min(finfo.max, max_input_for_format, max_input_for_sqrt)
+                # Additional safety: use 80% of Float16 max to avoid any edge cases
+                # This ensures sqrt results are well within Float16 range
+                max_val = min(max_val, output_finfo.max * 0.8)  # ~52400, sqrt ≈ 229
+            else:
+                max_val = finfo.max
+        else:
+            # No output format specified, use conservative limits for 16-bit input formats
+            if torch_format in (torch.float16, torch.bfloat16):
+                max_val = min(
+                    finfo.max, 1e4
+                )  # sqrt(1e4) = 100, safe for 16-bit formats
+            else:
+                max_val = finfo.max  # Float32 can handle larger values
+        # Transform uniform [0,1) to log-uniform [min_val, max_val]
+        log_min = torch.log(torch.tensor(min_val, dtype=torch.float32))
+        log_max = torch.log(torch.tensor(float(max_val), dtype=torch.float32))
+        src_A_float32 = torch.exp(
+            log_min + src_A.to(torch.float32) * (log_max - log_min)
+        )
+        # Clamp to ensure values don't exceed max_val (handles any floating point precision issues)
+        src_A_float32 = torch.clamp(src_A_float32, min_val, max_val)
+
+        # Final safety check: ensure values fit in output format when converted
+        # This is critical because the golden generator converts input -> output format first
+        if output_format and output_format in (
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ):
+            output_torch_format = format_dict[output_format]
+            output_finfo = torch.finfo(output_torch_format)
+            # Convert to output format to check for overflow
+            src_A_converted = src_A_float32.to(output_torch_format)
+            if torch.any(torch.isinf(src_A_converted)):
+                # If any values overflow, clamp more aggressively
+                # Use 80% of Float16 max to leave plenty of headroom
+                max_safe_input = output_finfo.max * 0.8
+                src_A_float32 = torch.clamp(src_A_float32, min_val, max_safe_input)
+
+        src_A = src_A_float32.to(torch_format)
+
+        # Additional check: after converting to input format, verify values still fit in output format
+        # This handles cases where input format (e.g., Float16_b) can represent larger values
+        # than output format (e.g., Float16)
+        if output_format and output_format in (
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ):
+            output_torch_format = format_dict[output_format]
+            output_finfo = torch.finfo(output_torch_format)
+            # Convert input format -> output format to check for overflow
+            src_A_converted = src_A.to(output_torch_format)
+            if torch.any(torch.isinf(src_A_converted)):
+                # If overflow occurs, clamp input values to output format max
+                max_safe_input = output_finfo.max * 0.75  # Very conservative
+                # Convert back to float32, clamp, then convert to input format
+                src_A_float32 = src_A.to(torch.float32)
+                src_A_float32 = torch.clamp(src_A_float32, min_val, max_safe_input)
+                src_A = src_A_float32.to(torch_format)
+    elif mathop == MathOperation.Reciprocal:
+        # Scale to range avoiding zero to prevent division by zero
+        # Reciprocal: 1/x, so we need to avoid x = 0
+        finfo = torch.finfo(torch_format)
+        # Use a range that avoids very small values near zero
+        min_val = max(1e-6, finfo.tiny * 100)
+        max_val = finfo.max / 2  # Avoid very large values that might cause underflow
+        # Use log-uniform distribution to test across orders of magnitude
+        log_min = torch.log(torch.tensor(min_val, dtype=torch.float32))
+        log_max = torch.log(torch.tensor(float(max_val), dtype=torch.float32))
+        src_A_float32 = torch.exp(
+            log_min + src_A.to(torch.float32) * (log_max - log_min)
+        )
+        # Ensure no values are too close to zero
+        src_A_float32 = torch.where(
+            torch.abs(src_A_float32) < min_val,
+            torch.sign(src_A_float32) * min_val,
+            src_A_float32,
+        )
+        src_A = src_A_float32.to(torch_format)
+    elif mathop == MathOperation.Tanh:
+        # Scale to range [-10, 10] for tanh - covers meaningful range without saturation
+        min_val = -10.0
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Sigmoid:
+        # Scale to range [-10, 10] for sigmoid - covers meaningful range without saturation
+        min_val = -10.0
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Silu:
+        # Scale to range [-10, 10] for SiLU - covers meaningful range without saturation
+        min_val = -10.0  # avoid overflow with negative exponential in SiLU
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    # else: keep src_A as-is for other operations
+
+    return src_A
 
 
 def convert_to_l1_view(

@@ -7,6 +7,8 @@ SFPU square on TRISC3 (isolated). MATH does datacopy when !unpack_to_dest.
 Same structure and parameter coverage as test_sfpu_square_quasar but SFPU runs on TRISC3.
 """
 
+import math
+
 import pytest
 import torch
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
@@ -20,6 +22,11 @@ from helpers.llk_params import (
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import (
+    apply_log_uniform_magnitudes,
+    compute_safe_input_magnitude_range,
+    format_elem_max,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -33,22 +40,12 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.utils import passed_test
-from test_sfpu_square_quasar import (
-    SFPU_SQUARE_FORMATS,
-    generate_sfpu_square_combinations,
-    prepare_square_inputs,
-)
+from test_sfpu_square_quasar import SFPU_SQUARE_COMBINATIONS, SQUARE_RANGE_SAFETY_FACTOR
 
 
 @pytest.mark.quasar
-@parametrize(
-    formats_dest_acc_sync_implied_math_dims=generate_sfpu_square_combinations(
-        SFPU_SQUARE_FORMATS
-    ),
-)
-def test_sfpu_square_trisc3_quasar(
-    formats_dest_acc_sync_implied_math_dims,
-):
+@parametrize(formats_dest_acc_sync_implied_math_dims=SFPU_SQUARE_COMBINATIONS)
+def test_sfpu_square_trisc3_quasar(formats_dest_acc_sync_implied_math_dims):
     """
     Test square operation on Quasar with SFPU on TRISC3.
 
@@ -67,8 +64,28 @@ def test_sfpu_square_trisc3_quasar(
         input_dimensions_B=input_dimensions,
     )
 
-    src_A = prepare_square_inputs(
-        src_A, src_B, formats.input_format, formats.output_format
+    input_elem_max = format_elem_max(formats.input_format)
+    input_magnitude_cap = (
+        input_elem_max
+        if formats.input_format.is_mx_format()
+        else math.sqrt(input_elem_max)
+    ) * SQUARE_RANGE_SAFETY_FACTOR
+    output_magnitude_cap = (
+        math.sqrt(format_elem_max(formats.output_format)) * SQUARE_RANGE_SAFETY_FACTOR
+    )
+
+    min_magnitude, max_magnitude = compute_safe_input_magnitude_range(
+        formats.input_format,
+        formats.output_format,
+        input_magnitude_cap=input_magnitude_cap,
+        output_magnitude_cap=output_magnitude_cap,
+    )
+    src_A = apply_log_uniform_magnitudes(
+        src_A,
+        min_magnitude=min_magnitude,
+        max_magnitude=max_magnitude,
+        cast_to_format=formats.input_format,
+        sign_source=src_B,
     )
 
     num_faces = 4
