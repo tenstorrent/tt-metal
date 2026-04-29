@@ -77,7 +77,6 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
-        sync_on_mla_and_ccl=sync_on_mla_and_ccl,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -120,6 +119,7 @@ def run_mla_inference(
             hidden_states=tt_hidden_states,
             rope_tensors=rope_tensors,
             kvpe_cache=tt_kvpe_cache,
+            sync_on_mla_and_ccl=sync_on_mla_and_ccl,
         )
         logger.info(f"Starting MLA forward synchronize call for iteration {i+1}")
         ttnn.synchronize_device(mesh_device)
