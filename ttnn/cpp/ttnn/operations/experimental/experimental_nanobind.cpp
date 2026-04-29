@@ -72,6 +72,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/bf16_to_fp8/bf16_to_fp8_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -158,6 +159,7 @@ void py_module(nb::module_& mod) {
 
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
+    deepseek_prefill::detail::bind_bf16_to_fp8(mod);
     deepseek_prefill::detail::bind_combine(mod);
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_extract(mod);
