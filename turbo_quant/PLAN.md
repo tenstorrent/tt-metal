@@ -98,16 +98,43 @@ parallelism cannot close it. Long-context (e.g. 32K+) might
 narrow the relative gap somewhat as SDPA grows, but Track B
 should hold its lead because BFP8 SDPA also stays fast there.
 
-### Current recommendation
+### ⚠️ Current recommendation — REVISED (2026-04-29 token-accuracy run)
 
-Track B (`--tq-rescaled-bfp4`) is the leading candidate for the
-production TQ path on the strength of the T3K numbers above.
+Token-accuracy on the 1024-token reference set (N150,
+`turbo_quant/eval_token_accuracy.py`):
 
-Track A's fused kernel + Tier 2A code stays in tree — the per-call
-SDPA wins from K=14 may still matter for workloads we haven't
-profiled yet (very long context, much larger batch, different
-head counts), so it's worth keeping the option live until the
-broader perf surface is mapped.
+| Mode                            | Top-1 | Top-5 | Δ vs BFP8 |
+|---------------------------------|------:|------:|----------:|
+| `--no-turbo-quant` (BFP8)       | 97.3% | 100.0% | —          |
+| `--tq-rescaled-bfp4` (Track B)  | **66.6%** | **82.2%** | **−30.7 / −17.8 pp** |
+
+**Track B has severe accuracy degradation at long context.**
+Per-position progress shows accuracy falling from ~84 % top-1
+at pos 710 down to ~67 % at pos 1010 — the BFP4 storage of
+rescaled centroid×norm values loses too much precision when
+many keys/values are read together at long cur_pos.
+
+So the earlier "Track B wins" recommendation — based on the
+short-context (cur_pos ≤ 72) "Paris" e2e tests — does not hold
+at long context. The synthetic per-call cosine on random K/V was
+≥ 0.9995, but attention compounds many such reads and the small
+errors accumulate.
+
+**Revised recommendation:** Track A (`--tq-full-dequant` +
+Tier 2A K=14) is the actual production candidate. It's slower
+end-to-end (29.1 ms/tok vs 13.9 baseline on T3K) but preserves
+quality (cos > 0.999 vs CPU reference). Track B stays in tree
+as the simpler short-context option but is **not safe for long
+context** without further work.
+
+Open work to revisit:
+- Run the same 1024-position accuracy test on Track A
+  (`--tq-full-dequant`) to confirm it preserves the BFP8 baseline
+  at long context as expected.
+- Investigate whether Track B's accuracy regression is in the
+  rescale step (centroid×norm → single BFP4 value) vs in BFP4's
+  reduced precision generally — could a sliding-window hybrid
+  (recent tokens BFP8, old tokens BFP4) recover quality?
 
 ### N150 per-call SDPA latency sweep (2026-04-29, K=1)
 

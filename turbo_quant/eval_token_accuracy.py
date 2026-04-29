@@ -142,9 +142,13 @@ def main():
 
     dtype = ttnn.bfloat8_b
     from pathlib import Path
-    import tempfile
 
-    wcache = model_args.weight_cache_path(dtype) if not use_tq else Path(tempfile.mkdtemp(prefix="tq_acc_"))
+    # Reuse the rotated weight cache that eval_e2e.py creates (suffix "_tq_rotated").
+    # If absent it'll be regenerated on first run; previously this used a tempdir
+    # which wastes disk and forces full re-tilization on every accuracy run.
+    wcache = model_args.weight_cache_path(dtype)
+    if use_tq:
+        wcache = Path(str(wcache) + "_tq_rotated")
 
     print("Loading TT model...")
     tt_model = Transformer(
@@ -163,20 +167,23 @@ def main():
     if use_tq:
         from turbo_quant.ttnn_integration import TTNNTurboQuantCache
 
+        # IMPORTANT: One shared TQ cache for all layers, not 32 separate caches.
+        # Per-layer caches caused decode to hang at scale (each layer compiles its
+        # own program and the program cache misses dominate).
         n_local_kv_heads = model_args.n_kv_heads // model_args.cluster_shape[1]
+        shared_tq = TTNNTurboQuantCache(
+            mesh_device,
+            num_layers=1,
+            num_kv_heads=n_local_kv_heads,
+            head_dim=model_args.head_dim,
+            max_seq_len=32,
+            bits=args.bits,
+            memory_efficient=False,
+            seed=args.seed,
+        )
+        shared_tq.rotation_absorbed = True
         for layer in tt_model.layers:
-            tq = TTNNTurboQuantCache(
-                mesh_device,
-                num_layers=1,
-                num_kv_heads=n_local_kv_heads,
-                head_dim=model_args.head_dim,
-                max_seq_len=32,
-                bits=args.bits,
-                memory_efficient=False,
-                seed=args.seed,
-            )
-            tq.rotation_absorbed = True
-            layer.attention.tq_cache = tq
+            layer.attention.tq_cache = shared_tq
 
     # ------------------------------------------------------------------ #
     # Teacher-forced decode: feed ref tokens one at a time, get top-5    #
@@ -279,10 +286,8 @@ def main():
 
     ttnn.release_trace(mesh_device, trace_id)
     if use_tq:
-        for layer in tt_model.layers:
-            tq = getattr(layer.attention, "tq_cache", None)
-            if tq is not None:
-                tq.deallocate()
+        # Single shared TQ cache — only deallocate once (all layers point to the same one).
+        shared_tq.deallocate()
     ttnn.close_mesh_device(mesh_device)
 
 
