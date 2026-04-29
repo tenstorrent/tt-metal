@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover — CPU-only / no Tenstorrent wheel
 
 def pytest_configure(config):
     # Before any HF remote-code import: satisfy ``check_imports`` for ``flash_attn`` while we use
-    # ``_attn_implementation="eager"`` (see ``reference/_flash_attn_shim.py``).
-    from models.demos.dots_ocr.reference._flash_attn_shim import install
+    # ``_attn_implementation="eager"`` (see ``reference/flash_attention_shim.py``).
+    from models.demos.dots_ocr.reference.flash_attention_shim import install
 
     install()

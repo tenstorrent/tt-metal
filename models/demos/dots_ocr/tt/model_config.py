@@ -204,7 +204,7 @@ class DotsModelArgs(ModelArgs):
         """
         from transformers import AutoConfig
 
-        from models.demos.dots_ocr.reference._flash_attn_shim import install as _install_flash_attn_shim
+        from models.demos.dots_ocr.reference.flash_attention_shim import install as _install_flash_attn_shim
 
         _install_flash_attn_shim()
 

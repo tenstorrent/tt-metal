@@ -7,7 +7,7 @@ HF reference loading for Dots OCR (CPU / no CUDA).
 **Remote Hub models:** Dots loads **remote** code from the Hub (``trust_remote_code=True``). Transformers still runs
 static ``check_imports`` on that file before ``from_pretrained(..., _attn_implementation="eager")``
 applies, so a bare ``import flash_attn`` in the checkpoint must resolve. We use
-``_flash_attn_shim.install()`` only for that import check; **runtime** attention is eager PyTorch
+``flash_attention_shim.install()`` only for that import check; **runtime** attention is eager PyTorch
 MHA via ``_attn_implementation="eager"``, not FlashAttention kernels and not CUDA-specific.
 After load, :func:`_install_eager_vision_attention` also swaps the **vision tower** to the
 remote code's eager ``VisionAttention`` (``vision_config`` defaults to flash otherwise).
@@ -50,10 +50,10 @@ def load_processor_and_model(spec: HFLoadSpec):
 
     Remote ``trust_remote_code`` modeling is still scanned with ``check_imports`` *before* those
     kwargs apply; if the repo lists ``import flash_attn``, we register a minimal compatibility
-    namespace (see ``_flash_attn_shim.install``) so imports succeed. That is **not** the real
+    namespace (see ``flash_attention_shim.install``) so imports succeed. That is **not** the real
     ``flash_attn`` package and does not enable FA2 at runtime.
     """
-    from models.demos.dots_ocr.reference._flash_attn_shim import install as _install_flash_attn_shim
+    from models.demos.dots_ocr.reference.flash_attention_shim import install as _install_flash_attn_shim
 
     _install_flash_attn_shim()
 
@@ -152,7 +152,7 @@ def load_processor_and_model(spec: HFLoadSpec):
             use_safetensors=True,
         )
     model.eval()
-    from models.demos.dots_ocr.reference._dots_hub_generation_patch import patch_dots_ocr_prepare_inputs_for_generation
+    from models.demos.dots_ocr.reference.dots_hub_generation import patch_dots_ocr_prepare_inputs_for_generation
 
     patch_dots_ocr_prepare_inputs_for_generation(model)
     _install_eager_vision_attention(model)
