@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
@@ -165,9 +166,10 @@ def test_host_io_loopback_with_embedding(
     logger.info(f"Testing embedding with vocab size {vocab_size} over H2D → D2H loopback")
 
     for token_id in range(vocab_size):
-        # Write 64-byte packet with token ID as first uint32, rest zeros
+        metadata = DeepseekMetadata(token_id=token_id)
+        metadata_list = metadata.to_list()
         torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-        torch_input[0, 0] = token_id
+        torch_input[0, : len(metadata_list)] = torch.tensor(metadata_list, dtype=token_dtype)
         input_tensor = ttnn.from_torch(
             torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -595,9 +597,10 @@ def test_multi_stage_pipeline_loopback_with_embedding(
     logger.info(f"Testing embedding with vocab size {vocab_size} over multi-stage pipeline")
 
     for token_id in range(vocab_size):
-        # Write 64-byte packet with token ID as first uint32, rest zeros
+        metadata = DeepseekMetadata(token_id=token_id)
+        metadata_list = metadata.to_list()
         torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-        torch_input[0, 0] = token_id
+        torch_input[0, : len(metadata_list)] = torch.tensor(metadata_list, dtype=token_dtype)
         input_tensor = ttnn.from_torch(
             torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
         )
