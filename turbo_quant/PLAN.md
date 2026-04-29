@@ -259,7 +259,72 @@ Correctness verified: 32-layer Llama-3.1-8B "Paris" answer
 unchanged. Implementation in commit (this branch). Smaller than
 the original tier estimate (5–10 %) but a clean, free win.
 
-### Sliding-window hybrid: ring infrastructure landed, hypothesis updated
+### Sliding-window hybrid: full LSE combine plumbed, validation pending (2026-04-29)
+
+The proper LSE-aware combine is now plumbed end-to-end. Smoke passes
+("Paris" at 99.3 ms/tok with W=64). 1024-position accuracy run blocked
+on a perf issue, not correctness — see "Open issues" below.
+
+**Implementation summary** (commits `9edefa7c385`, `e36f336d278`,
+`8227bc32354`):
+
+- **Step 1 — Fused TQ kernel LSE export.** New `return_lse` compile-time
+  flag; before final divide, compute `LSE = max·scale + log(sum)` and
+  pack to `cb_lse_out` (c_3, repurposed from Tier 2A's
+  `cb_merge_new_max`). Mutually exclusive with `num_cores_per_head > 1`.
+- **Step 2 — Plumbing.** Writer reads cb_lse_out and writes to a second
+  output tensor `[B, NQH, 1, 32]` BF16 (1 tile per head, broadcast
+  across the tile from the row-sum reduce). Device op now returns
+  `std::vector<Tensor>` of size 1 or 2. Python prim + nanobind +
+  `ttnn_integration.fused_sdpa_decode` accept `return_lse=True` and
+  return `(out, lse)` tuple.
+- **Step 3 — pre_rescaled trick.** Skipped modifying the standard SDPA
+  decode kernel by reusing the fused TQ kernel's existing pre_rescaled
+  mode for the BFP8 ring half (bypasses dequant cascade, runs
+  sdpa_standard with BFP8 K/V typecast inline). LSE export from step 1
+  already works there. Saved ~1 day of shared-kernel surgery.
+- **Step 4 — Host combine.** New `TTNNTurboQuantCache.hybrid_sdpa_decode`
+  runs both halves and combines via the standard online softmax LSE
+  formula on device:
+  ```
+  lse_max  = max(lse_old, lse_new)
+  w_X      = exp(lse_X − lse_max) / (exp(lse_old − lse_max) + exp(lse_new − lse_max))
+  out      = out_old · w_old + out_new · w_new
+  ```
+  LSE tensors are `[B,NQH,1,32]`; out is `[B,NQH,1,128]`. Used
+  `ttnn.repeat([1,1,1,4])` to expand LSE columns 32→128 for the multiply.
+- attention.py routes through `hybrid_sdpa_decode` when
+  `recent_window > 0`. eval_token_accuracy.py disables trace capture
+  when sliding-window mode is on (the dual-write path needs a host read
+  of cur_pos to compute `cur_pos % W`).
+
+**Verification:** `test_lse_export.py` PASS (out bit-identical with
+return_lse=False; LSE values 3.83-4.66 at cur_pos=42 — matches
+log(42)+max·scale ≈ 3.7-5). 32-layer "Paris" e2e at W=64 produces
+correct answer at 99.3 ms/tok.
+
+**Open issues for next session:**
+
+1. **1024-position accuracy blocked by host syncs.** Each `update_cache`
+   call reads cur_pos to host (to compute `cur_pos % W` for the ring
+   write — paged_update_cache requires page_table length ≤ cache size,
+   so the cyclic page_table trick doesn't work). With 32 layers × 1024
+   steps = ~33K host syncs per run, the test takes minutes per layer.
+   Killed after 4 min still in setup.
+
+   **Fix options:**
+   (a) Add a device-side modulo op (or `ttnn.subtract`/`ttnn.divide_int`
+       chain) to compute `cur_pos % W` on device.
+   (b) Have the model pass a separate `ring_pos` tensor pre-computed at
+       host before each step (alongside cur_pos) — same trace-friendly
+       pattern as cur_pos.
+   Option (b) is cheaper and trace-compatible; ~½ day to plumb.
+
+2. **W-sweep validation** (W ∈ {32, 64, 128, 256}) — runs once #1 lands.
+3. **Standard SDPA decode kernel LSE export** — no longer needed thanks
+   to the pre_rescaled trick. Drop from the design doc.
+
+
 
 `turbo_quant/SLIDING_WINDOW_DESIGN.md` has the full design.
 Implementation status (commit `3dcc01b1db9`):
