@@ -57,6 +57,7 @@ def mesh_device_fixture():
     yield (device, device_name)
     ttnn.close_mesh_device(device)
 
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -154,7 +155,9 @@ def run(
         start_time = start_measuring_time()
         output_tensor = ttnn.gt(input_tensor_a, input_tensor_b, **op_kwargs)
         mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
+        )
         e2e_perf = stop_measuring_time(start_time)
     else:
         scalar_value = scalar if scalar is not None else 0
@@ -163,7 +166,9 @@ def run(
         start_time = start_measuring_time()
         output_tensor = ttnn.gt(input_tensor_a, scalar_value, **op_kwargs)
         mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
+        )
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison

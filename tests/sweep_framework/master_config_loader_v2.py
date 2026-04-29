@@ -1219,7 +1219,9 @@ class MasterConfigLoader:
                     if "x" not in end or "y" not in end:
                         raise ValueError(f"Invalid grid end (missing x/y): {end}")
 
-                    core_range = ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+                    core_range = ttnn.CoreRange(
+                        ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])
+                    )
                     core_ranges.add(core_range)
 
                 shard_grid = ttnn.CoreRangeSet(core_ranges)

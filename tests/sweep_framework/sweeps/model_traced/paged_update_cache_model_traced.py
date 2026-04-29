@@ -263,9 +263,9 @@ def run(
         output_tensor = ttnn.experimental.paged_update_cache(
             input_tensor_a,  # cache_tensor (positional)
             input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=input_tensor_c
-            if input_tensor_c is not None
-            else None,  # update_idxs_tensor (optional keyword)
+            update_idxs_tensor=(
+                input_tensor_c if input_tensor_c is not None else None
+            ),  # update_idxs_tensor (optional keyword)
             page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
             **op_kwargs,
         )
@@ -274,9 +274,9 @@ def run(
         output_tensor = ttnn.experimental.paged_update_cache(
             input_tensor_a,  # cache_tensor (positional)
             input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=input_tensor_c
-            if input_tensor_c is not None
-            else None,  # update_idxs_tensor (optional keyword)
+            update_idxs_tensor=(
+                input_tensor_c if input_tensor_c is not None else None
+            ),  # update_idxs_tensor (optional keyword)
             page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
             **op_kwargs,
         )

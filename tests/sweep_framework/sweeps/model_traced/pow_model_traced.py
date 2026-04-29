@@ -58,6 +58,7 @@ def mesh_device_fixture():
     yield (device, device_name)
     ttnn.close_mesh_device(device)
 
+
 def run(
     input_a_shape,
     input_a_dtype,

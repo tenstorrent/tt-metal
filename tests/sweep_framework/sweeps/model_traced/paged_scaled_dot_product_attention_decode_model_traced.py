@@ -108,7 +108,9 @@ def _paged_sdpa_input_shard_axis_and_factor(placement_dict):
     return axis, factor
 
 
-def _paged_sdpa_decode_chip_attn(q_chip, k_cache_chip, v_cache_chip, page_table, cur_pos, num_users, page_size, sliding_window_size=None):
+def _paged_sdpa_decode_chip_attn(
+    q_chip, k_cache_chip, v_cache_chip, page_table, cur_pos, num_users, page_size, sliding_window_size=None
+):
     """Compute per-chip paged attention output: (B, H_q, num_users, D_chip).
     q_chip:       (B, H_q, num_users, D_chip)
     k_cache_chip: (num_pages, H_kv, page_size, D_chip)
@@ -161,7 +163,14 @@ def _paged_sdpa_decode_chip_attn(q_chip, k_cache_chip, v_cache_chip, page_table,
 
 
 def _paged_sdpa_decode_golden(
-    torch_q, torch_k_cache, torch_v_cache, page_table, cur_pos, num_users, padded_users, factor,
+    torch_q,
+    torch_k_cache,
+    torch_v_cache,
+    page_table,
+    cur_pos,
+    num_users,
+    padded_users,
+    factor,
     sliding_window_size=None,
 ):
     """Slice Q/K/V on dim -1 by `factor`, run per-chip paged attention, concat on -1.

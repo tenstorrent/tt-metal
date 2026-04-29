@@ -40,6 +40,7 @@ def mesh_device_fixture():
     yield (device, device_name)
     ttnn.close_mesh_device(device)
 
+
 def run(
     input_specs=None,
     compute_config=None,

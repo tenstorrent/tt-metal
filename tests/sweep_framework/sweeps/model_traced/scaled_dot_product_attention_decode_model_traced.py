@@ -269,15 +269,19 @@ def run(
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fidelity,
-            math_approx_mode=bool(compute_kernel_config_math_approx_mode)
-            if compute_kernel_config_math_approx_mode is not None
-            else False,
-            fp32_dest_acc_en=bool(compute_kernel_config_fp32_dest_acc_en)
-            if compute_kernel_config_fp32_dest_acc_en is not None
-            else False,
-            packer_l1_acc=bool(compute_kernel_config_packer_l1_acc)
-            if compute_kernel_config_packer_l1_acc is not None
-            else False,
+            math_approx_mode=(
+                bool(compute_kernel_config_math_approx_mode)
+                if compute_kernel_config_math_approx_mode is not None
+                else False
+            ),
+            fp32_dest_acc_en=(
+                bool(compute_kernel_config_fp32_dest_acc_en)
+                if compute_kernel_config_fp32_dest_acc_en is not None
+                else False
+            ),
+            packer_l1_acc=(
+                bool(compute_kernel_config_packer_l1_acc) if compute_kernel_config_packer_l1_acc is not None else False
+            ),
         )
 
     # Start with all parsed V2 kwargs, then override with explicitly built params
@@ -301,7 +305,7 @@ def run(
 
     # Run TTNN operation
     output_tensor = ttnn.transformer.scaled_dot_product_attention_decode(tt_Q, tt_K, tt_V, **op_kwargs)
-    mesh_composer = get_mesh_composer(device, kwargs.get('input_a_tensor_placement')) if is_mesh_device else None
+    mesh_composer = get_mesh_composer(device, kwargs.get("input_a_tensor_placement")) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
 
     # Slice output to match Q heads (following unit test pattern)

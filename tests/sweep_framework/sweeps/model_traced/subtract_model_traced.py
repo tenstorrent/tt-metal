@@ -57,6 +57,7 @@ def mesh_device_fixture():
     yield (device, device_name)
     ttnn.close_mesh_device(device)
 
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -125,7 +126,9 @@ def run(
         start_time = start_measuring_time()
         output_tensor = ttnn.subtract(input_tensor_a, scalar, **op_kwargs)
         mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
+        )
         e2e_perf = stop_measuring_time(start_time)
 
         return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

@@ -225,7 +225,7 @@ def run(
         op_kwargs["memory_config"] = mem_config
 
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, **op_kwargs)
-    mesh_composer = get_mesh_composer(device, kwargs.get('input_a_tensor_placement')) if is_mesh_device else None
+    mesh_composer = get_mesh_composer(device, kwargs.get("input_a_tensor_placement")) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 

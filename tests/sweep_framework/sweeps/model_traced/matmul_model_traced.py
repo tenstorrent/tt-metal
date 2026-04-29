@@ -220,8 +220,10 @@ def run(
     if a_pl_parsed and b_pl_parsed and mesh_dist and len(a_pl_parsed) == len(mesh_dist) == len(b_pl_parsed):
         a_ndim = torch_a_for_golden.ndim
         b_ndim = torch_b_for_golden.ndim
+
         def _nd(d, n):
             return d if d >= 0 else n + d
+
         a_K = a_ndim - 1
         b_K = b_ndim - 2
         b_N = b_ndim - 1
