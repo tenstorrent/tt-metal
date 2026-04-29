@@ -45,6 +45,7 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 permissions:
+  actions: read
   packages: write
   contents: write
 
