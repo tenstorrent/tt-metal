@@ -49,7 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [select(LB_MESH_CONFIGS, "linear-8-1link", "mesh-4x2", "mesh-2x4") + select(QB_MESH_CONFIGS, "linear-4-1link")],
+    select(LB_MESH_CONFIGS, "linear-8-1link", "mesh-4x2", "mesh-2x4") + select(QB_MESH_CONFIGS, "linear-4-1link"),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])

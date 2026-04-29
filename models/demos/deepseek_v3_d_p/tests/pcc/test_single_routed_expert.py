@@ -32,13 +32,15 @@ from tests.ttnn.utils_for_testing import comp_pcc
     ids=["ds-v3-1k", "ds-v3-1.6k", "ds-v3-2k", "ds-v3-3.2k", "ds-v3-4k"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, num_links, topology",
     SINGLE_DEVICE_CONFIG,
     indirect=["mesh_device", "device_params"],
 )
 def test_single_routed_expert(
     mesh_device,
     device_params,
+    num_links,
+    topology,
     num_tokens: int,
     emb_dim: int,
     hidden_dim: int,

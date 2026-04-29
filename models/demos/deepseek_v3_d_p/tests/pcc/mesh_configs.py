@@ -14,8 +14,10 @@ Platform-specific 4-value config groups (mesh_device, device_params, num_links, 
   TP_QB_MESH_CONFIGS – 4-chip TP-only topologies (no fabric_router_config)
   TP_LM_HEAD_MESH_CONFIGS – LM head specific topologies
 
+4-value single-device config (mesh_device, device_params, num_links, topology):
+  SINGLE_DEVICE_CONFIG   – single-chip
+
 2-value device config groups (mesh_device, device_params):
-  SINGLE_DEVICE_CONFIGS  – single-chip
   P300_DEVICE_CONFIGS    – 2-chip
   QB_DEVICE_CONFIGS      – 4-chip
   TP_QB_DEVICE_CONFIGS   – 4-chip TP-only
@@ -301,7 +303,16 @@ TP_LM_HEAD_MESH_CONFIGS = [
 # ==============================================================================
 
 SINGLE_DEVICE_CONFIG = [
-    _device_param(1, DISABLED, None, "single-chip", l1_small_size=L1_SMALL),
+    _mesh_param(
+        (1, 1),
+        DISABLED,
+        None,
+        1,
+        LINEAR,
+        "linear",
+        "single-chip",
+        l1_small_size=L1_SMALL,
+    ),
 ]
 
 P300_DEVICE_CONFIGS = [

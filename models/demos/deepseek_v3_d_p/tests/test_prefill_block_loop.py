@@ -75,7 +75,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 @pytest.mark.parametrize("isl_total", [1024])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [SINGLE_DEVICE_CONFIG + select(LB_MESH_CONFIGS, "mesh-2x4") + GLX_MESH_CONFIGS],
+    SINGLE_DEVICE_CONFIG + select(LB_MESH_CONFIGS, "mesh-2x4") + GLX_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)
