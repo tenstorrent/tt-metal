@@ -424,19 +424,8 @@ void kernel_main() {
         }
     }
 
-    // Clear stale RT profiler state on startup; host may enable RT profiler
-    // later by writing valid mailbox coordinates.
-    rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
-    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
-    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-    // FIFO + buffer IDs must be reset while core_noc_xy is still zero, before dispatch_d can
-    // append; deferring this would race with dispatch_d and drop the first/last program IDs.
-    rt_profiler_msg->program_id_fifo_start = 0;
-    rt_profiler_msg->program_id_fifo_end = 0;
-    rt_profiler_msg->kernel_start_a.id = 0;
-    rt_profiler_msg->kernel_end_a.id = 0;
-    rt_profiler_msg->kernel_start_b.id = 0;
-    rt_profiler_msg->kernel_end_b.id = 0;
+    // realtime_profiler_msg_t signalling + FIFO + kernel_* .id fields are zeroed on the host in
+    // DispatchSKernel::ConfigureCore() before CQ kernels launch.
 
     cmd_ptr = cb_base;
     bool done = false;
