@@ -1429,6 +1429,23 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                         lc0.x,
                         lc0.y,
                         eth_chan_0);
+                    // FIX PD (GAP-50): clear ERISC dispatch fw_launch_addr after Phase 2.5
+                    // force-reset. HW reset does NOT zero L1. If dispatch firmware was running,
+                    // fw_launch_addr retains its non-zero value → 500ms cascade on next open.
+                    // (140 occurrences/run observed in t3k_ttnn_tests, MMIO devices 0-3 chans
+                    //  6-9,14. FIX PC was in the wrong path; this quiesce path is the source.)
+                    try {
+                        const auto& hal_pd = env_impl.get_hal();
+                        const auto aeth_idx = hal_pd.get_programmable_core_type_index(
+                            HalProgrammableCoreType::ACTIVE_ETH);
+                        const uint32_t fw_launch_addr_pd =
+                            hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                        env_impl.get_cluster().write_core_immediate(
+                            this->id(), phys_core_0, std::vector<uint32_t>{0}, fw_launch_addr_pd);
+                    } catch (...) {
+                        // Best-effort: MMIO devices succeed via PCIe; non-MMIO dead relay may
+                        // throw — FIX PA in reset_cores() handles the one-time fallback.
+                    }
                     deasserted_lcs_inline.push_back(lc0);
                 } catch (const std::exception& e) {
                     log_warning(
@@ -1828,6 +1845,19 @@ void Device::launch_eth_cores_for_quiesce() {
                         lc0.x,
                         lc0.y,
                         eth_chan_0);
+                    // FIX PD (GAP-50): Mirror of the quiesce_and_restart_fabric_workers() FIX PD.
+                    // This path is taken when defer_eth_launch=true (launch_eth_cores_for_quiesce).
+                    try {
+                        const auto& hal_pd = env_impl.get_hal();
+                        const auto aeth_idx = hal_pd.get_programmable_core_type_index(
+                            HalProgrammableCoreType::ACTIVE_ETH);
+                        const uint32_t fw_launch_addr_pd =
+                            hal_pd.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                        env_impl.get_cluster().write_core_immediate(
+                            this->id(), phys_core_0, std::vector<uint32_t>{0}, fw_launch_addr_pd);
+                    } catch (...) {
+                        // Best-effort: MMIO succeeds via PCIe; non-MMIO dead relay may throw.
+                    }
                     deasserted_lcs.push_back(lc0);
                 } catch (const std::exception& e) {
                     log_warning(

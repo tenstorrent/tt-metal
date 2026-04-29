@@ -113,7 +113,8 @@ echo "=== PHASES ==="
 grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
-import sys, re
+import sys, re, signal
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 seen = set()
 for line in sys.stdin:
     line = line.rstrip()
@@ -134,7 +135,7 @@ for line in sys.stdin:
     if len(msg) > 140:
         msg = msg[:137] + '...'
     print(msg)
-" | head -50
+" | head -50 || true
 echo ""
 
 # ─── EDM STATUS VALUES ───
@@ -585,6 +586,73 @@ else:
 "
 echo ""
 
+# ─── DISPATCH CASCADE (FIX PA/PB/PC) ───
+echo "=== DISPATCH CASCADE (500ms fw_launch_addr stale — FIX PA/PB/PC) ==="
+python3 -c "
+import re, sys, collections
+with open('$CLEAN') as f:
+    lines = f.readlines()
+
+timeout_events = []
+force_reset_events = []
+fix_aq_events = []
+fix_pa_events = []
+per_device_cores = collections.defaultdict(set)
+
+for line in lines:
+    if re.search(r'Timeout \\(500 ms\\) waiting for physical cores', line):
+        msg = re.sub(r'^.*\\|\\s*(Metal|Test|Fabric|Always|critical)\\s*\\|\\s*', '', line).rstrip()
+        timeout_events.append(msg[:140])
+        dev_m = re.search(r'Device (\\d+):', msg)
+        cores_m = re.search(r'finish: ([0-9, -]+)', msg)
+        if dev_m and cores_m:
+            dev = dev_m.group(1)
+            cores = cores_m.group(1).strip()
+            per_device_cores[dev].add(cores)
+    elif re.search(r'Force-resetting stale ETH cores on device \\d+ to prevent', line):
+        msg = re.sub(r'^.*\\|\\s*(Metal|Test|Fabric|Always)\\s*\\|\\s*', '', line).rstrip()
+        force_reset_events.append(msg[:140])
+    elif re.search(r'FIX AQ.*Failed to init remote device', line):
+        fix_aq_events.append(line.rstrip())
+    elif re.search(r'FIX PA|erisc_app_still_running.*force.reset|fw_launch_addr.*cleared', line, re.I):
+        msg = re.sub(r'^.*\\|\\s*(Metal|Test|Fabric|Always)\\s*\\|\\s*', '', line).rstrip()
+        fix_pa_events.append(msg[:140])
+
+total_cascades = len(timeout_events)
+total_force_resets = len(force_reset_events)
+fix_aq_count = len(fix_aq_events)
+
+if total_cascades == 0:
+    print('  (no 500ms dispatch cascade detected — FIX PA/PB/PC appear effective)')
+else:
+    print(f'  [CASCADE DETECTED] {total_cascades} x 500ms timeout(s), {total_force_resets} force-reset(s)')
+    print(f'  FIX AQ overhead: {fix_aq_count} x 5s UMD timeout(s) = ~{fix_aq_count * 5}s total')
+    print(f'  Estimated cascade overhead: {total_cascades * 0.5 + fix_aq_count * 5:.0f}s ({(total_cascades * 0.5 + fix_aq_count * 5)/60:.1f} min)')
+    print()
+    print('  Affected devices and core coordinates:')
+    for dev in sorted(per_device_cores.keys(), key=int):
+        for core_set in per_device_cores[dev]:
+            print(f'    Device {dev}: {core_set}')
+    print()
+    if fix_pa_events:
+        print(f'  FIX PA mitigation active ({len(fix_pa_events)} event(s)):')
+        seen = set()
+        for msg in fix_pa_events:
+            key = re.sub(r'\\d+', 'N', msg)
+            if key not in seen:
+                seen.add(key)
+                print(f'    {msg}')
+    else:
+        print('  FIX PA mitigation: NOT detected in log')
+    print()
+    if total_cascades > 1:
+        print('  [ROOT CAUSE] fw_launch_addr not cleared after fabric teardown force-reset.')
+        print('  FIX PD (device.cpp quiesce Pass-0 deassert) should eliminate this — FIX PC was in the wrong path.')
+        print('  If FIX PC is present and cascade persists, check: write_core_immediate')
+        print('  failed silently for affected channel coordinates (catch(...) swallows it).')
+"
+echo ""
+
 # ─── ERRORS/WARNINGS ───
 echo "=== ERRORS/WARNINGS (filtered, deduplicated) ==="
 grep -iE '(warning|error|TT_THROW|TT_FATAL|Fatal|Abort)' "$CLEAN" | \
@@ -605,7 +673,7 @@ for line in sys.stdin:
     if key not in seen:
         seen.add(key)
         print(msg)
-" | head -25
+" | head -25 || true
 echo ""
 
 # ─── OPERATION TIMEOUT EVENTS ───
@@ -656,7 +724,7 @@ echo ""
 
 # ─── LAST 50 LINES ───
 echo "=== LAST 50 LINES (before cancel/cleanup) ==="
-CANCEL_LINE=$(grep -n 'operation was canceled' "$CLEAN" | head -1 | cut -d: -f1)
+CANCEL_LINE=$(grep -n 'operation was canceled' "$CLEAN" | head -1 | cut -d: -f1 || true)
 if [[ -n "$CANCEL_LINE" && "$CANCEL_LINE" -gt 0 ]]; then
     START=$((CANCEL_LINE - 50))
     [[ $START -lt 1 ]] && START=1
@@ -678,8 +746,8 @@ echo ""
 
 # ─── SUMMARY ───
 echo "=== SUMMARY ==="
-RUNNER=$(grep -m1 "Runner name:" "$CLEAN" | sed "s/^.*Runner name: //" | tr -d "'" | xargs)
-JOB=$(grep -m1 "Complete job name:" "$CLEAN" | sed "s/^.*Complete job name: //" | xargs)
+RUNNER=$(grep -m1 "Runner name:" "$CLEAN" | sed "s/^.*Runner name: //" | tr -d "'" | xargs || true)
+JOB=$(grep -m1 "Complete job name:" "$CLEAN" | sed "s/^.*Complete job name: //" | xargs || true)
 CANCEL_TS=$(grep -m1 'operation was canceled' "$CLEAN" | grep -oE '^[0-9-]*T[0-9:]*' || echo "unknown")
 
 LAST_METAL_TS=$(grep -E '(info|warning).*Metal' "$CLEAN" | tail -1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' | head -1 || echo "unknown")
@@ -689,7 +757,7 @@ P5B_FAILS=$(grep -c 'Phase 5b.*read failed' "$CLEAN" 2>/dev/null || true)
 P5B_FAILS=${P5B_FAILS:-0}
 P5B_SKIP=$(grep -c 'Phase 5b.*skipping' "$CLEAN" 2>/dev/null || true)
 P5B_SKIP=${P5B_SKIP:-0}
-PROBLEM_DEVS=$(grep -iE '(read failed|Timeout|0xDEAD5B5B|0xDEADECE7|deadbeef)' "$CLEAN" | grep -oE 'Device [0-9]+' | sort -u | tr '\n' ', ' | sed 's/,\s*$//')
+PROBLEM_DEVS=$(grep -iE '(read failed|Timeout|0xDEAD5B5B|0xDEADECE7|deadbeef)' "$CLEAN" | grep -oE 'Device [0-9]+' | sort -u | tr '\n' ', ' | sed 's/,\s*$//' || true)
 
 HANG_DUR="unknown"
 if [[ "$CANCEL_TS" != "unknown" && "$LAST_METAL_TS" != "unknown" ]]; then
@@ -701,6 +769,7 @@ if [[ "$CANCEL_TS" != "unknown" && "$LAST_METAL_TS" != "unknown" ]]; then
 fi
 
 # Detect which failure patterns are present, then emit a targeted diagnosis.
+HAS_DISPATCH_CASCADE=$(grep -c 'Timeout (500 ms) waiting for physical cores' "$CLEAN" 2>/dev/null || echo 0)
 HAS_RELAY_BROKEN=$(grep -c 'relay.*path.*broken\|fabric_relay_path_broken_' "$CLEAN" 2>/dev/null || echo 0)
 HAS_P4_TIMEOUT=$(grep -cE 'Phase 4.*TIMEOUT|Phase 4.*timeout|MUX.*timeout|Timeout.*MUX|Timeout.*MUX READY_FOR_TRAFFIC|MUX READY_FOR_TRAFFIC.*[Tt]imeout|Timeout waiting for fabric MUX' "$CLEAN" 2>/dev/null || echo 0)
 HAS_EXCEPTION=$(grep -cE 'TT_THROW|TT_FATAL|Fatal|Abort' "$CLEAN" 2>/dev/null || echo 0)
@@ -774,7 +843,13 @@ FIX_NU_COORD=$(grep -cE 'FIX NU: Captured EthCoord|Captured EthCoord.*MMIO.*befo
 FIX_NX_THROWS=$(grep -cE 'FIX NX: write_core.*threw|Marking relay broken \(FIX NX\+NY\)' "$CLEAN" 2>/dev/null || echo 0)
 FIX_NY_SKIPS=$(grep -cE 'FIX NY: write_core.*skipped.*relay already known broken' "$CLEAN" 2>/dev/null || echo 0)
 
-if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
+if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
+    DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
+events on ETH dispatch cores. Root cause: fw_launch_addr not cleared after fabric teardown
+force-reset. FIX PD (device.cpp quiesce Pass-0 deassert) should prevent this.
+If FIX PC is committed, cascade may persist for channels where write_core_immediate
+failed silently (catch(...) swallows it). Check DISPATCH CASCADE section above."
+elif [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
 fabric firmware on the MMIO device's relay ERISCs, subsequent non-MMIO reads via those
 relay channels either timed out (5s each) or hung indefinitely. Check RELAY PATH BROKEN
@@ -809,6 +884,9 @@ Last logged action: $LAST_METAL_MSG
 
 Diagnosis: $DIAGNOSIS
 SUMMARY_EOF
+if [ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]; then
+    echo "  => [DISPATCH CASCADE] ${HAS_DISPATCH_CASCADE} x 500ms fw_launch_addr stale timeout(s) — FIX PD needed in device.cpp quiesce_and_restart_fabric_workers Pass-0"
+fi
 if [ "${FIX_Z:-0}" -gt 0 ]; then
     echo "  => FIX Z triggered: relay path broken check in read_completion_queue_event — test was skipped or fast-failed"
 fi
