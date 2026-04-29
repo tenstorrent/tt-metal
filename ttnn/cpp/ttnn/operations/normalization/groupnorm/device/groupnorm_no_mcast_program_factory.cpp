@@ -954,12 +954,15 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
     }
 
-    uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-    tt::tt_metal::CircularBufferConfig ex_cb_external_config =
-        tt::tt_metal::CircularBufferConfig(
-            2 * single_tile_size * num_cores_per_mcast_group, {{ex_cb_external_index, cb_data_format}})
-            .set_page_size(ex_cb_external_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    // Welford does not use cb_ex_external.
+    if (!use_welford) {
+        uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        tt::tt_metal::CircularBufferConfig ex_cb_external_config =
+            tt::tt_metal::CircularBufferConfig(
+                2 * single_tile_size * num_cores_per_mcast_group, {{ex_cb_external_index, cb_data_format}})
+                .set_page_size(ex_cb_external_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    }
 
     uint32_t ex_cb_index = tt::CBIndex::c_9;
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;

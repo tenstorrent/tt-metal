@@ -735,29 +735,25 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     //       ceil(num_out_blocks_padded * num_mcast_cores * cb_ex_external_slot_pitch_bytes / tile_size)
     // so the CB must be at least that large.  Mirror the kernel's
     // num_out_blocks_padded calculation to get the exact count.
-    uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-    uint32_t num_out_blocks_padded = num_out_blocks;
+    // Note that Welford does not use cb_ex_external.
     if (!use_welford) {
-        // Legacy mcast sender/compute path: mirror kernel's num_out_blocks_padded calculation.
+        uint32_t num_out_blocks_padded = num_out_blocks;
         uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
         if (block_ht_group_1 % num_out_blocks != 0) {
             uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
             num_out_blocks_padded += (residual / out_block_h_normal + 1);
         }
+        uint32_t cb_ex_external_tiles =
+            (num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes + single_tile_size -
+             1) /
+            single_tile_size;
+        uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        tt::tt_metal::CircularBufferConfig ex_cb_external_config =
+            tt::tt_metal::CircularBufferConfig(
+                cb_ex_external_tiles * single_tile_size, {{ex_cb_external_index, cb_data_format}})
+                .set_page_size(ex_cb_external_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
-    uint32_t cb_ex_external_tiles = 1;
-    if (!use_welford) {
-        // Only the legacy kernels reference CBIndex::c_10; in Welford mode use a minimal size
-        // to preserve L1 headroom while keeping the CB index valid.
-        cb_ex_external_tiles = (num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes +
-                                single_tile_size - 1) /
-                               single_tile_size;
-    }
-    tt::tt_metal::CircularBufferConfig ex_cb_external_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_ex_external_tiles * single_tile_size, {{ex_cb_external_index, cb_data_format}})
-            .set_page_size(ex_cb_external_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
 
     uint32_t ex_cb_index = tt::CBIndex::c_9;
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;
