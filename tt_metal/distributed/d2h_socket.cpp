@@ -138,9 +138,16 @@ void D2HSocket::write_socket_metadata(
     config_data[host_addr_offset + 1] = data_info.addr_hi;
     config_data[host_addr_offset + 2] = data_info.pcie_xy_enc;
 
-    IDevice* device = mesh_device->get_device(sender_core_.device_coord);
-    tt::tt_metal::detail::WriteToDeviceL1(
-        device, sender_core_.core_coord, config_buffer_address_, config_data, CoreType::WORKER);
+    // External-config ctor skips MeshBuffer allocation; use direct L1 write. Standard
+    // ctor owns config_buffer_; use fast-dispatch WriteShard like pre-RT-profiler path.
+    if (config_buffer_) {
+        distributed::WriteShard(
+            mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
+    } else {
+        IDevice* device = mesh_device->get_device(sender_core_.device_coord);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            device, sender_core_.core_coord, config_buffer_address_, config_data, CoreType::WORKER);
+    }
 }
 
 void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id) {
@@ -166,10 +173,16 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     auto arch = MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+        // This process owns a mesh_device and hence has statically initialized TLBs.
+        // Entire device address space for Blackhole is statically mapped.
+        // Safe to use static TLBs without requiring the driver to do a reconfig.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr, data, num_bytes);
         };
     } else {
+        // Mesh Device not owned - use dynamic TLBs through UMD.
+        // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
+        // since the device address space is not statically mapped.
         pcie_writer_ = [sender_device_id, sender_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr);
