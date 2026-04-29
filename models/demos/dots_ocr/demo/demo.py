@@ -648,6 +648,10 @@ def run_ttnn_backend(
                 if visual is None:
                     raise RuntimeError("vision_backend=ttnn requested but TT vision stack was not constructed")
                 image_embeds = visual(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
+            # Vision stack may return either torch.Tensor or ttnn.Tensor depending on backend/module wrappers.
+            # Normalize to torch here because downstream host fusion path requires torch semantics.
+            if isinstance(image_embeds, ttnn.Tensor):
+                image_embeds = ttnn.to_torch(image_embeds)
             image_embeds = image_embeds.to(torch.bfloat16)
 
         pad_token_id = ref.tokenizer.pad_token_id or 0

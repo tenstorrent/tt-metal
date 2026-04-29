@@ -263,7 +263,36 @@ class DropInVisionTransformer(torch.nn.Module):
         Returns:
             [N_image_tokens, out_hidden_size] torch tensor suitable for ``merge_vision_tokens``.
         """
-        out = self.tt_model.forward(pixel_values, grid_thw)
+        ttnn = get_ttnn()
+        if ttnn is None:
+            raise RuntimeError("DropInVisionTransformer requires ttnn")
+        if grid_thw is None:
+            raise ValueError("DropInVisionTransformer.forward requires grid_thw for TT vision path")
+
+        mesh = self.model_args.mesh_device
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh)
+        pixel_tt = ttnn.from_torch(
+            pixel_values,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        grid_tt = ttnn.from_torch(
+            grid_thw.to(torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        out = self.tt_model.forward(pixel_tt, grid_tt)
+        # Release TTNN input staging tensors after vision forward returns.
+        ttnn.deallocate(pixel_tt)
+        ttnn.deallocate(grid_tt)
+        if isinstance(out, ttnn.Tensor):
+            out = ttnn.to_torch(out)
         # Normalize shape to [N_image_tokens, D]
         if isinstance(out, torch.Tensor):
             if out.dim() == 4:  # [B, 1, S, D]

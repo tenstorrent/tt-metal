@@ -1101,6 +1101,28 @@ class DotsVisionTransformerTT(LightweightModule):
         hs = hs.reshape(n, self.cfg.num_channels * self.cfg.patch_size * self.cfg.patch_size)
         return hs, n
 
+    def _pixels_flat_ttnn(self, pixel_values: ttnn.Tensor) -> tuple[ttnn.Tensor, int]:
+        c = int(self.cfg.num_channels)
+        t = int(self.cfg.temporal_patch_size)
+        p = int(self.cfg.patch_size)
+
+        shape = [int(s) for s in pixel_values.shape]
+        elems_per_patch = c * t * p * p
+        total = 1
+        for s in shape:
+            total *= s
+        if total % elems_per_patch != 0:
+            raise ValueError(f"pixel_values has incompatible shape {shape} for C={c}, T={t}, P={p}")
+
+        n = total // elems_per_patch
+        x5 = ttnn.reshape(pixel_values, (n, c, t, p, p))
+        x5_t0 = ttnn.slice(x5, (0, 0, 0, 0, 0), (n, c, 1, p, p), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Do not deallocate ``x5`` before consuming ``x5_t0``: slice output may alias parent storage.
+        hs = ttnn.reshape(x5_t0, (n, c * p * p))
+        ttnn.deallocate(x5_t0)
+        ttnn.deallocate(x5)
+        return hs, n
+
     def _patch_pixels_to_ttnn(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         hs, _n = self._pixels_flat_torch(pixel_values)
         pixel_tt = ttnn.from_torch(
@@ -1223,18 +1245,41 @@ class DotsVisionTransformerTT(LightweightModule):
         return ttnn.reshape(rotary, (1, 1, token_count, d))
 
     def forward(
-        self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, return_host_torch: bool = True
-    ) -> Union[torch.Tensor, ttnn.Tensor]:
-        if grid_thw.dim() == 1:
-            grid_thw = grid_thw.unsqueeze(0)
-        t = int(grid_thw.shape[0])
-        hidden_tt = self._patch_pixels_to_ttnn(pixel_values)
+        self,
+        pixel_values: ttnn.Tensor,
+        grid_thw: ttnn.Tensor,
+        return_host_torch: bool = True,
+    ) -> ttnn.Tensor:
+        if not isinstance(pixel_values, ttnn.Tensor):
+            raise TypeError(
+                f"DotsVisionTransformerTT.forward expects pixel_values as ttnn.Tensor, got {type(pixel_values)}"
+            )
+        if not isinstance(grid_thw, ttnn.Tensor):
+            raise TypeError(f"DotsVisionTransformerTT.forward expects grid_thw as ttnn.Tensor, got {type(grid_thw)}")
+
+        hs_tt, n = self._pixels_flat_ttnn(pixel_values)
+        pixel_tt = ttnn.reshape(
+            hs_tt,
+            (1, 1, n, self.cfg.num_channels * self.cfg.patch_size * self.cfg.patch_size),
+        )
+        ttnn.deallocate(hs_tt)
+        if pixel_tt.dtype != ttnn.bfloat16:
+            pixel_tt = ttnn.typecast(pixel_tt, ttnn.bfloat16)
+        pixel_tt = ttnn.to_layout(pixel_tt, ttnn.TILE_LAYOUT)
+        pixel_tt = ttnn.to_memory_config(pixel_tt, ttnn.DRAM_MEMORY_CONFIG)
+
+        grid_thw_torch = ttnn.to_torch(grid_thw)
+
+        if grid_thw_torch.dim() == 1:
+            grid_thw_torch = grid_thw_torch.unsqueeze(0)
+        t = int(grid_thw_torch.shape[0])
+        hidden_tt = self.patch_embed(pixel_tt, grid_thw=None)
         seqlen = int(hidden_tt.shape[2])
         s_pad = _w128(seqlen)
         hidden_tt = _pad_seq_dim_ttnn(hidden_tt, seqlen, s_pad)
-        grid_thw_list = [tuple(int(v) for v in row) for row in grid_thw.tolist()]
+        grid_thw_list = [tuple(int(v) for v in row) for row in grid_thw_torch.tolist()]
         rotary_tt = self._rot_pos_ttnn(grid_thw_list)
-        cu_tt = self._cu_seqlens_ttnn_from_grid(grid_thw)
+        cu_tt = self._cu_seqlens_ttnn_from_grid(grid_thw_torch)
         x = hidden_tt
         for blk in self.blocks:
             x = blk(x, rotary_tt, cu_tt, seqlen)
@@ -1255,5 +1300,14 @@ class DotsVisionTransformerTT(LightweightModule):
             o = o_full[:, :s_merge, : self.cfg.hidden_size]
         else:
             raise RuntimeError(f"Unexpected merged tensor rank {o_full.dim()} with shape {tuple(o_full.shape)}")
+        out_host = o.squeeze(0) if t == 1 else o.reshape(-1, self.cfg.hidden_size)
         ttnn.deallocate(x)
-        return o.squeeze(0) if t == 1 else o.reshape(-1, self.cfg.hidden_size)
+        out_tt = ttnn.from_torch(
+            out_host.contiguous().bfloat16(),
+            dtype=ttnn.bfloat16,
+            device=self.mesh,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        return ttnn.to_memory_config(out_tt, ttnn.DRAM_MEMORY_CONFIG)
