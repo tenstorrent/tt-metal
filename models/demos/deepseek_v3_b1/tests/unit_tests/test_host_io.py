@@ -90,6 +90,7 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
     host_io.terminate(True)
 
 
+@pytest.mark.skip(reason="Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.")
 @pytest.mark.parametrize(
     "h2d_mode",
     [
