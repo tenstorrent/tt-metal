@@ -46,8 +46,8 @@ using MoeGroupResult = std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn
 
 MoeGroupResult moe_group(
     const ttnn::Tensor& dispatched,        // [D, B, S, H]  ROW_MAJOR bf16
-    const ttnn::Tensor& metadata,          // [D, B, S, K]  ROW_MAJOR int32
-    const ttnn::Tensor& local_expert_ids,  // [E_local]      ROW_MAJOR uint32
+    const ttnn::Tensor& metadata,          // [D, B, S, K]  ROW_MAJOR uint16
+    const ttnn::Tensor& local_expert_ids,  // [E_local]     ROW_MAJOR uint16
     uint32_t e_local,
     uint32_t k);
 

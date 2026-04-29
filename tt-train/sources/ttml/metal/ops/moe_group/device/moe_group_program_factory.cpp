@@ -4,9 +4,8 @@
 
 #include "moe_group_program_factory.hpp"
 
+#include <algorithm>
 #include <cstdint>
-#include <map>
-#include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -43,9 +42,12 @@ uint32_t pick_num_chunks(uint32_t h) {
     uint32_t nc = (strip_bytes + kTargetChunkBytes - 1U) / kTargetChunkBytes;
     if (nc == 0U)
         nc = 1U;
-    uint32_t Wt = h / tt::constants::TILE_WIDTH;
-    if (nc > Wt)
+    // ceil(h / TILE_WIDTH) — last tile may be partial when h isn't tile-aligned.
+    uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
+    if (Wt > 0U && nc > Wt)
         nc = Wt;
+    if (nc == 0U)
+        nc = 1U;
     return nc;
 }
 
@@ -70,11 +72,17 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     const uint32_t t_cap = attrs.t_cap;
 
     const uint32_t num_chunks = pick_num_chunks(h);
-    const uint32_t Wt = h / tt::constants::TILE_WIDTH;
-    const uint32_t tiles_per_chunk = (Wt + num_chunks - 1U) / num_chunks;
+    // ceil(h / TILE_WIDTH); the last tile is padded with zeros if h % 32 != 0.
+    const uint32_t Wt = tt::round_up(h, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
+    const uint32_t tiles_per_chunk = tt::round_up(Wt, num_chunks) / num_chunks;
     const uint32_t hidden_chunk_bytes = tiles_per_chunk * tt::constants::TILE_WIDTH * 2U;
     const uint32_t last_chunk_tiles = Wt - (num_chunks - 1U) * tiles_per_chunk;
-    const uint32_t last_chunk_bytes = last_chunk_tiles * tt::constants::TILE_WIDTH * 2U;
+    // Valid bytes in the last chunk reflect the actual H, not the tile-rounded
+    // width: dispatched is row-major bf16 with stride h*2, so reading more than
+    // (h - prior_chunks_width) * 2 bytes would cross into the next row. The
+    // reader pads the unused L1 tail to hidden_chunk_bytes with zeros.
+    const uint32_t prior_chunks_bytes = (num_chunks - 1U) * hidden_chunk_bytes;
+    const uint32_t last_chunk_bytes = h * 2U - prior_chunks_bytes;
 
     // -------------------------------------------------------------------------
     // Core assignment: ALL cores run the combined scan+reader kernel.
@@ -153,8 +161,15 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         slice_block_rows = 1U;
 
     // Named sizes for the cb_scan layout.
-    constexpr uint32_t kStageBytes = 128U;    // scan stage scratch (lead-only)
-    constexpr uint32_t kLeidsBufBytes = 32U;  // leids_buf — one cache line, holds up to 16 leids
+    // Stage scratch must hold the offsets DMA write of size off_page_bytes
+    // = round_up((e_local+1)*4, kL1_ALIGN). Pin a 128 B floor so leids_buf
+    // stays at a stable offset for small e_local.
+    uint32_t off_page_bytes_host = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
+    uint32_t kStageBytes = std::max<uint32_t>(off_page_bytes_host, 128U);
+    // leids_buf must match the TensorAccessor's aligned page for the leids
+    // tensor (L1-aligned uint16 bytes). 32B floor for small e_local.
+    uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), kL1_ALIGN);
+    uint32_t kLeidsBufBytes = std::max<uint32_t>(leids_aligned_page_host, 32U);
     constexpr uint32_t kPlanChunk = 32U;      // plan pre-fill burst size (entries per chunk)
     constexpr uint32_t kMdAlignedPage = 32U;  // metadata aligned page size (one cache line)
     constexpr uint32_t kOverheadSlack = 64U;  // safety pad between sections (covers alignment carry-over)

@@ -133,15 +133,27 @@ void kernel_main() {
     const auto leids_addrgen = TensorAccessor(leids_args, leids_addr);
 
     // ---- L1 scratch layout in cb_scan ----
-    // [stage(32B)] [leids_buf(32B)] [counts(e_local)] [offsets(e_local+1)] [cursors(e_local)]
+    // [stage(STAGE_U32 uint32s)] [leids_buf(32B)] [counts(e_local)] [offsets(e_local+1)] [cursors(e_local)]
     // [shared_local_counts_table(num_total_cores * e_local)] [shared_per_core_start_table(...)]
     // [md_block (32B aligned)] [plan_stage(e_local * PLAN_CHUNK)] [fill(e_local)]
+    //
+    // stage must hold the largest DMA we issue from it: the offsets write of
+    // off_page_bytes, which the TensorAccessor sized to round_up((e_local+1)*4, L1).
+    // Pin a 32-uint32 (128B) minimum so leids_buf stays at a stable offset for
+    // small e_local; for larger e_local, scale the staging area to off_page_bytes
+    // so writes never spill into leids_buf.
+    constexpr uint32_t STAGE_U32 =
+        (off_page_bytes / sizeof(uint32_t) >= 32U) ? (off_page_bytes / sizeof(uint32_t)) : 32U;
+    // leids_buf holds e_local uint16s. The reader DMAs leids_aligned_page bytes
+    // into it (TensorAccessor's L1-aligned page size for the leids tensor), so
+    // sizing must match. Pin an 8-uint32 (32B) floor for layout-stability with
+    // small e_local; scale up for e_local > 16.
+    constexpr uint32_t LEIDS_BUF_U32 =
+        (leids_aligned_page / sizeof(uint32_t) >= 8U) ? (leids_aligned_page / sizeof(uint32_t)) : 8U;
     uint32_t scratch = get_write_ptr(cb_scan);
-    // stage must be large enough to hold (e_local+1) uint32s for counts/offsets writes.
-    // Use 32 uint32s = 128 bytes to support e_local up to 31.
     volatile tt_l1_ptr uint32_t* stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-    volatile tt_l1_ptr uint32_t* leids_buf = stage + 32U;  // +128 B
-    volatile tt_l1_ptr uint32_t* counts = leids_buf + 8U;
+    volatile tt_l1_ptr uint32_t* leids_buf = stage + STAGE_U32;
+    volatile tt_l1_ptr uint32_t* counts = leids_buf + LEIDS_BUF_U32;
     volatile tt_l1_ptr uint32_t* offsets = counts + e_local;
     volatile tt_l1_ptr uint32_t* cursors = offsets + (e_local + 1U);
     // Shared tables — identical CB allocation on every core, so local address

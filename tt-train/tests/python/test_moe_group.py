@@ -26,6 +26,7 @@ This file defines:
 from __future__ import annotations
 
 import math
+import os
 from typing import Tuple
 
 import numpy as np
@@ -36,14 +37,37 @@ import torch
 SENTINEL = np.uint32(0xFFFFFFFF)
 
 
+def _hal_l1_alignment_bytes() -> int:
+    """L1 NOC alignment in bytes from the running runtime (16 on WH, may
+    differ on BH/future archs). Falls back to 16 if ttnn isn't importable."""
+    try:
+        import ttnn
+
+        return int(ttnn._ttnn.bfp_utils.get_l1_alignment())
+    except Exception:
+        return 16
+
+
+def _l1_align_u32() -> int:
+    """L1 alignment expressed in uint32 entries (used for round_up_align)."""
+    return _hal_l1_alignment_bytes() // 4
+
+
 def moe_group_t_cap(e_local: int, k: int, d: int, b: int, s: int, num_total_cores: int = 64) -> int:
-    # Mirrors moe_group_device_operation.cpp: per-core padding adds up to 3
-    # SENTINEL slots per (core, expert), plus the original 32-row tail per expert.
-    return min(e_local, k) * d * b * s + e_local * (32 + 3 * num_total_cores)
+    # Mirrors moe_group_device_operation.cpp: per-core padding adds up to
+    # (l1_align_u32 - 1) SENTINEL slots per (core, expert), plus the
+    # 32-row tile-alignment tail per expert.
+    align_u32 = _l1_align_u32()
+    return min(e_local, k) * d * b * s + e_local * (32 + (align_u32 - 1) * num_total_cores)
 
 
 def _round_up_32(x: int) -> int:
     return ((x + 31) // 32) * 32
+
+
+def _round_up_align(x: int, align_u32: int) -> int:
+    """Round x up to a multiple of align_u32. align_u32 is L1 alignment / 4."""
+    return ((x + align_u32 - 1) // align_u32) * align_u32
 
 
 def moe_group_torch_reference(
@@ -95,14 +119,14 @@ def moe_group_torch_reference(
     counts = hits.sum(axis=1).astype(np.uint32)
 
     # Parallel scan layout: split rows into num_total_cores slices. Per expert e,
-    # core c writes its round_up_4(local_counts[c][e]) entries starting at
-    # per_core_start[c][e]. The round_up_4 padding (0..3 SENTINELs per core per
-    # expert) keeps each core's cursor 16B-aligned (required for DRAM writes).
+    # core c writes its round_up_align(local_counts[c][e]) entries starting at
+    # per_core_start[c][e]. The per-core padding (0..align-1 SENTINELs per core
+    # per expert) keeps each core's cursor L1-aligned (required for DRAM writes).
+    # `align_u32` matches the device runtime's `hal::get_l1_alignment() / 4`,
+    # so the reference stays valid across architectures (4 on WH/BH).
     # offsets[e+1] is rounded up to 32 for tile alignment in grouped.
     slice_size = (total_rows + num_total_cores - 1) // num_total_cores
-
-    def _round_up_4(x):
-        return (x + 3) & ~3
+    align_u32 = _l1_align_u32()
 
     # Per-core local counts per expert: [num_total_cores, E_local]
     local_counts = np.zeros((num_total_cores, E_local), dtype=np.uint32)
@@ -119,7 +143,7 @@ def moe_group_torch_reference(
     for e_idx in range(E_local):
         running = int(offsets[e_idx])
         for c in range(num_total_cores):
-            running += int(_round_up_4(int(local_counts[c, e_idx])))
+            running += int(_round_up_align(int(local_counts[c, e_idx]), align_u32))
         offsets[e_idx + 1] = _round_up_32(running)
     T_used = int(offsets[-1])
     assert T_used <= T_cap, f"T_used {T_used} exceeds T_cap {T_cap}; " f"E_local={E_local} K={k} D={D} B={B} S={S}"
@@ -138,7 +162,7 @@ def moe_group_torch_reference(
             n = len(core_hits)
             if n > 0:
                 plan[running : running + n] = core_hits
-            running += int(_round_up_4(n))
+            running += int(_round_up_align(n, align_u32))
 
     # Materialize grouped [1, 1, T_cap, H] using plan.
     grouped = torch.zeros(1, 1, T_cap, H, dtype=dispatched.dtype)
@@ -202,21 +226,29 @@ class TestMoeGroupReference:
         assert offsets.shape == (E_local + 1,)
         assert plan.shape == (T_cap,)
 
-        # offsets must be row-granular prefix-sum of round_up(counts, 32)
-        for e in range(E_local):
-            expected = int(offsets[e]) + _round_up_32(int(counts[e]))
-            assert int(offsets[e + 1]) == expected, f"offsets mismatch at e={e}"
-
-        # Each filled row of grouped must match a source row in dispatched.
-        flat = dispatched.reshape(D * B * S, H)
+        # Per-expert range must accommodate at least counts[e] real entries plus
+        # per-core round_up_4 padding, and end on a tile (32-row) boundary.
+        sentinel = int(SENTINEL.item())
         for e in range(E_local):
             start = int(offsets[e])
-            n = int(counts[e])
-            for i in range(n):
-                row_i = grouped[0, 0, start + i]
-                src = int(plan[start + i])
-                assert src != SENTINEL.item()
-                assert torch.equal(row_i, flat[src])
+            end = int(offsets[e + 1])
+            assert end - start >= int(counts[e]), f"offsets too tight at e={e}"
+            assert end % 32 == 0, f"offsets[e+1]={end} not tile-aligned at e={e}"
+            real_in_range = sum(1 for i in range(start, end) if int(plan[i]) != sentinel)
+            assert real_in_range == int(
+                counts[e]
+            ), f"expert {e}: counts[e]={int(counts[e])} but {real_in_range} real plan entries in [{start},{end})"
+
+        # Each real plan entry must point at a valid dispatched row, and the
+        # corresponding grouped row must match. Real entries can be interleaved
+        # with SENTINEL pads across [offsets[e], offsets[e+1]).
+        flat = dispatched.reshape(D * B * S, H)
+        for e in range(E_local):
+            for i in range(int(offsets[e]), int(offsets[e + 1])):
+                src = int(plan[i])
+                if src == sentinel:
+                    continue
+                assert torch.equal(grouped[0, 0, i], flat[src])
 
     def test_pad_rows_are_zero_and_sentinel(self):
         D, B, S, H = 2, 1, 32, 16
@@ -228,16 +260,24 @@ class TestMoeGroupReference:
         grouped, counts, offsets, plan = moe_group_torch_reference(dispatched, metadata, local_expert_ids, k=K)
 
         E_local = local_expert_ids.numel()
-        # Per-expert pad slots + trailing T_cap slots must be SENTINEL.
+        sentinel = int(SENTINEL.item())
+        # Within each expert's range [offsets[e], offsets[e+1]), real entries
+        # are interleaved with SENTINEL pads (round_up_4 per-core padding).
+        # The number of pad slots must equal range_size - counts[e], and every
+        # SENTINEL row in grouped must be exactly zero.
         for e in range(E_local):
-            start = int(offsets[e]) + int(counts[e])
+            start = int(offsets[e])
             end = int(offsets[e + 1])
+            pad_slots = sum(1 for i in range(start, end) if int(plan[i]) == sentinel)
+            assert pad_slots == (end - start) - int(
+                counts[e]
+            ), f"expert {e}: pad-slot count {pad_slots} != range_size - counts[e]"
             for i in range(start, end):
-                assert int(plan[i]) == SENTINEL.item(), f"pad slot {i} not SENTINEL"
-                assert torch.all(grouped[0, 0, i] == 0), f"pad row {i} not zero"
+                if int(plan[i]) == sentinel:
+                    assert torch.all(grouped[0, 0, i] == 0), f"pad row {i} not zero"
         # Tail past offsets[E_local]
         for i in range(int(offsets[-1]), plan.numel()):
-            assert int(plan[i]) == SENTINEL.item()
+            assert int(plan[i]) == sentinel
 
     def test_expert_with_zero_active(self):
         # Construct metadata where one local expert gets no tokens.
@@ -530,6 +570,34 @@ class TestMoeGroupDevice:
         metadata = TestMoeGroupReference._make_metadata(D, B, S, K, E, seed=11)
         self._check_correctness(dispatched, metadata, local_expert_ids, K, "h128")
 
+    @pytest.mark.parametrize("E_local", [32, 64, 128, 300])
+    def test_large_e_local(self, E_local):
+        """Exercises dynamic sizing of `stage` and `leids_buf` in cb_scan.
+        Pre-fix the kernel hardcoded stage to 32 uint32s and leids_buf to
+        32 bytes; for E_local >= 32 (stage) and > 16 (leids) these overflow
+        into adjacent fields. Goes up to E_local=300 to stress the layout."""
+        D, B, S, H = 2, 1, 64, 64
+        E = max(E_local * 2, 64)
+        K = 4
+        local_expert_ids = torch.arange(E_local, dtype=torch.int32)
+        dispatched = TestMoeGroupReference._make_dispatched(D, B, S, H, seed=E_local)
+        metadata = TestMoeGroupReference._make_metadata(D, B, S, K, E, seed=E_local)
+        self._check_correctness(dispatched, metadata, local_expert_ids, K, f"e_local{E_local}")
+
+    @pytest.mark.parametrize("H", [48, 80, 96, 144])
+    def test_non_tile_aligned_h(self, H):
+        """H not divisible by TILE_WIDTH=32 — last tile column is partial.
+        The kernel must read only h*2 valid bytes from each dispatched row and
+        pad the unused tile tail with zeros, otherwise the read crosses into
+        the next row in DRAM and grouped output is wrong.
+        """
+        D, B, S = 2, 1, 32
+        E, K = 4, 2
+        local_expert_ids = torch.tensor([0, 1], dtype=torch.int32)
+        dispatched = TestMoeGroupReference._make_dispatched(D, B, S, H, seed=H)
+        metadata = TestMoeGroupReference._make_metadata(D, B, S, K, E, seed=H)
+        self._check_correctness(dispatched, metadata, local_expert_ids, K, f"h{H}")
+
     def test_roofline_shape(self):
         """MoE roofline Config B from moe_summary.md:
         D=8, B=1, S=4096 (T_total=32768), H=4096, E=96, K=8, E_local=12.
@@ -570,9 +638,16 @@ class TestMoeGroupDevice:
 
 
 @pytest.mark.skipif(not _TTML_AVAILABLE, reason="ttml / ttnn not importable")
+@pytest.mark.skipif(
+    os.environ.get("TTML_RUN_PROFILE_TESTS", "0") not in ("1", "true", "True"),
+    reason="Profile sweep is opt-in: set TTML_RUN_PROFILE_TESTS=1 to enable",
+)
 @pytest.mark.requires_device
 class TestMoeGroupProfile:
-    """Run the op under Tracy, filter ops log by signposts, print device time."""
+    """Run the op under Tracy, filter ops log by signposts, print device time.
+
+    Opt-in to keep this out of the default CI run. Enable with `TTML_RUN_PROFILE_TESTS=1`.
+    """
 
     @staticmethod
     def _run_and_report(label, D, B, S, H, E, K, E_local, seed=0, num_iters=10, warmup=2, all_local=False):

@@ -44,10 +44,25 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
 
     const auto& ms = args.metadata.logical_shape();
     TT_FATAL(ms.rank() == 4U, "moe_group: metadata must be 4D [D,B,S,K]");
-    TT_FATAL(ms[3] == attrs.k, "moe_group: metadata K mismatch");
+    TT_FATAL(
+        ms[0] == attrs.d && ms[1] == attrs.b && ms[2] == attrs.s && ms[3] == attrs.k,
+        "moe_group: metadata shape [{},{},{},{}] does not match dispatched [D={},B={},S={},K={}]",
+        ms[0],
+        ms[1],
+        ms[2],
+        ms[3],
+        attrs.d,
+        attrs.b,
+        attrs.s,
+        attrs.k);
 
     const auto& ls = args.local_expert_ids.logical_shape();
     TT_FATAL(ls.rank() == 1U && ls[0] == attrs.e_local, "moe_group: local_expert_ids shape mismatch");
+
+    TT_FATAL(attrs.e_local > 0U, "moe_group: e_local must be > 0");
+    TT_FATAL(attrs.k > 0U, "moe_group: k must be > 0");
+    TT_FATAL(attrs.h > 0U, "moe_group: h must be > 0");
+    TT_FATAL(attrs.d > 0U && attrs.b > 0U && attrs.s > 0U, "moe_group: D, B, S must all be > 0");
 }
 
 spec_return_value_t MoeGroupDeviceOperation::compute_output_specs(
