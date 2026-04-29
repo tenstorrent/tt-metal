@@ -247,16 +247,8 @@ class Attention(LightweightModule):
         q_norm_torch = q_norm_weight.unsqueeze(0).view(1, 1, head_dim).reshape([1, 1, head_dim // TILE, TILE])
         k_norm_torch = k_norm_weight.unsqueeze(0).view(1, 1, head_dim).reshape([1, 1, head_dim // TILE, TILE])
 
-        # Torch reference (as_tensor from row-major torch):
-        # self.q_norm_weight = ttnn.as_tensor(
-        #     q_norm_torch,
-        #     device=device,
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     cache_file_name=get_cache_name("q_norm"),
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        # )
+        _qk_norm_gamma_memcfg = ttnn.L1_MEMORY_CONFIG
+
         _qn_cache = get_cache_name("q_norm")
         if _qn_cache is not None:
             self.q_norm_weight = ttnn.as_tensor(
@@ -264,7 +256,7 @@ class Attention(LightweightModule):
                 device=device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=_dram,
+                memory_config=_qk_norm_gamma_memcfg,
                 cache_file_name=_qn_cache,
                 mesh_mapper=_mesh_mapper,
             )
@@ -274,19 +266,10 @@ class Attention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
-                memory_config=_dram,
+                memory_config=_qk_norm_gamma_memcfg,
                 mesh_mapper=_mesh_mapper,
             )
 
-        # self.k_norm_weight = ttnn.as_tensor(
-        #     k_norm_torch,
-        #     device=device,
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     cache_file_name=get_cache_name("k_norm"),
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        # )
         _kn_cache = get_cache_name("k_norm")
         if _kn_cache is not None:
             self.k_norm_weight = ttnn.as_tensor(
@@ -294,7 +277,7 @@ class Attention(LightweightModule):
                 device=device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=_dram,
+                memory_config=_qk_norm_gamma_memcfg,
                 cache_file_name=_kn_cache,
                 mesh_mapper=_mesh_mapper,
             )
@@ -304,7 +287,7 @@ class Attention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
-                memory_config=_dram,
+                memory_config=_qk_norm_gamma_memcfg,
                 mesh_mapper=_mesh_mapper,
             )
 
@@ -410,10 +393,18 @@ class Attention(LightweightModule):
 
         # QK-norm (per-head RMSNorm to stabilize attention with large logit scales)
         q = ttnn.rms_norm(
-            q, epsilon=self.rms_norm_eps, weight=self.q_norm_weight, compute_kernel_config=self.compute_kernel_config
+            q,
+            epsilon=self.rms_norm_eps,
+            weight=self.q_norm_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         k = ttnn.rms_norm(
-            k, epsilon=self.rms_norm_eps, weight=self.k_norm_weight, compute_kernel_config=self.compute_kernel_config
+            k,
+            epsilon=self.rms_norm_eps,
+            weight=self.k_norm_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         if q.dtype != ttnn.bfloat16:
