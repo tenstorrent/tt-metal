@@ -558,7 +558,7 @@ class QwenImagePipeline:
                 )
 
                 tt_initial_latents = tensor.from_torch(
-                    latents, device=submesh_device, on_host=traced, mesh_axes=[None, sp_axis, None]
+                    latents, device=submesh_device, on_host=False, mesh_axes=[None, sp_axis, None]
                 )
 
                 tt_spatial_rope_cos = tensor.rope_double_last_dim_device(
@@ -580,10 +580,9 @@ class QwenImagePipeline:
 
                 if traced:
                     if self._traces is None:
-                        tt_initial_latents = tt_initial_latents.to(submesh_device)
                         tt_prompt_embeds_device = tt_prompt_embeds_device.to(submesh_device)
                     else:
-                        ttnn.copy_host_to_device_tensor(tt_initial_latents, self._traces[i].spatial_input)
+                        ttnn.copy(tt_initial_latents, self._traces[i].spatial_input)
                         ttnn.copy_host_to_device_tensor(tt_prompt_embeds_device, self._traces[i].prompt_input)
                         ttnn.copy(tt_spatial_rope_cos, self._traces[i].spatial_rope_cos)
                         ttnn.copy(tt_spatial_rope_sin, self._traces[i].spatial_rope_sin)
