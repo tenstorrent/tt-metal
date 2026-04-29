@@ -205,7 +205,7 @@ class TtDeepSeekPrefillPipeline:
     # Per-request entry point
     # ----------------------------------------------------------------
 
-    def prefill(self, token_ids: list[int], slot_id: int) -> int:
+    def prefill(self, token_ids: list[int], slot_id: int, actual_isl: Optional[int] = None) -> int:
         """Run prefill for one request.
 
         All MPI ranks must call prefill() collectively with the same arguments;
@@ -215,22 +215,23 @@ class TtDeepSeekPrefillPipeline:
             token_ids: Full input sequence in the user's original token order.
                 This function does the zigzag reorder internally.
             slot_id: KV cache slot assigned by the inference server.
+            actual_isl: Number of real (non-padded) tokens. Defaults to len(token_ids).
 
         Returns:
             First generated token ID.
         """
         assert self.compiled, "Call compile() before prefill()"
-        actual_isl = len(token_ids)
+        if actual_isl is None:
+            actual_isl = len(token_ids)
 
-        # remove these? JAKSA
         tt_token_ids = self._prepare_input_tensor(token_ids, actual_isl)
         on_layer_complete = self._build_migration_callback(slot_id, actual_isl)
 
         first_token_id, _first_token_prob, _ = self.model.forward(
             tt_token_ids,
             self.kvpe_cache,
+            number_of_non_padded_tokens=actual_isl,
             on_layer_complete=on_layer_complete,
-            actual_isl=actual_isl,
             temperature=0.0,  # greedy argmax; expose via prefill kwarg if/when sampling is needed
         )
         return int(first_token_id)
