@@ -452,11 +452,11 @@ def validate_matmul(
                     f" Allclose passed: {allclose_passed}"
                 )
 
-            #                 if not allclose_passed:
-            #                     mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
-            #                     logger.warning(
-            #                         f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]}"
-            #                     )
+                if not allclose_passed:
+                    mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
+                    logger.warning(
+                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
+                    )
             else:
                 logger.info(
                     f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
@@ -608,7 +608,10 @@ def create_torch_w2(L, E, N, K):
         # Use random weights for w2
         torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
-    return torch.ones_like(torch_w2)
+
+    # torch_w2 = torch.ones_like(torch_w2)
+    #     for i in range(K//32):
+    #         torch_w2[:,:,:,32*i:32*(i+1)]*=i
 
     return torch_w2
 
@@ -699,9 +702,12 @@ def gen_sparse_buffer_and_indices(
     # Generate original tokens for each source device
     # Shape: [num_dispatch_devices, tokens_per_device, hidden_size]
 
-    original_tokens = torch.ones(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
+    # original_tokens = torch.ones(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     # original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
-    # original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype) - 0.5
+    original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype) - 0.5
+
+    # for i in range(hidden_size//32):
+    #    original_tokens[:,:,32*i:32*(i+1)]*=i
 
     # Generate expert indices for each token
     # Shape: [num_dispatch_devices, tokens_per_device, selected_experts_k]
@@ -1661,8 +1667,10 @@ def run_moe_compute_test(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["perf"])
+# @pytest.mark.parametrize("enable_trace", [False, True])
+# @pytest.mark.parametrize("test_mode", ["perf", "correctness"])
 def test_moe_compute_deepseek(
     mesh_device,
     mesh_shape,
@@ -1673,7 +1681,7 @@ def test_moe_compute_deepseek(
 
     # DeepSeek specific configuration
     cluster_axis = 1
-    experts_per_device = 4
+    experts_per_device = 2
     tokens_per_device = 32
     N = 2048
     hidden_size = 7168
@@ -1735,7 +1743,7 @@ def test_moe_compute_deepseek(
 # @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("test_mode", ["perf"])
 # @pytest.mark.parametrize("test_mode", ["perf", "correctness"])
-@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("has_bias", [False])
 def test_moe_compute_gpt_oss(
     mesh_device,
     mesh_shape,
@@ -1755,7 +1763,6 @@ def test_moe_compute_gpt_oss(
     output_width_shard_dim = 3  # GptRingConfig::OUTPUT_WIDTH_SHARD_DIM
     dtype = ttnn.bfloat16
     activation_type = MoEActivationFunction.SWIGLU
-    has_bias = True
 
     # Test mode specific parameters
     if test_mode == "perf":

@@ -91,7 +91,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_w = moe_ring::W0_W1_BLOCK_TILES_W;
+    // constexpr uint32_t w0_w1_tiles_w = moe_ring::W0_W1_BLOCK_TILES_W;
     constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
@@ -106,7 +106,14 @@ void kernel_main() {
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
     constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;
-    constexpr uint32_t w2_blocks_per_expert = w2_blocks_per_four_mm2_tile * config_t::NUM_A2A_ITERS;
+    constexpr uint32_t w2_blocks_per_expert =
+        config_t::W2_BLOCKS_PER_EXPERT;  // w2_blocks_per_four_mm2_tile * config_t::NUM_A2A_ITERS;
+
+    DPRINT << "w0_w1_blocks_per_two_elt_tile: " << w0_w1_blocks_per_two_elt_tile
+           << " w0_w1_blocks_per_expert: " << w0_w1_blocks_per_expert
+           << " w2_blocks_per_four_mm2_tile: " << w2_blocks_per_four_mm2_tile
+           << " w2_blocks_per_expert: " << w2_blocks_per_expert << " moe_config_type_value: " << moe_config_type_value
+           << "\n";
 
     // config_t::W2_BLOCKS_PER_EXPERT;
 
@@ -127,7 +134,8 @@ void kernel_main() {
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
     // W2: same approach
-    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert * 2 * w2_bytes_per_txn;
+    constexpr uint32_t w2_total_size_per_expert =
+        config_t::W2_TILES_PER_EXPERT_W * config_t::W2_TILES_PER_EXPERT_H * w2_tile_size;
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 

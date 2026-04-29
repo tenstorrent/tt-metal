@@ -780,11 +780,11 @@ def get_weight_mem_configs(
     if has_bias:
         # With bias: N grows by 1 tile, then pad to align with 7-tile reads
         Nt_with_bias = Nt + 1
-        Nt_padded = math.ceil(Nt_with_bias / 7) * 7
+        Nt_padded = math.ceil(Nt_with_bias / BLOCK_TILES_H) * BLOCK_TILES_H
         w2_N_total = Nt_padded * ttnn.TILE_SIZE
     else:
         # Without bias: just pad to 7-tile alignment
-        w2_N_total = math.ceil(Nt / 7) * 7 * ttnn.TILE_SIZE
+        w2_N_total = math.ceil(Nt / BLOCK_TILES_H) * BLOCK_TILES_H * ttnn.TILE_SIZE
 
     # W2 memory config
     w2_shard_height = num_layers * experts_per_device * w2_groups_per_core * w2_N_total

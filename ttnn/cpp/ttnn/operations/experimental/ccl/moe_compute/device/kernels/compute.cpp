@@ -141,8 +141,9 @@ void kernel_main() {
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_dram_tiles_h = config_t::NUM_W2_DRAM_TILES_H;
     constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
-    // constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;
+    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
+
+    // constexpr uint32_t w2_blocks_per_four_mm2_tile = 13; //4 * w2_txns_h / w2_txns_per_block;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -150,13 +151,17 @@ void kernel_main() {
     // The number of times to repeat the all2all
     constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
 
-    // constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
+    constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
 
     // The number of steps to take in the all2all is the number of cores
     constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
 
     // The number of tiles to send in each step
     constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
+
+    DPRINT << "w2_blocks_per_expert: " << w2_blocks_per_expert << " num_a2a_iters: " << num_a2a_iters
+           << " w0_w1_blocks_per_two_elt_tile: " << w0_w1_blocks_per_two_elt_tile
+           << " w0_w1_blocks_per_expert: " << w0_w1_blocks_per_expert << "\n";
 
     //-------------------------------------------------------------------------
     // Compute
@@ -334,10 +339,9 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 uint32_t w2_k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-                    DPRINT << "block_id: " << block_id << " iter: " << iter << "\n";
-                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                    for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
                         if constexpr (has_bias) {
                             if (w2_k_tracker == num_w2_tiles_h) {
                                 // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
