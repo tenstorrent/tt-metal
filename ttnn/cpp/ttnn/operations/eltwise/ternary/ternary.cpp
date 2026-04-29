@@ -117,7 +117,6 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
-
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
