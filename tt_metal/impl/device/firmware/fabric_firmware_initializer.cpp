@@ -25,6 +25,7 @@
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 #include "device/edm_status_utils.hpp"
+#include "hal_types.hpp"
 
 // Timeout hierarchy (all host-side wall-clock):
 //   5000ms — teardown/init per-phase: covers full firmware startup/shutdown cycle
@@ -716,6 +717,27 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                         tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
                     cluster_.deassert_risc_reset_at_core(
                         tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
+                    // FIX PC: clear ERISC dispatch launch flag after fabric teardown force-reset.
+                    // HW reset (assert + deassert) halts the ERISC and restarts base UMD firmware
+                    // but does NOT zero L1.  If dispatch firmware was running on this channel,
+                    // fw_launch_addr retains its non-zero value from the prior session.
+                    // On the next test's reset_cores(), erisc_app_still_running() reads this
+                    // non-zero flag → 500ms wait_until_cores_done timeout → another force-reset
+                    // → loop on every single-device test open.
+                    // (Observed: 140 occurrences in run 25096771728, 146+ in prior runs.)
+                    // Clear fw_launch_addr here so reset_cores() sees the core as idle and skips
+                    // the stall entirely.
+                    try {
+                        const auto aeth_idx = hal_.get_programmable_core_type_index(
+                            HalProgrammableCoreType::ACTIVE_ETH);
+                        const uint32_t fw_launch_addr =
+                            hal_.get_jit_build_config(aeth_idx, 0, 0).fw_launch_addr;
+                        cluster_.write_core_immediate(
+                            ch.dev->id(), virtual_eth_coord, std::vector<uint32_t>{0}, fw_launch_addr);
+                    } catch (...) {
+                        // Best-effort: MMIO devices succeed via PCIe; non-MMIO with a dead relay
+                        // may throw — acceptable, FIX PA in reset_cores() handles the fallback.
+                    }
                 } catch (const std::exception& e) {
                     log_error(
                         tt::LogMetal,
