@@ -55,6 +55,7 @@ class DeepseekSamplingArgs:
     sampling_dp: int
     cluster_shape: tuple[int, int]
     sampling_all_gather_axis: int = 1
+    pad_logits_to_power_of_2: bool = True
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
