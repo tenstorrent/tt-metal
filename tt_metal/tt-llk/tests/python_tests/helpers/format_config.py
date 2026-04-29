@@ -106,6 +106,8 @@ class DataFormat(Enum):
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
+    Fp8R = DataFormatInfo("Fp8R", 1) # QSR specific
+    Fp8P = DataFormatInfo("Fp8P", 1) # QSR specific
 
     @property
     def size(self) -> int:
@@ -445,6 +447,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.UInt8: 17,
     DataFormat.UInt16: 130,
     DataFormat.Int16: 9,
+    DataFormat.Fp8R: 10,
+    DataFormat.Fp8P: 16,
 }
 
 

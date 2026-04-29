@@ -126,6 +126,8 @@ class Operand:
             pack_bfp8_b,
             pack_bfp16,
             pack_fp8_e4m3,
+            pack_fp8_r,
+            pack_fp8_p,
             pack_fp16,
             pack_fp32,
             pack_int8,
@@ -146,6 +148,8 @@ class Operand:
             DataFormat.Int16: pack_int16,
             DataFormat.UInt16: pack_uint16,
             DataFormat.Fp8_e4m3: pack_fp8_e4m3,
+            DataFormat.Fp8R: pack_fp8_r,
+            DataFormat.Fp8P: pack_fp8_p,
             DataFormat.Int8: pack_int8,
             DataFormat.UInt8: pack_uint8,
         }

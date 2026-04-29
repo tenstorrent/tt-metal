@@ -73,6 +73,20 @@ def unpack_fp8_e4m3(packed_list):
         .tolist()
     )
 
+def unpack_fp8_r(packed_list):
+    return (
+        np.frombuffer(bytes(packed_list), dtype=ml_dtypes.float8_e5m2)
+        .astype(np.float32)
+        .tolist()
+    )
+
+def unpack_fp8_p(packed_list):
+    return (
+        np.frombuffer(bytes(packed_list), dtype=ml_dtypes.float8_e4m3fn)
+        .astype(np.float32)
+        .tolist()
+    )
+
 
 def unpack_int8(packed_list):
     # INT8 uses sign-magnitude format in hardware (not two's complement)
@@ -364,6 +378,8 @@ _UNPACKERS = {
     DataFormat.Int16: unpack_int16,
     DataFormat.UInt16: unpack_uint16,
     DataFormat.Fp8_e4m3: unpack_fp8_e4m3,
+    DataFormat.Fp8R: unpack_fp8_r,
+    DataFormat.Fp8P: unpack_fp8_p,
     DataFormat.Int8: unpack_int8,
     DataFormat.UInt8: unpack_uint8,
 }

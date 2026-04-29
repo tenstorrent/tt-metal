@@ -38,6 +38,8 @@ tolerances = {
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.Fp8_e4m3: Tolerance(atol=0.2, rtol=0.2),
+    DataFormat.Fp8R: Tolerance(atol=0.2, rtol=0.2),
+    DataFormat.Fp8P: Tolerance(atol=0.2, rtol=0.2),
 }
 
 

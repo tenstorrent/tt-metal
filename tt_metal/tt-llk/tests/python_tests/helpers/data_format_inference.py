@@ -18,6 +18,8 @@ VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Float16_b,
     DataFormat.Float16,
     DataFormat.Float32,
+    DataFormat.Fp8R,
+    DataFormat.Fp8P,
     DataFormat.Tf32,
     DataFormat.Int32,
     DataFormat.Int8,
@@ -362,7 +364,7 @@ def infer_data_formats(
 
     # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
     # source registers. The ALU and packer must see Float16, not Lf8/Fp8_e4m3.
-    if math == DataFormat.Fp8_e4m3:
+    if math in [DataFormat.Fp8_e4m3, DataFormat.Fp8R, DataFormat.Fp8P]:
         math = DataFormat.Float16
 
     pack_in = infer_pack_in(
@@ -378,7 +380,7 @@ def infer_data_formats(
     # FP8 output: gasket must produce Float16 for packer's Pac_LF8_4b_exp encode path.
     # When math is a B-format (Float16_b), use Float16_b so the packer can distinguish
     # A-format vs B-format pipelines and enable 10-bit mantissa rounding accordingly.
-    if output_format == DataFormat.Fp8_e4m3:
+    if output_format in [DataFormat.Fp8_e4m3, DataFormat.Fp8R, DataFormat.Fp8P]:
         pack_in = DataFormat.Float16_b if math.is_exponent_B() else DataFormat.Float16
 
     # Input to the SrcS packer (PACK1)
@@ -490,6 +492,10 @@ def data_formats(
             pack_src_format = DataFormat.Float16_b
         elif input_format == DataFormat.Fp8_e4m3:
             unpack_dst = DataFormat.Fp8_e4m3
+            math_format = DataFormat.Float16
+            pack_src_format = DataFormat.Float16
+        elif input_format in [DataFormat.Fp8R, DataFormat.Fp8P]:
+            unpack_dst = input_format
             math_format = DataFormat.Float16
             pack_src_format = DataFormat.Float16
         else:

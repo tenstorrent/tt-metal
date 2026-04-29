@@ -73,6 +73,14 @@ def pack_fp8_e4m3(torch_tensor):
     return fp32_array.astype(ml_dtypes.float8_e4m3fn).tobytes()
 
 
+def pack_fp8_p(torch_tensor):
+    fp32_array = torch_tensor.cpu().to(torch.float32).numpy()
+    return fp32_array.astype(ml_dtypes.float8_e4m3fn).tobytes()
+
+def pack_fp8_r(torch_tensor):
+    fp32_array = torch_tensor.cpu().to(torch.float32).numpy()
+    return fp32_array.astype(ml_dtypes.float8_e5m2).tobytes()
+
 def pack_int8(torch_tensor):
     # INT8 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 7 = sign, bits 6:0 = magnitude

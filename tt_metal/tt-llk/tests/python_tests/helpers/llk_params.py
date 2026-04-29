@@ -23,6 +23,8 @@ format_dict = {
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
     DataFormat.Fp8_e4m3: torch.bfloat16,
+    DataFormat.Fp8R: torch.bfloat16,
+    DataFormat.Fp8P: torch.bfloat16,
 }
 
 
@@ -429,6 +431,8 @@ format_tile_sizes = {
     DataFormat.MxFp8R: 1056,
     DataFormat.MxFp8P: 1056,
     DataFormat.Fp8_e4m3: 1024,  # 1 byte per element, no exponent section
+    DataFormat.Fp8R: 1024,
+    DataFormat.Fp8P: 1024,
 }
 
 

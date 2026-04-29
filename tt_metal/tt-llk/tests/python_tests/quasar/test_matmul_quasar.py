@@ -62,8 +62,8 @@ matmul_dimensions_dest_sync = [
 # Generate format-aware combinations
 MATMUL_FORMAT = input_output_formats(
     [
-        DataFormat.Float16,
-        DataFormat.Float16_b,
+        DataFormat.Fp8R,
+        # DataFormat.Fp8P,
     ],
 )
 
@@ -73,9 +73,9 @@ MATMUL_FORMAT = input_output_formats(
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     math_fidelity=[
         MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
+        # MathFidelity.HiFi2,
+        # MathFidelity.HiFi3,
+        # MathFidelity.HiFi4,
     ],
     dimensions_dest_acc_dest_sync=matmul_dimensions_dest_sync,
     format=MATMUL_FORMAT,
