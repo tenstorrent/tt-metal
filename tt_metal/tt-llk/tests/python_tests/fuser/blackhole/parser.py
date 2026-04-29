@@ -350,9 +350,7 @@ class FpuMathSchema(BaseModel):
         if self.unpack_to_dest:
             kwargs["unpack_to_dest"] = self.unpack_to_dest
 
-        return ComputeNode(
-            fpu=fpu, src_a=src_a, src_b=src_b, output=output, sfpu=None, **kwargs
-        )
+        return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
 
     def get_output_dimensions(self, operands) -> Tuple[int, int]:
         src_a = operands.get(self.src_a).dimensions
