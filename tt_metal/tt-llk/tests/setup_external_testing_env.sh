@@ -31,8 +31,8 @@ check_deps() {
 # Check for supported Python version
 check_python_version() {
     PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
-    if [[ "$PYTHON_VERSION" != "3.8"* && "$PYTHON_VERSION" != "3.10"* ]]; then
-        echo "Error: Only Python 3.8 or 3.10 are supported. Detected: $PYTHON_VERSION" >&2
+    if [[ "$PYTHON_VERSION" != "3.10"* ]]; then
+        echo "Error: Only Python 3.10 is supported. Detected: $PYTHON_VERSION" >&2
         exit 1
     fi
     echo "Supported Python version detected: $PYTHON_VERSION"
