@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t num_readers = get_compile_time_arg_val(25);
+    constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
 
     constexpr auto q_args = TensorAccessorArgs<26>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -137,7 +137,7 @@ void kernel_main() {
     constexpr uint32_t q_heads_per_k = NH / NHK;
 
     // Throttle Q DRAM reads so many readers don't saturate the NoC outstanding-read budget.
-    constexpr uint32_t q_barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_readers>();
+    constexpr uint32_t q_barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_q_readers>();
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto local_k_reader = TensorAccessor(k_args, k_addr);
