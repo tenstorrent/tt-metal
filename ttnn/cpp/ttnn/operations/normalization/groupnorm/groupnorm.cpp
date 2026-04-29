@@ -238,7 +238,7 @@ Tensor group_norm(
 
     const bool core_grid_auto_selected = !core_grid.has_value();
 
-    if (!core_grid.has_value()) {
+    if (core_grid_auto_selected) {
         if (input_tensor.is_sharded()) {
             const auto& shard_spec_opt = input_tensor.shard_spec();
             TT_FATAL(
