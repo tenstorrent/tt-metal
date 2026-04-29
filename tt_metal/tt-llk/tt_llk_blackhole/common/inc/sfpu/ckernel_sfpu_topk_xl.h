@@ -596,7 +596,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // transpose DST faces back
     transpose_8_faces();
     // set every 4 SFPU instances to alternate SWAP direction
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0104);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
     TTI_SFPCONFIG(0x5500, 0xF, 8);
     for (int col = 0; col < 2; col++)
     {

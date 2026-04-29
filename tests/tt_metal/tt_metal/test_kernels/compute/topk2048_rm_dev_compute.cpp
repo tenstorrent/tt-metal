@@ -57,7 +57,7 @@ void kernel_main() {
         DEVICE_PRINT("row {:03d}: ", row);
         for (int col = 0; col < 16; col++) {
             float val = dst32[row * 16 + col];
-            DEVICE_PRINT("{:8.3f} ", val);
+            DEVICE_PRINT("{:11.6f} ", val);
         }
         DEVICE_PRINT("\n");
     }

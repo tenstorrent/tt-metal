@@ -68,7 +68,7 @@ std::vector<uint32_t> make_input_keys(uint32_t n, uint32_t num_el_padded, uint32
             keys[i] = pack_bf16_index(bfloat16(dis(gen)), static_cast<uint16_t>(i & 0xFFFFu));
             // make every pair of elements the same, this way I can compare odd/even columns to verify sorting
             if (i % 2 == 1) {
-                keys[i] = keys[i - 1];
+                keys[i] = keys[i - 1] | 0x00000001u;
             }
         }
     }
@@ -88,7 +88,7 @@ std::vector<uint32_t> golden_topk_u32(const std::vector<uint32_t>& keys_in, uint
         if (fx != fy) {
             return fx > fy;
         }
-        return (x & 0xFFFFu) < (y & 0xFFFFu);
+        return (x & 0xFFFFu) > (y & 0xFFFFu);
     });
     a.resize(k);
     return a;
@@ -146,7 +146,7 @@ bool verify_topk_outputs(const std::vector<uint32_t>& out_u32, const std::vector
     }
     table += fmt::format("{:-^100}\n", "");
     table += fmt::format("overall: {}\n", all_ok ? "PASS" : "FAIL");
-    // log_info(LogTest, "{}", table);
+    log_info(LogTest, "{}", table);
     return all_ok;
 }
 
