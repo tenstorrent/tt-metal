@@ -464,7 +464,7 @@ def _moe_routed_expert_tensor_target(name: str, K: int, N: int, device) -> Tenso
         memory_config=mem_config,
         tile_shape=(32, 32),
         mesh_mapper_config=ReplicateMeshMapper(),
-        transform_version=3,
+        transform_version=4,
     )
 
 
@@ -491,7 +491,7 @@ def _dense_routed_stacked_tensor_target(name: str, K: int, N: int, device) -> Te
         memory_config=mem_config,
         tile_shape=(32, 32),
         mesh_mapper_config=Shard2dMeshMapper(dims=(0, 1)),
-        transform_version=3,
+        transform_version=4,
     )
 
 
@@ -735,17 +735,19 @@ def prepare_attention_weights(
         def _preprocess_merged(t: dict[str, torch.Tensor], *, include_gate: bool) -> dict[str, torch.Tensor]:
             o_proj = t[o_proj_key].T.contiguous()
             o_proj = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.pack_o_proj_weights_tp4_shuffled(o_proj)
+            # Fold RMSNorm gammas in fp32 to avoid an extra bf16 rounding before
+            # the final pack-to-target-dtype (bf16/bf8/bf4) quantization.
             if include_gate:
-                gate_mm = (t[gate_key] * t[ffn_norm_key]).T.contiguous()
+                gate_mm = (t[gate_key].float() * t[ffn_norm_key].float()).T.contiguous()
             else:
                 gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
-            q_a = t[q_a_key].T.contiguous()
-            attn_norm_w = t[attn_norm_key].T.contiguous()
+            q_a = t[q_a_key].T.contiguous().float()
+            attn_norm_w = t[attn_norm_key].T.contiguous().float()
             q_a = q_a * attn_norm_w.unsqueeze(-1)
-            q_b = deinterleave_q_b_proj(t[q_b_key])
-            kv_a = t[kv_a_key].T.contiguous()
+            q_b = deinterleave_q_b_proj(t[q_b_key]).float()
+            kv_a = t[kv_a_key].T.contiguous().float()
             kv_a = kv_a * attn_norm_w.unsqueeze(-1)
-            q_norm_w = t[q_norm_key].T.contiguous()
+            q_norm_w = t[q_norm_key].T.contiguous().float()
             q_b = q_b * q_norm_w.unsqueeze(-1)
             q_ab_kv_a = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
             return {
@@ -846,16 +848,16 @@ def prepare_attention_weights(
 
     # -- mla_tp == 1: separate q_ab_kv_a and o_proj fusion groups --
     def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        q_a = t[q_a_key].T.contiguous()
-        attn_norm = t[attn_norm_key].T.contiguous()
-        # deffered norm preprocessing step
+        # Fold RMSNorm gammas in fp32 (single rounding at the final pack/quantize step).
+        q_a = t[q_a_key].T.contiguous().float()
+        attn_norm = t[attn_norm_key].T.contiguous().float()
         q_a = q_a * attn_norm.unsqueeze(-1)
-        q_b = deinterleave_q_b_proj(t[q_b_key])
-        kv_a = t[kv_a_key].T.contiguous()
+        q_b = deinterleave_q_b_proj(t[q_b_key]).float()
+        kv_a = t[kv_a_key].T.contiguous().float()
         kv_a = kv_a * attn_norm.unsqueeze(-1)
         if q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
             q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
-        q_norm = t[q_norm_key].T.contiguous()
+        q_norm = t[q_norm_key].T.contiguous().float()
         q_b = q_b * q_norm.unsqueeze(-1)
         return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
 
@@ -880,7 +882,8 @@ def prepare_attention_weights(
 
         def _preprocess_o_proj_moe(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
             o_proj = t[o_proj_key].T.contiguous()
-            gate_mm = (t[gate_key] * t[ffn_norm_key]).T.contiguous()
+            # Fold ffn_norm gamma into the topk gate matmul in fp32.
+            gate_mm = (t[gate_key].float() * t[ffn_norm_key].float()).T.contiguous()
             attn_norm = t[attn_norm_key].unsqueeze(0)
             q_norm = t[q_norm_key].unsqueeze(0)
             kv_norm = t[kv_norm_key].unsqueeze(0)
@@ -1023,9 +1026,10 @@ def prepare_shared_expert_weights(
         ffn_norm_k = _key(layer_idx, "post_attention_layernorm.weight")
 
         def _preprocess_gate_up_moe(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            fn = t[ffn_norm_k]
-            sg = (t[gate_k] * fn).T.contiguous()
-            su = (t[up_k] * fn).T.contiguous()
+            # Fold ffn_norm gamma in fp32 to keep one rounding step at the final pack.
+            fn = t[ffn_norm_k].float()
+            sg = (t[gate_k].float() * fn).T.contiguous()
+            su = (t[up_k].float() * fn).T.contiguous()
             if moe_tp == 1:
                 full_n = _MOE_TP1_SHARED_GATE_UP_N * 8
                 if sg.shape[1] == full_n:
@@ -1080,9 +1084,10 @@ def prepare_shared_expert_weights(
         ffn_norm_k = _key(layer_idx, "post_attention_layernorm.weight")
 
         def _preprocess_gate_up_dense(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            fn = t[ffn_norm_k]
-            gate = (t[gate_k] * fn).T.contiguous()[:, :shared_n]
-            up = (t[up_k] * fn).T.contiguous()[:, :shared_n]
+            # Fold ffn_norm gamma in fp32 to keep one rounding step at the final pack.
+            fn = t[ffn_norm_k].float()
+            gate = (t[gate_k].float() * fn).T.contiguous()[:, :shared_n]
+            up = (t[up_k].float() * fn).T.contiguous()[:, :shared_n]
             return preprocess_gate_up(gate, up, moe_tp, mesh_rows, mesh_cols)
 
         gu_fp = cache_config.context.fingerprint(
@@ -1159,7 +1164,8 @@ def prepare_moe_routed_experts_bspm(
         [_key(layer_idx, f"mlp.experts.{e}.up_proj.weight") for e in range(num_routed_experts)],
         [_key(layer_idx, f"mlp.experts.{e}.down_proj.weight") for e in range(num_routed_experts)],
     ]
-    ffn_norm = state_dict[_key(layer_idx, "post_attention_layernorm.weight")]
+    # Fold ffn_norm gamma into routed gate/up in fp32 (single rounding before BSPM compression).
+    ffn_norm = state_dict[_key(layer_idx, "post_attention_layernorm.weight")].float()
     results: list[list] = [[], [], []]
     for proj_idx, (proj_name, keys) in enumerate(zip(proj_names, proj_keys)):
         sample_w = state_dict[keys[0]]
@@ -1180,7 +1186,7 @@ def prepare_moe_routed_experts_bspm(
         for e, key in enumerate(keys):
             w = state_dict[key].T.contiguous()
             if fold_norm:
-                w = w * ffn_norm.unsqueeze(-1)
+                w = w.float() * ffn_norm.unsqueeze(-1)
             if N_padded != N:
                 w = torch.nn.functional.pad(w, (0, N_padded - N))
 
@@ -1283,7 +1289,8 @@ def prepare_routed_expert_weights(
             )
 
             def _pre_gate(t, _gk=gk, _fnk=ffn_norm_key):
-                w = (t[_gk] * t[_fnk]).T.contiguous()
+                # Fold ffn_norm gamma in fp32 to avoid an extra bf16 rounding before bf4 packing.
+                w = (t[_gk].float() * t[_fnk].float()).T.contiguous()
                 return {"routed_gate_proj": moe_routed_expert_torch_for_cache(w, num_banks)}
 
             gw = cache_config.cache.get_or_create(
@@ -1303,7 +1310,8 @@ def prepare_routed_expert_weights(
             )
 
             def _pre_up(t, _uk=uk, _fnk=ffn_norm_key):
-                w = (t[_uk] * t[_fnk]).T.contiguous()
+                # Fold ffn_norm gamma in fp32 to avoid an extra bf16 rounding before bf4 packing.
+                w = (t[_uk].float() * t[_fnk].float()).T.contiguous()
                 return {"routed_up_proj": moe_routed_expert_torch_for_cache(w, num_banks)}
 
             uw = cache_config.cache.get_or_create(
@@ -1359,7 +1367,8 @@ def prepare_routed_expert_weights(
         _dn_expert_n = D.MOE_INTERMEDIATE_SIZE
 
         def _pre_routed_gate(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            mg = (t[gate_k] * t[ffn_norm_key]).T.contiguous()
+            # Fold ffn_norm gamma in fp32 to avoid an extra bf16 rounding before bf4 packing.
+            mg = (t[gate_k].float() * t[ffn_norm_key].float()).T.contiguous()
             ge = mg[:, _dn_shared:].reshape(mg.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
             return {"routed_gate_proj": mlp_routed_dense_stacked_torch_for_cache(ge, num_banks, mesh_shape)}
 
@@ -1369,7 +1378,8 @@ def prepare_routed_expert_weights(
         )
 
         def _pre_routed_up(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            mu = (t[up_k] * t[ffn_norm_key]).T.contiguous()
+            # Fold ffn_norm gamma in fp32 to avoid an extra bf16 rounding before bf4 packing.
+            mu = (t[up_k].float() * t[ffn_norm_key].float()).T.contiguous()
             ue = mu[:, _dn_shared:].reshape(mu.shape[0], _dn_num_routed, _dn_expert_n).permute(1, 0, 2).contiguous()
             return {"routed_up_proj": mlp_routed_dense_stacked_torch_for_cache(ue, num_banks, mesh_shape)}
 
