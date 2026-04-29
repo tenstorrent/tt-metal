@@ -123,6 +123,11 @@ struct Broadcast {
 
     private:
 #if defined(COMPILE_FOR_NCRISC)
+        static constexpr uint8_t worker_to_fabric_noc = 0;
+        static constexpr uint32_t initial_header_payload_size_bytes =
+            CTArgs::num_chunks == 1 ? CTArgs::last_chunk_size_bytes : CTArgs::chunk_size_bytes;
+        static_assert(
+            noc_mode == DM_DYNAMIC_NOC || worker_to_fabric_noc == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
         std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
         std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
         uint64_t dst_noc_base = 0;
@@ -137,31 +142,43 @@ struct Broadcast {
                     PacketHeaderPool::reset();
                 }
 
-                dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
+                dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, worker_to_fabric_noc);
                 for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
-                    sem_nocs[link_idx] =
-                        safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
+                    sem_nocs[link_idx] = safe_get_noc_addr(
+                        args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], worker_to_fabric_noc);
                     sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
 
+                std::array<uint32_t, CTArgs::num_neighbors> dst_mesh_ids = {};
+                std::array<uint32_t, CTArgs::num_neighbors> dst_chip_ids = {};
                 size_t arg_idx = args.per_core_rta_arg_idx_offset;
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
-                    const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-                    const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+                    dst_mesh_ids[neighbor_idx] = get_arg_val<uint32_t>(arg_idx++);
+                    dst_chip_ids[neighbor_idx] = get_arg_val<uint32_t>(arg_idx++);
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
                         connections[connection_idx] =
                             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                                 arg_idx);
                         connections[connection_idx].open_start();
+                    }
+                }
+
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
                         headers[connection_idx] = PacketHeaderPool::allocate_header();
-                        fabric_set_single_hop_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                        fabric_set_single_hop_unicast_route(
+                            headers[connection_idx], dst_chip_ids[neighbor_idx], dst_mesh_ids[neighbor_idx]);
                         headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 dst_noc_base, sem_nocs[link_idx], 1, false},
-                            CTArgs::chunk_size_bytes);
-                        connections[connection_idx].open_finish();
+                            initial_header_payload_size_bytes);
                     }
+                }
+
+                for (uint32_t connection_idx = 0; connection_idx < CTArgs::num_connections; connection_idx++) {
+                    connections[connection_idx].open_finish();
                 }
             }
 #endif
@@ -207,10 +224,29 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
-                auto send_chunk = [&](uint32_t connection_idx,
-                                      uint32_t src_base_addr,
-                                      uint32_t chunk_idx,
-                                      uint32_t size) {
+                std::array<uint32_t, CTArgs::num_connections> cached_free_write_slots = {};
+
+                auto refill_free_write_slots = [&](uint32_t connection_idx) {
+                    do {
+                        invalidate_l1_cache();
+                        cached_free_write_slots[connection_idx] =
+                            connections[connection_idx].get_num_free_write_slots();
+                    } while (cached_free_write_slots[connection_idx] == 0);
+                };
+
+                auto send_single_chunk = [&](uint32_t connection_idx,
+                                             uint32_t src_base_addr) __attribute__((always_inline)) {
+                    connections[connection_idx].wait_for_empty_write_slot();
+                    connections[connection_idx].send_payload_without_header_non_blocking_from_address(
+                        src_base_addr, CTArgs::last_chunk_size_bytes);
+                    connections[connection_idx].send_payload_flush_non_blocking_from_address(
+                        reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
+                };
+
+                auto send_multi_chunk = [&](uint32_t connection_idx,
+                                            uint32_t src_base_addr,
+                                            uint32_t chunk_idx,
+                                            uint32_t size) __attribute__((always_inline)) {
                     uint32_t chunk_offset = chunk_idx * CTArgs::chunk_size_bytes;
                     if constexpr (CTArgs::last_chunk_size_bytes != CTArgs::chunk_size_bytes) {
                         if (size != CTArgs::chunk_size_bytes) {
@@ -219,15 +255,30 @@ struct Broadcast {
                     }
                     headers[connection_idx]->set_fused_unicast_write_atomic_inc_write_noc_address(
                         dst_noc_base + chunk_offset);
-                    connections[connection_idx].wait_for_empty_write_slot();
+                    if (cached_free_write_slots[connection_idx] == 0) {
+                        refill_free_write_slots(connection_idx);
+                    }
                     connections[connection_idx].send_payload_without_header_non_blocking_from_address(
                         src_base_addr + chunk_offset, size);
                     connections[connection_idx].send_payload_flush_non_blocking_from_address(
                         reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
+                    cached_free_write_slots[connection_idx]--;
                 };
 
                 std::array<uint32_t, CTArgs::num_links> link_counters = {};
                 auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
+                    if constexpr (CTArgs::num_chunks == 1) {
+                        constexpr uint32_t single_chunk_link = 0;
+                        link_counters[single_chunk_link]++;
+                        wait_for_link_chunk(single_chunk_link, link_counters[single_chunk_link]);
+
+                        for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                            const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + single_chunk_link;
+                            send_single_chunk(connection_idx, src_base_addr);
+                        }
+                        return;
+                    }
+
                     uint32_t current_link = 0;
 
                     for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
@@ -240,14 +291,14 @@ struct Broadcast {
 
                         for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                             const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + current_link;
-                            send_chunk(connection_idx, src_base_addr, chunk_idx, chunk_size);
+                            send_multi_chunk(connection_idx, src_base_addr, chunk_idx, chunk_size);
                         }
 
                         if (++current_link == CTArgs::num_links) {
                             current_link = 0;
                             // flush only when about to reuse a packet header
-                            if (CTArgs::num_neighbors > 0) {
-                                noc_async_writes_flushed();
+                            if constexpr (CTArgs::num_neighbors > 0) {
+                                noc_async_writes_flushed(worker_to_fabric_noc);
                             }
                         }
                     }
