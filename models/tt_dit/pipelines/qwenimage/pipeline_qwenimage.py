@@ -33,7 +33,12 @@ from models.tt_dit.pipelines.qwenimage.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils import cache
 from models.tt_dit.utils.mesh import reshape_device
-from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices, rope_double_last_dim_device
+from models.tt_dit.utils.tensor import (
+    from_torch,
+    from_torch_to_devices,
+    mesh_partition_with_padding,
+    rope_double_last_dim_device,
+)
 from models.tt_dit.utils.tracing import Tracer
 
 if TYPE_CHECKING:
@@ -466,58 +471,35 @@ class QwenImagePipeline(PipelineAPIMixin):
         img_shapes = [[(1, latents_height // p, latents_width // p)]] * transformer_batch_size
         txt_seq_lens = [prompt_sequence_length] * transformer_batch_size
 
-        # When sp_factor == 1 the per-submesh RoPE tensors are replicated, so we
-        # assemble them on device via QwenPosEmbedTT. For sp_factor > 1 we still
-        # need to shard along the sequence axis at upload time, so we fall back to
-        # the host builder (no ttnn replicated->SP-sharded reshard primitive yet).
+        # Assemble RoPE tensors on device via QwenPosEmbedTT. For sp_factor > 1 the
+        # sequence axis of the spatial RoPE tables must be sharded across the sp mesh
+        # axis; we build replicated and convert via ``ttnn.mesh_partition`` (inverse of
+        # all-gather). Prompt RoPE stays replicated since the text sequence is not
+        # sp-sharded.
         sp_factor = self._parallel_config.sequence_parallel.factor
-        use_device_pos_embed = sp_factor == 1
-        if use_device_pos_embed:
-            latents_rope_cos = []
-            latents_rope_sin = []
-            prompt_rope_cos = []
-            prompt_rope_sin = []
-            for idx, _ in enumerate(self._submesh_devices):
-                cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
-                    submesh_index=idx,
-                    img_shapes_per_batch=img_shapes[0],
-                    max_txt_seq_len=txt_seq_lens[0],
+        latents_rope_cos = []
+        latents_rope_sin = []
+        prompt_rope_cos = []
+        prompt_rope_sin = []
+        for idx, _ in enumerate(self._submesh_devices):
+            cos_half, sin_half, txt_cos_half, txt_sin_half = self._pos_embed_tt.build(
+                submesh_index=idx,
+                img_shapes_per_batch=img_shapes[0],
+                max_txt_seq_len=txt_seq_lens[0],
+            )
+            spatial_cos = rope_double_last_dim_device(cos_half)
+            spatial_sin = rope_double_last_dim_device(sin_half)
+            if sp_factor > 1:
+                spatial_cos = mesh_partition_with_padding(
+                    spatial_cos, dim=0, cluster_axis=sp_axis, cluster_size=sp_factor
                 )
-                latents_rope_cos.append(rope_double_last_dim_device(cos_half))
-                latents_rope_sin.append(rope_double_last_dim_device(sin_half))
-                prompt_rope_cos.append(rope_double_last_dim_device(txt_cos_half))
-                prompt_rope_sin.append(rope_double_last_dim_device(txt_sin_half))
-        else:
-            torch_latents_rope, torch_prompt_rope = self._pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
-
-            # Upload half-dim cos/sin tensors; the per-axis repeat_interleave doubling
-            # happens on device via rope_double_last_dim_device to save host compute
-            # and halve the upload bandwidth.
-            torch_latents_rope_cos_half = torch_latents_rope.real
-            torch_latents_rope_sin_half = torch_latents_rope.imag
-            torch_prompt_rope_cos_half = torch_prompt_rope.real
-            torch_prompt_rope_sin_half = torch_prompt_rope.imag
-
-            latents_rope_cos = [
-                rope_double_last_dim_device(
-                    from_torch(torch_latents_rope_cos_half, device=d, mesh_axes=[sp_axis, None], on_host=False)
+                spatial_sin = mesh_partition_with_padding(
+                    spatial_sin, dim=0, cluster_axis=sp_axis, cluster_size=sp_factor
                 )
-                for d in self._submesh_devices
-            ]
-            latents_rope_sin = [
-                rope_double_last_dim_device(
-                    from_torch(torch_latents_rope_sin_half, device=d, mesh_axes=[sp_axis, None], on_host=False)
-                )
-                for d in self._submesh_devices
-            ]
-            prompt_rope_cos = [
-                rope_double_last_dim_device(from_torch(torch_prompt_rope_cos_half, device=d, on_host=False))
-                for d in self._submesh_devices
-            ]
-            prompt_rope_sin = [
-                rope_double_last_dim_device(from_torch(torch_prompt_rope_sin_half, device=d, on_host=False))
-                for d in self._submesh_devices
-            ]
+            latents_rope_cos.append(spatial_cos)
+            latents_rope_sin.append(spatial_sin)
+            prompt_rope_cos.append(rope_double_last_dim_device(txt_cos_half))
+            prompt_rope_sin.append(rope_double_last_dim_device(txt_sin_half))
 
         context = distribute_cfg(torch_context, devices=self._submesh_devices)
         latents = self._random_latents(batch_size=transformer_batch_size, seed=seed)
