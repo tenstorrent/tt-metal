@@ -112,16 +112,52 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     DataFormat math_format     = static_cast<DataFormat>(formats.math);
-    DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-    if (is_fp32_dest_acc_en && (pack_src_format == DataFormat::Float32 || pack_src_format == DataFormat::Int32))
+    if (is_fp32_dest_acc_en) // is_fp32_dest_acc_en = true means Fp32/Int32 format in dest
     {
+        // Disable implied math format mode for 32BIT dest transpose dest
+        cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = 1;
+        cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = 1;
+
+        // When unpacking to Fp32/Int32 dest, SrcA/B formats are set to Fp32/Int32
+        std::uint8_t SRCA_FORMAT_MASKED = static_cast<std::uint8_t>(math_format) & 0xFF;
+        std::uint8_t SRCB_FORMAT_MASKED = static_cast<std::uint8_t>(math_format) & 0xFF;
+
+        alu_config_u alu_config;
+        for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+        {
+            alu_config.val[i] = 0;
+        }
+
+        if constexpr (!EN_IMPLIED_MATH_FORMAT)
+        {
+            // Set ALU SrcA format since it is not implied
+            // If input format has exp_width == 5, the math dest set to Float16
+            // else input format has exp_width == 8, the math dest set to Float16_b
+            alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
+            alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = 0x1;
+            alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
+            alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = 0x1;
+
+            // RT: Since SrcA & SrcB need to match exponent widths, can set them the same for now
+            // Check with HW team if different mixes between Src registers are allowed
+            alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA = SRCA_FORMAT_MASKED;
+            alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB = SRCB_FORMAT_MASKED;
+        }
+
         // For Int32 dest, transpose dest requires opposite settings that what is usually set for Int32 dest,
         // this is why fp32_dest is set to true and int32_dest is set to false
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+        alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = 1;
+        alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = 0;
+        alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = 0;
+
+        for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+        {
+            cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
+        }
     }
     else
     {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
     }
 
     if constexpr (!unpack_to_dest)
