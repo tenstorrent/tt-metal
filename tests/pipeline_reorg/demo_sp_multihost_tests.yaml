@@ -124,6 +124,8 @@
 
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
+    echo "PIPELINE_HOSTS: $PIPELINE_HOSTS"
+    echo "PIPELINE_DIR: $PIPELINE_DIR"
     mkdir -p $PIPELINE_DIR
 
     echo "=== SP4 superpod: running generate_blitz_decode_pipeline_configs ==="
