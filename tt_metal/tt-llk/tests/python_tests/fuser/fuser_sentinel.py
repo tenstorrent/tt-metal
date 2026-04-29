@@ -28,7 +28,7 @@ class FuserSentinel:
     @staticmethod
     def _find_format_node(
         operation: "FusedOperation",
-    ) -> "ComputeNode":
+    ) -> Optional["ComputeNode"]:
         """Find the first compute node with operand inputs for format inference.
 
         In a pipeline with mixed FPU and SFPU nodes, only FPU nodes have src_a/src_b
