@@ -72,6 +72,7 @@ def _build_prefill_device_program(
     Nk_TP=16,
     repeat_factor=2,
     key_dim_tp=2048,
+    v_split=1,
 ):
     """Build ProgramDescriptor for the prefill GDN kernel.
 
@@ -83,26 +84,34 @@ def _build_prefill_device_program(
         scale_dev, rms_scale_dev, rms_eps_dev: [1,1,1] scalars
         state_dev: [num_pairs, Dk, Dv] — recurrence state
         output_dev: [num_pairs * N, 1, Dv] — flat output buffer
+        v_split: number of V-shards per pair. Each (pair, v_shard_idx) tuple
+            is assigned to one core; total active cores = num_pairs * v_split.
+            Vt_shard = Vt // v_split tiles per shard.
     """
+    assert Vt % v_split == 0, f"Vt={Vt} must be divisible by v_split={v_split}"
+    Vt_shard = Vt // v_split
+    state_tiles_shard = Kt * Vt_shard
+
     max_cores = grid.x * grid.y
-    num_cores = min(num_cores, num_pairs_total, max_cores)
-    pairs_per_core = num_pairs_total // num_cores
-    remainder = num_pairs_total % num_cores
+    total_work_units = num_pairs_total * v_split
+    num_cores_used = min(total_work_units, max_cores)
+    assert (
+        num_cores_used == total_work_units
+    ), f"v_split={v_split} requires {total_work_units} cores; only {max_cores} available"
 
-    core_coords = []
-    for i in range(num_cores):
-        core_coords.append(ttnn.CoreCoord(i % grid.x, i // grid.x))
-
+    # Each core gets exactly one (pair_idx, v_shard_idx) work unit.
+    core_coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(num_cores_used)]
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_coords])
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
-    pair_offset = 0
-    core_pair_counts = []
 
+    # Layout: cores 0..num_pairs-1 = (pair=0..num_pairs-1, v_shard=0)
+    #         cores num_pairs..2*num_pairs-1 = (pair=0..num_pairs-1, v_shard=1)
+    #         ... etc. Simple row-major over (v_shard, pair).
     for i, cc in enumerate(core_coords):
-        n = pairs_per_core + (1 if i < remainder else 0)
-        core_pair_counts.append(n)
+        v_shard_idx = i // num_pairs_total
+        pair_idx = i % num_pairs_total
         reader_rt_args[cc.x][cc.y] = [
             conv_out_dev.buffer_address(),
             a_dev.buffer_address(),
@@ -114,16 +123,17 @@ def _build_prefill_device_program(
             rms_scale_dev.buffer_address(),
             state_dev.buffer_address(),
             rms_eps_dev.buffer_address(),
-            pair_offset,
-            n,
+            pair_idx,
+            1,  # n_pairs per core (always 1 with v_split dispatch)
+            v_shard_idx,
         ]
         writer_rt_args[cc.x][cc.y] = [
             output_dev.buffer_address(),
             state_dev.buffer_address(),
-            pair_offset,
-            n,
+            pair_idx,
+            1,
+            v_shard_idx,
         ]
-        pair_offset += n
 
     # Tile offsets for Q/K/V regions within conv_out
     key_tile_off = key_dim_tp // 32
@@ -132,31 +142,33 @@ def _build_prefill_device_program(
     conv_tiles_per_row = qkv_dim // 32
     ab_tiles_per_row = (Nv_TP + 31) // 32
 
-    # CB descriptors
+    # CB descriptors. CBs that touch only the V-shard slice are sized by Vt_shard;
+    # CBs over Q/K dims (or shared scalars) are unchanged.
     cb_descriptors = [
         _make_cb(0, Kt, core_ranges),  # cb_q_raw
         _make_cb(1, Kt, core_ranges),  # cb_k_raw
         _make_cb(2, Kt, core_ranges),  # cb_k_col
-        _make_cb(3, Vt, core_ranges),  # cb_v
+        _make_cb(3, Vt_shard, core_ranges),  # cb_v
         _make_cb(4, 1, core_ranges),  # cb_g
         _make_cb(5, 1, core_ranges),  # cb_beta
-        _make_cb(6, STATE_TILES, core_ranges),  # cb_state_in
-        _make_cb(7, STATE_TILES, core_ranges),  # cb_state_b
-        _make_cb(8, STATE_TILES, core_ranges),  # cb_state_out
+        _make_cb(6, state_tiles_shard, core_ranges),  # cb_state_in
+        _make_cb(7, state_tiles_shard, core_ranges),  # cb_state_b
+        _make_cb(8, state_tiles_shard, core_ranges),  # cb_state_out
         _make_cb(9, 1, core_ranges),  # cb_a
         _make_cb(10, 1, core_ranges),  # cb_b
         _make_cb(12, 1, core_ranges),  # cb_neg_exp_A
         _make_cb(13, 1, core_ranges),  # cb_dt_bias
-        _make_cb(14, Vt, core_ranges),  # cb_norm_w (persistent)
+        _make_cb(14, Vt_shard, core_ranges),  # cb_norm_w (persistent)
         _make_cb(15, 1, core_ranges),  # cb_scale (persistent)
-        _make_cb(16, Vt, core_ranges),  # cb_out
+        _make_cb(16, Vt_shard, core_ranges),  # cb_out
         _make_cb(17, Kt, core_ranges),  # cb_q (normed)
         _make_cb(18, Kt, core_ranges),  # cb_k_row (normed)
-        _make_cb(21, 15, core_ranges),  # cb_scratch (whole-tile Q/K/V/a/b + scalars)
+        # cb_scratch holds: Kt(Q) + Kt(K) + Vt_shard(V) + 1(A) + 1(B) + 1(scalars). Keep at 15 (safe).
+        _make_cb(21, 15, core_ranges),
         _make_cb(24, 1, core_ranges),  # cb_exp_g
-        _make_cb(25, Vt, core_ranges),  # cb_kv_mem
-        _make_cb(26, Vt, core_ranges),  # cb_delta
-        _make_cb(27, Vt, core_ranges),  # cb_delta_s
+        _make_cb(25, Vt_shard, core_ranges),  # cb_kv_mem
+        _make_cb(26, Vt_shard, core_ranges),  # cb_delta
+        _make_cb(27, Vt_shard, core_ranges),  # cb_delta_s
         _make_cb(28, Kt, core_ranges),  # cb_sq_acc
         _make_cb(29, 1, core_ranges),  # cb_tmp
         _make_cb(31, 1, core_ranges),  # cb_rms_scale (persistent)
@@ -167,85 +179,68 @@ def _build_prefill_device_program(
     state_l1_flag = 1 if state_in_l1 else 0
     packed_reduce_scaler = 0x3F803F80
 
-    # Group cores by pair count (for compile-time arg specialization)
-    groups = {}
-    for i, cc in enumerate(core_coords):
-        n = core_pair_counts[i]
-        groups.setdefault(n, []).append(cc)
+    reader_ct = [
+        Kt,  # 0
+        Vt_shard,  # 1  (per-shard V-tile count)
+        BF16_TILE_BYTES,  # 2
+        state_l1_flag,  # 3
+        packed_reduce_scaler,  # 4
+        Nv_TP,  # 5
+        Nk_TP,  # 6
+        repeat_factor,  # 7
+        key_tile_off,  # 8
+        v_tile_off,  # 9
+        num_tokens,  # 10
+        conv_tiles_per_row,  # 11
+        ab_tiles_per_row,  # 12
+        Vt,  # 13 — global V-tile count (for addressing)
+    ]
 
-    all_kernels = []
-    for n_pairs, cores in groups.items():
-        if n_pairs == 0:
-            continue
+    writer_ct = [
+        Kt,  # 0
+        Vt_shard,  # 1  (per-shard V-tile count)
+        BF16_TILE_BYTES,  # 2
+        state_l1_flag,  # 3
+        num_tokens,  # 4
+        Vt,  # 5 — global V-tile count (for addressing)
+    ]
 
-        group_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    compute_ct = [Kt, Vt_shard, 1, num_tokens]  # 1 pair per core; Vt_shard internally
 
-        group_reader_rt = ttnn.RuntimeArgs()
-        group_writer_rt = ttnn.RuntimeArgs()
-        for c in cores:
-            group_reader_rt[c.x][c.y] = list(reader_rt_args[c.x][c.y])
-            group_writer_rt[c.x][c.y] = list(writer_rt_args[c.x][c.y])
+    reader_kd = ttnn.KernelDescriptor(
+        kernel_source=READER_PREFILL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_ranges,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
 
-        reader_ct = [
-            Kt,  # 0
-            Vt,  # 1
-            BF16_TILE_BYTES,  # 2
-            state_l1_flag,  # 3
-            packed_reduce_scaler,  # 4
-            Nv_TP,  # 5
-            Nk_TP,  # 6
-            repeat_factor,  # 7
-            key_tile_off,  # 8
-            v_tile_off,  # 9
-            num_tokens,  # 10
-            conv_tiles_per_row,  # 11
-            ab_tiles_per_row,  # 12
-        ]
+    writer_kd = ttnn.KernelDescriptor(
+        kernel_source=WRITER_PREFILL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_ranges,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
 
-        writer_ct = [
-            Kt,  # 0
-            Vt,  # 1
-            BF16_TILE_BYTES,  # 2
-            state_l1_flag,  # 3
-            num_tokens,  # 4
-        ]
-
-        reader_kd = ttnn.KernelDescriptor(
-            kernel_source=READER_PREFILL_PATH,
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=group_ranges,
-            compile_time_args=reader_ct,
-            runtime_args=group_reader_rt,
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-
-        writer_kd = ttnn.KernelDescriptor(
-            kernel_source=WRITER_PREFILL_PATH,
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=group_ranges,
-            compile_time_args=writer_ct,
-            runtime_args=group_writer_rt,
-            config=ttnn.WriterConfigDescriptor(),
-        )
-
-        compute_kd = ttnn.KernelDescriptor(
-            kernel_source=COMPUTE_PREFILL_PATH,
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=group_ranges,
-            compile_time_args=[Kt, Vt, n_pairs, num_tokens],
-            runtime_args=[],
-            config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                dst_full_sync_en=False,
-            ),
-        )
-
-        all_kernels.extend([reader_kd, writer_kd, compute_kd])
+    compute_kd = ttnn.KernelDescriptor(
+        kernel_source=COMPUTE_PREFILL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct,
+        runtime_args=[],
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        ),
+    )
 
     return ttnn.ProgramDescriptor(
-        kernels=all_kernels,
+        kernels=[reader_kd, writer_kd, compute_kd],
         cbs=cb_descriptors,
     )
 
@@ -269,6 +264,7 @@ def gdn_prefill_fused(
     Nk_TP=16,
     repeat_factor=2,
     key_dim_tp=2048,
+    v_split=1,
 ):
     """Prefill GDN: process N tokens in a single kernel dispatch.
 
@@ -288,6 +284,9 @@ def gdn_prefill_fused(
         output: [num_pairs * N, 1, Dv] — flat output buffer
         num_pairs: B * Nv (e.g. 1 * 32 = 32)
         num_tokens: N (sequence length)
+        v_split: number of V-shards per pair (default 1). With v_split=k, each pair's
+            V-tiles (Vt) are split across k cores; total active cores = num_pairs * k.
+            Math is unchanged (v_split is parallelism only); output PCC must be parity.
     """
     device = conv_out.device()
     state_in_l1 = state.memory_config().buffer_type == ttnn.BufferType.L1
@@ -320,5 +319,6 @@ def gdn_prefill_fused(
         Nk_TP=Nk_TP,
         repeat_factor=repeat_factor,
         key_dim_tp=key_dim_tp,
+        v_split=v_split,
     )
     ttnn.generic_op(all_tensors, program)

@@ -562,6 +562,11 @@ class Qwen35GatedDeltaNet:
             b_fused = ttnn.to_memory_config(b_fused, ttnn.DRAM_MEMORY_CONFIG)
 
         # ---- 4. Call prefill kernel ----
+        # GDN_PREFILL_V_SPLIT env var controls V-dim parallelism: each pair's V-tiles
+        # split across this many cores. Default 1 (32 active cores). Setting 4 uses
+        # 128 cores for the prefill kernel — only meaningful when num_pairs * v_split
+        # ≤ 130 (P150 worker grid).
+        v_split = int(os.environ.get("GDN_PREFILL_V_SPLIT", "1"))
         gdn_prefill_fused(
             conv_out,
             a_fused,
@@ -580,6 +585,7 @@ class Qwen35GatedDeltaNet:
             Nk_TP=Nk,
             repeat_factor=Nv // Nk,
             key_dim_tp=q_dim,
+            v_split=v_split,
         )
         ttnn.deallocate(conv_out)
         ttnn.deallocate(a_fused)
