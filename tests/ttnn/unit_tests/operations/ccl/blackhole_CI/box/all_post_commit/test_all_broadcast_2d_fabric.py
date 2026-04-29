@@ -37,10 +37,9 @@ def test_all_broadcast_2d_fabric(
     function_level_defaults,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
-    cluster_axis = 0
 
     topology = ttnn.Topology.Linear
-    validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
 
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")

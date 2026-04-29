@@ -164,6 +164,21 @@ def run_all_broadcast_impl(
         output_tensor_goldens_list.append(output_tensors)
         temp_output_tensor = torch.cat(output_tensors, -1)
 
+        # Detect actual mesh shape and configure accordingly
+        mesh_actual_shape = mesh_device.shape
+        if mesh_actual_shape[0] > 1 and mesh_actual_shape[1] == 1:
+            # Row-oriented: (N, 1)
+            placement = [ttnn.PlacementShard(-1), ttnn.PlacementReplicate()]
+            logical_shape = ttnn.MeshShape(num_devices, 1)
+        elif mesh_actual_shape[1] > 1 and mesh_actual_shape[0] == 1:
+            # Column-oriented: (1, N)
+            placement = [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)]
+            logical_shape = ttnn.MeshShape(1, num_devices)
+        else:
+            # Default to column-oriented for other cases
+            placement = [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)]
+            logical_shape = ttnn.MeshShape(1, num_devices)
+
         input_tensor_mesh = ttnn.from_torch(
             temp_output_tensor,
             device=mesh_device,
@@ -172,11 +187,10 @@ def run_all_broadcast_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
-                ),
+                ttnn.MeshMapperConfig(placement, logical_shape),
             ),
         )
+        # breakpoint()
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -185,6 +199,7 @@ def run_all_broadcast_impl(
     tt_out_tensor_list = []
     with cache_entries_counter.measure():
         if trace_mode:
+            logger.info("Running with trace")
             tt_out_tensor = run_with_trace(
                 mesh_device,
                 all_broadcast_topology,
@@ -196,6 +211,8 @@ def run_all_broadcast_impl(
             )
             tt_out_tensor_list.append(tt_out_tensor)
         else:
+            logger.info("Running all broadcast")
+            # breakpoint()
             for i in range(num_iters):
                 tt_out_tensors = ttnn.all_broadcast(
                     input_tensor_mesh_list[i],
@@ -207,9 +224,11 @@ def run_all_broadcast_impl(
                 tt_out_tensor_list.append(tt_out_tensors)
 
             logger.info(f"Waiting for op")
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            # breakpoint()
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done op")
 
+    logger.info(f"Done op for real")
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensors = tt_out_tensor_list[tensor_index]
@@ -217,7 +236,9 @@ def run_all_broadcast_impl(
         for k in range(num_devices):
             output_tensor = output_tensors[k]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensors[k])):
-                tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+                logger.info(f"calculating output tensor...")
+                # breakpoint()
+                tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()  # hanging
                 logger.info(f"Checking for device {t.device().id()}")
                 if input_dtype == ttnn.bfloat16:
                     eq, output = comp_equal(tt_output_tensor, output_tensor)
