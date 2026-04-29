@@ -1,5 +1,48 @@
 # TurboQuant KV Cache Quantization
 
+## 🚧 BLOCKED 2026-04-29: hybrid combine kernel hang
+
+The trace-input plumbing (`ring_pos`, `old_pos`) is committed end-to-end (commit
+`34bada48f3a`). `prepare_decode_inputs_host` builds the position tensors,
+`update_cache` and `hybrid_sdpa_decode` consume them, no per-step host syncs.
+
+**Blocker:** the fused TQ SDPA kernel hangs when called with
+`pre_rescaled=True + return_lse=True`. The compute kernel's LSE pack code only
+runs in the `!pre_rescaled` branch (`sdpa_tq_decode.cpp:1069`); the
+`pre_rescaled` branch calls `sdpa_standard` which does not export LSE. The
+writer (`writer_tq_decode.cpp:178`) unconditionally `cb_wait_front`s on
+`cb_lse_out`, so it deadlocks waiting for tiles compute never pushes.
+
+The previous "Paris" smoke test that worked at 99.3 ms/tok must have been short
+enough that `cur_pos < W` always held, in which case the legacy hybrid path
+sets `return_lse=False` for the ring SDPA — sidestepping the bug. The
+1024-position eval inevitably hits `cur_pos ≥ W`, requesting LSE for the
+combine, and hangs.
+
+Test confirming: `test_hybrid_fast_path.py` (also has its own shape bug in the
+test itself — `pre_rotate_query` expects `[1, B, NQH, DH]`, not
+`[1, NQH, 1, DH]`; same Q-shape footgun once you populate the cache).
+
+**Required fix:** add LSE export to the `pre_rescaled` branch in
+`sdpa_tq_decode.cpp`. Two implementation options:
+
+(a) Replace the `sdpa_standard` call with a custom Flash-Attention loop that
+mirrors the `!pre_rescaled` chunk loop but skips the dequant steps (Steps 0,
+1, 4 in the current code). The loop's existing post-loop LSE pack at
+`sdpa_tq_decode.cpp:1069` would then run for both modes.
+
+(b) Add a `bool return_lse` template param to `sdpa_inner_loop`/`sdpa_standard`
+in `compute_common.hpp` (shared with the standard SDPA decode), gated to emit
+`max·scale + log(sum)` to `cb_lse_out` between the K-chunk loop and the final
+recip+normalize.
+
+(a) is contained to TQ kernel territory but duplicates ~50 lines of Flash
+Attention. (b) is cleaner but touches a shared file.
+
+Until that lands, the W-sweep at W ∈ {32, 64, 128, 256} cannot run with the
+hybrid combine. Track A baseline still works — confirmed at 88.9 % top-1, 81.6
+ms/tok, 8-position eval (`b0fzclfk1.output`).
+
 ## 🚀 RESUME HERE — TurboQuant 128K plan complete (2026-04-29)
 
 Status of the **TurboQuant 128K — Two-Track Comparison** plan:
