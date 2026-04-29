@@ -8,17 +8,11 @@ TTNN-based implementation of the Dots OCR vision-language model family (HF: `red
 - Demo script + performance benchmark
 
 
-Text prefill PCC (single file):
-
-```bash
-pytest models/demos/dots_ocr/tests/pcc/test_text_prefill_pcc.py
-```
-
 Run demo in TTNN:
 
 ```bash
 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo \
-  --image models/demos/dots_ocr/tests/demo/test12.png \
+  --image models/demos/dots_ocr/tests/demo/image.png \
   --backend ttnn \
   --vision-backend ttnn
 ```
@@ -28,6 +22,14 @@ Run HF reference only:
 ```bash
 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo --image models/demos/dots_ocr/tests/demo/test12.png --backend hf
 ```
+
+Text prefill PCC:
+
+```bash
+pytest models/demos/dots_ocr/tests/pcc/test_text_prefill_pcc.py
+```
+
+*Only passing in N150
 
 ### Supported Wormhole topologies
 
