@@ -114,7 +114,7 @@
         for tt_smi in /usr/local/bin/tt-smi /home/user/.local/bin/tt-smi "$(command -v tt-smi 2>/dev/null)" "$HOME/.local/bin/tt-smi"; do
           if [ -n "$tt_smi" ] && [ -x "$tt_smi" ]; then
             echo "Using tt-smi at $tt_smi on $(hostname)"
-            # exec replaces this remote shell, so mpirun sees tt-smi's exit code.
+            # exec replaces this remote shell, so mpirun sees the tt-smi exit code.
             exec "$tt_smi" -glx_reset_auto
           fi
         done
@@ -123,7 +123,7 @@
           tt_smi=$(find "$search_root" -maxdepth 5 -type f -name tt-smi -perm /111 -print -quit 2>/dev/null || true)
           if [ -n "$tt_smi" ]; then
             echo "Using tt-smi at $tt_smi on $(hostname)"
-            # exec replaces this remote shell, so mpirun sees tt-smi's exit code.
+            # exec replaces this remote shell, so mpirun sees the tt-smi exit code.
             exec "$tt_smi" -glx_reset_auto
           fi
         done
