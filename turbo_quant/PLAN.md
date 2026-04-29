@@ -98,43 +98,60 @@ parallelism cannot close it. Long-context (e.g. 32K+) might
 narrow the relative gap somewhat as SDPA grows, but Track B
 should hold its lead because BFP8 SDPA also stays fast there.
 
-### ⚠️ Current recommendation — REVISED (2026-04-29 token-accuracy run)
+### Token-accuracy reality check (2026-04-29 N150)
 
-Token-accuracy on the 1024-token reference set (N150,
-`turbo_quant/eval_token_accuracy.py`):
+`eval_token_accuracy.py` over 1024 reference tokens (eval = positions
+512 → 1022, 511 positions scored):
 
-| Mode                            | Top-1 | Top-5 | Δ vs BFP8 |
-|---------------------------------|------:|------:|----------:|
-| `--no-turbo-quant` (BFP8)       | 97.3% | 100.0% | —          |
-| `--tq-rescaled-bfp4` (Track B)  | **66.6%** | **82.2%** | **−30.7 / −17.8 pp** |
+| Mode                            | Top-1 | Top-5 | ms/tok | KV mem |
+|---------------------------------|------:|------:|-------:|-------:|
+| `--no-turbo-quant` (BFP8)       | **97.3%** | **100.0%** | 37.8 | 1.00× |
+| `--tq-full-dequant` (Track A)   | **86.9%** | **97.1%**  | 83.1 | 0.75× |
+| `--tq-rescaled-bfp4` (Track B)  | 66.6% | 82.2% | 43.5 | 0.50× |
 
-**Track B has severe accuracy degradation at long context.**
-Per-position progress shows accuracy falling from ~84 % top-1
-at pos 710 down to ~67 % at pos 1010 — the BFP4 storage of
-rescaled centroid×norm values loses too much precision when
-many keys/values are read together at long cur_pos.
+**Both TQ paths lose accuracy vs BFP8.** Track A loses ~10 pp
+top-1 / ~3 pp top-5; Track B loses ~31 pp / ~18 pp. Per-position
+progression shows Track B steadily collapsing from ~84 % top-1
+at pos 560 to ~67 % at pos 1010, while Track A holds ~84-92 %
+across the same span — Track A errors are bounded, Track B's
+errors compound.
 
-So the earlier "Track B wins" recommendation — based on the
-short-context (cur_pos ≤ 72) "Paris" e2e tests — does not hold
-at long context. The synthetic per-call cosine on random K/V was
-≥ 0.9995, but attention compounds many such reads and the small
-errors accumulate.
+So the short-context "Paris" tests at cur_pos = 72 didn't surface
+either of these regressions; the synthetic per-call cosine
+≥ 0.9995 on random K/V doesn't capture the real attention
+dynamics either.
 
-**Revised recommendation:** Track A (`--tq-full-dequant` +
-Tier 2A K=14) is the actual production candidate. It's slower
-end-to-end (29.1 ms/tok vs 13.9 baseline on T3K) but preserves
-quality (cos > 0.999 vs CPU reference). Track B stays in tree
-as the simpler short-context option but is **not safe for long
-context** without further work.
+### Current recommendation
 
-Open work to revisit:
-- Run the same 1024-position accuracy test on Track A
-  (`--tq-full-dequant`) to confirm it preserves the BFP8 baseline
-  at long context as expected.
-- Investigate whether Track B's accuracy regression is in the
-  rescale step (centroid×norm → single BFP4 value) vs in BFP4's
-  reduced precision generally — could a sliding-window hybrid
-  (recent tokens BFP8, old tokens BFP4) recover quality?
+Neither track is yet a drop-in replacement for BFP8 baseline at
+long context — both have meaningful quality regressions on this
+benchmark. Track A is the better quality option (top-5 nearly
+intact at 97.1 %), but is 2.2× slower than baseline on N150 K=1
+and the regression in top-1 still matters for greedy decoding.
+
+Both tracks stay in tree. The short-context win for Track B
+(faster than BFP8, halves memory, identical "Paris" answer at
+cur_pos ≤ 72) is real and useful for some workloads — but it
+should not be defaulted on for general decoding without a
+sliding-window hybrid or further work to recover the lost top-1.
+
+### Open follow-ups
+
+- **Sliding-window hybrid** for Track B — recent tokens stay
+  BFP8 (or BF16), older tokens compress to BFP4. Could recover
+  quality while keeping the memory + per-call speed wins on
+  the older tokens.
+- **Investigate the gap in Track A** — fused kernel itself was
+  validated at cos > 0.999, so why is e2e top-1 down 10 pp?
+  Likely the W_o pre-rotation or rope+TQ interaction. Worth
+  re-checking the rotation absorption math against the BFP8
+  baseline at the lm_head level.
+- **T3K K=14 + Track A accuracy** — same 1024-position run on
+  T3K with `--tq-num-cores-per-head 14`. Should produce same
+  top-1/top-5 (numerics are deterministic) at much lower
+  latency.
+- **Add `--tq-full-dequant` row** to `bench_seqlen_sweep.py`
+  with K=14 numbers when run on T3K.
 
 ### N150 per-call SDPA latency sweep (2026-04-29, K=1)
 

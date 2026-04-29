@@ -44,6 +44,13 @@ def build_parser():
         "(--bfp4-cache kept as alias for backwards compatibility.)",
     )
     p.add_argument(
+        "--tq-full-dequant",
+        action="store_true",
+        help="Track A: paged BFP4 indices + BF16 norms in a custom TQ cache, fused "
+        "TQ SDPA kernel does centroid-gather × norm on-the-fly. Highest precision; "
+        "needs the fused kernel and the multi-device Tier 2A K=14 split for perf.",
+    )
+    p.add_argument(
         "--bfp4-baseline", action="store_true", help="Baseline with BFP4 cache (no TQ) — isolate storage vs TQ loss"
     )
     p.add_argument("--max-seq-len", type=int, default=1024, help="Must be >= 1024 for full reference")
@@ -171,19 +178,45 @@ def main():
         # Per-layer caches caused decode to hang at scale (each layer compiles its
         # own program and the program cache misses dominate).
         n_local_kv_heads = model_args.n_kv_heads // model_args.cluster_shape[1]
-        shared_tq = TTNNTurboQuantCache(
-            mesh_device,
-            num_layers=1,
-            num_kv_heads=n_local_kv_heads,
-            head_dim=model_args.head_dim,
-            max_seq_len=32,
-            bits=args.bits,
-            memory_efficient=False,
-            seed=args.seed,
-        )
+        if args.tq_full_dequant:
+            # Track A: free model's standard layer_past (fused path owns the KV cache)
+            # and allocate a paged BFP4-idx + BF16-norms TQ cache.
+            for layer in tt_model.layers:
+                attn = layer.attention
+                if hasattr(attn, "layer_past") and attn.layer_past is not None:
+                    for t in attn.layer_past:
+                        ttnn.deallocate(t)
+                    attn.layer_past = None
+            shared_tq = TTNNTurboQuantCache(
+                mesh_device,
+                num_layers=len(tt_model.layers),
+                num_kv_heads=n_local_kv_heads,
+                head_dim=model_args.head_dim,
+                max_seq_len=args.max_seq_len,
+                bits=args.bits,
+                memory_efficient=True,  # paged BFP4 indices + BF16 norms + fused SDPA
+                paged_config=paged_attention_config,
+                max_batch_size=1,
+                seed=args.seed,
+            )
+        else:
+            # Track B / pre-rescaled mode: TQ object only carries the rotation matrix
+            # and codebook; the actual storage is the model's standard layer_past.
+            shared_tq = TTNNTurboQuantCache(
+                mesh_device,
+                num_layers=1,
+                num_kv_heads=n_local_kv_heads,
+                head_dim=model_args.head_dim,
+                max_seq_len=32,
+                bits=args.bits,
+                memory_efficient=False,
+                seed=args.seed,
+            )
         shared_tq.rotation_absorbed = True
-        for layer in tt_model.layers:
+        for layer_idx, layer in enumerate(tt_model.layers):
             layer.attention.tq_cache = shared_tq
+            if args.tq_full_dequant:
+                layer.attention.tq_layer_idx = layer_idx
 
     # ------------------------------------------------------------------ #
     # Teacher-forced decode: feed ref tokens one at a time, get top-5    #
@@ -271,6 +304,8 @@ def main():
         mode = "baseline BFP4 (no TQ)"
     elif args.tq_rescaled_bfp4:
         mode = f"TQ {args.bits}-bit rescaled BFP4 paged"
+    elif args.tq_full_dequant:
+        mode = f"TQ {args.bits}-bit full dequant (fused kernel)"
     else:
         mode = f"TurboQuant {args.bits}-bit BF16"
     print(f"\n{'='*60}")
