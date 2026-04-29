@@ -123,22 +123,19 @@ def _torch_hf_rope_decode_broadcast_heads(x_1bhd: torch.Tensor, cos_1b1d: torch.
     return (x_1bhd * cos_e) + (rotate_half(x_1bhd) * sin_e)
 
 
+def _decode_height_shard_core_grid(device, batch: int):
+    """Core grid for decode-mode HEIGHT sharding; input and cos/sin must use the same grid."""
+    grid_size = device.compute_with_storage_grid_size()
+    return ttnn.num_cores_to_corerangeset(batch, grid_size, row_wise=True)
+
+
 def _decode_qk_heads_mem_config(device, batch: int, num_heads: int, head_dim: int) -> ttnn.MemoryConfig:
     """HEIGHT-sharded L1 for decode Q/K (aligned with ``test_rotary_embedding_hf_decode_baseline``)."""
     padded_heads = nearest_32(num_heads)
     shard_h = padded_heads
-    if is_blackhole():
-        return ttnn.create_sharded_memory_config(
-            shape=(shard_h, head_dim),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-    grid_size = device.compute_with_storage_grid_size()
-    batch_grid = ttnn.num_cores_to_corerangeset(batch, grid_size, row_wise=True)
+    batch_grid = _decode_height_shard_core_grid(device, batch)
     return ttnn.create_sharded_memory_config(
-        shape=(padded_heads, head_dim),
+        shape=(shard_h, head_dim),
         core_grid=batch_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
