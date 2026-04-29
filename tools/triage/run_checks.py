@@ -42,6 +42,7 @@ from triage import (
     log_warning_risc,
     create_progress,
     log_check,
+    TTTriageSkipped,
 )
 from triage_session import get_triage_session
 from ttexalens.context import Context
@@ -49,7 +50,6 @@ from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from ttexalens.hardware.risc_debug import RiscHaltError
-import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
 script_config = ScriptConfig(
@@ -110,34 +110,23 @@ class PerCoreCheckResult(PerBlockCheckResult):
 
 def get_devices(
     devices: list[str],
-    inspector_data: InspectorData | None,
+    inspector_data: InspectorData,
     metal_device_id_mapping: MetalDeviceIdMapping,
     context: Context,
 ) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
-        if inspector_data is not None:
-            metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
-
-            if len(metal_device_ids) == 0:
-                utils.WARN(
-                    f"  No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache."
-                )
-                device_ids = [int(id) for id in context.devices.keys()]
-            else:
-                device_ids = [
-                    metal_device_id_mapping.get_device_id(metal_device_id)
-                    for metal_device_id in metal_device_ids
-                    if metal_device_id_mapping.get_device_id(metal_device_id) is not None
-                ]
-        else:
-            utils.WARN(f"  Using all available devices.")
-            device_ids = [int(id) for id in context.devices.keys()]
+        metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
+        device_ids = [
+            metal_device_id_mapping.get_device_id(metal_device_id)
+            for metal_device_id in metal_device_ids
+            if metal_device_id_mapping.get_device_id(metal_device_id) is not None
+        ]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
         device_ids = [int(id) for id in devices]
 
-    return [context.devices[id] for id in device_ids]
+    return [context.devices[id] for id in device_ids if id in context.devices]
 
 
 def _convert_to_on_chip_coordinates(
@@ -162,8 +151,10 @@ def get_block_locations(
     inspector_data: InspectorData,
     metal_device_id_mapping: MetalDeviceIdMapping,
 ) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
-    device_map = _make_device_map(devices)
     block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = defaultdict(dict)
+    if not devices:
+        return block_locations
+    device_map = _make_device_map(devices)
     chip_blocks_list = inspector_data.getBlocksByType().chips
 
     for i in range(len(chip_blocks_list)):
@@ -390,6 +381,14 @@ def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
+    if not devices:
+        raise TTTriageSkipped(
+            "No active devices in metal process; nothing to triage - no scripts requiring metal devices will be executed.\n"
+            "       Likely causes: device init (e.g. FW-init) failed before any device was registered with the runtime, "
+            "the process never opened a device or the workload closed all devices before triage attached.\n"
+            "       Pass --dev=all to inspect every visible chip anyway (unsafe in multi-process/TT_METAL_VISIBLE_DEVICES setups)."
+        )
+
     block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
     return RunChecks(devices, block_locations, metal_device_id_mapping)
 
