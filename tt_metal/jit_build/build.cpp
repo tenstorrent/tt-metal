@@ -133,8 +133,10 @@ void JitBuildEnv::init(
     }
 
     // Flags
-    // string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
-    string common_flags = "-std=c++20 -flto=auto -ffast-math -fno-exceptions -Wno-volatile -Wno-template-body ";
+    string common_flags =
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval"
+        " -flto=auto -ffast-math -fno-exceptions"
+        " -Wno-volatile -Wno-template-body ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
