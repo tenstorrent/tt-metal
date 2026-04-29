@@ -10,8 +10,6 @@ that can be fed into the vision transformer blocks.
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 from models.common.lightweightmodule import LightweightModule
@@ -64,8 +62,7 @@ class PatchEmbedTT(LightweightModule):
         # Some callers provide prefixes with a trailing '.' (e.g. "vision_tower.patch_embed.").
         # Normalize so f"{prefix}.foo" never produces a double-dot key.
         prefix = (self.state_dict_prefix or "").rstrip(".")
-        # Keep torch copies for bring-up diagnostics (device-vs-torch comparisons).
-        # These are small relative to the full checkpoint and only used when debugging is enabled.
+        # Small host-side copies of projection / norm weights (aligned with HF layout).
         self._torch_proj_weight_out_in = None  # [out_features, in_features]
         self._torch_proj_bias = None  # [out_features]
         self._torch_patch_norm_gamma = None  # [out_features]
@@ -291,53 +288,6 @@ class PatchEmbedTT(LightweightModule):
                 # HF patchifier RMSNorm uses eps=1e-5
                 out = ttnn.rms_norm(out, weight=self.patch_norm_weight, epsilon=1e-5)
 
-            # Optional bring-up diagnostic: compare device output vs torch reference using the *same* weights.
-            # Enable with: DOTS_DEBUG_PATCH_EMBED=1
-            if os.environ.get("DOTS_DEBUG_PATCH_EMBED") == "1":
-                try:
-                    print("[DOTS_DEBUG_PATCH_EMBED] enabled")
-                    # Convert TT output back to torch (replicated mesh -> pick first replica).
-                    mesh_composer = None
-                    if hasattr(ttnn, "ConcatMeshToTensor"):
-                        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-                    tt_out = ttnn.to_torch(out, mesh_composer=mesh_composer) if mesh_composer else ttnn.to_torch(out)
-                    # If replicated, first replica matches the full tensor.
-                    if tt_out.dim() >= 4 and tt_out.shape[0] > 1:
-                        tt_out = tt_out[0]
-                    # Normalize shapes: [1,1,S,D] -> [S,D]
-                    tt_out_2d = tt_out.reshape(-1, int(tt_out.shape[-1])).float()
-
-                    # Torch reference: linear + rmsnorm on the same input x (bf16) using the exact torch weights we loaded.
-                    if self._torch_proj_weight_out_in is None:
-                        raise RuntimeError("missing _torch_proj_weight_out_in (weight loading failed?)")
-                    torch_lin = torch.nn.functional.linear(
-                        x.squeeze(0).float(),
-                        self._torch_proj_weight_out_in,
-                        self._torch_proj_bias,
-                    )
-                    if self._torch_patch_norm_gamma is not None:
-                        eps = 1e-5
-                        torch_lin = (
-                            torch_lin * torch.rsqrt(torch_lin.pow(2).mean(-1, keepdim=True) + eps)
-                        ) * self._torch_patch_norm_gamma
-
-                    # PCC helper
-                    def _pcc(a, b):
-                        a = a.flatten()
-                        b = b.flatten()
-                        a = a - a.mean()
-                        b = b - b.mean()
-                        return (a * b).sum() / (torch.sqrt((a * a).sum()) * torch.sqrt((b * b).sum()) + 1e-12)
-
-                    n = min(torch_lin.shape[0], tt_out_2d.shape[0])
-                    d = min(torch_lin.shape[1], tt_out_2d.shape[1])
-                    p = float(_pcc(torch_lin[:n, :d], tt_out_2d[:n, :d]))
-                    max_abs = float((torch_lin[:n, :d] - tt_out_2d[:n, :d]).abs().max())
-                    print(
-                        f"[DOTS_DEBUG_PATCH_EMBED] device_vs_torch pcc={p:.6f} max_abs={max_abs:.6f} torch={tuple(torch_lin.shape)} tt={tuple(tt_out_2d.shape)}"
-                    )
-                except Exception as e:
-                    print(f"[DOTS_DEBUG_PATCH_EMBED] compare failed: {type(e).__name__}: {e}")
             # Do NOT reorder tokens here: processor already emits patchified tokens in the HF order.
             # Also, Dots' RoPE is applied in attention blocks, not via learned pos-embeddings here.
             return out

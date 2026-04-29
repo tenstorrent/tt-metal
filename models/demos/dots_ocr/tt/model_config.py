@@ -68,7 +68,7 @@ class DotsModelArgs(ModelArgs):
                     # Keep activations handled by callers; just force the weight tensors.
                     conf.tensor_dtype_settings[TensorGroup.FF1_FF3] = PrecisionSetting.BF16
                     conf.tensor_dtype_settings[TensorGroup.FF2] = PrecisionSetting.BF16
-                logger.info("DotsModelArgs: forced BF16 for FFN weights (FF1_FF3/FF2) for OCR correctness")
+                logger.debug("DotsModelArgs: forced BF16 for FFN weights (FF1_FF3/FF2) for OCR correctness")
         except Exception:
             pass
 
@@ -107,7 +107,7 @@ class DotsModelArgs(ModelArgs):
                                 dst_full_sync_en=bool(getattr(cfg, "dst_full_sync_en", False)),
                             ),
                         )
-                    logger.info("DotsModelArgs: forced HiFi3 for fp32 accumulation on Wormhole (correctness)")
+                    logger.debug("DotsModelArgs: forced HiFi3 for fp32 accumulation on Wormhole (correctness)")
         except Exception:
             pass
 
@@ -134,7 +134,7 @@ class DotsModelArgs(ModelArgs):
         cap = os.getenv("DOTS_MAX_SEQ_LEN") or os.getenv("DOTS_MAX_SEQ_LEN_WH_LB")
         if cap:
             self.max_seq_len = min(self.max_seq_len, int(cap))
-            logger.info(f"DotsModelArgs: max_seq_len capped to {self.max_seq_len} via env")
+            logger.debug(f"DotsModelArgs: max_seq_len capped to {self.max_seq_len} via env")
 
         # Shrink LM head column chunks so host tilize stays within L1 CB limits on WH (N300/N150).
         lm_cap_s = os.getenv("DOTS_LM_HEAD_MAX_COLUMNS_PER_DEVICE", "2048")
@@ -144,7 +144,7 @@ class DotsModelArgs(ModelArgs):
                 old_lm = self.max_columns_per_device_lm_head
                 self.max_columns_per_device_lm_head = min(old_lm, lm_cap)
                 if self.max_columns_per_device_lm_head < old_lm:
-                    logger.info(
+                    logger.debug(
                         f"DotsModelArgs: max_columns_per_device_lm_head {old_lm} -> "
                         f"{self.max_columns_per_device_lm_head} (LM head tilize / L1; "
                         f"override DOTS_LM_HEAD_MAX_COLUMNS_PER_DEVICE)"
@@ -162,7 +162,7 @@ class DotsModelArgs(ModelArgs):
                 f"meshes are automatically clamped to a 1x2 submesh."
             )
 
-        logger.info(
+        logger.debug(
             f"DotsModelArgs: dim={self.dim} layers={self.n_layers} heads={self.n_heads} "
             f"kv_heads={self.n_kv_heads} cluster_shape={self.cluster_shape} "
             f"max_seq_len={self.max_seq_len} device_name={self.device_name}"

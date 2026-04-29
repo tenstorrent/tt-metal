@@ -33,6 +33,7 @@ import torch
 from loguru import logger
 from PIL import Image
 
+from models.demos.dots_ocr.logging_utils import configure_dots_ocr_console_logging
 from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec, get_hf_model_id
 from models.demos.dots_ocr.reference.model import DotsOCRReference
 
@@ -52,135 +53,6 @@ def _ensure_local_ttnn_import() -> None:
     for p in (ttnn_py_root, repo_root):
         if p not in sys.path:
             sys.path.insert(0, p)
-
-
-def _pcc_and_max_abs(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
-    a = a.float()
-    b = b.float()
-    a0 = a - a.mean()
-    b0 = b - b.mean()
-    denom = (a0.norm() * b0.norm()).clamp_min(1e-8)
-    pcc = float((a0.flatten() @ b0.flatten()) / denom)
-    max_abs = float((a - b).abs().max())
-    return pcc, max_abs
-
-
-def _maybe_log_fusion_pcc(
-    *,
-    input_ids: torch.Tensor,
-    hf_config,
-    mesh_device,
-    fused_ttnn: object | None,
-    image_embeds: torch.Tensor,
-    tt_model,
-) -> None:
-    """
-    Optional debug: compare device-fused embeddings vs host-fused embeddings.
-
-    Enable with: `export DOTS_DEBUG_FUSION_PCC=1`
-    """
-    if os.getenv("DOTS_DEBUG_FUSION_PCC", "").strip() != "1":
-        return
-    if fused_ttnn is None:
-        return
-    try:
-        from models.demos.dots_ocr.tt.common import (
-            fused_ttnn_embeddings_to_torch,
-            merge_vision_tokens,
-            text_embeds_from_ttnn_embedding,
-        )
-
-        # Device fused -> torch
-        dev_fused = fused_ttnn_embeddings_to_torch(fused_ttnn, mesh_device)  # [B,S,D]
-
-        # Host path: same TT token table for text embeds + same image_embeds
-        host_text = text_embeds_from_ttnn_embedding(tt_model, input_ids)
-        host_fused = merge_vision_tokens(input_ids, host_text, image_embeds, hf_config)
-
-        # Compare a reasonably-sized slice
-        b = min(int(dev_fused.shape[0]), int(host_fused.shape[0]), 1)
-        s = min(int(dev_fused.shape[1]), int(host_fused.shape[1]), 256)
-        d = min(int(dev_fused.shape[2]), int(host_fused.shape[2]), 256)
-        pcc, max_abs = _pcc_and_max_abs(dev_fused[:b, :s, :d], host_fused[:b, :s, :d])
-        logger.info(f"[DOTS_DEBUG_FUSION_PCC] b={b} s={s} d={d} pcc={pcc:.6f} max_abs={max_abs:.6f}")
-    except Exception as e:
-        logger.warning(f"[DOTS_DEBUG_FUSION_PCC] compare failed: {type(e).__name__}: {e}")
-
-
-def _maybe_log_vision_pcc(*, ref: DotsOCRReference, inputs, tt_vision_embeds: torch.Tensor) -> None:
-    """
-    Optional debug: compare TTNN vision embeddings vs HF vision tower output.
-
-    Enable with: `export DOTS_DEBUG_VISION_PCC=1`
-    """
-    if os.getenv("DOTS_DEBUG_VISION_PCC", "").strip() != "1":
-        return
-    try:
-        with torch.no_grad():
-            ref_out = ref.model.vision_tower(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
-            if isinstance(ref_out, (tuple, list)):
-                ref_out = ref_out[0]
-        a = tt_vision_embeds
-        b = ref_out
-        if isinstance(a, torch.Tensor) and a.dim() == 3:
-            a = a.reshape(-1, a.shape[-1])
-        if isinstance(b, torch.Tensor) and b.dim() == 3:
-            b = b.reshape(-1, b.shape[-1])
-        if not (isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor)):
-            return
-        n = min(int(a.shape[0]), int(b.shape[0]), 256)
-        d = min(int(a.shape[1]), int(b.shape[1]), 256)
-        pcc, max_abs = _pcc_and_max_abs(a[:n, :d], b[:n, :d])
-        logger.info(f"[DOTS_DEBUG_VISION_PCC] n={n} d={d} pcc={pcc:.6f} max_abs={max_abs:.6f}")
-    except Exception as e:
-        logger.warning(f"[DOTS_DEBUG_VISION_PCC] compare failed: {type(e).__name__}: {e}")
-
-
-def _maybe_log_decode_pcc(
-    *,
-    ref: DotsOCRReference,
-    inputs,
-    tt_logits: torch.Tensor,
-    fused_input_embeds: torch.Tensor | None,
-) -> None:
-    """
-    Optional debug: compare TTNN logits to HF reference for the *prefill* last-token row.
-
-    Enable with: `export DOTS_DEBUG_DECODE_PCC=1`
-    """
-    if os.getenv("DOTS_DEBUG_DECODE_PCC", "").strip() != "1":
-        return
-    try:
-        with torch.no_grad():
-            # Compare against HF *text* stack, but using the *same* fused embeddings we fed TTNN.
-            if fused_input_embeds is None:
-                return
-            attn = getattr(inputs, "attention_mask", None)
-            if attn is None:
-                return
-            # position_ids: cumulative positions over non-pad tokens (HF convention)
-            position_ids = (attn.long().cumsum(dim=-1) - 1).clamp_min(0)
-
-            # Run HF language model on the fused embeddings and project with lm_head.
-            lm = getattr(getattr(ref.model, "model", ref.model), "language_model", None)
-            if lm is None:
-                lm = getattr(ref.model, "model", None)
-            out_lm = lm(inputs_embeds=fused_input_embeds, attention_mask=attn, position_ids=position_ids)
-            hidden = out_lm[0] if isinstance(out_lm, (tuple, list)) else out_lm.last_hidden_state
-            hf_logits = ref.model.lm_head(hidden)  # [B, S, V]
-        # TT logits are typically [B, 1, V] (prefill) or [B, V]
-        if tt_logits.dim() == 3:
-            tt_row = tt_logits[:, -1, :]
-        elif tt_logits.dim() == 2:
-            tt_row = tt_logits
-        else:
-            return
-        hf_row = hf_logits[:, -1, :]
-        v = min(int(tt_row.shape[-1]), int(hf_row.shape[-1]))
-        pcc, max_abs = _pcc_and_max_abs(tt_row[..., :v], hf_row[..., :v])
-        logger.info(f"[DOTS_DEBUG_DECODE_PCC] vocab={v} pcc={pcc:.6f} max_abs={max_abs:.6f}")
-    except Exception as e:
-        logger.warning(f"[DOTS_DEBUG_DECODE_PCC] compare failed: {type(e).__name__}: {e}")
 
 
 def _decode_pcc_value(
@@ -219,9 +91,7 @@ def _decode_pcc_value(
         b0 = b.float() - b.float().mean()
         denom = (a0.norm() * b0.norm()).clamp_min(1e-8)
         return float((a0.flatten() @ b0.flatten()) / denom)
-    except Exception as e:
-        if os.getenv("DOTS_DEBUG_DECODE_PCC", "").strip() == "1":
-            logger.warning(f"[DOTS_DEBUG_DECODE_PCC] pcc_value failed: {type(e).__name__}: {e}")
+    except Exception:
         return None
 
 
@@ -314,7 +184,6 @@ def _strip_echoed_user_instruction(decoded: str, user_prompt: str) -> str:
         rest = d[len(p) :].strip()
         if rest:
             return rest
-        logger.info("[TTNN] Decoded text matched the user prompt only; skipping echo strip so output is not empty.")
         return d
     return d
 
@@ -393,13 +262,11 @@ def run_hf_backend(
 
 def _load_dots_ttnn_state_dict(model_args, *, text_qkv_permute: bool) -> dict:
     """Load real Dots checkpoint tensors for the TT text stack and validate critical keys."""
-    logger.info(f"[TTNN] Loading real Dots weights (text_qkv_permute={int(text_qkv_permute)})")
     real_sd = model_args.load_real_state_dict(qkv_permute=text_qkv_permute)
     required_keys = ("tok_embeddings.weight", "output.weight")
     missing = [k for k in required_keys if k not in real_sd]
     if missing:
         raise KeyError(f"Real state_dict missing required keys: {missing}")
-    logger.info(f"[TTNN] Loaded real Dots state_dict with {len(real_sd)} tensors.")
     return real_sd
 
 
@@ -490,10 +357,6 @@ def _decode_loop(
         stop_ids.add(int(tokenizer.eos_token_id))
 
     user_done = [False] * batch_size
-    logger.info(
-        f"[TTNN] Starting decode loop (max_new_tokens={max_new_tokens}, stop_at_eos={stop_at_eos}, "
-        f"repetition_penalty={repetition_penalty})"
-    )
 
     # Option A: fixed-step decode. We still run a Python loop (TTNN does not provide a dynamic
     # device-side loop primitive here), but we eliminate per-token EOS bookkeeping and only
@@ -502,7 +365,6 @@ def _decode_loop(
         out_buf = torch.empty((batch_size, max_new_tokens), dtype=torch.int64)
         out_buf[:, 0] = prefilled_token.view(-1).to(torch.int64)
         for iteration in range(1, max_new_tokens):
-            t0 = time.perf_counter()
             use_device_pick = not (repetition_penalty is not None and repetition_penalty > 1.0)
             if use_device_pick:
                 tt_out = generator.decode_forward(
@@ -556,9 +418,6 @@ def _decode_loop(
                 out_tok = torch.argmax(logits, dim=-1)
             if out_tok.dim() == 1:
                 out_tok = out_tok.unsqueeze(-1)
-            elapsed = time.perf_counter() - t0
-            if iteration == 1 or (iteration + 1) % 8 == 0:
-                logger.info(f"[TTNN] iter {iteration + 1}/{max_new_tokens}: {elapsed * 1000:.0f}ms")
             out_buf[:, iteration] = out_tok.view(-1).to(torch.int64)
             current_pos += 1
 
@@ -579,7 +438,6 @@ def _decode_loop(
 
     # Legacy EOS-aware path (kept for debugging or very short runs).
     for iteration in range(max_new_tokens):
-        t0 = time.perf_counter()
         use_device_pick = not (repetition_penalty is not None and repetition_penalty > 1.0)
         if use_device_pick:
             tt_out = generator.decode_forward(
@@ -636,7 +494,6 @@ def _decode_loop(
             out_tok = torch.argmax(logits, dim=-1)
         if out_tok.dim() == 1:
             out_tok = out_tok.unsqueeze(-1)
-        elapsed = time.perf_counter() - t0
 
         current_pos += 1
         any_new = False
@@ -646,13 +503,9 @@ def _decode_loop(
                 continue
             if stop_at_eos and tok in stop_ids:
                 user_done[b] = True
-                logger.info(f"[TTNN] User {b} EOS at iter {iteration} (token_id={tok})")
                 continue
             all_outputs[b].append(tok)
             any_new = True
-
-        if iteration == 0 or (iteration + 1) % 8 == 0:
-            logger.info(f"[TTNN] iter {iteration + 1}/{max_new_tokens}: {elapsed * 1000:.0f}ms")
 
         if stop_at_eos and all(user_done):
             break
@@ -680,7 +533,7 @@ def run_ttnn_backend(
     device_fusion: bool = True,
     fixed_decode_steps: bool = False,
 ) -> str:
-    logger.info(
+    logger.debug(
         f"[TTNN] Loading {model_id} and building Dots TT stack (MESH_DEVICE={os.environ.get('MESH_DEVICE', 'N150')})"
     )
     try:
@@ -784,30 +637,22 @@ def run_ttnn_backend(
         inputs = ref.preprocess_image_and_prompt(image, prompt)
 
         if sanity_text_only:
-            logger.info("[TTNN] Sanity run: text-only (no image) using token-id prefill")
             inputs = ref.preprocess_image_and_prompt(None, prompt)
 
         # Vision forward
         image_embeds = torch.tensor([], dtype=torch.bfloat16)
         if not sanity_text_only and getattr(inputs, "pixel_values", None) is not None:
-            t0 = time.perf_counter()
             if vision_backend == "hf":
                 image_embeds = ref.vision_forward(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
             else:
                 if visual is None:
                     raise RuntimeError("vision_backend=ttnn requested but TT vision stack was not constructed")
                 image_embeds = visual(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
-            logger.info(
-                f"[TTNN] Vision forward ({vision_backend}): {time.perf_counter() - t0:.2f}s, {tuple(image_embeds.shape)}"
-            )
             image_embeds = image_embeds.to(torch.bfloat16)
-            if vision_backend == "ttnn":
-                _maybe_log_vision_pcc(ref=ref, inputs=inputs, tt_vision_embeds=image_embeds)
 
         pad_token_id = ref.tokenizer.pad_token_id or 0
 
         if device_fusion:
-            logger.info("[TTNN] device_fusion: text+vision merge + prefill on mesh (one D2H readback in prefill)")
             text_ttnn = text_embeds_from_ttnn_embedding_ttnn(tt_model, inputs.input_ids)
             if image_embeds.numel() > 0:
                 fused_ttnn = merge_vision_tokens_ttnn(
@@ -815,14 +660,6 @@ def run_ttnn_backend(
                 )
             else:
                 fused_ttnn = text_ttnn
-            _maybe_log_fusion_pcc(
-                input_ids=inputs.input_ids,
-                hf_config=ref.model.config,
-                mesh_device=mesh_device,
-                fused_ttnn=fused_ttnn,
-                image_embeds=image_embeds,
-                tt_model=tt_model,
-            )
             pad_tt = pad_embedding_ttnn_tensor(tt_model, int(pad_token_id))
             per_user = ttnn_fused_batch_to_user_list(fused_ttnn)
             input_prefill, decoding_pos, prefill_lens = preprocess_inputs_prefill_ttnn(
@@ -854,11 +691,7 @@ def run_ttnn_backend(
             # Use HF rotary_emb forward for exact RoPE match (host-only; TTNN still runs prefill/decode).
             cos, sin = text_rope_from_hf(inputs, prefill_for_rope, ref.model, model_args, pad_token_id)
             rot_mats = (cos, sin)
-        else:
-            logger.info("[TTNN] Using device-side RoPE caches (no host rot_mats)")
-
         # --- Prefill ---------------------------------------------------------
-        logger.info(f"[TTNN] Prefill: seq_len={prefill_lens[0]}")
         t0 = time.perf_counter()
         logits = generator.prefill_forward_text(
             input_prefill, rot_mats=rot_mats, prompt_lens=torch.tensor(decoding_pos)
@@ -866,8 +699,7 @@ def run_ttnn_backend(
         # If decode PCC is poor, try both qkv_permute settings once and keep the better one.
         if isinstance(logits, torch.Tensor):
             p_base = _decode_pcc_value(ref=ref, inputs=inputs, tt_logits=logits, fused_input_embeds=prefill_for_rope)
-            # Only do the extra rebuild if PCC debug is enabled or the base PCC is clearly bad.
-            do_try = (os.getenv("DOTS_DEBUG_DECODE_PCC", "").strip() == "1") or (p_base is not None and p_base < 0.85)
+            do_try = p_base is not None and p_base < 0.85
             if do_try:
                 results: dict[bool, tuple[float | None, torch.Tensor | None]] = {}
                 # Evaluate both permutations deterministically.
@@ -877,8 +709,6 @@ def run_ttnn_backend(
                         if perm == bool(text_qkv_permute):
                             p = p_base
                             results[perm] = (p, logits)
-                            if os.getenv("DOTS_DEBUG_DECODE_PCC", "").strip() == "1":
-                                logger.info(f"[DOTS_DEBUG_DECODE_PCC] text_qkv_permute={int(perm)} pcc={p}")
                             continue
 
                         # Otherwise rebuild just the text stack and re-run prefill; keep vision/fusion as-is.
@@ -900,8 +730,6 @@ def run_ttnn_backend(
                             ref=ref, inputs=inputs, tt_logits=logits_try, fused_input_embeds=prefill_for_rope
                         )
                         results[perm] = (p_try, logits_try)
-                        if os.getenv("DOTS_DEBUG_DECODE_PCC", "").strip() == "1":
-                            logger.info(f"[DOTS_DEBUG_DECODE_PCC] text_qkv_permute={int(perm)} pcc={p_try}")
                     except Exception as e:
                         results[perm] = (None, None)
                         logger.warning(f"[TTNN] qkv_permute try({int(perm)}) failed: {type(e).__name__}: {e}")
@@ -918,19 +746,13 @@ def run_ttnn_backend(
                     best_perm, best_p, best_logits = True, p1, l1 if l1 is not None else best_logits
 
                 if best_perm != bool(text_qkv_permute):
-                    logger.info(
+                    logger.debug(
                         f"[TTNN] Switching text_qkv_permute {int(bool(text_qkv_permute))} -> {int(best_perm)} "
                         f"(PCC {p_base} -> {best_p})"
                     )
                     text_qkv_permute = best_perm
                     logits = best_logits
 
-        _maybe_log_decode_pcc(
-            ref=ref,
-            inputs=inputs,
-            tt_logits=(logits if isinstance(logits, torch.Tensor) else torch.tensor([])),
-            fused_input_embeds=prefill_for_rope,
-        )
         ttft = time.perf_counter() - t0
 
         # --- Decode ----------------------------------------------------------
@@ -1031,6 +853,7 @@ def _load_prompts_from_json(path: str) -> list[tuple[str | None, str]]:
 
 
 def main() -> None:
+    configure_dots_ocr_console_logging()
     parser = argparse.ArgumentParser(description="Dots OCR demo (HF reference or Dots TT stack)")
     parser.add_argument("--image", type=str, default=None, help="Path to an input image (optional for text-only)")
     parser.add_argument(

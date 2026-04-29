@@ -852,9 +852,10 @@ class DotsPatchMergerTt(LightweightModule):
         merge2 = self.cfg.spatial_merge_size**2
         assert seqlen % merge2 == 0, "Token count must be divisible by spatial_merge_size**2 for PatchMerger"
         xu = ttnn.slice(x, [0, 0, 0, 0], [1, 1, seqlen, x.shape[3]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x)
+        # Do not deallocate `x` before `ln(xu)`: `xu` may alias `x` storage; freeing `x` invalidates `xu`.
         x1 = self.ln(xu)
         ttnn.deallocate(xu)
+        ttnn.deallocate(x)
         n_merge = seqlen // merge2
         xrm = ttnn.to_layout(x1, ttnn.ROW_MAJOR_LAYOUT)
         xrm = ttnn.reshape(xrm, (1, 1, n_merge, self.mlp_in))

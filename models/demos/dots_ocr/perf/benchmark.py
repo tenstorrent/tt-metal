@@ -4,12 +4,21 @@
 """
 Performance benchmark for Dots OCR (HF vs TTNN).
 
+TTNN timing matches ``models.demos.dots_ocr.demo.demo.run_ttnn_backend``:
+same ``DotsModelArgs`` / weight cache keys, device fusion (default), host RoPE
+(``text_rope_from_hf``), ``generator.prefill_forward_text``, and ``_decode_loop``
+(greedy TTNN argmax decode).
+
 Measures:
-  - ``ttft``          — time from inputs → first sampled token (i.e. prefill).
-  - ``decode_tok_s``  — steady-state decode throughput (tokens / s).
-  - ``avg_latency``   — total wall time for the full iteration.
+  - ``ttft``          — prefill only (first-token logits on host).
+  - ``decode_tok_s``  — generated token count / decode-phase wall time (same definition as demo).
+  - ``avg_latency``   — total wall time per iteration (prefill + decode).
 
 Uses the same timing columns as other VLM/decoder TT demos (ttft, decode_tok_s, etc.).
+
+When ``--image`` is omitted, the benchmark loads ``demo/benchmark_image.png`` (shipped
+under ``models/demos/dots_ocr/demo/``) so HF and TTNN paths exercise vision like the demo.
+Use ``--text-only`` to skip that default and run text-only.
 """
 
 from __future__ import annotations
@@ -23,8 +32,19 @@ import torch
 from loguru import logger
 from PIL import Image
 
+from models.demos.dots_ocr.logging_utils import configure_dots_ocr_console_logging
 from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec, get_hf_model_id
 from models.demos.dots_ocr.reference.model import DotsOCRReference
+
+
+def _dots_ocr_default_benchmark_image() -> Path | None:
+    """First existing file among shipped demo assets (prefer ``benchmark_image.png``)."""
+    demo_dir = Path(__file__).resolve().parents[1] / "demo"
+    for name in ("benchmark_image.png", "image.png", "test12.png"):
+        p = demo_dir / name
+        if p.is_file():
+            return p
+    return None
 
 
 def _summarize(backend: str, metrics: list[dict]) -> dict:
@@ -86,7 +106,7 @@ def benchmark_hf(model_id: str, image_path: str, prompt: str, max_new_tokens: in
 
 
 # ---------------------------------------------------------------------------
-# TTNN backend — prefill + decode loop
+# TTNN backend — aligned with demo.run_ttnn_backend (prefill + _decode_loop)
 # ---------------------------------------------------------------------------
 
 
@@ -98,130 +118,210 @@ def benchmark_ttnn(
     warmup: int,
     iters: int,
     *,
-    max_seq_len: int,
+    max_seq_len_user: int,
+    device_fusion: bool,
+    vision_backend: str,
+    text_qkv_permute: bool,
+    ttnn_dtype: str,
+    stop_at_eos: bool,
 ) -> dict:
-    logger.info("Running TTNN benchmark (prefill + decode)...")
-    # tt_transformers prefill kernels require seq_len padded to a multiple of 128, and the KV cache
-    # must be at least that tall. Enforce a sane minimum here to avoid cache height assertions.
+    logger.info(
+        f"Running TTNN benchmark (aligned with demo: device_fusion={device_fusion}, "
+        f"vision_backend={vision_backend}, text_qkv_permute={text_qkv_permute})..."
+    )
+
+    from models.demos.dots_ocr.demo.demo import _decode_loop, _ensure_local_ttnn_import, _load_dots_ttnn_state_dict
+
+    _ensure_local_ttnn_import()
+    import ttnn
+
+    try:
+        import ttnn._ttnn  # noqa: F401
+    except Exception as exc:
+        return {"backend": "ttnn", "error": f"TTNN not usable: {exc}"}
+
+    from models.demos.dots_ocr.tt.common import (
+        fused_ttnn_embeddings_to_torch,
+        merge_vision_tokens,
+        merge_vision_tokens_ttnn,
+        pad_embedding_ttnn,
+        pad_embedding_ttnn_tensor,
+        preprocess_inputs_prefill,
+        preprocess_inputs_prefill_ttnn,
+        text_embeds_from_ttnn_embedding,
+        text_embeds_from_ttnn_embedding_ttnn,
+        text_rope_from_hf,
+        ttnn_fused_batch_to_user_list,
+    )
+    from models.demos.dots_ocr.tt.generator import Generator
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, get_max_seq_len_cap, open_mesh_device
+    from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
+    from models.demos.dots_ocr.tt.model_config import DotsModelArgs
+    from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
+
+    tt_dtype = ttnn.bfloat16 if ttnn_dtype == "bf16" else ttnn.bfloat8_b
+    use_host_rope = True
+
+    cap = get_max_seq_len_cap()
+    max_seq_len = min(max_seq_len_user, cap) if cap else max_seq_len_user
     if max_seq_len < 128:
         logger.warning(f"Raising max_seq_len {max_seq_len} -> 128 (prefill/KV cache requirement)")
         max_seq_len = 128
 
-    try:
-        pass
-    except Exception as exc:  # pragma: no cover
-        logger.warning(f"ttnn not importable: {exc}")
-        return {"backend": "ttnn", "error": str(exc)}
-
-    from models.demos.dots_ocr.demo.demo import _build_tt_stack
-    from models.demos.dots_ocr.tt.common import (
-        argmax_token_id_host_via_ttnn,
-        merge_vision_tokens,
-        pad_embedding_ttnn,
-        preprocess_inputs_prefill,
-        sample_host,
-        text_embeds_from_ttnn_embedding,
-        text_rope_from_hf,
-    )
-    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
-
     mesh_device = open_mesh_device()
+    model_args = None
+    tt_model = None
+    generator = None
+    visual = None
+    ref = None
+
     try:
-        ref, model_args, tt_model, generator, visual = _build_tt_stack(model_id, mesh_device, max_seq_len=max_seq_len)
-        # TTTransformer forward expects `kv_cache` as a per-layer list (not nested).
-        # The tt_transformers Generator wrapper takes `[kv_cache]` (list per model) for decode,
-        # so our `Generator.decode_forward` wrapper will wrap this again as needed.
-        tt_kv_cache = [layer.attention.layer_past for layer in tt_model.layers]
+        os.environ.setdefault("HF_MODEL", model_id)
+        ref = DotsOCRReference(HFLoadSpec(model_id=model_id))
 
-        image = Image.open(image_path).convert("RGB") if os.path.exists(image_path) else None
-        inputs = ref.preprocess_image_and_prompt(image, prompt)
+        def _build_text_stack(*, qkv_permute: bool):
+            nonlocal model_args, tt_model, generator
+            model_args = DotsModelArgs(
+                mesh_device=mesh_device,
+                hf_config=ref.model.config,
+                max_batch_size=1,
+                max_seq_len=max_seq_len,
+            )
+            model_args.dots_text_qkv_permute = bool(qkv_permute)
+            model_args.dots_use_host_rope = bool(use_host_rope)
+            model_args.lm_head_dtype = ttnn.bfloat16
+            state_dict = _load_dots_ttnn_state_dict(model_args, text_qkv_permute=qkv_permute)
+            tt_model = DotsTransformer(
+                args=model_args,
+                dtype=tt_dtype,
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                weight_cache_path=model_args.weight_cache_path(tt_dtype),
+                paged_attention_config=None,
+            )
+            generator = Generator(tt_model, model_args, mesh_device, processor=ref.processor, tokenizer=ref.tokenizer)
 
-        pad_token_id = ref.tokenizer.pad_token_id or 0
-        pad_embedding = pad_embedding_ttnn(tt_model, int(pad_token_id))
+        _build_text_stack(qkv_permute=bool(text_qkv_permute))
 
-        stop_ids: set[int] = set()
-        for attr in ("eos_token_id", "pad_token_id"):
-            val = getattr(ref.tokenizer, attr, None)
-            if isinstance(val, int):
-                stop_ids.add(val)
-            elif isinstance(val, (list, tuple)):
-                stop_ids.update(int(v) for v in val)
+        if vision_backend == "ttnn" and (hasattr(ref.model, "vision_tower") or hasattr(ref.model, "visual")):
+            vision_model_args = DotsVisionModelArgs(mesh_device=mesh_device, hf_config=ref.model.config)
+            visual = DropInVisionTransformer(ref.model, vision_model_args, debug=False)
+        else:
+            visual = None
 
         def _one_iter() -> dict:
-            t_start = time.perf_counter()
+            img_for_preprocess = None
+            if image_path and os.path.isfile(image_path):
+                img_for_preprocess = Image.open(image_path).convert("RGB")
+            inputs = ref.preprocess_image_and_prompt(img_for_preprocess, prompt)
 
-            if visual is not None and getattr(inputs, "pixel_values", None) is not None:
-                image_embeds = visual(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
+            pad_token_id = ref.tokenizer.pad_token_id or 0
+
+            image_embeds = torch.tensor([], dtype=torch.bfloat16)
+            if getattr(inputs, "pixel_values", None) is not None:
+                if vision_backend == "hf":
+                    image_embeds = ref.vision_forward(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
+                elif visual is not None:
+                    image_embeds = visual(inputs.pixel_values, getattr(inputs, "image_grid_thw", None))
+                image_embeds = image_embeds.to(torch.bfloat16)
+
+            prefill_for_rope: torch.Tensor | None = None
+            if device_fusion:
+                text_ttnn = text_embeds_from_ttnn_embedding_ttnn(tt_model, inputs.input_ids)
+                if image_embeds.numel() > 0:
+                    fused_ttnn = merge_vision_tokens_ttnn(
+                        inputs.input_ids, text_ttnn, image_embeds, ref.model.config, mesh_device=mesh_device
+                    )
+                else:
+                    fused_ttnn = text_ttnn
+                pad_tt = pad_embedding_ttnn_tensor(tt_model, int(pad_token_id))
+                per_user = ttnn_fused_batch_to_user_list(fused_ttnn)
+                input_prefill, decoding_pos, prefill_lens = preprocess_inputs_prefill_ttnn(
+                    per_user, model_args, inputs.attention_mask, pad_tt
+                )
+                if use_host_rope:
+                    prefill_for_rope = fused_ttnn_embeddings_to_torch(fused_ttnn, mesh_device)
             else:
-                image_embeds = torch.tensor([], dtype=torch.bfloat16)
+                text_embeds = text_embeds_from_ttnn_embedding(tt_model, inputs.input_ids)
+                input_embeds = (
+                    merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, ref.model.config)
+                    if image_embeds.numel() > 0
+                    else text_embeds
+                )
+                pad_embedding = pad_embedding_ttnn(tt_model, int(pad_token_id))
+                input_prefill, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+                    [input_embeds[0]],
+                    model_args,
+                    inputs.attention_mask,
+                    pad_embedding,
+                )
+                prefill_for_rope = input_embeds
 
-            text_embeds = text_embeds_from_ttnn_embedding(tt_model, inputs.input_ids)
-            input_embeds = (
-                merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, ref.model.config)
-                if image_embeds.numel() > 0
-                else text_embeds
-            )
-            input_prefill, decoding_pos, _prefill_lens = preprocess_inputs_prefill(
-                [input_embeds[0]], model_args, inputs.attention_mask, pad_embedding
-            )
-            cos, sin = text_rope_from_hf(inputs, input_embeds, ref.model, model_args, pad_token_id)
+            rot_mats = None
+            if use_host_rope:
+                if prefill_for_rope is None:
+                    raise RuntimeError("host RoPE: missing embeddings for rope")
+                cos, sin = text_rope_from_hf(inputs, prefill_for_rope, ref.model, model_args, pad_token_id)
+                rot_mats = (cos, sin)
 
             t_prefill = time.perf_counter()
             logits = generator.prefill_forward_text(
                 input_prefill,
-                rot_mats=(cos, sin),
-                # Prefill path can run without KV-cache updates; passing a paged KV cache here
-                # requires page_table/chunk_page_table alignment. Keep benchmarking simple.
+                rot_mats=rot_mats,
                 kv_cache=None,
                 prompt_lens=torch.tensor(decoding_pos),
             )
             ttft = time.perf_counter() - t_prefill
 
-            try:
-                out_tok = argmax_token_id_host_via_ttnn(logits, mesh_device=mesh_device)
-            except Exception:
-                out_tok = torch.argmax(logits, dim=-1)
-            current_pos = torch.tensor([decoding_pos[0]])
-            decoded = 1
             t_decode = time.perf_counter()
-            for _ in range(max_new_tokens - 1):
-                try:
-                    logits, _ = generator.decode_forward(
-                        out_tok,
-                        current_pos,
-                        kv_cache=None,
-                        enable_trace=False,
-                    )
-                except Exception as exc:
-                    logger.warning(f"decode_forward failed: {exc}")
-                    break
-                _, out_tok = sample_host(logits, None, temperature=0.0)
-                tok_id = int(out_tok.flatten()[0].item())
-                decoded += 1
-                current_pos += 1
-                if tok_id in stop_ids:
-                    break
+            all_outputs = _decode_loop(
+                generator=generator,
+                tokenizer=ref.tokenizer,
+                ref_model=ref.model,
+                prefilled_logits=logits,
+                decoding_pos=decoding_pos,
+                max_new_tokens=max_new_tokens,
+                stop_at_eos=stop_at_eos,
+                repetition_penalty=None,
+                fixed_steps=False,
+            )
             decode_s = time.perf_counter() - t_decode
 
+            n_gen = len(all_outputs[0]) if all_outputs else 0
+
             return {
-                "total": time.perf_counter() - t_start,
+                "total": ttft + decode_s,
                 "ttft": ttft,
                 "decode_s": decode_s,
-                "decode_tokens": decoded,
+                "decode_tokens": float(n_gen),
+                "prefill_tokens": float(prefill_lens[0]),
             }
 
         for _ in range(warmup):
             _one_iter()
+
         metrics: list[dict] = []
         for i in range(iters):
             m = _one_iter()
             metrics.append(m)
             logger.info(
                 f"TTNN iter {i + 1}/{iters}: total={m['total']:.3f}s ttft={m['ttft']:.3f}s "
-                f"decode={m['decode_tokens']} in {m['decode_s']:.3f}s"
+                f"decode={int(m['decode_tokens'])} tok in {m['decode_s']:.3f}s "
+                f"(prefill_len={int(m.get('prefill_tokens', 0))})"
             )
         return _summarize("ttnn", metrics)
     finally:
+        try:
+            if generator is not None:
+                del generator
+            if visual is not None:
+                del visual
+            if tt_model is not None:
+                del tt_model
+            if ref is not None:
+                del ref
+        except Exception:
+            pass
         close_dots_mesh_device(mesh_device)
 
 
@@ -231,8 +331,19 @@ def benchmark_ttnn(
 
 
 def main() -> None:
+    configure_dots_ocr_console_logging()
     parser = argparse.ArgumentParser(description="Dots OCR perf benchmark (HF vs TTNN)")
-    parser.add_argument("--image", type=str, default="")
+    parser.add_argument(
+        "--image",
+        type=str,
+        default="",
+        help="Image file. If omitted, uses demo/benchmark_image.png when present (same multimodal path as demo).",
+    )
+    parser.add_argument(
+        "--text-only",
+        action="store_true",
+        help="Do not load the default demo image; benchmark text-only (no pixel_values).",
+    )
     parser.add_argument("--prompt", type=str, default="Extract all text from this document.")
     parser.add_argument("--max-new-tokens", type=int, default=32)
     parser.add_argument("--warmup", type=int, default=2)
@@ -240,27 +351,67 @@ def main() -> None:
     parser.add_argument("--backend", type=str, default="both", choices=["hf", "ttnn", "both"])
     parser.add_argument("--hf-model", type=str, default=None)
     parser.add_argument("--max-seq-len", type=int, default=4096)
+    parser.add_argument(
+        "--no-device-fusion",
+        dest="device_fusion",
+        action="store_false",
+        default=True,
+        help="Host-side merge + preprocess_inputs_prefill (default is device fusion, matching demo)",
+    )
+    parser.add_argument("--vision-backend", type=str, default="ttnn", choices=["hf", "ttnn"])
+    parser.add_argument(
+        "--no-text-qkv-permute",
+        dest="text_qkv_permute",
+        action="store_false",
+        default=True,
+        help="HF Q/K layout without Meta permute (default: permute on, matching demo)",
+    )
+    parser.add_argument("--ttnn-dtype", type=str, default="bf16", choices=["bf16", "bf8"])
+    parser.add_argument(
+        "--no-eos",
+        dest="stop_at_eos",
+        action="store_false",
+        default=True,
+        help="Decode fixed steps without stopping at EOS (matches demo --no-eos)",
+    )
     args = parser.parse_args()
 
     model_id = args.hf_model or get_hf_model_id()
-    image_path = Path(args.image)
-    if args.image and not image_path.exists():
-        logger.warning(f"Image {image_path} not found — proceeding text-only.")
+    # Empty `--image` must stay empty: Path("") resolves to "." (cwd), which exists() but is not a file.
+    image_path_str = ""
+    raw_img = (args.image or "").strip()
+    if not raw_img and not args.text_only:
+        default_p = _dots_ocr_default_benchmark_image()
+        if default_p is not None:
+            raw_img = str(default_p.resolve())
+    if raw_img:
+        ip = Path(raw_img)
+        if ip.is_file():
+            image_path_str = str(ip.resolve())
+        elif ip.exists():
+            logger.warning(f"Image path {ip} is not a regular file — proceeding text-only.")
+        else:
+            logger.warning(f"Image {ip} not found — proceeding text-only.")
 
     results: dict = {}
     if args.backend in ("hf", "both"):
         results["hf"] = benchmark_hf(
-            model_id, str(image_path), args.prompt, args.max_new_tokens, args.warmup, args.iters
+            model_id, image_path_str, args.prompt, args.max_new_tokens, args.warmup, args.iters
         )
     if args.backend in ("ttnn", "both"):
         results["ttnn"] = benchmark_ttnn(
             model_id,
-            str(image_path),
+            image_path_str,
             args.prompt,
             args.max_new_tokens,
             args.warmup,
             args.iters,
-            max_seq_len=args.max_seq_len,
+            max_seq_len_user=args.max_seq_len,
+            device_fusion=args.device_fusion,
+            vision_backend=args.vision_backend,
+            text_qkv_permute=args.text_qkv_permute,
+            ttnn_dtype=args.ttnn_dtype,
+            stop_at_eos=args.stop_at_eos,
         )
 
     print("\n" + "=" * 60)
