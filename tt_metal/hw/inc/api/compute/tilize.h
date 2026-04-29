@@ -160,7 +160,7 @@ ALWI void tilize_block(
 #ifndef ARCH_QUASAR
         // Datacopy
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
-            0 /*dst index*/)));
+            0 /*dst index*/, icb)));
         PACK((llk_pack<DST_ACCUM_MODE, true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));

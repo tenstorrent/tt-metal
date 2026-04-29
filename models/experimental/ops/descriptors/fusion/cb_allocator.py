@@ -409,6 +409,185 @@ class CBPoolAllocator:
 
         return slot_groups
 
+    # ------------------------------------------------------------------
+    # Phase-bridge sizing (Fix A for #40330)
+    # ------------------------------------------------------------------
+    #
+    # Background: in a fused Sequential(opA, opB) chain, the L1 buffer that
+    # carries the intermediate tensor from phase N (opA) to phase N+1 (opB)
+    # appears as a single pool slot with both endpoints attached to the same
+    # buffer.  In standalone execution that slot would be drained by the
+    # phase-N writer (BRISC) NOC kernel; in the fused execution the writer
+    # is elided in phase N (its output is consumed in-L1 by phase N+1's
+    # compute), so there is no concurrent NCRISC drain during phase N.
+    #
+    # When the producer-side CB total_size is sized for "streaming" (a small
+    # window) rather than "full output", the CB can fill before phase N
+    # completes, back-pressuring pack -> math -> unpack.  With LLK asserts
+    # enabled, an LLK_ASSERT_BLOCK in the unpack path issues a tensix_sync
+    # which then deadlocks on the back-pressured pipeline.
+    #
+    # Fix A: identify these phase-bridge slots and ensure their total_size
+    # is at least the maximum producer-side requirement across producing
+    # phases.  In practice _reuse_slot already takes max(...) of per-phase
+    # total_size when the slot is reused, so for ops whose factory already
+    # sizes their output CB to the full per-block output this is a no-op.
+    # We still run it explicitly so:
+    #   * the architectural invariant is enforced in one place;
+    #   * a future op whose output CB is sized for streaming gets the
+    #     correct bound automatically;
+    #   * we surface diagnostic logs so undersized bridges are visible.
+
+    def _identify_phase_bridge_slots(
+        self,
+        phases: List["PhaseInfo"],
+    ) -> Dict[int, Dict[str, Set[int]]]:
+        """Return a mapping ``{slot_idx: {"compute": {...}, "writer": {...}, "reader": {...}}}``.
+
+        A slot qualifies as a **phase-bridge** (and is included in the result)
+        when *all* of the following hold:
+
+        - The slot is buffer-backed (``has_buffer=True``) — bridge tensors
+          carry an L1 allocation between phases.
+        - The slot is referenced by a **compute** kernel in ``>= 2`` phases.
+          Only compute references count: a buffer-backed slot used by compute
+          in only one phase is a regular input or output, not a bridge.
+
+        The (writer, reader) per-phase sets are returned alongside ``compute``
+        so the sizing logic can decide which compute phases are
+        "producer-side" (no concurrent writer drain) and which are
+        "consumer-side" (no concurrent reader fill).
+
+        We deliberately do NOT require ``producer NOT in writer_phases``
+        here: in the fused chain a per-phase op's standalone writer may
+        still be present in its own ``op_descriptor.kernels`` even though
+        the fused program may elide / no-op it for the producing phase.
+        Treating any compute-in-2+-phases buffer-backed slot as a bridge is
+        a sound (slightly over-eager) upper bound — for true output slots
+        (compute writes in only the *last* phase) the consumer-side check
+        in ``_size_phase_bridge_slots`` will see no later compute phase and
+        leave the slot alone via the producer-max==current short-circuit.
+        """
+        from models.experimental.ops.descriptors.fusion.common import _get_risc_type
+
+        slot_compute_phases: Dict[int, Set[int]] = defaultdict(set)
+        slot_writer_phases: Dict[int, Set[int]] = defaultdict(set)
+        slot_reader_phases: Dict[int, Set[int]] = defaultdict(set)
+
+        for phase_idx, phase in enumerate(phases):
+            if phase_idx >= len(self.phase_remaps):
+                continue
+            remap = self.phase_remaps[phase_idx]
+            for kernel_desc in phase.op_descriptor.descriptor.kernels:
+                risc = _get_risc_type(kernel_desc)
+                if risc == "unknown":
+                    continue
+                for name, value in kernel_desc.named_compile_time_args:
+                    if not _is_cb_named_arg(name, value):
+                        continue
+                    slot_idx = remap.get(value, value)
+                    if slot_idx not in self._slots:
+                        continue
+                    if risc == "compute":
+                        slot_compute_phases[slot_idx].add(phase_idx)
+                    elif risc == "riscv_0":  # BRISC = writer (drains compute output)
+                        slot_writer_phases[slot_idx].add(phase_idx)
+                    elif risc == "riscv_1":  # NCRISC = reader (fills compute input)
+                        slot_reader_phases[slot_idx].add(phase_idx)
+
+        bridges: Dict[int, Dict[str, Set[int]]] = {}
+        for slot_idx, slot in self._slots.items():
+            if not slot.config.has_buffer:
+                continue
+            compute_phases = slot_compute_phases.get(slot_idx, set())
+            if len(compute_phases) < 2:
+                continue
+            bridges[slot_idx] = {
+                "compute": compute_phases,
+                "writer": slot_writer_phases.get(slot_idx, set()),
+                "reader": slot_reader_phases.get(slot_idx, set()),
+            }
+        return bridges
+
+    def _size_phase_bridge_slots(self, phases: List["PhaseInfo"]) -> None:
+        """Bump bridge slot ``total_size`` to the worst-case producer requirement.
+
+        For each phase-bridge slot, the **producer-side requirement** in a
+        given phase is the per-phase ``CBInfo.total_size`` for that slot —
+        which the standalone op factory already sizes to one full block of
+        the producer's output.  We take the max across all *producing*
+        phases and ensure the slot's pool-level ``total_size`` is at least
+        that value.
+
+        A phase ``p`` is producing-into-bridge for ``slot`` when:
+        - compute references ``slot`` in phase ``p``, AND
+        - there exists a later compute phase ``p' > p`` that also references
+          ``slot`` (i.e. the data must persist for a downstream phase to
+          consume).
+
+        This is required for correctness in the fused parallel/sequential
+        model: a bridge slot whose ``total_size`` is smaller than the full
+        producer output back-pressures the producer's pack pipeline.  When
+        LLK asserts are enabled, that back-pressure can deadlock the
+        unpack/math/pack chain via a ``tensix_sync()`` issued from
+        ``LLK_ASSERT_BLOCK``.  See issue #40330.
+        """
+        bridges = self._identify_phase_bridge_slots(phases)
+        if not bridges:
+            return
+
+        for slot_idx, info in sorted(bridges.items()):
+            slot = self._slots[slot_idx]
+            old_size = slot.total_size
+
+            compute_phases = info["compute"]
+            sorted_compute = sorted(compute_phases)
+            # Producing phases are those with a later consumer phase.
+            producing_phases = {p for i, p in enumerate(sorted_compute) if any(c > p for c in sorted_compute[i + 1 :])}
+            consuming_phases = compute_phases - producing_phases
+            if not producing_phases:
+                continue
+
+            producer_max = 0
+            for phase_idx in sorted(producing_phases):
+                if phase_idx >= len(phases):
+                    continue
+                phase = phases[phase_idx]
+                remap = self.phase_remaps[phase_idx]
+                for orig_idx, sidx in remap.items():
+                    if sidx != slot_idx:
+                        continue
+                    cb_info = phase.cb_info.get(orig_idx)
+                    if cb_info is not None:
+                        producer_max = max(producer_max, cb_info.total_size)
+
+            sorted_producing = sorted(producing_phases)
+            sorted_consuming = sorted(consuming_phases)
+            new_size = max(old_size, producer_max)
+
+            if new_size != old_size:
+                slot.total_size = new_size
+                logger.warning(
+                    "[CB_BRIDGE] slot %d: bumped total_size %d -> %d "
+                    "(producing_phases=%s, consuming_phases=%s, producer_max=%d)",
+                    slot_idx,
+                    old_size,
+                    new_size,
+                    sorted_producing,
+                    sorted_consuming,
+                    producer_max,
+                )
+            else:
+                logger.debug(
+                    "[CB_BRIDGE] slot %d: total_size=%d already covers producer_max=%d "
+                    "(producing_phases=%s, consuming_phases=%s)",
+                    slot_idx,
+                    old_size,
+                    producer_max,
+                    sorted_producing,
+                    sorted_consuming,
+                )
+
     def build_merged_cb_descriptors(
         self,
         phases: List["PhaseInfo"],
@@ -440,6 +619,16 @@ class CBPoolAllocator:
             - global_cb_source_map: [(merged_idx, OpDescriptor, cbs_position)]
               for GlobalCB-backed CBs
         """
+        # NOTE (issue #40330): Fix A (phase-bridge sizing) was investigated and
+        # the helpers `_identify_phase_bridge_slots` / `_size_phase_bridge_slots`
+        # are kept above as diagnostic plumbing.  They are NOT invoked here
+        # because empirical runs of `test_sharded_chain[block]` showed that
+        # for our bridge slots (0 and 16) the producer max ALREADY equals
+        # the slot's `total_size` — the deadlock observed under
+        # `TT_METAL_LLK_ASSERTS=1` is not an undersized-bridge problem.  See
+        # `_size_phase_bridge_slots` docstring for context.  Re-enable here
+        # if a future fused chain has a producer-side CB sized for streaming.
+
         slot_alias = self._compute_slot_alias_groups(phases)
 
         # Group slots by alias group

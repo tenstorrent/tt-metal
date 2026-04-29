@@ -472,14 +472,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         detail::get_page_size(metadata_tensor),
         detail::get_page_size(dispatch_table_tensor),
 
-        // Operation parameters (8)
+        // Operation parameters (7)
         mesh_view.num_devices(),  // num_devices
         (uint32_t)hidden_size,
         operation_attributes.experts_per_chip,
         operation_attributes.num_routed_experts,
         operation_attributes.num_experts_per_tok,
         operation_attributes.metadata_len,
-        operation_attributes.max_dispatched_tokens_per_expert,
         (uint32_t)tokens_per_device,
 
         // Mesh information (5)
@@ -506,6 +505,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
 
         // Batch configuration (1)
         read_batch_size,
+
+        // Dispatch buffer total token capacity (1) — used by the reader's
+        // in-kernel bounds check.
+        operation_attributes.max_dispatch_buffer_token_size,
     };
 
     // Append TensorAccessorArgs for all 7 tensors
@@ -618,7 +621,6 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
             static_cast<uint32_t>(tt::CBIndex::c_13),        // cb_metadata_scratch_id
             detail::get_aligned_page_size(metadata_tensor),  // aligned_metadata_page_size
             operation_attributes.num_experts_per_tok,
-            operation_attributes.max_dispatched_tokens_per_expert,
             linearized_mesh_coord,
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(idle_writer_compile_args);
@@ -1054,14 +1056,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         detail::get_page_size(metadata_tensor),
         detail::get_page_size(dispatch_table_tensor),
 
-        // Operation parameters (8)
+        // Operation parameters (7)
         mesh_view.num_devices(),  // num_devices
         (uint32_t)hidden_size,
         operation_attributes.experts_per_chip,
         operation_attributes.num_routed_experts,
         operation_attributes.num_experts_per_tok,
         operation_attributes.metadata_len,
-        operation_attributes.max_dispatched_tokens_per_expert,
         (uint32_t)tokens_per_device,
 
         // Mesh information (5)
@@ -1088,6 +1089,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
 
         // Batch configuration (1)
         read_batch_size,
+
+        // Dispatch buffer total token capacity (1) — used by the reader's
+        // in-kernel bounds check.
+        operation_attributes.max_dispatch_buffer_token_size,
     };
 
     // Append TensorAccessorArgs for all 7 tensors
