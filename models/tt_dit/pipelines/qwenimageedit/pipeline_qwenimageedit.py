@@ -52,6 +52,16 @@ VAE_IMAGE_SIZE = 1024 * 1024
 PROMPT_TEMPLATE_EDIT = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"  # noqa: E501
 PROMPT_DROP_IDX_EDIT = 64
 
+# Fixed sequence length the image-conditioned prompt path (``_encode_prompts_with_images``)
+# pads its output to. The text-only path already produces a fixed 512 tokens (via
+# ``sequence_length=512 + PROMPT_DROP_IDX_EDIT`` then dropping the first 64), so using
+# the same constant here keeps both paths shape-stable across calls. That matters for
+# traced multi-prompt interactive runs: the trace's prompt-input placeholder is bound
+# once, and every later call must match it. A 384x384 condition image contributes
+# ~188 tokens plus ~50 template tokens; 512 leaves ~275 tokens for the user text,
+# which is plenty for typical prompts.
+IMAGE_PROMPT_PAD_SEQ_LEN = 512
+
 
 @dataclass
 class PipelineTrace:
@@ -342,10 +352,6 @@ class QwenImageEditPipeline:
             self._vae_encoder = None
 
         self._traces = None
-        # First traced call records its prompt seq length here; every later call
-        # must pad up to the same length so the trace's prompt-input placeholder
-        # keeps a stable shape. See ``__call__`` for the enforcement logic.
-        self._prompt_pad_seq_len: int | None = None
 
         logger.info("warming up for tracing...")
         self.run_single_edit(prompt="test edit", image=None, num_inference_steps=1, seed=0, traced=False, skip_vae=True)
@@ -707,36 +713,6 @@ class QwenImageEditPipeline:
                         profiler_iteration=profiler_iteration,
                     )
             _, prompt_sequence_length, _ = prompt_embeds.shape
-
-            # The image path (``_encode_prompts_with_images``) pads prompt embeds
-            # only to the per-call batch max, so two consecutive prompts with
-            # different token counts produce tensors of different seq length. The
-            # traced prompt-input placeholder is bound to whatever shape was used
-            # when the trace was captured, so any later call with a different
-            # length would fail the ``copy_host_to_device_tensor`` shape check
-            # (``host_tensor.logical_shape() == device_tensor.logical_shape()``).
-            # To make interactive (multi-prompt) traced runs work we cache the
-            # first call's length and pad every subsequent call up to it. The
-            # text-only path already encodes to a fixed length, so this is a
-            # no-op for it.
-            if traced:
-                if self._prompt_pad_seq_len is None:
-                    self._prompt_pad_seq_len = prompt_sequence_length
-                pad_target = self._prompt_pad_seq_len
-                if prompt_sequence_length > pad_target:
-                    msg = (
-                        f"Prompt sequence length {prompt_sequence_length} exceeds the traced "
-                        f"placeholder length {pad_target}; recreate the pipeline to recapture "
-                        f"the trace with a longer prompt."
-                    )
-                    raise ValueError(msg)
-                if prompt_sequence_length < pad_target:
-                    pad_amt = pad_target - prompt_sequence_length
-                    prompt_embeds = torch.nn.functional.pad(
-                        prompt_embeds, (0, 0, 0, pad_amt), mode="constant", value=0.0
-                    )
-                    prompt_mask = torch.nn.functional.pad(prompt_mask, (0, pad_amt), mode="constant", value=0)
-                    prompt_sequence_length = pad_target
 
             self.prepare_transformers()
 
@@ -1225,7 +1201,20 @@ class QwenImageEditPipeline:
         split_hidden = [e[PROMPT_DROP_IDX_EDIT:] for e in split_hidden]
         attn_masks = [torch.ones(e.size(0), dtype=torch.long) for e in split_hidden]
 
-        max_seq = max(e.size(0) for e in split_hidden)
+        # Pad every call to the same fixed length so the traced prompt-input
+        # placeholder has a stable shape across multiple interactive prompts.
+        # (Padding only to the per-batch max would let two prompts with different
+        # token counts mismatch the baked trace shape and fail the
+        # ``copy_host_to_device_tensor`` shape check.)
+        natural_max = max(e.size(0) for e in split_hidden)
+        if natural_max > IMAGE_PROMPT_PAD_SEQ_LEN:
+            msg = (
+                f"Image-conditioned prompt encoded to {natural_max} tokens, which exceeds "
+                f"IMAGE_PROMPT_PAD_SEQ_LEN={IMAGE_PROMPT_PAD_SEQ_LEN}. Shorten the prompt or "
+                f"raise the constant."
+            )
+            raise ValueError(msg)
+        max_seq = IMAGE_PROMPT_PAD_SEQ_LEN
         prompt_embeds = torch.stack([torch.cat([u, u.new_zeros(max_seq - u.size(0), u.size(1))]) for u in split_hidden])
         encoder_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq - u.size(0))]) for u in attn_masks])
 
