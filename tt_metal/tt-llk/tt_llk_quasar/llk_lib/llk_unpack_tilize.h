@@ -22,13 +22,8 @@ using namespace ckernel;
  * stored in the buffer descriptor table, values = 0 - 16
  * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length)
  */
-<<<<<<< HEAD
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
-=======
-template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST, std::uint32_t BLOCK_CT_DIM>
-inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id)
->>>>>>> 1af8b2955b2 (Rename all to EN_32BIT_DEST)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
@@ -70,25 +65,15 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id)
  * @brief Initialized unpacker to unpack tilize a single operand by full 32x32 tiles
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
-<<<<<<< HEAD
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
-=======
  * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32b mode
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
->>>>>>> 1af8b2955b2 (Rename all to EN_32BIT_DEST)
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length)
  */
-<<<<<<< HEAD
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t C_DIM_FACES>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST, std::uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim)
-=======
-template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST, std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id)
->>>>>>> 1af8b2955b2 (Rename all to EN_32BIT_DEST)
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
@@ -108,11 +93,7 @@ inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id)
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, full_ct_dim * C_DIM_FACES); // how much to stride to go to next row within the same tile
     }
-<<<<<<< HEAD
-    _llk_unpack_tilize_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, block_ct_dim);
-=======
-    _llk_unpack_tilize_mop_config_<UNP_SEL, EN_32BIT_DEST, BLOCK_CT_DIM>(buf_desc_id);
->>>>>>> 1af8b2955b2 (Rename all to EN_32BIT_DEST)
+    _llk_unpack_tilize_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, block_ct_dim);
 }
 
 /**
