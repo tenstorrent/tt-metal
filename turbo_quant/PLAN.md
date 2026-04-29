@@ -259,15 +259,58 @@ Correctness verified: 32-layer Llama-3.1-8B "Paris" answer
 unchanged. Implementation in commit (this branch). Smaller than
 the original tier estimate (5–10 %) but a clean, free win.
 
-### Sliding-window hybrid: design doc ready
+### Sliding-window hybrid: ring infrastructure landed, hypothesis updated
 
-`turbo_quant/SLIDING_WINDOW_DESIGN.md` — full plan for keeping
-the most recent W tokens in a BFP8 ring while older tokens use
-the TQ cache. Hypothesis: attention mass concentrates on recent
-tokens, so high-precision K/V there + lossy K/V for old tokens
-recovers most of the −10 pp top-1 gap with minimal memory cost
-(~4 MB total ring at W=64). ~1.5-day implementation; ready to
-pick up.
+`turbo_quant/SLIDING_WINDOW_DESIGN.md` has the full design.
+Implementation status (commit `3dcc01b1db9`):
+
+- **Step 1 cache structure** ✅ — BFP8 ring + cyclic page table.
+- **Step 2 dual-write** ✅ — `update_cache` writes K/V to both
+  the TQ cache and the BFP8 ring. Two real implementation snags
+  found and worked around (quantize() aliases its input, paged
+  update_cache won't accept page_table > cache size).
+- **Step 3 hybrid SDPA** 🟡 — first cut shipped as **ring-only**
+  (standard SDPA over the BFP8 ring, ignoring TQ contributions
+  from older positions). Tested the cheaper hypothesis first.
+  **Full hybrid with online-softmax combine still TODO** — needs
+  the standard SDPA decode kernel to expose LSE so we can
+  log-sum-exp two SDPA outputs at host level.
+- **Step 4 eval flags** ✅ — `--tq-recent-window N`.
+- **Step 5 validation** ✅ for ring-only (see below).
+
+### Ring-only validation result (2026-04-29 N150 W=64)
+
+`eval_token_accuracy.py --tq-full-dequant --tq-recent-window 64`:
+
+| Mode                            | Top-1 | Top-5 |
+|---------------------------------|------:|------:|
+| BFP8 baseline                   | 97.3% | 100.0% |
+| Track A (TQ FD K=1)             | 86.9% | 97.1%  |
+| Track B (TQ rescaled BFP4)      | 66.6% | 82.2%  |
+| **SW ring-only W=64**           | **24.0%** | **36.7%** |
+
+**Hypothesis "Llama tolerates W=64 sliding-window attention"
+→ REJECTED.** Per-position trace is stable (24-43 %, no monotonic
+decay) — just inherently low because the model needs long-range
+context. Discarding everything past W is too aggressive.
+
+So the **full hybrid (recent BFP8 + old TQ + LSE-based online
+softmax combine) is the only path that can recover quality**.
+The ring infrastructure is still useful — it provides the
+high-precision recent K/V the combine math needs — but the
+combine step is mandatory, not optional.
+
+Required follow-up for the combine:
+- Modify `paged_scaled_dot_product_attention_decode` to optionally
+  return LSE = log(sum) + max alongside the output. The kernel
+  already maintains (max, sum) internally for online softmax.
+- Modify the fused TQ SDPA kernel similarly.
+- Host-level combine: `out = (out_a · exp(lse_a − lse_max) +
+  out_b · exp(lse_b − lse_max)) / (exp(lse_a − lse_max) +
+  exp(lse_b − lse_max))`.
+
+Estimated additional effort: ~1-2 days for the LSE-aware kernel
++ host combine.
 
 ### Open follow-ups
 
