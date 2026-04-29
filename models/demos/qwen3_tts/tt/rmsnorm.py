@@ -44,12 +44,13 @@ class RMSNorm(LightweightModule):
         if weight_cache_path is not None:
             cache_name = weight_cache_path / weight_key.replace(".", "_")
 
+        # Small gamma fits L1; reduces DRAM traffic vs norms + matmuls on the same layer.
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=device,
             dtype=weight_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             cache_file_name=cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
@@ -120,7 +121,7 @@ class QKNorm(LightweightModule):
             device=device,
             dtype=weight_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             cache_file_name=q_cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
@@ -137,7 +138,7 @@ class QKNorm(LightweightModule):
             device=device,
             dtype=weight_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             cache_file_name=k_cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
@@ -165,6 +166,7 @@ class QKNorm(LightweightModule):
             epsilon=self.eps,
             weight=self.q_norm_weight,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         k_normed = ttnn.rms_norm(
@@ -172,6 +174,7 @@ class QKNorm(LightweightModule):
             epsilon=self.eps,
             weight=self.k_norm_weight,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         return q_normed, k_normed

@@ -176,7 +176,14 @@ class CodePredictor(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def get_codec_embedding(self, code_idx: int, token_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
+    @staticmethod
+    def _activation_memory_config(seq_len: int, mode: str) -> ttnn.MemoryConfig:
+        """Match ``MLP`` policy: L1 for decode or moderate-length prefill; DRAM for long sequences."""
+        if mode == "decode" or seq_len <= 256:
+            return ttnn.L1_MEMORY_CONFIG
+        return ttnn.DRAM_MEMORY_CONFIG
+
+    def get_codec_embedding(self, code_idx: int, token_ids_tt: ttnn.Tensor, *, mode: str = "decode") -> ttnn.Tensor:
         """
         Look up codec embeddings for one codebook on device.
 
@@ -188,11 +195,13 @@ class CodePredictor(LightweightModule):
             Embeddings [batch, 1, seq_len, hidden_size] (tile layout)
         """
         if code_idx < len(self.codec_embeddings_tt) and self.codec_embeddings_tt[code_idx] is not None:
+            seq_len = int(tuple(token_ids_tt.shape)[-1])
+            mem_cfg = self._activation_memory_config(seq_len, mode)
             return ttnn.embedding(
                 token_ids_tt,
                 self.codec_embeddings_tt[code_idx],
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem_cfg,
             )
         raise ValueError(f"Missing TTNN codec embedding for index {code_idx}")
 
@@ -239,6 +248,8 @@ class CodePredictor(LightweightModule):
             - updated_kv_caches: list of (k_cache, v_cache) tuples or None
         """
         hidden_states = inputs_embeds
+        seq_len = int(inputs_embeds.shape[-2])
+        mem_cfg = self._activation_memory_config(seq_len, mode)
 
         # Input projection if needed (from Talker's 2048 dim to CodePredictor's 1024 dim)
         if self.needs_projection:
@@ -247,7 +258,7 @@ class CodePredictor(LightweightModule):
                 self.input_proj,
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem_cfg,
             )
 
         # Apply decoder layers
@@ -281,7 +292,7 @@ class CodePredictor(LightweightModule):
                 hidden_states,
                 self.lm_heads[lm_head_idx],
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem_cfg,
             )
         else:
             raise ValueError(f"Invalid generation_step {generation_step}, only have {len(self.lm_heads)} LM heads")
@@ -321,6 +332,9 @@ class CodePredictor(LightweightModule):
             - logits_list: List of logits tensors, one per code group [batch, 1, seq_len, vocab_size]
             - updated_kv_caches: list of (k_cache, v_cache) tuples or None
         """
+        seq_len = int(hidden_states.shape[-2])
+        mem_cfg = self._activation_memory_config(seq_len, mode)
+
         # Input projection if needed (from Talker's 2048 dim to CodePredictor's 1024 dim)
         if self.needs_projection:
             hidden_states = ttnn.linear(
@@ -328,7 +342,7 @@ class CodePredictor(LightweightModule):
                 self.input_proj,
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem_cfg,
             )
 
         # Apply decoder layers
@@ -355,7 +369,7 @@ class CodePredictor(LightweightModule):
                 hidden_states,
                 lm_head,
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem_cfg,
             )
             logits_list.append(logits)
 
