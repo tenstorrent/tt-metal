@@ -60,23 +60,8 @@ class Talker(LightweightModule):
             return weight_cache_path / f"talker_{name}".replace(".", "_")
 
         def _linear_weight_torch_to_matmul_4d(w_torch: torch.Tensor) -> torch.Tensor:
-            """[out, in] checkpoint linear weight -> [1, 1, in, out] host torch for ttnn.linear (transpose on device, DRAM)."""
-            out_f, in_f = int(w_torch.shape[0]), int(w_torch.shape[1])
-            w_tt = ttnn.from_torch(
-                w_torch,
-                device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=_dram,
-                mesh_mapper=_mesh_mapper,
-            )
-            w_tx = ttnn.transpose(w_tt, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(w_tt)
-            w_4d = ttnn.reshape(w_tx, [1, 1, in_f, out_f], memory_config=ttnn.L1_MEMORY_CONFIG)
-            host = ttnn.to_torch(w_4d).contiguous()
-            ttnn.deallocate(w_4d)
-            ttnn.deallocate(w_tx)
-            return host
+            """[out, in] checkpoint -> [1, 1, in, out] host tensor for ttnn.linear (transpose on CPU; single H2D upload)."""
+            return w_torch.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
 
         # Codec embedding (for audio codec tokens)
         codec_embedding_weight = state_dict["talker.model.codec_embedding.weight"]
