@@ -495,7 +495,12 @@ class ttMLA:
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
     def forward(
-        self, hidden_states: ttnn.Tensor, rope_tensors: dict, kvpe_cache: ttnn.Tensor, cache_user_idx: int = 0
+        self,
+        hidden_states: ttnn.Tensor,
+        rope_tensors: dict,
+        kvpe_cache: ttnn.Tensor,
+        cache_user_idx: int = 0,
+        sync_on_mla_and_ccl: bool = False,
     ) -> ttnn.Tensor:
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
@@ -510,6 +515,11 @@ class ttMLA:
 
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
+            if sync_on_mla_and_ccl:
+                logger.info(f"Pre-RS1_SYNC begin")
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Pre-RS1_SYNC end")
+
             tt_q = ttnn.experimental.reduce_scatter_minimal_async(
                 tt_q,
                 persistent_output_buffers=None,
@@ -521,6 +531,12 @@ class ttMLA:
                 topology=self.ccl_topology,
                 cluster_axis=self.tp_axis,
             )
+
+            if sync_on_mla_and_ccl:
+                logger.info(f"Post-RS1_SYNC begin")
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Post-RS1_SYNC end")
+
             tt_q = ttnn.experimental.all_gather_async(
                 tt_q,
                 dim=3,
@@ -531,6 +547,11 @@ class ttMLA:
                 topology=self.ccl_topology,
                 cluster_axis=self.tp_axis,
             )
+
+            if sync_on_mla_and_ccl:
+                logger.info(f"Post-AG1_SYNC begin")
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Post-AG1_SYNC end")
 
         # rmsnorm
         tt_q = ttnn.rms_norm(
@@ -594,6 +615,10 @@ class ttMLA:
 
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
+            if sync_on_mla_and_ccl:
+                logger.info(f"Pre-AG2_SYNC begin")
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Pre-AG2_SYNC end")
             tt_kv = ttnn.experimental.all_gather_async(
                 tt_kv,
                 dim=1,
@@ -604,6 +629,11 @@ class ttMLA:
                 topology=self.ccl_topology,
                 cluster_axis=self.tp_axis,
             )
+            if sync_on_mla_and_ccl:
+                logger.info(f"Post-AG2_SYNC begin")
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Post-AG2_SYNC end")
+
             tt_kv = ttnn.experimental.fast_reduce_nc(
                 tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
@@ -646,6 +676,11 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
+        if sync_on_mla_and_ccl:
+            logger.info(f"Pre-SDPA sync begin")
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"Pre-SDPA sync end")
+
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
@@ -673,6 +708,11 @@ class ttMLA:
             is_balanced=self.is_balanced,
         )
 
+        if sync_on_mla_and_ccl:
+            logger.info(f"Post-SDPA sync begin")
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"Post-SDPA sync end")
+
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
             v_out,
@@ -681,6 +721,10 @@ class ttMLA:
             **self._get_mm_kwargs("o_proj", seq_len_local),
         )
         if self.tp_factor > 1:
+            if sync_on_mla_and_ccl:
+                logger.info(f"Pre-RS2_SYNC begin")
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Pre-RS2_SYNC end")
             out = ttnn.experimental.reduce_scatter_minimal_async(
                 v_out,
                 dim=3,
@@ -691,6 +735,10 @@ class ttMLA:
                 topology=self.ccl_topology,
                 cluster_axis=self.tp_axis,
             )
+            if sync_on_mla_and_ccl:
+                logger.info(f"Post-RS2_SYNC begin")
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Post-RS2_SYNC end")
         else:
             out = v_out
         return out

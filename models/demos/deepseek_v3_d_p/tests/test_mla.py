@@ -24,8 +24,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+# MAX_PAYLOAD_SIZE = DeepSeekV3Config.EMB_SIZE
+MAX_PAYLOAD_SIZE = 4352  # Default
 
 
 def run_mla_inference(
@@ -39,6 +43,8 @@ def run_mla_inference(
     is_balanced,
     topology,
     tt_kvpe_cache,
+    num_iterations=1,
+    sync_on_mla_and_ccl=False,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -71,6 +77,7 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
+        sync_on_mla_and_ccl=sync_on_mla_and_ccl,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -106,11 +113,20 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_output = mla_tt.forward(
-        hidden_states=tt_hidden_states,
-        rope_tensors=rope_tensors,
-        kvpe_cache=tt_kvpe_cache,
-    )
+
+    for i in range(num_iterations):
+        logger.info(f"Starting MLA forward pass iteration {i+1}/{num_iterations}")
+        tt_output = mla_tt.forward(
+            hidden_states=tt_hidden_states,
+            rope_tensors=rope_tensors,
+            kvpe_cache=tt_kvpe_cache,
+        )
+        logger.info(f"Starting MLA forward synchronize call for iteration {i+1}")
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"Ending MLA forward synchronize call for iteration {i+1}")
+
+        if i != num_iterations - 1:
+            ttnn.deallocate(tt_output)
 
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
@@ -131,10 +147,12 @@ def run_mla_inference(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
         },
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
         },
     ],
     ids=["line", "ring"],
@@ -142,7 +160,12 @@ def run_mla_inference(
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize(
+    "seq_len", [128 * 1024, 100 * 1024, 1024, 25 * 1024], ids=["seq128k", "seq100k", "seq1k", "seq25k"]
+)
+@pytest.mark.parametrize(
+    "num_iterations", [10, 100, 1_000, 10_000, 100_000], ids=["10it", "100it", "1kit", "10kit", "100kit"]
+)
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
@@ -157,6 +180,7 @@ def test_mla(
     is_ci_env,
     is_ci_v2_env,
     device_params,
+    num_iterations,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.
@@ -243,6 +267,8 @@ def test_mla(
         is_balanced=is_balanced,
         topology=topology,
         tt_kvpe_cache=tt_kvpe_cache,
+        num_iterations=num_iterations,
+        sync_on_mla_and_ccl=True,  # Sync after MLA forward to ensure all is synced up
     )
 
     batch_size = 1
