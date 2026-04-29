@@ -1,6 +1,6 @@
 transformer_config:
   model_type: "llama"
-  num_heads: 6
+  num_heads: 8
   num_groups: 2 # should be divisible by number of devices
   embedding_dim: 384
   dropout_prob: 0.0
