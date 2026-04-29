@@ -23,15 +23,14 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
     [[maybe_unused]] const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     IDevice* device = output.device();
-    auto grid = device->compute_with_storage_grid_size();
-
     uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
-    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(grid, units_to_divide);
-
-    uint32_t num_cores_x = grid.x;
-    uint32_t num_cores_y = grid.y;
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
+    const auto& ws = cached_split_work_to_cores(device, units_to_divide);
+    const auto& all_cores = ws.all_cores;
+    const auto& core_group_1 = ws.core_group_1;
+    const auto& core_group_2 = ws.core_group_2;
+    const auto& units_per_core_group_1 = ws.units_per_core_group_1;
+    const auto& units_per_core_group_2 = ws.units_per_core_group_2;
+    const auto& cores = ws.cores;
 
     Program program = Program();
 
