@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_include.h"
+#include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
 
@@ -17,6 +18,9 @@ using namespace ckernel::math;
 inline void _llk_math_dbg_feature_disable_()
 {
     tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+    };
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                              // workaround for bug tenstorrent/budabackend#1372
 }
@@ -24,6 +28,9 @@ inline void _llk_math_dbg_feature_disable_()
 inline void _llk_math_dbg_feature_enable_()
 {
     tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+    };
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
                                                        // workaround for bug tenstorrent/budabackend#1372
 }
@@ -59,6 +66,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     if (int8_math_enabled || uint16_with_fp32_dest)
     {
         _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
     }
 }
 
@@ -156,6 +167,20 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
     }
+
+    std::uint32_t int8_math_enabled =
+        (masked_data_format(srca_data_format) == to_underlying(DataFormat::Int8)) || (srca_data_format == to_underlying(DataFormat::Int32));
+
+    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && (srca_data_format == to_underlying(DataFormat::UInt16));
+
+    if (int8_math_enabled || uint16_with_fp32_dest)
+    {
+        _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
+    }
 }
 
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
@@ -175,6 +200,20 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
     {
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(srcb_data_format);
+    }
+
+    std::uint32_t int8_math_enabled =
+        (masked_data_format(srcb_data_format) == to_underlying(DataFormat::Int8)) || (srcb_data_format == to_underlying(DataFormat::Int32));
+
+    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && (srcb_data_format == to_underlying(DataFormat::UInt16));
+
+    if (int8_math_enabled || uint16_with_fp32_dest)
+    {
+        _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
     }
 }
 
@@ -199,6 +238,22 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
         std::uint32_t config_data           = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
+    }
+
+    std::uint32_t int8_math_enabled = (masked_data_format(srca_data_format) == to_underlying(DataFormat::Int8)) ||
+                                      (masked_data_format(srcb_data_format) == to_underlying(DataFormat::Int8)) ||
+                                      (srca_data_format == to_underlying(DataFormat::Int32)) || (srcb_data_format == to_underlying(DataFormat::Int32));
+
+    bool uint16_with_fp32_dest =
+        is_fp32_dest_acc_en && ((srca_data_format == to_underlying(DataFormat::UInt16)) || (srcb_data_format == to_underlying(DataFormat::UInt16)));
+
+    if (int8_math_enabled || uint16_with_fp32_dest)
+    {
+        _llk_math_dbg_feature_disable_();
+    }
+    else
+    {
+        _llk_math_dbg_feature_enable_();
     }
 }
 
