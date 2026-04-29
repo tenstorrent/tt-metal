@@ -1457,6 +1457,16 @@ void kernel_main() {
         // local_cur_pos is used for kv cache update and flash mla.
         invalidate_l1_cache();
         uint32_t cur_pos = metadata_ptr->position_id;
+        float temperature = metadata_ptr->temperature;
+        float probability_mass_threshold = metadata_ptr->probability_mass_threshold;
+        uint32_t prefill_token_id = metadata_ptr->prefill_token_id;
+        uint32_t k = metadata_ptr->k;
+
+        DPRINT << "cp: " << cur_pos << ENDL();
+        DPRINT << "t: " << temperature << ENDL();
+        DPRINT << "ptid: " << prefill_token_id << ENDL();
+        DPRINT << "K: " << k << ENDL();
+        DPRINT << "pmt: " << probability_mass_threshold << ENDL();
 
         const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
             cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);

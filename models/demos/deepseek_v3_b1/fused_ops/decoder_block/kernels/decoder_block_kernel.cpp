@@ -2320,6 +2320,16 @@ void kernel_main() {
         // local_cur_pos is used for kv cache update and flash mla.
         invalidate_l1_cache();
         uint32_t cur_pos = metadata_ptr->position_id;
+        float temperature = metadata_ptr->temperature;
+        float probability_mass_threshold = metadata_ptr->probability_mass_threshold;
+        uint32_t prefill_token_id = metadata_ptr->prefill_token_id;
+        uint32_t k = metadata_ptr->k;
+
+        DPRINT << "cp: " << cur_pos << ENDL();
+        DPRINT << "t: " << temperature << ENDL();
+        DPRINT << "ptid: " << prefill_token_id << ENDL();
+        DPRINT << "K: " << k << ENDL();
+        DPRINT << "pmt: " << probability_mass_threshold << ENDL();
 
         const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
             cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
@@ -2717,6 +2727,23 @@ void kernel_main() {
             unified_kernels::sync_riscs_exit<false>(ccl_sync_sem);
         }
 
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t residual_cb = get_named_compile_time_arg_val("shared_residual_mcast_src_cb");
+            constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb");
+            auto* rp = reinterpret_cast<uint16_t*>(get_read_ptr(residual_cb));
+            DPRINT << "RESID[0-4]: "
+                   << BF16(rp[0]) << " " << BF16(rp[1]) << " "
+                   << BF16(rp[2]) << " " << BF16(rp[3]) << " "
+                   << BF16(rp[4]) << ENDL();
+            auto* gp = reinterpret_cast<uint16_t*>(get_read_ptr(gamma_cb));
+            DPRINT << "MOE_GAMMA[0-4]: "
+                   << BF16(gp[0]) << " " << BF16(gp[1]) << " "
+                   << BF16(gp[2]) << " " << BF16(gp[3]) << " "
+                   << BF16(gp[4]) << ENDL();
+        }
+#endif
+
         // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
         {
             DeviceZoneScopedN("RMSNORM");
@@ -2733,6 +2760,18 @@ void kernel_main() {
             DeviceZoneScopedN("MCAST");
             moe_mcast(moe.routed.mcast_args);
         }
+
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::Routed::is_gate_proj_core) {
+            constexpr uint32_t dst_cb = get_named_compile_time_arg_val("moe_mcast_dst_cb");
+            cb_wait_front(dst_cb, 1);
+            auto* p = reinterpret_cast<uint16_t*>(get_read_ptr(dst_cb));
+            DPRINT << "CHK1_MOE_IN[0-4]: "
+                   << BF16(p[0]) << " " << BF16(p[1]) << " "
+                   << BF16(p[2]) << " " << BF16(p[3]) << " "
+                   << BF16(p[4]) << ENDL();
+        }
+#endif
 
 #ifdef ENABLE_ROUTING
         // 2. Matmul + Activation: Routing matmul on gate_mm cores
@@ -2863,6 +2902,18 @@ void kernel_main() {
             mul_op();
         }
 
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::Routed::is_gate_proj_core) {
+            constexpr uint32_t out_cb = get_named_compile_time_arg_val("mul_cb_out");
+            cb_wait_front(out_cb, 1);
+            auto* p = reinterpret_cast<uint16_t*>(get_read_ptr(out_cb));
+            DPRINT << "CHK2_MUL_OUT[0-4]: "
+                   << BF16(p[0]) << " " << BF16(p[1]) << " "
+                   << BF16(p[2]) << " " << BF16(p[3]) << " "
+                   << BF16(p[4]) << ENDL();
+        }
+#endif
+
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
         {
@@ -2989,6 +3040,18 @@ void kernel_main() {
             add_op();
         }
 
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::Routed::is_gate_proj_core) {
+            constexpr uint32_t out_cb = get_named_compile_time_arg_val("reduce_local_cb");
+            cb_wait_front(out_cb, 1);
+            auto* p = reinterpret_cast<uint16_t*>(get_read_ptr(out_cb));
+            DPRINT << "CHK3_ADD_OUT[0-4]: "
+                   << BF16(p[0]) << " " << BF16(p[1]) << " "
+                   << BF16(p[2]) << " " << BF16(p[3]) << " "
+                   << BF16(p[4]) << ENDL();
+        }
+#endif
+
         // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh
         //     Reduces final_output from all 8 devices to ROOT1 device
 #ifdef ENABLE_REDUCE_TO_ONE
@@ -3075,6 +3138,21 @@ void kernel_main() {
             }
             setup_moe_sharded_buffers();
         }
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::Routed::is_gate_proj_core) {
+            constexpr uint32_t gp_in1 = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+            constexpr uint32_t dp_in1 = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
+            constexpr uint32_t moe_dst_cb = get_named_compile_time_arg_val("moe_mcast_dst_cb");
+            constexpr uint32_t mul_out_cb = get_named_compile_time_arg_val("mul_cb_out");
+            constexpr uint32_t reduce_cb = get_named_compile_time_arg_val("reduce_local_cb");
+            DPRINT << "GATE_ADDRS gp_in1=" << gp_in1
+                   << " dp_in1=" << dp_in1
+                   << " moe_dst@" << get_write_ptr(moe_dst_cb)
+                   << " mul_out@" << get_write_ptr(mul_out_cb)
+                   << " reduce@" << get_write_ptr(reduce_cb)
+                   << ENDL();
+        }
+#endif
         {
             DeviceZoneScopedN("MOE");
             moe_body();

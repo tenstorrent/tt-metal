@@ -16,6 +16,7 @@ In single-device mode (skip_ccl=True): CCL is skipped and the input is used dire
 import os
 import re
 import statistics
+import struct
 from pathlib import Path
 
 import pytest
@@ -31,25 +32,19 @@ from models.common.utility_functions import is_slow_dispatch, skip_with_llk_asse
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
     create_single_galaxy_combined_spec_decode_pipeline_configuration,
-    create_single_galaxy_pipeline_configuration,
-    create_single_galaxy_spec_decode_pipeline_configuration,
     create_single_pod_combined_spec_decode_pipeline_configuration,
 )
 from models.demos.deepseek_v3_b1.demo.stage import (
     TOKEN_META_PAGE_SIZE_BYTES,
-    TOKEN_PAGE_SIZE_BYTES,
     BaseLMHeadStage,
     EmbeddingStage,
     PassthroughPayload,
     PassthroughStage,
     SpecLMHeadStage,
 )
-from models.demos.deepseek_v3_b1.demo.weight_provider import (
-    StateDictWeightProvider,
-    SyntheticWeightProvider,
-    _build_synthetic_mtp_state_dict,
-)
+from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider, _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
+from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_NUM_UINT32
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
@@ -58,6 +53,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     create_fabric_router_config,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 from models.demos.deepseek_v3_b1.weights.prepare import (
     _MTP_LAYER_IDX,
     DeepSeekV3EmbeddingLayerWeights,
@@ -778,19 +774,21 @@ def create_single_pod_passthrough_pipeline_configuration(
     )
 
 
-# Golden helper: same deterministic formula as SyntheticWeightProvider (one-hot embedding, winner_per_row).
+# Golden helper: same deterministic formula as SyntheticWeightProvider (randn LM head, one-hot embedding).
 def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor:
     """Compute expected output indices for synthetic weights. Same math as SyntheticWeightProvider."""
     K = 7168
-    n_total = 101 * 160
+    V = _VOCAB_SIZE
     torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
     row_indices = torch.arange(iterations, dtype=torch.int64) % K
     torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
     torch_embedding_table[torch.arange(iterations), row_indices] = 1
-    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
-    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
-    torch_b[torch.arange(K), winner_per_row] = 1
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+    # Use a diagonal matrix for the LM head (same logic as weight_provider.py SyntheticWeightProvider)
+    lm_w = torch.full((V, K), -1.0, dtype=torch.bfloat16)
+    lm_w[torch.arange(K, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(K)] = 1
+    lm_w_bf8 = ttnn.from_torch(lm_w.T.contiguous(), dtype=ttnn.bfloat8_b)
+    torch_b = ttnn.to_torch(lm_w_bf8).to(torch.bfloat16)
+    torch_indices_flat = torch.arange(V, dtype=torch.int32).reshape(1, V)
     torch_expected_indices = torch.stack(
         [
             LMHeadSampling.golden(
@@ -968,6 +966,24 @@ def _format_real_weights_topk_mismatch_report(
     return "\n".join(lines)
 
 
+def _per_shard_quantize(tensor: torch.Tensor, *, num_shards: int, shard_dim: int, dtype) -> torch.Tensor:
+    """Quantize a tensor by splitting into shards first, matching ShardTensorToMesh.
+
+    The pipeline's EphemeralTensorCache uses ``ShardTensorToMesh`` which splits the
+    bf16 tensor into ``num_shards`` pieces along ``shard_dim`` and converts each
+    shard to the target block-float dtype independently.  A single HOST round-trip
+    on the full tensor can produce different shared exponents than per-shard
+    conversion, so this helper replicates the per-shard path entirely on the HOST.
+    """
+    shards = tensor.chunk(num_shards, dim=shard_dim)
+    quantized_shards = []
+    for shard in shards:
+        shard_c = shard.contiguous()
+        tt = ttnn.from_torch(shard_c, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32)))
+        quantized_shards.append(ttnn.to_torch(tt).to(torch.bfloat16))
+    return torch.cat(quantized_shards, dim=shard_dim)
+
+
 def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     """Compute expected (base_token, spec_token) pairs for the 4-stage MTP pipeline.
 
@@ -979,8 +995,8 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
     Weights match SyntheticWeightProvider from weight_provider.py:
       - Embedding: one-hot (emb[i, i % K] = 1)
-      - LM head: one-hot (lm_w[i % n_total, i] = 1, rest -1), bfloat8_b quantized
-      - MTP norms: ones; MTP eh_proj: randn (from _build_synthetic_mtp_state_dict)
+      - LM head: randn (seed=42), bfloat8_b quantized
+      - MTP norms: randn (abs + 0.1); MTP eh_proj: randn (from _build_synthetic_mtp_state_dict)
     """
     K = _EMBED_HIDDEN
     n_total = _LM_HEAD_N_SYNTHETIC
@@ -989,29 +1005,43 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     base_embed_w = torch.zeros(_VOCAB_SIZE, K, dtype=torch.bfloat16)
     base_embed_w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % K] = 1
 
-    # One-hot LM head (same as SyntheticWeightProvider.load_lm_head)
-    lm_w = torch.full((_VOCAB_SIZE, K), -1.0, dtype=torch.bfloat16)
-    lm_w[torch.arange(K, dtype=torch.int64) % n_total, torch.arange(K)] = 1
-    norm_w = torch.ones(K, dtype=torch.bfloat16)
+    # Random LM head (same as SyntheticWeightProvider.load_lm_head)
+    g = torch.Generator().manual_seed(42)
+    lm_w = torch.randn(_VOCAB_SIZE, K, generator=g, dtype=torch.bfloat16)
+    lm_w_eye = torch.eye(K, K, dtype=torch.bfloat16)
+    lm_w_eye = 100 * lm_w_eye
+    lm_w[:7168, :] = lm_w_eye
+    norm_w = torch.randn(K, generator=g, dtype=torch.bfloat16).abs() + 0.1
 
-    # Round-trip through bfloat8_b to match device quantization (prepare_weights stores as bfloat8_b)
-    lm_w_bf8 = ttnn.from_torch(lm_w.T.contiguous(), dtype=ttnn.bfloat8_b)
-    lm_w_quantized = ttnn.to_torch(lm_w_bf8).to(torch.bfloat16)
+    lm_w_folded = lm_w * norm_w
+    lm_w_folded_T = lm_w_folded.T.contiguous()
+    lm_w_quantized = _per_shard_quantize(lm_w_folded_T, num_shards=8, shard_dim=1, dtype=ttnn.bfloat8_b)
 
-    torch_gamma = norm_w.unsqueeze(0)
+    torch_gamma = None
     torch_b = lm_w_quantized
     torch_indices_flat = torch.arange(_VOCAB_SIZE, dtype=torch.int32).reshape(1, _VOCAB_SIZE)
 
     # MTP weights (same as SyntheticWeightProvider.load_mtp via _build_synthetic_mtp_state_dict)
     mtp_sd = _build_synthetic_mtp_state_dict()
-    torch_h_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.hnorm.weight"].unsqueeze(0)
-    torch_e_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.enorm.weight"].unsqueeze(0)
+    raw_h_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.hnorm.weight"]
+    raw_e_gamma = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.enorm.weight"]
     torch_eh_proj = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.eh_proj.weight"].T.contiguous()
+
     # MTP embedding reuses the main one-hot embedding table
     torch_embedding = base_embed_w
 
-    torch_eh_proj_bf8 = ttnn.from_torch(torch_eh_proj, dtype=ttnn.bfloat8_b)
-    torch_eh_proj = ttnn.to_torch(torch_eh_proj_bf8).to(torch.bfloat16)
+    gamma_eh = torch.cat([raw_e_gamma, raw_h_gamma], dim=0).unsqueeze(1)
+    torch_eh_proj_folded = torch_eh_proj * gamma_eh
+    torch_eh_proj = _per_shard_quantize(torch_eh_proj_folded, num_shards=8, shard_dim=0, dtype=ttnn.bfloat4_b)
+
+    torch_h_gamma = None
+    torch_e_gamma = None
+
+    spec_lm_w = mtp_sd["lm_head.weight"]
+    spec_norm_w = mtp_sd[f"model.layers.{_MTP_LAYER_IDX}.shared_head.norm.weight"]
+    spec_lm_w_folded = spec_lm_w * spec_norm_w
+    spec_lm_w_folded_T = spec_lm_w_folded.T.contiguous()
+    spec_b = _per_shard_quantize(spec_lm_w_folded_T, num_shards=8, shard_dim=1, dtype=ttnn.bfloat8_b)
 
     results = []
     for iteration in range(iterations):
@@ -1020,24 +1050,25 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
         base_token_tensor, mtp_logits = LMHeadSampling.golden(
             torch_input.float(),
-            torch_gamma.float(),
+            torch_gamma,
             torch_b.float().unsqueeze(0),
             indices=torch_indices_flat,
             k=1,
             p=1.0,
+            temperature=0.6,
             fuse_mtp=True,
             embedding_tensor=torch_embedding.float(),
-            h_gamma_tensor=torch_h_gamma.float(),
-            e_gamma_tensor=torch_e_gamma.float(),
+            h_gamma_tensor=torch_h_gamma,
+            e_gamma_tensor=torch_e_gamma,
             eh_projection_tensor=torch_eh_proj.float(),
         )
         base_token = base_token_tensor.to(torch.uint32).item()
 
         _h_var = torch_input.float().pow(2).mean(-1, keepdim=True)
-        _h_norm = torch_input.float() * torch.rsqrt(_h_var + 1e-6) * torch_h_gamma.float()
+        _h_norm = torch_input.float() * torch.rsqrt(_h_var + 1e-6)
         _tok_emb = torch_embedding[iteration, :].unsqueeze(0).float()
         _e_var = _tok_emb.pow(2).mean(-1, keepdim=True)
-        _e_norm = _tok_emb * torch.rsqrt(_e_var + 1e-6) * torch_e_gamma.float()
+        _e_norm = _tok_emb * torch.rsqrt(_e_var + 1e-6)
         _concat = torch.cat([_e_norm, _h_norm], dim=-1)
         _concat_bf16 = _concat.to(torch.bfloat16).to(torch.float32)
 
@@ -1094,11 +1125,12 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
         spec_token_tensor, _ = LMHeadSampling.golden(
             _reduced_logits,
-            torch_gamma.float(),
-            torch_b.float().unsqueeze(0),
+            None,
+            spec_b.float().unsqueeze(0),
             indices=torch_indices_flat,
             k=1,
             p=1.0,
+            temperature=0.6,
         )
         spec_token = spec_token_tensor.to(torch.uint32).item()
 
@@ -1554,7 +1586,7 @@ def _compute_reference_payload_mtp_metrics_ttnn(
         verifiable_rows = 0
 
         for row_idx in range(total_rows):
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = row_idx
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
@@ -1932,7 +1964,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -1963,7 +1995,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
-            output_mtp_tensor=ttnn_mtp_output,
+            eh_mm_fused_buffer=ttnn_mtp_output,
             embedding_tensor=ttnn_embedding,
             h_gamma_tensor=ttnn_h_gamma,
             e_gamma_tensor=ttnn_e_gamma,
@@ -1994,7 +2026,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
-            output_mtp_tensor=ttnn_mtp_output,
+            eh_mm_fused_buffer=ttnn_mtp_output,
             embedding_tensor=ttnn_embedding,
             h_gamma_tensor=ttnn_h_gamma,
             e_gamma_tensor=ttnn_e_gamma,
@@ -2442,7 +2474,7 @@ def test_single_device_mtp(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -2656,7 +2688,7 @@ def test_single_device_mtp_verification(
     )
     torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
     ttnn_eh_proj = to_device(
-        torch_eh_proj_shuffled, eh_proj_mem_config, layout=ttnn.TILE_LAYOUT, tile=b_tile, dtype=ttnn.bfloat8_b
+        torch_eh_proj_shuffled, eh_proj_mem_config, layout=ttnn.TILE_LAYOUT, tile=b_tile, dtype=ttnn.bfloat4_b
     )
     ttnn_mtp_output = to_device(
         torch.zeros((M, mtp_padded_dim), dtype=torch.bfloat16),
@@ -2682,7 +2714,7 @@ def test_single_device_mtp_verification(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -2807,7 +2839,7 @@ def test_single_device_d2h(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    d2h_page_size_bytes = 64
+    d2h_page_size_bytes = 256
 
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
@@ -3480,7 +3512,7 @@ def test_multidevice_mtp(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -3564,7 +3596,7 @@ def test_d2h(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    d2h_page_size_bytes = 64
+    d2h_page_size_bytes = 256
 
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
@@ -3798,7 +3830,7 @@ def test_d2d_to_d2h_pipeline(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    socket_page_size_bytes = 64
+    socket_page_size_bytes = 256
     socket_fifo_size = 256
 
     a_tile = ttnn.Tile([1, 32])
@@ -4059,335 +4091,73 @@ def test_d2d_to_d2h_pipeline(
     ttnn.synchronize_device(submesh)
 
 
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("final_mesh_coord", [(1, 1), (0, 1), (2, 0), (2, 1)])
-@pytest.mark.parametrize("seed", [5449])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
-def test_4stage_galaxy_1_iteration(
-    bh_2d_mesh_device,
-    use_fp32,
-    final_mesh_coord,
-    seed,
-    device_params,
-):
-    """4x2 mesh lm_head pipeline with H2D ingress + D2D ingress before compute, then D2D->D2H egress."""
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
-    if not is_slow_dispatch():
-        pytest.skip("Skipping D2D/D2H pipeline test in fast dispatch mode")
+def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
+    """Parse a 256-byte DeepseekMetadata output page into a dict.
 
-    mesh_rows, mesh_cols = 4, 2
-    num_devices = mesh_rows * mesh_cols
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
+    Layout (64 uint32 words = 256 bytes):
+      words  0-15 : header (tok0_id, tok0_type, tok0_pos, tok1_id, tok1_type, tok1_pos,
+                             slot_id, token_id, position_id, prefill_token_id,
+                             temperature, k, probability_mass_threshold, _pad0-2)
+      words 16-47 : p_indices[32]  (uint32)
+      words 48-63 : p_scores[32]   (bf16 packed as uint16, 2 per uint32)
+    """
+    raw = ttnn.to_torch(output_tensor).to(torch.int32).flatten()
+    assert (
+        raw.numel() >= METADATA_TENSOR_NUM_UINT32
+    ), f"output tensor has {raw.numel()} words, expected >= {METADATA_TENSOR_NUM_UINT32}"
 
-    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    ttnn.enable_asynchronous_slow_dispatch(submesh)
+    def _u32_to_f32(bits: int) -> float:
+        return struct.unpack("<f", struct.pack("<I", bits & 0xFFFFFFFF))[0]
 
-    device_grid_size = submesh.compute_with_storage_grid_size()
-    worker_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
-    )
+    p_indices = raw[16:48].tolist()
+    scores_packed = raw[48:64].contiguous().view(torch.bfloat16)
+    p_scores = scores_packed.float().tolist()
 
-    M = 1
-    K = 7168
-    num_matmul_cores = 101
-    n_per_core = 160
-    n_total = num_matmul_cores * n_per_core
-    activation_page_size_bytes = K * 2  # bf16 [1, 7168]
-    activation_fifo_size = activation_page_size_bytes * 2
-    socket_page_size_bytes = 64
-    socket_fifo_size = 512
-    assert activation_page_size_bytes == 14336
-    assert socket_fifo_size == 8 * socket_page_size_bytes
+    return {
+        "tok0_id": int(raw[0].item()),
+        "tok0_type": int(raw[1].item()),
+        "tok0_pos": int(raw[2].item()),
+        "tok1_id": int(raw[3].item()),
+        "tok1_type": int(raw[4].item()),
+        "tok1_pos": int(raw[5].item()),
+        "slot_id": int(raw[6].item()),
+        "token_id": int(raw[7].item()),
+        "position_id": int(raw[8].item()),
+        "prefill_token_id": int(raw[9].item()),
+        "temperature": _u32_to_f32(raw[10].item()),
+        "k": int(raw[11].item()),
+        "probability_mass_threshold": _u32_to_f32(raw[12].item()),
+        "p_indices": p_indices,
+        "p_scores": p_scores,
+    }
 
-    a_tile = ttnn.Tile([1, 32])
-    b_tile = ttnn.Tile([32, 32])
-    out_tile = ttnn.Tile([1, 32])
 
-    lmhead_input_core_x = 10
-    lmhead_input_core_y = 9
-    lmhead_input_core = ttnn.CoreCoord(lmhead_input_core_x, lmhead_input_core_y)
-    lmhead_input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(lmhead_input_core, lmhead_input_core)])
-    matmul_core_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
-        ]
-    )
-    argmax_final_core = ttnn.CoreCoord(0, 0)
-    argmax_final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)])
+def create_input_page(
+    token_id: int,
+    position_id: int,
+    prefill_token_id: int,
+    slot_id: int,
+    temperature: float = 0.0,
+    top_k: int = 0,
+    probability_mass_threshold: float = 0.0,
+) -> ttnn.Tensor:
+    """Build a TOKEN_PAGE_SIZE_BYTES input page matching the DeepseekMetadata input layout.
 
-    reserved_cores = {(argmax_final_core.x, argmax_final_core.y), (lmhead_input_core.x, lmhead_input_core.y)}
-    extra_cores = []
-    for y in range(device_grid_size.y):
-        for x in range(device_grid_size.x):
-            if (x, y) in reserved_cores:
-                continue
-            if matmul_core_grid.bounding_box().contains(ttnn.CoreCoord(x, y)):
-                continue
-            extra_cores.append(ttnn.CoreCoord(x, y))
-    if len(extra_cores) < 4:
-        pytest.skip("Test requires at least 4 spare cores for H2D/D2D and D2D/D2H pipeline wiring")
-
-    ingress_forward_core = ttnn.CoreCoord(11, 0)
-    egress_sink_core = ttnn.CoreCoord(11, 1)
-    d2h_endpoint_core = ttnn.CoreCoord(11, 2)
-    h2d_endpoint_core = ttnn.CoreCoord(11, 3)
-    ingress_relay_core = ttnn.CoreCoord(11, 4)
-
-    torch.manual_seed(seed)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
-    torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_expected_idx, _ = LMHeadSampling.golden(
-        torch_a.float(),
-        torch_gamma.float(),
-        torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
-        indices=torch_indices_all,
-        k=1,
-        p=1.0,
-    )
-
-    input_a_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(lmhead_input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    width_shard_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(matmul_core_grid, (K, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    indices_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    output_index_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(argmax_final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    winner_page_bytes = 16
-    scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes) // 4)
-    scratch_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(argmax_final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
-    )
-
-    sender_coord = ttnn.MeshCoordinate(1, 0)
-    bcast_inputs = build_broadcast_test_inputs(
-        mesh_device=submesh,
-        mesh_rows=mesh_rows,
-        mesh_cols=mesh_cols,
-        sender_coord=sender_coord,
-        output_shape=torch_a.shape,
-        input_shard_shape=(M, K),
-        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        layout=ttnn.TILE_LAYOUT,
-        input_dtype=ttnn.bfloat16,
-        bcast_core=lmhead_input_core,
-        input_tensor_torch=torch_a,
-        create_output_tensor_mesh=True,
-        create_semaphores=True,
-        num_links=1,
-        tile=a_tile,
-        output_mesh_mapper="shard_dim0",
-    )
-    input_tensor_mesh = bcast_inputs.input_tensor_mesh
-    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
-    mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=input_a_mem_config,
-        tile=a_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    ttnn_b = ttnn.from_torch(
-        torch_b,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=width_shard_mem_config,
-        tile=b_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    ttnn_scores = ttnn.from_torch(
-        torch.zeros((M, n_total), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=output_mem_config,
-        tile=out_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    ttnn_indices = ttnn.from_torch(
-        torch_indices_all,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=indices_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_output_index = ttnn.from_torch(
-        torch.zeros((num_devices, 1, 1), dtype=torch.uint32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=output_index_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_fabric_scratch = ttnn.from_torch(
-        torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=scratch_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-
-    global_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
-    global_stage2_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
-    sender_mesh_coord = ttnn.MeshCoordinate(int(sender_coord[0]), int(sender_coord[1]))
-
-    lmhead_input_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, lmhead_input_core)
-    ingress_relay_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, ingress_relay_core)
-    ingress_forward_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, ingress_forward_core)
-    h2d_endpoint_mesh_core = ttnn.MeshCoreCoord(sender_mesh_coord, h2d_endpoint_core)
-
-    argmax_final_mesh_core = ttnn.MeshCoreCoord(
-        ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        argmax_final_core,
-    )
-
-    egress_forward_mesh_core = ttnn.MeshCoreCoord(
-        ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        ingress_forward_core,
-    )
-    egress_sink_mesh_core = ttnn.MeshCoreCoord(
-        ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        egress_sink_core,
-    )
-    d2h_endpoint_mesh_core = ttnn.MeshCoreCoord(
-        ttnn.MeshCoordinate(int(final_mesh_coord[0]), int(final_mesh_coord[1])),
-        d2h_endpoint_core,
-    )
-    h2d_host_socket = ttnn.H2DSocket(
-        submesh,
-        h2d_endpoint_mesh_core,
-        ttnn.BufferType.L1,
-        activation_fifo_size,
-        ttnn.H2DMode.HOST_PUSH,
-    )
-    d2h_host_socket = ttnn.D2HSocket(submesh, d2h_endpoint_mesh_core, socket_fifo_size)
-    host_io_bridge = HostInterface(
-        h2d_host_socket,
-        d2h_host_socket,
-        activation_page_size_bytes,
-        socket_page_size_bytes,
-        core_to_core_socket_buffer_size=activation_fifo_size,
-        h2d_downstream_core=ingress_relay_mesh_core,
-        d2h_upstream_core=egress_sink_mesh_core,
-    )
-    ingress_d2d_link = SocketInterface(
-        activation_page_size_bytes,
-        activation_fifo_size,
-        activation_page_size_bytes,
-        ingress_relay_mesh_core,
-        ingress_forward_mesh_core,
-        upstream_socket=host_io_bridge.get_downstream_socket(),
-        downstream_core_coord=lmhead_input_mesh_core,  # LMHead sender/socket-receiver core
-        sender_mesh=MeshWrapper(submesh),
-        receiver_mesh=MeshWrapper(submesh),
-    )
-    egress_d2d_link = SocketInterface(
-        socket_page_size_bytes,
-        socket_fifo_size,
-        socket_page_size_bytes,
-        egress_forward_mesh_core,
-        egress_sink_mesh_core,
-        upstream_core_coord=argmax_final_mesh_core,  # sampling winner core / socket sender core
-        downstream_socket=host_io_bridge.get_upstream_socket(),
-        sender_mesh=MeshWrapper(submesh),
-        receiver_mesh=MeshWrapper(submesh),
-    )
-
-    logger.info("Running HostInterface")
-    host_io_bridge.run()
-    logger.info("Running Input SocketInterface")
-    ingress_d2d_link.run()
-    logger.info("Running Output SocketInterface")
-    egress_d2d_link.run()
-
-    try:
-        h2d_activation_tensor = ttnn.from_torch(
-            torch_a.contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        logger.info("Running H2D socket write")
-        h2d_host_socket.write_tensor(h2d_activation_tensor)
-
-        logger.info("Running LMHeadSampling")
-        LMHeadSampling.op(
-            input_tensor_mesh,
-            intermediate_tensor_mesh,
-            ttnn_gamma,
-            ttnn_b,
-            ttnn_scores,
-            sender_coord=sender_coord,
-            indices_tensor=ttnn_indices,
-            output_index_tensor=ttnn_output_index,
-            argmax_final_core_coord=argmax_final_core,
-            argmax_final_mesh_coord=final_mesh_coord,
-            bcast_semaphores=bcast_inputs.semaphores,
-            global_semaphore=global_semaphore,
-            global_stage2_semaphore=global_stage2_semaphore,
-            fabric_scratch_tensor=ttnn_fabric_scratch,
-            fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
-            socket_input=ingress_d2d_link.get_downstream_socket(),
-            socket_output=egress_d2d_link.get_upstream_socket(),
-            fabric_config=device_params["fabric_config"],
-        )
-        logger.info("Running D2H socket read")
-        d2h_page_words = socket_page_size_bytes // 4
-        d2h_read_tensor = ttnn.from_torch(
-            torch.zeros((1, d2h_page_words), dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        d2h_host_socket.read_tensor(d2h_read_tensor)
-        d2h_token = ttnn.to_torch(d2h_read_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-        assert torch.equal(
-            d2h_token, torch_expected_idx
-        ), f"Mesh H2D->D2D->LMHead->D2D->D2H token mismatch. expected={torch_expected_idx.item()}, got={int(d2h_token.item())}"
-    finally:
-        host_io_bridge.terminate(False)
-        ingress_d2d_link.terminate(False)
-        egress_d2d_link.terminate(True)
-        ttnn.synchronize_device(submesh)
+    Word indices (from model.py InputField):
+      [1] token_type  [2] tok0_position_id  [6] slot_id (user_id)
+      [7] token_id    [8] position_id       [9] prefill_token_id
+      [10] temperature (f32 bits)  [11] top_k  [12] probability_mass_threshold (f32 bits)
+    """
+    page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
+    page[0, 2] = position_id
+    page[0, 6] = slot_id
+    page[0, 7] = token_id
+    page[0, 8] = position_id
+    page[0, 9] = prefill_token_id
+    page[0, 10] = float_to_uint32(temperature)
+    page[0, 11] = top_k
+    page[0, 12] = float_to_uint32(probability_mass_threshold)
+    return ttnn.from_torch(page, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 @pytest.mark.parametrize("use_fp32", [True])
@@ -4402,477 +4172,7 @@ def test_4stage_galaxy_1_iteration(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
-def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_params):
-    """
-    4-stage 4x2 single-galaxy pipeline:
-    P1(H2D) -> P2(LMHead+Sampling) -> P3(forward) -> P4(forward) -> P1(D2H).
-    One-shot LMHead (no persistent mode); single token; terminate in finally.
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 4:
-        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
-
-    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
-    torch_expected_idx = torch_expected_indices[0]
-
-    config = create_single_galaxy_pipeline_configuration(
-        SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-        persistent_mode=False,
-    )
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
-    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
-    pipeline = config.build_pipeline(
-        mesh_device,
-        stages_metadata=stages_metadata,
-        pipeline_config=pipeline_config,
-    )
-    try:
-        pipeline.setup_and_run()
-
-        if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = 0
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            pipeline.write_token(token_tensor)
-            pipeline.read_output(output_tensor)
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            assert torch.equal(
-                got, torch_expected_idx
-            ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
-
-        pipeline.barrier()
-    finally:
-        pipeline.terminate()
-
-
-@pytest.mark.skipif(
-    not _is_persistent_mode_enabled(), reason="Set TT_RUN_PERSISTENT_MODE=1 to run persistent mode test"
-)
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
-def test_persistent_mode(mesh_device, use_fp32, device_params):
-    """
-    4-stage 4x2 single-galaxy pipeline:
-    P1(H2D) -> P2(LMHead+Sampling) -> P3(forward) -> P4(forward) -> P1(D2H).
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 4:
-        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
-
-    iterations = 100
-    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
-    config = create_single_galaxy_pipeline_configuration(
-        SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-    )
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
-    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
-    pipeline = config.build_pipeline(
-        mesh_device,
-        stages_metadata=stages_metadata,
-        pipeline_config=pipeline_config,
-    )
-    try:
-        pipeline.setup_and_run()
-
-        if pipeline.my_mesh_id == 0:
-            for iteration in range(iterations):
-                logger.info(f"Writing token for iteration {iteration}")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                pipeline.write_token(token_tensor)
-                pipeline.read_output(output_tensor)
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                expected_idx = torch_expected_indices[iteration]
-                logger.info(f"Iteration {iteration} output token: {got}, expected: {expected_idx}")
-                assert torch.equal(
-                    got, expected_idx
-                ), f"PipelineBlock 4-stage token mismatch. expected={int(expected_idx.item())}, got={int(got.item())}"
-
-        logger.info(f"Barrier for P{pipeline.my_mesh_id}")
-        pipeline.barrier()
-        logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
-    finally:
-        logger.info(f"Terminating P{pipeline.my_mesh_id}")
-        pipeline.terminate()
-        logger.info(f"Terminated P{pipeline.my_mesh_id}")
-
-    logger.info("TEST COMPLETE!")
-
-
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1499000,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
-def test_persistent_mode_mtp(mesh_device, use_fp32):
-    """
-    4-stage 4x2 single-galaxy pipeline with MTP + verification:
-    P1(Embed) -> P2(LMHead+MTP) -> P3(Passthrough ACTIVATION_W_TOKEN_META) -> P4(Verify) -> P1(D2H TOKEN_META).
-
-    The verification stage (P4) receives gathered logits + token metadata, runs its
-    own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
-
-    TOKEN_META page layout (uint32 words):
-      [0] num_tokens  (0=stale, 1=accept, 2=reject)
-      [1] tok0_id     [2] tok0_type (0=BASE,1=SPEC)  [3] tok0_pos
-      [4] tok1_id     [5] tok1_type                   [6] tok1_pos
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 4:
-        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
-
-    iterations = 50
-    run_golden = True
-
-    config = create_single_galaxy_spec_decode_pipeline_configuration(
-        SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-    )
-    logger.debug(f"[TEST] config created, building pipeline")
-    # Propagate an identical, explicit pipeline_config and stages_metadata to
-    # every rank. Without this, each rank independently calls
-    # generate_blitz_decode_pipeline() and the submesh-aware code paths added
-    # in #42002 can produce inconsistent entry/exit MeshCoordinates across
-    # ranks, causing the inter-mesh MeshSocket handshake in
-    # SpecEmbeddingPipelineBlock.__init__'s h2d_host_io to time out.
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
-    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
-    pipeline = config.build_pipeline(
-        mesh_device,
-        stages_metadata=stages_metadata,
-        pipeline_config=pipeline_config,
-    )
-    pid = pipeline.my_mesh_id
-    logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
-    try:
-        pipeline.setup_and_run()
-        logger.debug(f"[TEST P{pid}] setup_and_run complete")
-
-        token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
-
-        if pipeline.my_mesh_id == 0:
-            if run_golden:
-                logger.debug(f"[TEST] computing golden...")
-                golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
-                logger.debug(f"[TEST] golden computed, creating config")
-            else:
-                logger.debug(f"[TEST] skipping golden computation")
-            for iteration in range(iterations):
-                logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, token_meta_words, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                pipeline.write_token(token_tensor)
-                logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
-                pipeline.read_output(output_tensor)
-                logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
-                raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
-
-                num_tokens = raw[0].item()
-                tok0_id = raw[1].item()
-                tok0_type = raw[2].item()
-                tok0_pos = raw[3].item()
-                tok1_id = raw[4].item()
-                tok1_type = raw[5].item()
-                tok1_pos = raw[6].item()
-
-                if run_golden:
-                    expected_base, expected_spec = golden[iteration]
-                else:
-                    expected_base = None
-                    expected_spec = None
-
-                type_name = {0: "BASE", 1: "SPEC"}
-                logger.debug(
-                    f"[TEST P{pid}] iter {iteration} "
-                    f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
-                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
-                    f"golden base token={expected_base} golden spec token={expected_spec}",
-                )
-                if run_golden:
-                    logger.debug(
-                        f"[TEST P{pid}] iter {iteration} "
-                        f"golden concat[0]={dbg['concat_0']:.6f} concat[7168]={dbg['concat_7168']:.6f} "
-                        f"mtp_logits: {chunk_strs}",
-                    )
-                    logger.debug(
-                        f"[TEST P{pid}] iter {iteration} "
-                        f"golden spec_rmsnorm[0]={dbg['spec_rmsnorm_0']:.6f} "
-                        f"[mid]={dbg['spec_rmsnorm_mid']:.6f} [last]={dbg['spec_rmsnorm_last']:.6f} "
-                        f"absmax={dbg['spec_rmsnorm_absmax']:.6f} chunks: {spec_rms_chunk_strs}",
-                    )
-        logger.debug(f"[TEST P{pid}] all iterations done, barrier")
-        pipeline.barrier()
-        logger.debug(f"[TEST P{pid}] barrier done, terminate")
-        pipeline.terminate()
-        logger.debug(f"[TEST P{pid}] terminate done, final barrier")
-        pipeline.barrier()
-        logger.debug(f"[TEST P{pid}] final barrier done")
-    finally:
-        pass
-
-
-# @pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
-def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_state_dict):
-    """
-    Same as test_persistent_mode but uses real HF weights (DEEPSEEK_V3_HF_MODEL) via StateDictWeightProvider.
-    Each pipeline step writes a **random** input vocab id (fixed seed) for the embedding lookup; the device
-    output must lie in the reference top-k from HuggingFace-style functional logits (RMSNorm then
-    hidden @ lm_head.weight.T in bfloat16), since device numerics (e.g. bfloat8_b weights) can disagree
-    with the reference argmax.
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 4:
-        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
-
-    iterations = 300
-    topk = 5
-    rng = torch.Generator().manual_seed(_REAL_WEIGHTS_PERSISTENT_INPUT_TOKEN_SEED)
-    input_token_ids = torch.randint(0, _VOCAB_SIZE, (iterations,), generator=rng, dtype=torch.int64)
-    ref_topk = _compute_reference_topk_token_ids_real(hf_state_dict, input_token_ids, topk=topk)
-    config = create_single_galaxy_pipeline_configuration(
-        StateDictWeightProvider(hf_model_path),
-        lm_head_fp32_dest_acc_en=use_fp32,
-    )
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
-    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
-    pipeline = config.build_pipeline(
-        mesh_device,
-        stages_metadata=stages_metadata,
-        pipeline_config=pipeline_config,
-    )
-    pipeline.setup_and_run()
-    try:
-        if pipeline.my_mesh_id == 0:
-            got_tokens = []
-            for iteration in range(iterations):
-                in_tok = int(input_token_ids[iteration].item())
-                logger.info(f"Writing token for iteration {iteration} (in_tok={in_tok})")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = in_tok
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                pipeline.write_token(token_tensor)
-                pipeline.read_output(output_tensor)
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                got_tokens.append(got)
-            got_all = torch.stack(got_tokens, dim=0)
-            got_flat = got_all.squeeze(-1).squeeze(-1)
-            logger.info(f"Random input token ids (in_tok per iter): {input_token_ids.tolist()}")
-            logger.info(f"All output tokens (real weights): {got_flat.tolist()}")
-            logger.info(f"Reference top-{topk} per iteration (first row): {ref_topk[0].tolist()}")
-            mismatches = []
-            for i in range(iterations):
-                in_tok = int(input_token_ids[i].item())
-                g = int(got_flat[i].item())
-                top_ids = [int(x) for x in ref_topk[i].tolist()]
-                if g not in top_ids:
-                    mismatches.append((i, in_tok, g, top_ids))
-            results_table = _format_real_weights_topk_results_table(
-                hf_state_dict,
-                input_token_ids,
-                got_flat,
-                ref_topk,
-                topk=topk,
-            )
-            logger.info(results_table)
-            if mismatches:
-                report = _format_real_weights_topk_mismatch_report(
-                    hf_state_dict,
-                    mismatches,
-                    topk=topk,
-                    total_iters=iterations,
-                )
-                logger.error(report)
-                pytest.fail(
-                    f"PipelineBlock (real weights): {len(mismatches)} output(s) not in HF functional top-{topk}.\n{report}"
-                )
-
-        logger.info(f"Barrier for P{pipeline.my_mesh_id} (real weights)")
-        pipeline.barrier()
-        logger.info(f"Barrier completed for P{pipeline.my_mesh_id} (real weights)")
-    finally:
-        pipeline.terminate()
-
-
-@pytest.mark.skipif(
-    not _is_persistent_mode_enabled(), reason="Set TT_RUN_PERSISTENT_MODE=1 to run persistent mode test"
-)
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
-def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
-    """
-    16-stage 4x2 pod pipeline (4 galaxies):
-    Stage1(H2D+Embed) -> Stage2..14(activation fwd) -> Stage15(LMHead+Sampling) -> Stage16(token fwd) -> Stage1(D2H).
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 16:
-        pytest.skip("This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)")
-
-    iterations = 100
-    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
-    config = create_single_pod_passthrough_pipeline_configuration(
-        SyntheticWeightProvider(),
-        lm_head_fp32_dest_acc_en=use_fp32,
-    )
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
-    stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
-    pipeline = config.build_pipeline(
-        mesh_device,
-        stages_metadata=stages_metadata,
-        pipeline_config=pipeline_config,
-    )
-    pipeline.setup_and_run()
-    try:
-        if pipeline.my_mesh_id == 0:
-            for iteration in range(iterations):
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                logger.info(f"Writing token for iteration {iteration}")
-                pipeline.write_token(token_tensor)
-                logger.info(f"Reading output for iteration {iteration}")
-                pipeline.read_output(output_tensor)
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                expected_idx = torch_expected_indices[iteration]
-                logger.info(f"Iteration {iteration} output token: {got}, expected: {expected_idx}")
-                assert torch.equal(
-                    got, expected_idx
-                ), f"Pod 16-stage token mismatch at iter {iteration}. expected={int(expected_idx.item())}, got={int(got.item())}"
-
-        logger.info(f"Barrier for stage {pipeline.my_mesh_id + 1}")
-        pipeline.barrier()
-        logger.info(f"Barrier completed for stage {pipeline.my_mesh_id + 1}")
-    finally:
-        pipeline.terminate()
-
-
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1485568,
+            "worker_l1_size": 1453716,
         }
     ],
     indirect=True,
@@ -4900,20 +4200,20 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
 
     num_procs = int(ttnn.distributed_context_get_size())
     if num_procs == 4:
-        config = create_single_pod_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
+        config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
+            SyntheticWeightProvider(fold_rmsnorm_weights=True),
             fp32_dest_acc_en=use_fp32,
         )
     elif num_procs == 16:
-        config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
+        config = create_single_pod_combined_spec_decode_pipeline_configuration(
+            SyntheticWeightProvider(fold_rmsnorm_weights=True),
             fp32_dest_acc_en=use_fp32,
         )
     else:
         raise ValueError(f"Test does not support {num_procs} distributed processes")
 
     print(f"[TEST] config created, building pipeline", flush=True)
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(True)
     stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
     pipeline = config.build_pipeline(
         mesh_device,
@@ -4924,13 +4224,21 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
 
     pos_id = 0
-    slot_id = 23
+    slot_id = 0
+
+    golden = None
+    golden_debug = None
+    if run_golden and pid == 0:
+        logger.debug(f"[TEST] computing golden...")
+        golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
+        logger.debug(f"[TEST] golden computed")
 
     pipeline.setup_and_run()
     logger.debug(f"[TEST P{pid}] setup_and_run complete")
 
     token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
-
+    raw_indices = []
+    raw_scores = []
     if pipeline.my_mesh_id == 0:
         if run_golden:
             logger.debug(f"[TEST] computing golden...")
@@ -4939,38 +4247,29 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
         else:
             logger.debug(f"[TEST] skipping golden computation")
 
-        tok0_id = 0
-        tok0_type = 0
-        tok0_pos = 0
-        tok1_id = 0
-        tok1_type = 0
-        tok1_pos = 0
+        output_tensor = ttnn.from_torch(
+            torch.zeros(1, token_meta_words, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
         for iteration in range(iterations):
             logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 6] = slot_id
-            torch_token[0, 7] = iteration
-            torch_token[0, 8] = iteration
-            torch_token[0, 9] = iteration
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_meta_words, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+            token_tensor = create_input_page(
+                token_id=10,
+                position_id=iteration,
+                prefill_token_id=10,
+                slot_id=slot_id,
+                temperature=0.6,
+                top_k=32,
+                probability_mass_threshold=1.0,
             )
             pipeline.write_token(token_tensor)
             logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
             pipeline.read_output(output_tensor)
-            logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
-            raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
-            tok0_id = raw[0].item()
-            tok0_type = raw[1].item()
-            tok0_pos = raw[2].item()
-            tok1_id = raw[3].item()
-            tok1_type = raw[4].item()
-            tok1_pos = raw[5].item()
+            page = parse_output_page(output_tensor)
+            type_name = {0: "BASE", 1: "SPEC"}
 
             if run_golden:
                 expected_base, expected_spec = golden[iteration]
@@ -4978,15 +4277,38 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 expected_base = None
                 expected_spec = None
 
-            type_name = {0: "BASE", 1: "SPEC"}
-            logger.debug(
-                f"[TEST P{pid}] iter {iteration} "
-                f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
-                f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
-                f"golden base token={expected_base} golden spec token={expected_spec}",
+            nonzero_p_idx = [(i, v) for i, v in enumerate(page["p_indices"]) if v != 0]
+            nonzero_p_sc = [(i, v) for i, v in enumerate(page["p_scores"]) if v != 0.0]
+
+            if iteration < 50:
+                raw_dump = ttnn.to_torch(output_tensor).flatten().tolist()
+                raw_indices.append(raw_dump[16:48])
+                raw_scores.append(raw_dump[48:64])
+                hdr = [f"0x{int(v) & 0xFFFFFFFF:08X}" for v in raw_dump[:16]]
+                idx = [f"0x{int(v) & 0xFFFFFFFF:08X}" for v in raw_dump[16:48]]
+                scr = [f"0x{int(v) & 0xFFFFFFFF:08X}" for v in raw_dump[48:64]]
+                print(f"[RAW P{pid}] iter {iteration} HDR={hdr}", flush=True)
+                print(f"[RAW P{pid}] iter {iteration} IDX={idx}", flush=True)
+                print(f"[RAW P{pid}] iter {iteration} SCR={scr}", flush=True)
+
+            logger.info(
+                f"[TEST P{pid}] iter {iteration} | "
+                f"t0={page['tok0_id']}/{type_name.get(page['tok0_type'], '?')} pos={page['tok0_pos']} | "
+                f"t1={page['tok1_id']}/{type_name.get(page['tok1_type'], '?')} pos={page['tok1_pos']} | "
+                f"slot_id={page['slot_id']} token_id={page['token_id']} "
+                f"position_id={page['position_id']} prefill_token_id={page['prefill_token_id']} | "
+                f"temperature={page['temperature']:.4f} k={page['k']} "
+                f"prob_mass_threshold={page['probability_mass_threshold']:.4f} | "
+                f"p_indices(nonzero)={nonzero_p_idx} | "
+                f"p_scores(nonzero)={nonzero_p_sc} | "
+                f"golden base={expected_base} spec={expected_spec}"
             )
 
+    # check if all raw scores and indices are the same – selection may vary based on random seed
+    if pipeline.my_mesh_id == 0:
+        for i in range(len(raw_indices)):
+            assert raw_indices[i] == raw_indices[0], f"Raw indices for iteration {i} are not the same"
+            assert raw_scores[i] == raw_scores[0], f"Raw scores for iteration {i} are not the same"
     logger.debug(f"[TEST P{pid}] all iterations done, barrier")
     pipeline.barrier()
     logger.debug(f"[TEST P{pid}] barrier done, terminate")
