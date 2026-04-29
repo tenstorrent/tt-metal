@@ -20,7 +20,6 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tracy import signpost
 
 
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(
