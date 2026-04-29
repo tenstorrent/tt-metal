@@ -507,7 +507,7 @@ def vit_embeddings(config, pixel_values, parameters, device):
     return embedding_output  # (B, 1408, 1024)
 
 
-def vit_layer(hidden_states, parameters, config):
+def vit_layer(hidden_states, parameters, config, attention_mask=None):
     """Single ViT-Large transformer block.
 
     Uses fused QKV matmul + ttnn's split/concatenate_heads helpers.
@@ -556,7 +556,11 @@ def vit_layer(hidden_states, parameters, config):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # ViT has NO attention mask -- use plain softmax (not attention_softmax_).
+    # Apply attention mask to prevent padding tokens from affecting softmax.
+    # Mask is (1, 1, 1, seqL) with -inf at padding positions, 0 elsewhere.
+    if attention_mask is not None:
+        attn_scores = ttnn.add(attn_scores, attention_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     attn_probs = ttnn.softmax(attn_scores, dim=-1)
     ttnn.deallocate(attn_scores)
 
@@ -694,6 +698,17 @@ class TtDepthAnythingV2:
         # Ensure TILE + DRAM before encoder (no sharding -- N300 8x7 grid).
         hidden_states = _dram_tile(hidden_states)
 
+        # ---- Attention mask for padding tokens ----------------------------
+        # Sequence layout: [CLS(1 real + 31 pad), patches(1369 real + 7 pad)] = 1408
+        # Real tokens: position 0 (CLS), positions 32-1400 (patches)
+        # Padding tokens: positions 1-31, 1401-1407  -> set to -inf
+        import torch
+        seqL = 1408
+        mask_np = torch.zeros(1, 1, 1, seqL)
+        mask_np[0, 0, 0, 1:32] = float("-inf")     # CLS padding
+        mask_np[0, 0, 0, 1401:1408] = float("-inf")  # patch padding
+        attention_mask = ttnn.from_torch(mask_np, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
         # ---- 2. ViT-Large encoder (24 layers) --------------------------
         features = []
         out_indices = {4, 11, 17, 23}  # HF out_indices=[5,12,18,24] are 1-indexed (include embedding)
@@ -703,6 +718,7 @@ class TtDepthAnythingV2:
                 hidden_states,
                 self.parameters["backbone"]["encoder"]["layer"][i],
                 self.config,
+                attention_mask=attention_mask,
             )
             if i in out_indices:
                 features.append(ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG))
