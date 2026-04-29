@@ -7,8 +7,10 @@
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -20,8 +22,9 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
-INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+TERMINATE_GRACE_SECONDS = 90  # < pod terminationGracePeriodSeconds (120) when running as MPIJob launcher
+FORWARDED_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
 class RankBinding(BaseModel):
@@ -250,6 +253,55 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
         logger.info(f"{prefix} Command: " + " ".join(cmd))
 
 
+def run_mpi_with_signal_forwarding(mpi_cmd: List[str]) -> int:
+    """Launch mpirun and forward SIGTERM/SIGINT so PRTE can tear down remote ranks.
+
+    tt-run runs as PID 1 in the MPIJob launcher pod; without forwarding, a SIGTERM from
+    kubelet kills the Python process and orphans mpirun, leaving remote workers on the
+    cards (MINFRA-297). A second signal escalates to SIGKILL so interactive callers can
+    still bail out fast.
+    """
+    proc = subprocess.Popen(mpi_cmd)
+
+    state = {"signals": 0, "deadline": None}
+
+    def _forward(signum, _frame):
+        state["signals"] += 1
+        if state["signals"] == 1:
+            logger.warning(
+                f"{TT_RUN_PREFIX} received signal {signum}, forwarding to mpirun (pid={proc.pid}); "
+                f"send signal again to escalate"
+            )
+            try:
+                proc.send_signal(signum)
+            except ProcessLookupError:
+                pass
+            state["deadline"] = time.monotonic() + TERMINATE_GRACE_SECONDS
+        else:
+            logger.error(f"{TT_RUN_PREFIX} second signal {signum} received, sending SIGKILL to mpirun")
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+    previous = {sig: signal.signal(sig, _forward) for sig in FORWARDED_SIGNALS}
+
+    try:
+        while True:
+            timeout = None if state["deadline"] is None else max(0.0, state["deadline"] - time.monotonic())
+            try:
+                return proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    f"{TT_RUN_PREFIX} mpirun did not exit within {TERMINATE_GRACE_SECONDS}s after signal; sending SIGKILL"
+                )
+                proc.kill()
+                return proc.wait()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 @click.command(
     context_settings=dict(
         ignore_unknown_options=True,
@@ -442,14 +494,11 @@ def main(
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
-        result = subprocess.run(mpi_cmd)
-        sys.exit(result.returncode)
-    except KeyboardInterrupt:
-        # Handle Ctrl+C gracefully with proper exit code (128 + SIGINT)
-        logger.error(f"{TT_RUN_PREFIX} Interrupted")
-        sys.exit(INTERRUPTED_EXIT_CODE)
+        exit_code = run_mpi_with_signal_forwarding(mpi_cmd)
     except OSError as e:
         raise click.ClickException(f"Error launching mpirun: {e}")
+
+    sys.exit(exit_code if exit_code >= 0 else 128 + (-exit_code))
 
 
 if __name__ == "__main__":
