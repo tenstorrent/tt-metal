@@ -905,49 +905,90 @@ class TtGatedDeltaNet(LightweightModule):
         b_3d = ttnn.reshape(b_all, (1, seq_len, Nv_TP))
         b_3d = _unshard(b_3d)
 
-        # Allocate flat output buffer: [num_pairs * seq_len, 1, Dv]
-        prefill_output = ttnn.from_torch(
-            torch.zeros(num_pairs * seq_len, 1, Dv, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        )
+        # ---- Allocate output buffer ----
+        # Layout depends on which kernel variant we use:
+        #   - Legacy (gdn_prefill_fused):     [num_pairs * N, 1, Dv]
+        #   - Seq-major (gdn_prefill_fused_seq_major):
+        #                                     [1, 1, N, num_pairs * Dv]
+        #     (RMSNorm + permute fused into the kernel)
+        use_seq_major = bool(_os.environ.get("GDN_PREFILL_SEQ_MAJOR", ""))
 
-        # Single kernel call — processes all tokens, updates state in-place
-        gdn_prefill_fused(
-            conv_out_3d,
-            a_3d,
-            b_3d,
-            self.neg_exp_A,
-            tw["dt_bias"],
-            tw["norm_w"],
-            self.scale_tt,
-            self.rms_scale_tt,
-            self.rms_eps_tt,
-            self._prefill_rec_states,
-            prefill_output,
-            num_pairs=num_pairs,
-            num_tokens=seq_len,
-            Nv_TP=Nv_TP,
-            Nk_TP=Nk_TP,
-            repeat_factor=repeat_factor,
-            key_dim_tp=key_dim_tp,
-        )
-        # Safe to deallocate now — kernel has completed
-        ttnn.deallocate(conv_out_all)
-        ttnn.deallocate(a_all)
-        ttnn.deallocate(b_all)
+        if use_seq_major:
+            from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import gdn_prefill_fused_seq_major
 
-        # RMS norm directly on kernel output [num_pairs*seq_len, 1, Dv] — avoids
-        # two intermediate reshapes by normalising before the heads↔tokens permute.
-        out_n = ttnn.rms_norm(prefill_output, weight=tw["norm_w"], epsilon=1e-6)
-        ttnn.deallocate(prefill_output)
-        out_4d = ttnn.reshape(out_n, (1, num_pairs, seq_len, Dv))
-        ttnn.deallocate(out_n)
-        out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, seq_len, num_pairs, Dv]
-        out_f = ttnn.reshape(out_4d, (1, 1, seq_len, self.value_dim_tp))
-        ttnn.deallocate(out_4d)
+            prefill_output = ttnn.from_torch(
+                torch.zeros(1, 1, seq_len, num_pairs * Dv, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+
+            gdn_prefill_fused_seq_major(
+                conv_out_3d,
+                a_3d,
+                b_3d,
+                self.neg_exp_A,
+                tw["dt_bias"],
+                tw["norm_w"],
+                self.scale_tt,
+                self.rms_scale_tt,
+                self.rms_eps_tt,
+                self._prefill_rec_states,
+                prefill_output,
+                num_pairs=num_pairs,
+                num_tokens=seq_len,
+                Nv_TP=Nv_TP,
+                Nk_TP=Nk_TP,
+                repeat_factor=repeat_factor,
+                key_dim_tp=key_dim_tp,
+            )
+            ttnn.deallocate(conv_out_all)
+            ttnn.deallocate(a_all)
+            ttnn.deallocate(b_all)
+
+            # RMSNorm + reshape + permute + reshape are all folded into the kernel.
+            out_f = prefill_output
+        else:
+            prefill_output = ttnn.from_torch(
+                torch.zeros(num_pairs * seq_len, 1, Dv, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+
+            gdn_prefill_fused(
+                conv_out_3d,
+                a_3d,
+                b_3d,
+                self.neg_exp_A,
+                tw["dt_bias"],
+                tw["norm_w"],
+                self.scale_tt,
+                self.rms_scale_tt,
+                self.rms_eps_tt,
+                self._prefill_rec_states,
+                prefill_output,
+                num_pairs=num_pairs,
+                num_tokens=seq_len,
+                Nv_TP=Nv_TP,
+                Nk_TP=Nk_TP,
+                repeat_factor=repeat_factor,
+                key_dim_tp=key_dim_tp,
+            )
+            ttnn.deallocate(conv_out_all)
+            ttnn.deallocate(a_all)
+            ttnn.deallocate(b_all)
+
+            # Legacy post-kernel chain: rms_norm + reshape + permute + reshape
+            out_n = ttnn.rms_norm(prefill_output, weight=tw["norm_w"], epsilon=1e-6)
+            ttnn.deallocate(prefill_output)
+            out_4d = ttnn.reshape(out_n, (1, num_pairs, seq_len, Dv))
+            ttnn.deallocate(out_n)
+            out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, seq_len, num_pairs, Dv]
+            out_f = ttnn.reshape(out_4d, (1, 1, seq_len, self.value_dim_tp))
+            ttnn.deallocate(out_4d)
         z_act = ttnn.silu(z_all)
         ttnn.deallocate(z_all)
         out_f = _unshard(out_f)
