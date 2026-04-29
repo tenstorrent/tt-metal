@@ -40,7 +40,7 @@ enum class Legacy : bool { Off = false, On = true };
 enum class Dst : uint32_t { D0=0, D1=1, ..., D7=7 };
 ```
 
-Always cap DEST slot enum at the hardware limit (8 in half-sync fp16 mode) and `static_assert(<8)` in every base.
+Cap the DEST slot enum at `DEST_AUTO_LIMIT`, never a literal `8` — see [llk_helpers_hq.md → DEST capacity is compile-time, never literal](llk_helpers_hq.md#dest-capacity-is-compile-time-never-literal) for the general rule. The `Dst::D0..D7` naming is the eltwise-specific surface; the bound that gates each enum value is the shared `DEST_AUTO_LIMIT` constexpr.
 
 ### 1.4 Mirror hardcoded LLK contracts in the type
 
@@ -190,6 +190,12 @@ Naming: call the element `CopyTile`, not `Load`. The element wraps the `copy_til
 
 When the user passes the same CB for both operands of a binary op (e.g. `square` is just `mul(cb_x, cb_x, ...)`), the helper must dedup `cb_wait_front` / `cb_pop_front` so the same CB is waited and popped exactly once per iteration. Don't ship a separate `square` alias to "avoid repeating the same CB" — that's a legacy ergonomic patch. Just pass the same CB twice; the helper detects `icb_a == icb_b` and dedups. Correct same-CB semantics is the helper's responsibility — user-side dedup is fragile and produces double-traffic bugs.
 
+### 3.7 In-DEST hold loops break the eltwise acquire/release pattern
+
+The eltwise chain pipeline wraps a full `tile_regs_acquire / commit / wait / release` inside one helper invocation. Some kernels keep DEST values alive across multiple acquire/release boundaries — e.g. a reduction accumulates partial sums in DEST tile `k`, an outer loop runs an FPU op, then reads slot `k` back. The release at end-of-invocation discards the accumulator, so the eltwise helper as it stands cannot model this lifecycle.
+
+Investigate before refusing: confirm the kernel genuinely holds DEST (vs. re-loading from a CB each iteration). If it does, leave that block on raw LLK and flag the missing policy (split-acquire, `DestRetainPolicy`, or equivalent — caller takes the final release). Hoisting the outer loop into the helper just relocates the problem. Mark blocked kernels in the gap map until the policy lands.
+
 ---
 
 ## 4. Internal state hygiene
@@ -205,8 +211,8 @@ A fast path (e.g. "skip `init()` when the chain has only one compute op", "batch
 ### 4.3 Compile-time validation over runtime checks
 
 ```cpp
-static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
-static_assert(...DataSlot < 7..., "Mask requires DataSlot + 1 < 8...");
+static_assert(static_cast<uint32_t>(Slot) < DEST_AUTO_LIMIT, "DEST slot exceeds compile-time DEST capacity");
+static_assert(static_cast<uint32_t>(DataSlot) + 1 < DEST_AUTO_LIMIT, "Mask requires DataSlot + 1 < DEST capacity...");
 chain_has_duplicate_upfront_cbs_v<Chain> // static_assert in pipeline
 ```
 
@@ -289,6 +295,22 @@ Each parameterized over `num_tiles ∈ {1, 8, 64}` (single tile, fits in DEST, m
 
 Add a sister "raw-LLK" diagnostic kernel for any new compute path. If both helper and raw hang, the bug is in the LLK or the test scaffolding (reader push counts, CB capacity, persistent-tile lifecycle). If only the helper hangs, the helper is wrong. The diagnostic kernel saves hours.
 
+The dtype-matrix and untestable-locally rules are general — see [llk_helpers_hq.md → Step 4](llk_helpers_hq.md#step-4--verify-on-device).
+
+### 8.1 srcB reconfig path is its own dimension (eltwise-specific)
+
+Standard FPU binary (`add_tiles`, `sub_tiles`, `mul_tiles`) consumes srcA *and* srcB; either operand can drive a format reconfig on entry. `DestReuseOp` adds the `DEST_TO_SRCB` path (DEST → srcB, CB → srcA). In every case srcA-reconfig and srcB-reconfig are **separate LLK paths** even when they share a single helper enum value (e.g. `BinaryDataFormatReconfig::INPUT_AND_OUTPUT`, `DestReuseReconfig::Input`, see §2.4). A migration that only validates srcA-reconfig has not validated the srcB branch.
+
+Test matrix must cover:
+
+- `binary_op` srcA-reconfig: A operand changes dtype, B unchanged.
+- `binary_op` srcB-reconfig: B operand changes dtype, A unchanged.
+- `binary_op` both reconfigured: A and B both change dtype between calls.
+- `DestReuseOp` srcA-reconfig (`CB_TO_SRCA`-style ReuseType): CB operand changes dtype.
+- `DestReuseOp` srcB-reconfig (`DEST_TO_SRCB`): DEST → srcB path with CB-side dtype change.
+
+Add a dedicated test variant per srcB path the helper supports, or document explicitly that srcB-reconfig is untested and untouched in the migration. Don't assume "srcA worked, so srcB works" — they hit different unpacker MOPs.
+
 ---
 
 ## 9. Eltwise-specific migration enablers
@@ -319,3 +341,5 @@ Eltwise helper roadmap: track open gaps in a `feature_gap_map` keyed by GAP-N, e
 - **Mid-loop dtype swaps without policy support.** Helpers do one entry-time reconfig. If the kernel switches dtypes mid-loop, that path stays raw or grows a mid-chain reinit policy.
 - **Skipping `fp32_dest_acc_en=True` testing.** Every binary migration runs against `fp32_dest_acc_en ∈ {False, True}` and any mixed-dtype combo the original supported.
 - **Hand-coding around a missing op struct in a kernel.** Add the op struct to the helper, rebuild, then migrate. The kernel never gets a workaround copy of the LLK call.
+
+Migration-pipeline rules (test-change approvals, partial-migration log format, untestable-locally handoff, HQ doc audit, Phase-2 handoff) live in [llk_helpers_hq.md → Pipeline Self-Maintenance](llk_helpers_hq.md#pipeline-self-maintenance). General helper-design rules (helper owns CB lifecycle, DEST capacity is compile-time) live in [llk_helpers_hq.md → Helper Design Principles](llk_helpers_hq.md#helper-design-principles-general).
