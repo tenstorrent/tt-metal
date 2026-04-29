@@ -161,10 +161,12 @@ struct Broadcast {
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
                     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+                    const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
                         headers[connection_idx] = PacketHeaderPool::allocate_header();
-                        fabric_set_single_hop_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                        fabric_set_single_hop_unicast_route_from_direction(
+                            headers[connection_idx], connection_direction, dst_chip_id, dst_mesh_id);
                         headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 dst_noc_base, sem_nocs[link_idx], 1, false},
@@ -223,7 +225,6 @@ struct Broadcast {
 
                 auto refill_free_write_slots = [&](uint32_t connection_idx) {
                     do {
-                        invalidate_l1_cache();
                         cached_free_write_slots[connection_idx] =
                             connections[connection_idx].get_num_free_write_slots();
                     } while (cached_free_write_slots[connection_idx] == 0);
@@ -232,10 +233,10 @@ struct Broadcast {
                 auto send_single_chunk = [&](uint32_t connection_idx,
                                              uint32_t src_base_addr) __attribute__((always_inline)) {
                     connections[connection_idx].wait_for_empty_write_slot();
-                    connections[connection_idx].send_payload_without_header_non_blocking_from_address(
-                        src_base_addr, CTArgs::last_chunk_size_bytes);
-                    connections[connection_idx].send_payload_flush_non_blocking_from_address(
-                        reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
+                    connections[connection_idx].send_current_slot_non_blocking(
+                        src_base_addr,
+                        CTArgs::last_chunk_size_bytes,
+                        reinterpret_cast<uint32_t>(headers[connection_idx]));
                 };
 
                 auto send_multi_chunk = [&](uint32_t connection_idx,
@@ -253,10 +254,8 @@ struct Broadcast {
                     if (cached_free_write_slots[connection_idx] == 0) {
                         refill_free_write_slots(connection_idx);
                     }
-                    connections[connection_idx].send_payload_without_header_non_blocking_from_address(
-                        src_base_addr + chunk_offset, size);
-                    connections[connection_idx].send_payload_flush_non_blocking_from_address(
-                        reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
+                    connections[connection_idx].send_current_slot_non_blocking(
+                        src_base_addr + chunk_offset, size, reinterpret_cast<uint32_t>(headers[connection_idx]));
                     cached_free_write_slots[connection_idx]--;
                 };
 
@@ -293,7 +292,9 @@ struct Broadcast {
                             current_link = 0;
                             // flush only when about to reuse a packet header
                             if constexpr (CTArgs::num_neighbors > 0) {
-                                noc_async_writes_flushed(worker_to_fabric_noc);
+                                if (chunk_idx + 1 < CTArgs::num_chunks) {
+                                    noc_async_writes_flushed(worker_to_fabric_noc);
+                                }
                             }
                         }
                     }
