@@ -287,6 +287,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gpt_oss_swiglu/gpt_oss_swiglu_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
@@ -720,6 +721,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::TopkRouterGpt
+        TTNN::Ops::Experimental::GptOssSwiglu
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
@@ -975,6 +977,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
+add_subdirectory(cpp/ttnn/operations/experimental/gpt_oss_swiglu)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
