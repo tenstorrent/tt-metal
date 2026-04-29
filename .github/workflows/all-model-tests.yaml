@@ -263,6 +263,7 @@ jobs:
     if: ${{ needs.preflight.outputs.has-any-tests == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:

@@ -115,6 +115,7 @@ jobs:
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:
@@ -140,6 +141,7 @@ jobs:
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:
@@ -229,6 +231,7 @@ jobs:
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:

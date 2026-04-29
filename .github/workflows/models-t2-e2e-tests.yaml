@@ -101,6 +101,7 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:
