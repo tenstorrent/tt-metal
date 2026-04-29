@@ -39,7 +39,7 @@ export TT_DS_PREFILL_TTNN_CACHE="/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-
 export DEEPSEEK_V3_HF_MODEL="/mnt/models/deepseek-ai/DeepSeek-R1-0528"
 
 TEST_PATH="models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py"
-TEST_FILTER='pretrained and e256_cf32_device_fp32 and mesh-8x4 and 61 and balanced and right_pad and pcc and iter1 and 1024 and pie960'
+TEST_FILTER='pretrained and e256_device_fp32 and mesh-8x4 and 61 and balanced and right_pad and pcc and iter1 and 1024 and pie960'
 
 pass_count=0
 fail_count=0
