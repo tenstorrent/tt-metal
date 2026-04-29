@@ -82,7 +82,9 @@ TEST_F(ProgramSpecTestQuasar, DuplicateKernelNameFails) {
     duplicate_kernel.config_spec = dm_config;
     spec.kernels.push_back(duplicate_kernel);
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name 'dm_kernel'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DuplicateDFBNameFails) {
@@ -92,7 +94,10 @@ TEST_F(ProgramSpecTestQuasar, DuplicateDFBNameFails) {
     auto duplicate_dfb = MakeMinimalDFB("dfb_0");
     spec.dataflow_buffers.push_back(duplicate_dfb);
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate DataflowBufferSpec name 'dfb_0'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DuplicateSemaphoreNameFails) {
@@ -109,7 +114,9 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSemaphoreNameFails) {
 
     spec.semaphores = {sem1, sem2};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate SemaphoreSpec name 'sem_0'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DuplicateWorkUnitNameFails) {
@@ -129,7 +136,9 @@ TEST_F(ProgramSpecTestQuasar, DuplicateWorkUnitNameFails) {
     auto work_unit1 = MakeMinimalWorkUnit("same_name", node1, {"kernel1"});  // Duplicate!
     spec.work_units = std::vector<WorkUnitSpec>{work_unit0, work_unit1};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate WorkUnitSpec name 'same_name'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
@@ -150,7 +159,10 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     spec.dataflow_buffers = {dfb0, dfb1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'kernel' has duplicate local_accessor_name 'same_accessor'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
@@ -183,7 +195,11 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
         spec.dataflow_buffers = {dfb};
         spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-        EXPECT_ANY_THROW(MakeProgramFromSpec(spec)) << "Expected rejection for name: '" << bad_name << "'";
+        EXPECT_THAT(
+            [&] { MakeProgramFromSpec(spec); },
+            ::testing::ThrowsMessage<std::runtime_error>(
+                ::testing::HasSubstr("DFB local_accessor_name '" + bad_name + "' must be a valid C++ identifier")))
+            << "Expected rejection for name: '" << bad_name << "'";
     }
 }
 
@@ -200,7 +216,10 @@ TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'kernel' references unknown DFB 'nonexistent_dfb'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithNoBindingsFails) {
@@ -219,7 +238,10 @@ TEST_F(ProgramSpecTestQuasar, DFBWithNoBindingsFails) {
 
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'orphan_dfb' is defined but not bound by any kernel")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithOnlyProducerFails) {
@@ -238,7 +260,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyProducerFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has no consumer")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
@@ -257,7 +281,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has no producer")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersFails) {
@@ -283,7 +309,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersFails) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has multiple producers")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
@@ -309,7 +337,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer1", "consumer2"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has multiple consumers")));
 }
 
 // ============================================================================
@@ -321,7 +351,10 @@ TEST_F(ProgramSpecTestQuasar, EmptyKernelsFails) {
     spec.program_id = "empty_program";
     spec.work_units = std::vector<WorkUnitSpec>{};  // Empty work_units too
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("A ProgramSpec must have at least one KernelSpec")));
 }
 
 TEST_F(ProgramSpecTestQuasar, KernelWithZeroThreadsFails) {
@@ -334,7 +367,9 @@ TEST_F(ProgramSpecTestQuasar, KernelWithZeroThreadsFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("KernelSpec 'kernel' has no threads")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelExceedingMaxThreadsFails) {
@@ -348,7 +383,10 @@ TEST_F(ProgramSpecTestQuasar, DMKernelExceedingMaxThreadsFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("KernelSpec 'kernel' has too many data movement threads")));
 }
 
 TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
@@ -362,7 +400,10 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "KernelSpec 'kernel' has too many threads. The architecture supports up to 4 for compute kernels")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
@@ -386,7 +427,10 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("KernelSpec 'kernel' must specify a Gen2 DM config when targeting Quasar")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
@@ -404,7 +448,10 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("KernelSpec 'kernel' must specify a DM config for Gen1, Gen2, or both")));
 }
 
 // Remote DFBs are part of the API surface but not yet supported by the runtime.
@@ -456,7 +503,10 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' uses borrowed memory, but this feature is not yet implemented")));
 }
 
 // Remove once implemented
@@ -479,7 +529,10 @@ TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' has a non-empty alias_with, but DFB aliasing is not yet implemented")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
@@ -678,7 +731,10 @@ TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' is used by a compute kernel, but no data_format_metadata is specified")));
 }
 
 TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnknownDFBFails) {
@@ -704,7 +760,10 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnknownDFBF
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'consumer' unpack_to_dest_mode references unknown DFB 'nonexistent_dfb'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
@@ -727,7 +786,9 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
 }
 
 // ============================================================================
@@ -742,7 +803,10 @@ TEST_F(ProgramSpecTestQuasar, EmptyWorkUnitSpecsFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{};  // Empty!
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'kernel' is not referenced by any WorkUnitSpec")));
 }
 
 TEST_F(ProgramSpecTestQuasar, WorkUnitSpecWithNoKernelsFails) {
@@ -760,7 +824,10 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitSpecWithNoKernelsFails) {
     work_unit.kernels = {};  // No kernels!
     spec.work_units = std::vector<WorkUnitSpec>{work_unit};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'kernel' is not referenced by any WorkUnitSpec")));
 }
 
 TEST_F(ProgramSpecTestQuasar, WorkUnitSpecReferencesUnknownKernelFails) {
@@ -775,7 +842,10 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitSpecReferencesUnknownKernelFails) {
     // WorkUnit references a kernel that doesn't exist
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"nonexistent_kernel"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("WorkUnitSpec 'work_unit' references unknown kernel 'nonexistent_kernel'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, OverlappingWorkUnitSpecsFails) {
@@ -793,7 +863,9 @@ TEST_F(ProgramSpecTestQuasar, OverlappingWorkUnitSpecsFails) {
     spec.work_units = std::vector<WorkUnitSpec>{
         MakeMinimalWorkUnit("work_unit1", node, {"kernel1"}), MakeMinimalWorkUnit("work_unit2", node, {"kernel2"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("overlap in target nodes")));
 }
 
 TEST_F(ProgramSpecTestQuasar, KernelNotInAnyWorkUnitSpecFails) {
@@ -808,7 +880,10 @@ TEST_F(ProgramSpecTestQuasar, KernelNotInAnyWorkUnitSpecFails) {
 
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel1"})};  // Only kernel1
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'kernel2' is not referenced by any WorkUnitSpec")));
 }
 
 TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsDMCoreBudgetFails) {
@@ -825,7 +900,10 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsDMCoreBudgetFails) {
     spec.kernels = {kernel1, kernel2, kernel3};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm1", "dm2", "dm3"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("WorkUnitSpec 'work_unit' requests 9 data movement cores")));
 }
 
 TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsComputeCoreBudgetFails) {
@@ -834,14 +912,18 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsComputeCoreBudgetFails) {
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    // Create enough compute kernels to exceed the 4 Tensix core budget
+    // Create enough compute kernels to exceed the 4 Tensix core budget (2+4=6).
+    // (Legal thread counts on Quasar are 1, 2, 4; 3 is explicitly disallowed.)
     auto kernel1 = MakeMinimalComputeKernel("compute1", 2);
-    auto kernel2 = MakeMinimalComputeKernel("compute2", 3);  // Total: 5 > 4
+    auto kernel2 = MakeMinimalComputeKernel("compute2", 4);
 
     spec.kernels = {kernel1, kernel2};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute1", "compute2"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("WorkUnitSpec 'work_unit' needs 6 Tensix engines")));
 }
 
 TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
@@ -857,7 +939,10 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
     spec.kernels = {compute1, compute2};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute1", "compute2"})};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("WorkUnitSpec 'work_unit' has more than one compute kernel")));
 }
 
 TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatchFails) {
@@ -884,7 +969,10 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
         MakeMinimalWorkUnit("work_unit_1", node1, {"consumer"}),
     };
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("do not share identical WorkUnitSpec membership")));
 }
 // ============================================================================
 // SECTION 4: Programs Creation Tests
@@ -1327,7 +1415,10 @@ TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNod
     };
 
     // EXPECTED BEHAVIOR: FAILS due to simplifying assumption violation.
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Failed to find valid processor assignments for DM kernels")));
 }
 
 // ============================================================================
