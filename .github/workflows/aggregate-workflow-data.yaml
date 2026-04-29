@@ -162,8 +162,8 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     outputs:
-      has_failed_workflows: ${{ steps.inject-fake.outputs.has_failed_workflows || steps.analyze.outputs.has_failed_workflows }}
-      has_regressions: ${{ steps.inject-fake.outputs.has_regressions || steps.analyze.outputs.has_regressions }}
+      has_failed_workflows: ${{ steps.set-outputs.outputs.has_failed_workflows }}
+      has_regressions: ${{ steps.set-outputs.outputs.has_regressions }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -324,6 +324,13 @@ jobs:
             ${{ steps.analyze.outputs.alert_all_message_path }}
           retention-days: 1
 
+      - name: Set job outputs
+        id: set-outputs
+        if: always()
+        shell: bash
+        run: |
+          echo "has_failed_workflows=${{ steps.inject-fake.outputs.has_failed_workflows || steps.analyze.outputs.has_failed_workflows }}" >> "$GITHUB_OUTPUT"
+          echo "has_regressions=${{ steps.inject-fake.outputs.has_regressions || steps.analyze.outputs.has_regressions }}" >> "$GITHUB_OUTPUT"
 
   handle-failures:
     needs: analyze-data
