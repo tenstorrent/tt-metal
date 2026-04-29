@@ -105,14 +105,24 @@ SEQ_LEN_25K = 25 * 1024
         pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
 )
+# @pytest.mark.parametrize(
+#     "n_routed_experts, gate_fallback_mode",
+#     [
+#         (64, GateComputeMode.HOST_ALL),
+#         (256, GateComputeMode.HOST_ALL),
+#         (256, GateComputeMode.DEVICE),
+#     ],
+#     ids=["e64_host", "e256_host", "e256_device"],
+# )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
     [
         (64, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.DEVICE),
+        (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e64_host", "e256_host", "e256_device"],
+    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
 )
 @pytest.mark.parametrize("num_iterations", [1, 50], ids=["iter1", "iter50"])
 @pytest.mark.parametrize(

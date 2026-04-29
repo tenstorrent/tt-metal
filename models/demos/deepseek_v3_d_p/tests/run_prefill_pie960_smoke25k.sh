@@ -4,7 +4,7 @@
 
 MAIN=/data/ipotkonjak/single_glx_debug
 ENV="TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden-32a3e8b6 TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill  DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528"
-BASE="pretrained and e256_cf32_device_fp32 and mesh-8x4 and 61 and balanced and right_pad"
+BASE="pretrained and e256_device_fp32 and mesh-8x4 and 61 and balanced and right_pad"
 
 run() {
     local k="$1" log="$2"
