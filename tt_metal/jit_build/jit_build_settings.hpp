@@ -17,6 +17,8 @@ namespace tt::tt_metal {
 // (eg, API specified settings)
 class JitBuildSettings {
 public:
+    // Returns the human readable kernel name
+    virtual std::string name() const = 0;
     // Returns the full kernel name
     virtual const std::string& get_full_kernel_name() const = 0;
     // Returns the compiler optimization level
