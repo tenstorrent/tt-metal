@@ -128,21 +128,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             alu_config.val[i] = 0;
         }
 
-        if constexpr (!EN_IMPLIED_MATH_FORMAT)
-        {
-            // Set ALU SrcA format since it is not implied
-            // If input format has exp_width == 5, the math dest set to Float16
-            // else input format has exp_width == 8, the math dest set to Float16_b
-            alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
-            alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = 0x1;
-            alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
-            alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = 0x1;
+        // Set ALU SrcA format since it is not implied
+        // If input format has exp_width == 5, the math dest set to Float16
+        // else input format has exp_width == 8, the math dest set to Float16_b
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = 0x1;
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
+        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = 0x1;
 
-            // RT: Since SrcA & SrcB need to match exponent widths, can set them the same for now
-            // Check with HW team if different mixes between Src registers are allowed
-            alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA = SRCA_FORMAT_MASKED;
-            alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB = SRCB_FORMAT_MASKED;
-        }
+        // RT: Since SrcA & SrcB need to match exponent widths, can set them the same for now
+        // Check with HW team if different mixes between Src registers are allowed
+        alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA = SRCA_FORMAT_MASKED;
+        alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB = SRCB_FORMAT_MASKED;
 
         // For Int32 dest, transpose dest requires opposite settings that what is usually set for Int32 dest,
         // this is why fp32_dest is set to true and int32_dest is set to false
