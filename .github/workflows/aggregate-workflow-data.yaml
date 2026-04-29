@@ -16,6 +16,15 @@ on:
         required: false
         type: boolean
         default: false
+      slack-channel-id:
+        description: 'Override Slack channel ID for notifications (default: C08SJ7MGESY)'
+        required: false
+        default: 'C08SJ7MGESY'
+      alert-all:
+        description: 'Alert on all currently failing workflows (not just new regressions) — useful for testing'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   fetch-data:
@@ -249,7 +258,7 @@ jobs:
           gtest-logs-index-path: ${{ github.workspace }}/logs/gtest/gtest-logs-index.json
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
-          alert-all: 'false'
+          alert-all: ${{ github.event.inputs.alert-all || 'false' }}
       - name: Upload status changes artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -295,7 +304,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          channel_id: C08SJ7MGESY
+          channel_id: ${{ github.event.inputs.slack-channel-id || 'C08SJ7MGESY' }}
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           alert_all_message_path: ${{ github.workspace }}/regression-notification-inputs/alert-all-message.txt
         env:
@@ -339,6 +348,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
           slack_ts_map: ${{ needs.handle-failures.outputs.slack_ts_map }}
-          slack_channel_id: C08SJ7MGESY
+          slack_channel_id: ${{ github.event.inputs.slack-channel-id || 'C08SJ7MGESY' }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
