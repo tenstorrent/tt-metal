@@ -31,10 +31,16 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
 
 def patch_embed_device(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, device):
     """Patch embedding fully on device: upload img + ttnn im2col (reshape+permute)
-    + ttnn.linear matmul. img: (B, 3, H, W) host → ttnn (B, N, 1024) tile.
+    + ttnn.linear matmul. img: (B, 3, H, W) host → ttnn (B, N, E) tile.
+
+    H and W must be divisible by the patch size (weight.shape[2]).
     """
     B, C, H, W = img.shape
     p = weight.shape[2]
+    if H % p or W % p:
+        raise ValueError(
+            f"image size ({H}x{W}) must be divisible by patch size {p}"
+        )
     hp, wp = H // p, W // p
     N = hp * wp
 
@@ -379,21 +385,25 @@ def full_encoder(
     depth: int = 24,
     return_device: bool = False,
 ):
-    """Full encoder: patch_embed -> 24 encoder blocks -> enc_norm.
+    """Full encoder: patch_embed -> N encoder blocks -> enc_norm.
 
-    img: (B, 3, H, W) torch. Returns (B, N, 1024) — host torch by default,
-    device tensor when ``return_device=True`` (used by dust3r_forward to feed
-    the decoder without a round-trip).
+    img: (B, 3, H, W) torch. H, W must be divisible by the patch size (16).
+    Returns (B, hp*wp, enc_dim) — host torch by default, device tensor when
+    ``return_device=True`` (used by dust3r_forward to feed the decoder without
+    a round-trip).
     """
     # Patch embed on device, output stays device-resident.
     B, C, H, W = img.shape
-    hp, wp = H // 16, W // 16
+    patch = int(state["patch_embed.proj.weight"].shape[2])
+    if H % patch or W % patch:
+        raise ValueError(
+            f"image size ({H}x{W}) must be divisible by patch size {patch}"
+        )
+    hp, wp = H // patch, W // patch
     tt_x = patch_embed_device(img, state["patch_embed.proj.weight"], state["patch_embed.proj.bias"], device)
-    # Make positions matching reference (row-major y then x).
-    ys = torch.arange(hp)
-    xs = torch.arange(wp)
-    gy, gx = torch.meshgrid(ys, xs, indexing="ij")
-    pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
+    # Make positions matching reference (row-major y then x). Cached so the
+    # device RoPE LUT (keyed on id(pos)) survives across inferences.
+    pos = _make_positions_cached(B, hp, wp)
 
     # Pre-upload all encoder block weights once (cached on module as a simple memo).
     cache_key = id(state)
@@ -692,30 +702,44 @@ def _make_positions_cached(B: int, hp: int, wp: int) -> torch.Tensor:
 def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     """Full end-to-end DUSt3R forward on TT — DPT runs on device too.
 
-    Encoder is run once at B=2 (both views stacked) — the dispatch/queue
+    Encoder is run once at batch 2*B (both views stacked) — the dispatch/queue
     setup cost halves vs two sequential forwards; compute stays the same.
+
+    Accepts any image size (H, W) where both H and W are divisible by
+    2*patch_size (32 for ViT-L/16). The 2× factor comes from the DPT chain's
+    stride-2 down-conv that needs an even patch dim to match upsampled taps.
+    img1 and img2 must have identical shape.
     """
+    if img1.shape != img2.shape:
+        raise ValueError(
+            f"img1 and img2 must have identical shape; got {tuple(img1.shape)} vs {tuple(img2.shape)}"
+        )
     B, C, H, W = img1.shape
-    hp, wp = H // 16, W // 16
-    img_batched = torch.cat([img1, img2], dim=0)   # (2, 3, H, W)
+    patch = int(state["patch_embed.proj.weight"].shape[2])
+    if H % (2 * patch) or W % (2 * patch):
+        raise ValueError(
+            f"image size ({H}x{W}) must be divisible by {2 * patch} "
+            f"(patch={patch}, DPT requires even patch grid)"
+        )
+    hp, wp = H // patch, W // patch
+    enc_dim = int(state["enc_norm.weight"].shape[0])
+    img_batched = torch.cat([img1, img2], dim=0)   # (2B, 3, H, W)
     tt_enc_batched = full_encoder(img_batched, state, device, return_device=True)
-    # Split B=2 encoder output → two (1, N, 1024) device tensors.
+    # Split (2B, N, enc_dim) encoder output → two (B, N, enc_dim) device tensors.
     N = hp * wp
-    # ttnn.slice on the batch dim.
-    tt_enc1 = ttnn.slice(tt_enc_batched, [0, 0, 0], [1, N, 1024])
-    tt_enc2 = ttnn.slice(tt_enc_batched, [1, 0, 0], [2, N, 1024])
-    pos = _make_positions_cached(1, hp, wp)
+    tt_enc1 = ttnn.slice(tt_enc_batched, [0, 0, 0], [B, N, enc_dim])
+    tt_enc2 = ttnn.slice(tt_enc_batched, [B, 0, 0], [2 * B, N, enc_dim])
+    pos = _make_positions_cached(B, hp, wp)
 
     _, _, dev_taps1, dev_taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device, compute_norm=False)
     feats1 = [tt_enc1, dev_taps1[0], dev_taps1[1], dev_taps1[2]]
     feats2 = [tt_enc2, dev_taps2[0], dev_taps2[1], dev_taps2[2]]
 
-    tt_out1 = dpt_head_device(feats1, (hp, wp), state, 1, device)
-    tt_out2 = dpt_head_device(feats2, (hp, wp), state, 2, device)
-    # Final downloads — single sync wave.
-    Hh, Wh = H, W
-    out1 = ttnn.to_torch(tt_out1).reshape(B, Hh, Wh, 4).permute(0, 3, 1, 2).contiguous().float()
-    out2 = ttnn.to_torch(tt_out2).reshape(B, Hh, Wh, 4).permute(0, 3, 1, 2).contiguous().float()
+    tt_out1 = dpt_head_device(feats1, (hp, wp), state, 1, device, batch=B)
+    tt_out2 = dpt_head_device(feats2, (hp, wp), state, 2, device, batch=B)
+    # Final downloads — single sync wave. DPT upsamples 16× → output H, W match input.
+    out1 = ttnn.to_torch(tt_out1).reshape(B, H, W, 4).permute(0, 3, 1, 2).contiguous().float()
+    out2 = ttnn.to_torch(tt_out2).reshape(B, H, W, 4).permute(0, 3, 1, 2).contiguous().float()
     return out1, out2
 
 
@@ -897,13 +921,27 @@ def _ffb(tt_x, w, r: int, ch, B, H, W, device, skip=None):
     return tt_x
 
 
-def dpt_head_device(tt_feats_list, hw, state: dict, branch: int, device):
+def dpt_head_device(tt_feats_list, hw, state: dict, branch: int, device, batch: int = 1):
     """Full DPT on TT device. Inputs are 4 device tensors (B, N, D) tile.
     Returns a device tensor in NHWC flat shape (1, 1, B*H_img*W_img, 4).
+
+    `hw` is the (H, W) of the patch grid (= image size / patch). Both H and W
+    must be even, since the DPT pipeline contains a stride-2 down-conv whose
+    output must match the un-resampled tap when later upsampled by 2.
     """
     H, W = hw
-    B = 1
+    if H % 2 or W % 2:
+        raise ValueError(
+            f"DPT requires even patch dims, got ({H}, {W}); "
+            f"image size must be divisible by 2*patch (e.g. 32 for ViT-L/16)"
+        )
+    B = batch
     N = H * W
+
+    # Encoder dim (1024 for ViT-L) and decoder dim (768) — derive from weights.
+    prefix = f"downstream_head{branch}.dpt."
+    enc_c = int(state[prefix + "act_postprocess.0.0.weight"].shape[1])
+    dec_c = int(state[prefix + "act_postprocess.1.0.weight"].shape[1])
 
     cache_key = ("dpt", id(state), branch, id(device))
     w = _DPT_DEVICE_CACHE.get(cache_key)
@@ -912,34 +950,34 @@ def dpt_head_device(tt_feats_list, hw, state: dict, branch: int, device):
         _DPT_DEVICE_CACHE[cache_key] = w
 
     # Reshape inputs to NHWC flat for conv2d.
-    f0 = _tokens_to_nhwc(tt_feats_list[0], B, N, 1024)  # enc tap
-    f1 = _tokens_to_nhwc(tt_feats_list[1], B, N, 768)
-    f2 = _tokens_to_nhwc(tt_feats_list[2], B, N, 768)
-    f3 = _tokens_to_nhwc(tt_feats_list[3], B, N, 768)
+    f0 = _tokens_to_nhwc(tt_feats_list[0], B, N, enc_c)  # enc tap
+    f1 = _tokens_to_nhwc(tt_feats_list[1], B, N, dec_c)
+    f2 = _tokens_to_nhwc(tt_feats_list[2], B, N, dec_c)
+    f3 = _tokens_to_nhwc(tt_feats_list[3], B, N, dec_c)
 
-    # ap0: 1024 -> 96 1x1 (linear), then ConvTranspose 4x4 stride 4 (96 -> 96).
-    l1 = _linear_1x1(f0, w["ap0_proj_w"], w["ap0_proj_b"], B, H, W, 1024, 96)
+    # ap0: enc_c -> 96 1x1 (linear), then ConvTranspose 4x4 stride 4 (96 -> 96).
+    l1 = _linear_1x1(f0, w["ap0_proj_w"], w["ap0_proj_b"], B, H, W, enc_c, 96)
     l1 = _conv_t2d(l1, w["ap0_up_w"], w["ap0_up_b"], 96, 96, B, H, W, k=4, stride=4, padding=0, device=device)
     H1, W1 = H * 4, W * 4
 
-    # ap1: 768 -> 192 1x1, then ConvTranspose 2x2 stride 2 (192 -> 192).
-    l2 = _linear_1x1(f1, w["ap1_proj_w"], w["ap1_proj_b"], B, H, W, 768, 192)
+    # ap1: dec_c -> 192 1x1, then ConvTranspose 2x2 stride 2 (192 -> 192).
+    l2 = _linear_1x1(f1, w["ap1_proj_w"], w["ap1_proj_b"], B, H, W, dec_c, 192)
     l2 = _conv_t2d(l2, w["ap1_up_w"], w["ap1_up_b"], 192, 192, B, H, W, k=2, stride=2, padding=0, device=device)
     H2, W2 = H * 2, W * 2
 
-    # ap2: 768 -> 384 1x1.
-    l3 = _linear_1x1(f2, w["ap2_proj_w"], w["ap2_proj_b"], B, H, W, 768, 384)
+    # ap2: dec_c -> 384 1x1.
+    l3 = _linear_1x1(f2, w["ap2_proj_w"], w["ap2_proj_b"], B, H, W, dec_c, 384)
 
-    # ap3: 768 -> 768 1x1, then 768 -> 768 3x3 stride 2 padding 1.
-    l4 = _linear_1x1(f3, w["ap3_proj_w"], w["ap3_proj_b"], B, H, W, 768, 768)
-    l4 = _conv2d(l4, w["ap3_down_w"], w["ap3_down_b"], 768, 768, B, H, W, k=3, stride=2, padding=1, device=device)
+    # ap3: dec_c -> dec_c 1x1, then dec_c -> dec_c 3x3 stride 2 padding 1.
+    l4 = _linear_1x1(f3, w["ap3_proj_w"], w["ap3_proj_b"], B, H, W, dec_c, dec_c)
+    l4 = _conv2d(l4, w["ap3_down_w"], w["ap3_down_b"], dec_c, dec_c, B, H, W, k=3, stride=2, padding=1, device=device)
     H4, W4 = H // 2, W // 2
 
     # layer_rn: scale to 256 channels, no bias.
     l1 = _conv2d(l1, w["l1_rn_w"], None, 96, 256, B, H1, W1, k=3, padding=1, device=device)
     l2 = _conv2d(l2, w["l2_rn_w"], None, 192, 256, B, H2, W2, k=3, padding=1, device=device)
     l3 = _conv2d(l3, w["l3_rn_w"], None, 384, 256, B, H, W, k=3, padding=1, device=device)
-    l4 = _conv2d(l4, w["l4_rn_w"], None, 768, 256, B, H4, W4, k=3, padding=1, device=device)
+    l4 = _conv2d(l4, w["l4_rn_w"], None, dec_c, 256, B, H4, W4, k=3, padding=1, device=device)
 
     # Refinenets (top-down).
     p4 = _ffb(l4, w, 4, 256, B, H4, W4, device, skip=None)   # 16->32
