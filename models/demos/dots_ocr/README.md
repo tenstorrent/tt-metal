@@ -5,35 +5,14 @@ TTNN-based implementation of the Dots OCR vision-language model family (HF: `red
 - Modular design (patch embedding, feature extractor, decoder)
 - PyTorch reference implementation for correctness
 - TTNN implementation optimized for Tenstorrent devices
-- Pytest suite: PCC checks vs HF (vision tower, text prefill) plus HF-only demo smoke
 - Demo script + performance benchmark
 
-## Quick start
 
-Install extra dependencies:
-
-```bash
-pip install -r models/demos/dots_ocr/requirements.txt
-```
-
-Run the dots_ocr test package (use `--confcutdir` so only this tree’s `conftest` loads):
+Text prefill PCC (single file):
 
 ```bash
-pytest models/demos/dots_ocr/tests -q --confcutdir=models/demos/dots_ocr/tests
+pytest models/demos/dots_ocr/tests/pcc/test_text_prefill_pcc.py
 ```
-
-**What’s in `tests/`**
-
-
-| File                           | Role                                                  |
-| ------------------------------ | ----------------------------------------------------- |
-| `pcc/test_vision_tower_pcc.py` | Vision tower TTNN vs HF (`assert_quality`, threshold) |
-| `pcc/test_text_prefill_pcc.py` | Text decoder prefill logits vs HF                     |
-| `test_decoder_smoke.py`        | Wraps the text prefill PCC check                      |
-| `test_demo_hf_torch_only.py`   | HF backend demo path (no TT device)                   |
-
-
-Many tests are skipped without a Tenstorrent mesh / cached weights; `test_demo_hf_torch_only.py` is the most hermetic.
 
 Run demo in TTNN:
 
@@ -48,18 +27,6 @@ Run HF reference only:
 
 ```bash
 HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo --image models/demos/dots_ocr/tests/demo/test12.png --backend hf
-```
-
-Run HF reference OCR demo (image → text):
-
-```bash
-PYTHONPATH=$(pwd) python3 -m models.demos.dots_ocr.tests.demo.reference_demo \
-  --input models/demos/dots_ocr/tests/demo/test12.png \
-  --dtype fp32 \
-  --use-slow-processor \
-  --ocr-preset en \
-  --num-beams 1 \
-  --max-new-tokens 64
 ```
 
 ### Supported Wormhole topologies
@@ -99,6 +66,6 @@ maps `config._attn_implementation` to classes including `"eager"` and `"sdpa"` (
 
 **Dots OCR** uses **remote** Hub code (`trust_remote_code`). Transformers runs `**check_imports`**
 on that file *before* `from_pretrained` kwargs take effect, so a top-level `import flash_attn` in
-the checkpoint must still import. We register a minimal `**reference/flash_attention_shim.py*`* so that
+the checkpoint must still import. We register a minimal `**reference/flash_attention_shim.py`** so that
 check passes; it is **not** FlashAttention at runtime — **eager** is. If the real `flash_attn`
 package is installed, we do not replace it.
