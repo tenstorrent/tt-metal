@@ -392,6 +392,7 @@ def run_eval(
                     "response": response,
                     "predicted_answer": predicted,
                     "choices": choices,
+                    "first_token_top5": perf.get("first_token_top5"),
                 }
                 results.append(result)
 
