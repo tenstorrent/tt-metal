@@ -30,13 +30,13 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
       - "--track_memory"
-    skip-arch:
+    skip-card:
       - "n150"
       - "n300"
       - "p100"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "TinyLlama/TinyLlama_v1.1"
+      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
       output_file: "data/tokenized_shakespeare_tinyllama"
 
   - name: "Linear Regression"
@@ -52,7 +52,7 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_06b.yaml"
       - "--track_memory"
-    skip-arch:
+    skip-card:
       - "n150"
       - "n300"
     tokenize:
@@ -66,7 +66,7 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_17b.yaml"
       - "--track_memory"
-    skip-arch:
+    skip-card:
       - "n150"
       - "n300"
       - "p100"
@@ -81,7 +81,7 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nano_deepseek_char.yaml"
       - "--track_memory"
-    skip-arch:
+    skip-card:
       - "n150"
       - "n300"
 
@@ -91,7 +91,7 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char.yaml"
       - "--track_memory"
-    skip-arch:
+    skip-card:
       - "n150"
       - "n300"
       - "p100"
