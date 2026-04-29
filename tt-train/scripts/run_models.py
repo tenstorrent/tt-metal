@@ -47,8 +47,13 @@ def get_git_commit_hash() -> str:
 
 
 def get_card_type() -> str:
-    with open("/sys/class/tenstorrent/tenstorrent!0/tt_card_type", "r") as card_type:
-        return card_type.read().rstrip()
+    """Get the card type by reading from the sysfs. Return exception if failure."""
+    tt_card_type = Path("/sys/class/tenstorrent/tenstorrent!0/tt_card_type")
+    if tt_card_type.exists() and tt_card_type.is_file():
+        with open(tt_card_type, "r") as card_type:
+            return card_type.read().rstrip()
+    else:
+        raise Exception(f"Cannot read {tt_card_type}.")
 
 
 def run_and_save_log(cmd: list[str], log_path: Path) -> int:
