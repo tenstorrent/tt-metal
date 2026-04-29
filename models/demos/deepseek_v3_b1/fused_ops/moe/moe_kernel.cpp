@@ -195,7 +195,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
-                get_named_compile_time_arg_val("gate_proj_cb_internal_acc")>;
+                get_named_compile_time_arg_val("gate_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // up_proj DRAM Matmul Expert Compressed (reader) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
@@ -237,7 +238,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
-                get_named_compile_time_arg_val("up_proj_cb_internal_acc")>;
+                get_named_compile_time_arg_val("up_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
@@ -295,7 +297,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
-                get_named_compile_time_arg_val("down_proj_cb_internal_acc")>;
+                get_named_compile_time_arg_val("down_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
@@ -882,7 +885,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_next_core_noc_y"),
                 get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
-                get_named_compile_time_arg_val("gate_proj_cb_internal_acc")>;
+                get_named_compile_time_arg_val("gate_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // up_proj DRAM Matmul Expert Compressed (compute) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
@@ -920,7 +924,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_next_core_noc_y"),
                 get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
-                get_named_compile_time_arg_val("up_proj_cb_internal_acc")>;
+                get_named_compile_time_arg_val("up_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Mul (compute)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
@@ -979,7 +984,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_next_core_noc_y"),
                 get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
                 get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
-                get_named_compile_time_arg_val("down_proj_cb_internal_acc")>;
+                get_named_compile_time_arg_val("down_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<

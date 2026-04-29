@@ -1445,6 +1445,15 @@ class MoeRoutedExpertOp:
             if isinstance(gate_proj_weights_tensor, list)
             else device
         )
+        # MoE routes top-8 of N_total experts → num_active_experts=8. Dense MLP has no
+        # routing; cts_list contains exactly the experts to run (one CompressedTensor
+        # per chunk from prepare_dense_routed_experts_compressed_tp8), so
+        # num_active_experts = len(cts_list). The kernel iterates exp_i = 0..N-1 and,
+        # because we feed enable_routing=False through to the unified kernel's
+        # ``enable_indexing`` constexpr, synthesizes raw_idx = exp_i without touching
+        # cb_index or index_l1_addr — every device runs the same [0..N-1] sequence
+        # against its own TP-sliced weights.
+        gate_up_num_active_experts = 8 if enable_routing else len(gate_proj_weights_tensor)
         if isinstance(gate_proj_weights_tensor, list):
             # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
             # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
@@ -1458,18 +1467,15 @@ class MoeRoutedExpertOp:
                 cores_per_dram_bank=2,
                 k_parallel_per_bank=2,
                 primary_at_last_offset=True,
-                num_active_experts=8,
+                num_active_experts=gate_up_num_active_experts,
                 primary_worker_cores=gate_proj_worker_cores,
             )
         else:
-            gate_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
-                device=device,
-                weights_tensor=gate_proj_weights_tensor,
-                core_ranges=gate_proj_core_ranges,
-                cb_in1_index=gate_proj_cb_in1,
-                cb_out_index=gate_proj_cb_out,
-                fp32_dest_acc_en=False,
-                num_subblocks_k=4,
+            raise AssertionError(
+                "gate_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
+                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
+                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
+                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
             )
 
         # ==================================================================
@@ -1485,18 +1491,15 @@ class MoeRoutedExpertOp:
                 cores_per_dram_bank=2,
                 k_parallel_per_bank=2,
                 primary_at_last_offset=True,
-                num_active_experts=8,
+                num_active_experts=gate_up_num_active_experts,
                 primary_worker_cores=gate_proj_worker_cores,
             )
         else:
-            up_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
-                device=device,
-                weights_tensor=up_proj_weights_tensor,
-                core_ranges=gate_proj_core_ranges,
-                cb_in1_index=up_proj_cb_in1,
-                cb_out_index=up_proj_cb_mm_out,
-                fp32_dest_acc_en=False,
-                num_subblocks_k=4,
+            raise AssertionError(
+                "up_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
+                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
+                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
+                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
             )
 
         # ==================================================================
@@ -1566,6 +1569,9 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # MatmulExpertCompressedDRAM: down_proj (Phase 1B)
         # ==================================================================
+        # See gate/up note above: derive num_active_experts so dense MLP (one CT,
+        # enable_routing=False) runs exactly one expert iteration per device.
+        down_num_active_experts = 8 if enable_routing else len(down_proj_weights_tensor)
         if isinstance(down_proj_weights_tensor, list):
             down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
@@ -1578,24 +1584,25 @@ class MoeRoutedExpertOp:
                 subblock_n=7,
                 cores_per_dram_bank=2,
                 primary_at_last_offset=True,
-                num_active_experts=8,
+                num_active_experts=down_num_active_experts,
                 accum_experts=1,
                 primary_worker_cores=gate_proj_worker_cores,
             )
         else:
-            down_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
-                device=device,
-                weights_tensor=down_proj_weights_tensor,
-                core_ranges=gate_proj_core_ranges,
-                cb_in1_index=down_proj_cb_in1,
-                cb_out_index=down_proj_cb_out,
-                fp32_dest_acc_en=False,
-                num_subblocks_k=2,
+            raise AssertionError(
+                "down_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
+                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
+                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
+                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
             )
 
-        # Wire index_l1_addr for MatmulExpertCompressedDRAM (Phase 1B).
-        # The routing output indices L1 buffer address is the same across mesh devices
-        # when allocations are symmetric; use gate_output_indices_tensor.buffer_address().
+        # Wire index_l1_addr for MatmulExpertCompressedDRAM. The routing output
+        # indices L1 buffer address is the same across mesh devices when allocations
+        # are symmetric; use gate_output_indices_tensor.buffer_address(). When
+        # enable_routing=False the kernel's ``enable_indexing`` constexpr is also off
+        # (threaded via the same ``enable_routing`` named CT arg in moe_kernel.cpp /
+        # decoder_block_kernel.cpp), so the kernel skips the L1 read entirely and
+        # the index_l1_addr value is irrelevant — leave it sentinel-zeroed.
         if enable_routing and gate_output_indices_tensor is not None:
             index_l1_addr = _fused_base_addr(gate_output_indices_tensor)
             for p in (gate_proj_params, up_proj_params, down_proj_params):
@@ -2203,7 +2210,11 @@ class MoeRoutedExpertOp:
             # Mul writer
             ("mul_cb_out", ctx.mul_cb_out),
             ("mul_num_tiles", ctx.mul_num_tiles),
-            ("mul_num_experts", 8 if ctx.enable_routing else 1),
+            # Mul consumes per_core_n × num_active_experts tiles per CB (gate_proj/up_proj
+            # each push that many). Use the matmul's own num_active_experts so dense MLP
+            # (8 chunks, no routing) and MoE (top-8 of routing) both get 8 here, while a
+            # legacy 1-expert path would get 1.
+            ("mul_num_experts", ctx.gate_proj_params["num_active_experts"]),
             # down_proj gather sender (MoeGather: sender on BRISC)
             ("down_proj_gather_dest_noc_x", ctx.down_proj_gather_params["dest_noc_x"]),
             ("down_proj_gather_dest_noc_y", ctx.down_proj_gather_params["dest_noc_y"]),
@@ -2346,7 +2357,11 @@ class MoeRoutedExpertOp:
             ("mul_cb_in1", ctx.mul_cb_in1),
             ("mul_cb_out", ctx.mul_cb_out),
             ("mul_num_tiles", ctx.mul_num_tiles),
-            ("mul_num_experts", 8 if ctx.enable_routing else 1),
+            # Mul consumes per_core_n × num_active_experts tiles per CB (gate_proj/up_proj
+            # each push that many). Use the matmul's own num_active_experts so dense MLP
+            # (8 chunks, no routing) and MoE (top-8 of routing) both get 8 here, while a
+            # legacy 1-expert path would get 1.
+            ("mul_num_experts", ctx.gate_proj_params["num_active_experts"]),
             ("mul_cb_scalar", ctx.mul_cb_scalar),
             ("mul_fp32_dest_acc_en", 0),
             # down_proj MatmulExpertCompressedDRAM compute
