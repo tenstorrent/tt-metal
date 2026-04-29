@@ -14,21 +14,13 @@
 // so all gap bytes inside a slot (positions [datum_size_bytes, slot_pitch))
 // and any trailing bytes in the last reserved tile must stay zero.
 //
-// This value must match exactly across:
-//   * the reader kernels' per-slot stride
-//     (`l1_write_addr_external += cb_ex_external_slot_pitch_bytes`):
-//       device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp
-//       device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp
-//   * the compute kernel's cb_ex_external_tiles_required sizing:
-//       device/kernels/compute/groupnorm.cpp
-//   * the host program factory's cb_ex_external CB size (legacy path only;
-//     the welford path requests a single-tile cb_ex_external as a placeholder
-//     and never reads/writes it):
-//       device/groupnorm_mcast_program_factory.cpp
-//
-// Each producer also has a
-// `static_assert(datum_size_bytes <= cb_ex_external_slot_pitch_bytes)` so a
-// wider datum will fail the build instead of silently corrupting reductions.
-// Raising this above 16 to support a wider datum (e.g. fp32) requires
-// updating all of the above call sites together.
+// To ensure consistency:
+//   * Any code that strides between per-core slots, or sizes cb_ex_external
+//     to hold N slots, should use this constant (rather than e.g. a literal 16).
+//   * Any producer writing into a slot should static_assert
+//     `datum_size_bytes <= cb_ex_external_slot_pitch_bytes` so a too-wide
+//     datum fails the build instead of silently corrupting the reduction.
+//   * Raising this value to support a wider datum (e.g. fp32) requires
+//     auditing every consumer of the constant, since SRAM footprint and tile
+//     packing change in lockstep.
 inline constexpr std::uint32_t cb_ex_external_slot_pitch_bytes = 16;
