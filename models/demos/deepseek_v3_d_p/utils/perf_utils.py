@@ -298,17 +298,27 @@ def run_moe_perf_with_approximation(
     SP ops (Dispatch, Combine, expert FFN Matmul, ...) come from 8x1.
     TP ops (AllGather, ReduceScatter, AllBroadcast, gate, ...) come from 2x4.
     """
+    # Collect perf-check failures from each proxy so the entire pipeline
+    # (8x1, 2x4, approximation) runs to completion regardless of which proxy
+    # tripped its baseline. Re-raised as a single AssertionError at the end so
+    # pytest still reports the test as FAILED with all offending proxies named.
+    perf_failures: list[tuple[str, str]] = []
+
     logger.info("=== 8x1 proxy: dispatch + combine + expert FFN ===")
-    run_model_device_perf_test_with_merge(
-        command=command_8x1,
-        expected_device_perf_ns_per_iteration=expected_ns_8x1,
-        subdir=subdir,
-        model_name=model_name_8x1,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        margin=margin,
-        comments=comments_8x1,
-    )
+    try:
+        run_model_device_perf_test_with_merge(
+            command=command_8x1,
+            expected_device_perf_ns_per_iteration=expected_ns_8x1,
+            subdir=subdir,
+            model_name=model_name_8x1,
+            num_iterations=num_iterations,
+            batch_size=batch_size,
+            margin=margin,
+            comments=comments_8x1,
+        )
+    except AssertionError as e:
+        logger.warning(f"8x1 perf check FAILED but continuing to 2x4: {e}")
+        perf_failures.append(("8x1", str(e)))
     csv_8x1 = get_latest_ops_log_filename(subdir)
     logger.info(f"8x1 CSV: {csv_8x1}")
 
@@ -321,16 +331,20 @@ def run_moe_perf_with_approximation(
         shutil.copy(csv_8x1, tmp_csv_8x1)
 
         logger.info("=== 2x4 proxy: gate + TP collectives ===")
-        run_model_device_perf_test_with_merge(
-            command=command_2x4,
-            expected_device_perf_ns_per_iteration=expected_ns_2x4,
-            subdir=subdir,
-            model_name=model_name_2x4,
-            num_iterations=num_iterations,
-            batch_size=batch_size,
-            margin=margin,
-            comments=comments_2x4,
-        )
+        try:
+            run_model_device_perf_test_with_merge(
+                command=command_2x4,
+                expected_device_perf_ns_per_iteration=expected_ns_2x4,
+                subdir=subdir,
+                model_name=model_name_2x4,
+                num_iterations=num_iterations,
+                batch_size=batch_size,
+                margin=margin,
+                comments=comments_2x4,
+            )
+        except AssertionError as e:
+            logger.warning(f"2x4 perf check FAILED: {e}")
+            perf_failures.append(("2x4", str(e)))
         csv_2x4 = get_latest_ops_log_filename(subdir)
         logger.info(f"2x4 CSV: {csv_2x4}")
 
@@ -340,6 +354,10 @@ def run_moe_perf_with_approximation(
     finally:
         if tmp_csv_8x1:
             os.unlink(tmp_csv_8x1)
+
+    if perf_failures:
+        summary = "; ".join(f"{which}: {msg}" for which, msg in perf_failures)
+        raise AssertionError(f"Perf check(s) outside expected range — {summary}")
 
 
 def run_mla_perf_with_approximation(
