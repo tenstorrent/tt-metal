@@ -101,10 +101,9 @@ ttnn::Tensor routed_expert_ffn_default(
     const auto gate_activation =
         mode == RoutedExpertMode::SILU ? std::optional<std::string>(std::string("silu")) : std::nullopt;
 
-    auto gate_result = ttnn::linear(
+    auto gate_result = ttnn::matmul(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/gate_proj,
-        /*bias=*/gate_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
@@ -112,11 +111,13 @@ ttnn::Tensor routed_expert_ffn_default(
         /*program_config=*/std::nullopt,
         /*activation=*/gate_activation,
         /*compute_kernel_config=*/compute_kernel_config);
+    if (gate_bias.has_value()) {
+        ttnn::add(gate_result, gate_bias.value(), std::nullopt, std::nullopt, gate_result);
+    }
 
-    auto up_result = ttnn::linear(
+    auto up_result = ttnn::matmul(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/up_proj,
-        /*bias=*/up_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
@@ -124,6 +125,9 @@ ttnn::Tensor routed_expert_ffn_default(
         /*program_config=*/std::nullopt,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
+    if (up_bias.has_value()) {
+        ttnn::add(up_result, up_bias.value(), std::nullopt, std::nullopt, up_result);
+    }
 
     if (mode == RoutedExpertMode::SILU) {
         ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
@@ -143,10 +147,9 @@ ttnn::Tensor routed_expert_ffn_default(
         gate_result = std::move(fused);
     }
 
-    return ttnn::linear(
+    auto result = ttnn::matmul(
         /*input_tensor_a=*/gate_result,
         /*input_tensor_b=*/down_proj,
-        /*bias=*/down_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
@@ -156,7 +159,15 @@ ttnn::Tensor routed_expert_ffn_default(
         /*compute_kernel_config=*/compute_kernel_config,
         /*core_grid=*/std::nullopt,
         /*output_tile=*/std::nullopt,
-        /*optional_output_tensor=*/std::move(output));
+        /*optional_output_tensor=*/down_bias.has_value() ? std::nullopt : std::move(output));
+    if (down_bias.has_value()) {
+        if (output.has_value()) {
+            ttnn::add(result, down_bias.value(), std::nullopt, std::nullopt, output.value());
+            return output.value();
+        }
+        ttnn::add(result, down_bias.value(), std::nullopt, std::nullopt, result);
+    }
+    return result;
 }
 
 }  // namespace detail

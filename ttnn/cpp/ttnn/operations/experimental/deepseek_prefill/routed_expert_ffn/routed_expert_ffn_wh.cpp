@@ -93,10 +93,13 @@ ttnn::Tensor routed_expert_ffn_wh(
     const std::optional<std::string> gate_activation =
         mode == RoutedExpertMode::SILU ? std::optional<std::string>(std::string("silu")) : std::nullopt;
 
-    auto gate_result = ttnn::linear(
+    // ttnn::linear doesn't support bias when input_tensor_b has a batch dim
+    // (the matmul kernel can't broadcast a batched bias). For routed-expert
+    // weights of shape [1, EPC, K, N] we run ttnn::matmul and apply bias as a
+    // separate eltwise add. Cost is ~50us per add, swamped by the matmul itself.
+    auto gate_result = ttnn::matmul(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/gate_proj,
-        /*bias=*/gate_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
@@ -104,11 +107,13 @@ ttnn::Tensor routed_expert_ffn_wh(
         /*program_config=*/gate_up_config,
         /*activation=*/gate_activation,
         /*compute_kernel_config=*/compute_kernel_config);
+    if (gate_bias.has_value()) {
+        ttnn::add(gate_result, gate_bias.value(), std::nullopt, std::nullopt, gate_result);
+    }
 
-    auto up_result = ttnn::linear(
+    auto up_result = ttnn::matmul(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/up_proj,
-        /*bias=*/up_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
@@ -116,6 +121,9 @@ ttnn::Tensor routed_expert_ffn_wh(
         /*program_config=*/gate_up_config,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
+    if (up_bias.has_value()) {
+        ttnn::add(up_result, up_bias.value(), std::nullopt, std::nullopt, up_result);
+    }
 
     // SILU: result = gate_silu * up; in-place multiply on gate_result's L1 shard.
     // GPT_OSS_SWIGLU: result = (clamp(up,-L,L)+1) * clamp(gate,L) * sigmoid(alpha*clamp(gate,L)),
@@ -183,10 +191,9 @@ ttnn::Tensor routed_expert_ffn_wh(
     // Fast path: matmul writes directly to the L1 block-sharded buffer.
     // optional_output_tensor isn't passed — matmul would ignore it since the
     // memory_configs don't match. We hand the caller's tensor to the reshard.
-    auto result = ttnn::linear(
+    auto result = ttnn::matmul(
         /*input_tensor_a=*/swiglu_result,
         /*input_tensor_b=*/down_proj,
-        /*bias=*/down_bias,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/down_mem,
@@ -197,6 +204,9 @@ ttnn::Tensor routed_expert_ffn_wh(
         /*core_grid=*/std::nullopt,
         /*output_tile=*/std::nullopt,
         /*optional_output_tensor=*/std::nullopt);
+    if (down_bias.has_value()) {
+        ttnn::add(result, down_bias.value(), std::nullopt, std::nullopt, result);
+    }
     swiglu_result.deallocate(/*force=*/true);
 
     // Always reshard L1 to DRAM interleaved. Releases the L1 shard so it doesn't
