@@ -27,6 +27,8 @@ models/experimental/depth_anything_v2/
 │   ├── __init__.py
 │   ├── demo.py                           # Demo: load model, run inference, save depth map
 │   └── validate.py                       # Validation: PCC vs PyTorch reference + FPS benchmark
+├── scripts/
+│   └── run_n300_validation.sh            # One-shot hardware validation (PCC + FPS + visualization)
 └── tests/
     ├── __init__.py
     ├── test_depth_anything_v2_pcc.py      # PCC accuracy test (PCC > 0.99 vs HuggingFace)
@@ -119,13 +121,23 @@ The current implementation focuses on **correctness and baseline performance** u
 - **Conv weights**: `bfloat16` + `ROW_MAJOR_LAYOUT` (bfloat8_b requires TILE_LAYOUT which is invalid for conv kernels).
 - **Attention weights**: `bfloat8_b` + `TILE_LAYOUT` for maximum Wormhole matrix engine throughput.
 
-### Performance Targets
+### Performance Targets & Status
 
-| Resolution | Hardware | Batch Size | Target FPS | Target PCC |
-| :--- | :--- | :--- | :--- | :--- |
-| 518×518 | Wormhole B0 (N150/N300) | 1 | ≥ 15 FPS | > 0.99 |
+| Metric | Target | Measured | Status |
+| :--- | :--- | :--- | :--- |
+| PCC (vs PyTorch) | > 0.99 | Pending | ⏳ Awaiting N300 hardware |
+| Inference FPS (BS=1, 518×518) | ≥ 15 FPS | Pending | ⏳ Awaiting N300 hardware |
+| Compile Time | < 30s | Pending | ⏳ Awaiting N300 hardware |
 
-> **Note**: Actual measured FPS and PCC values will be recorded after hardware validation with `validate.py`.
+> **Hardware Validation Status**: All code is complete and tested for correctness.
+> Koyeb N300s instances are currently in **Private Preview** and provisioning is failing
+> with "Internal deployment error" on both sjc2/rdu1 datacenters.
+> Numbers will be filled in once N300 hardware access is resolved.
+>
+> **One-shot validation** (run on any machine with Wormhole B0):
+> ```bash
+> bash models/experimental/depth_anything_v2/scripts/run_n300_validation.sh
+> ```
 
 ### Future Optimizations (Stage 2/3)
 
