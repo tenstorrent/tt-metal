@@ -1215,6 +1215,25 @@ def generate_codes_ttnn(
         talker_cos_table, talker_sin_table, _talker_num_heads, max_talker_seq_len, real_seq_len
     )
 
+    # NB: Do not reuse a single ttnn.from_torch(..., layout=TILE_LAYOUT) across loop iterations:
+    # tilization copies into an internal host buffer; mutating the torch tensor + copy_ does not refresh it.
+
+    frame_breakdown_sums = {
+        "cp_input_prep_ms": 0.0,
+        "cp_kv_restore_ms": 0.0,
+        "cp_prefill_ms": 0.0,
+        "cp_decode_ms": 0.0,
+        "build_acc_embed_ms": 0.0,
+        "talker_decode_ms": 0.0,
+        "codec0_sample_device_logits_ms": 0.0,
+        "codec0_sample_cpu_ms": 0.0,
+        "cp_prefill_sample_device_logits_ms": 0.0,
+        "cp_prefill_sample_cpu_ms": 0.0,
+        "cp_decode_samples_device_logits_ms": 0.0,
+        "cp_decode_samples_cpu_ms": 0.0,
+    }
+    frame_breakdown_frames = 0
+
     try:
         # --- Generation loop ---
         for step in range(config.max_new_tokens):
@@ -1223,6 +1242,7 @@ def generate_codes_ttnn(
             else:
                 ttnn.synchronize_device(device)
             t_step_start = time.time()
+            _step_pc = time.perf_counter()
 
             # === CodePredictor: Generate codes 1-15 ===
             past_hidden_torch = ttnn.to_torch(talker_hidden_tt)[:, :, -1:, :].float()
@@ -1231,6 +1251,7 @@ def generate_codes_ttnn(
             cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
 
             code_row = [token_0]
+            _t_after_cp_input = time.perf_counter()
 
             # Restore CP constants corrupted by Talker's paged_update_cache
             ttnn.copy_host_to_device_tensor(cp_trace_prefill_mask_host, cp_trace_prefill_mask_tt, cq_id=h2d_cq)
@@ -1239,6 +1260,7 @@ def generate_codes_ttnn(
             for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
                 ttnn.copy_host_to_device_tensor(k_zero, k_cache, cq_id=h2d_cq)
                 ttnn.copy_host_to_device_tensor(v_zero, v_cache, cq_id=h2d_cq)
+            _t_after_kv = time.perf_counter()
 
             # CP prefill trace
             cp_prefill_embed_cpu.copy_(cp_input.bfloat16())
@@ -1255,16 +1277,20 @@ def generate_codes_ttnn(
 
             _pf_vocab = cp_prefill_logits_tt.shape[3]
             last_prefill_logits = ttnn.slice(cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
+            _prefill_sp = {}
             token = sample_from_tt_vocab_logits(
                 last_prefill_logits,
                 temperature=config.temperature,
                 top_k=config.top_k,
                 greedy=config.greedy,
+                prof_acc=_prefill_sp,
             )
             ttnn.deallocate(last_prefill_logits)
             code_row.append(token)
+            _t_after_cp_prefill = time.perf_counter()
 
             # CP decode traces (len = num_code_groups - 2)
+            _decode_sp_agg = {"device_logits": 0.0, "cpu_sample": 0.0}
             for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
                 prev_embed_idx = code_idx - 2
                 token_id_buf[0, 0] = token
@@ -1288,20 +1314,26 @@ def generate_codes_ttnn(
                     cp_decode_input_ready[_buf_i] = ttnn.record_event(device, 0)
                     trace_cq0_idle = cp_decode_input_ready[_buf_i]
 
+                _dsp = {}
                 token = sample_from_tt_vocab_logits(
                     cp_decode_logits_tts[_buf_i][_trace_i],
                     temperature=config.temperature,
                     top_k=config.top_k,
                     greedy=config.greedy,
+                    prof_acc=_dsp,
                 )
+                _decode_sp_agg["device_logits"] += _dsp.get("device_logits", 0.0)
+                _decode_sp_agg["cpu_sample"] += _dsp.get("cpu_sample", 0.0)
                 code_row.append(token)
 
             all_codes.append(code_row)
             if not use_2cq:
                 ttnn.synchronize_device(device)
             t_cp_end = time.time()
+            _t_after_cp_decode = time.perf_counter()
 
             # === Build next Talker input embedding ===
+            _t_embed0 = time.perf_counter()
             acc_code_embed.zero_()
             for i, tok in enumerate(code_row):
                 token_id_buf[0, 0] = tok
@@ -1322,6 +1354,7 @@ def generate_codes_ttnn(
                 next_embed = next_embed + tts_pad_embed
 
             next_embed = next_embed.unsqueeze(1)
+            _t_after_build_embed = time.perf_counter()
 
             # === Talker decode trace ===
             _talker_h2d_i = talker_pos - real_seq_len
@@ -1354,6 +1387,7 @@ def generate_codes_ttnn(
             cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
             # Get next code 0 from trace output (on-device argmax for greedy)
+            _c0_sp = {}
             token_0 = sample_from_tt_vocab_logits(
                 trace_codec_logits_out,
                 temperature=config.temperature,
@@ -1361,8 +1395,25 @@ def generate_codes_ttnn(
                 greedy=config.greedy,
                 repetition_penalty=config.repetition_penalty,
                 generated_tokens=generated_code0_tokens,
+                prof_acc=_c0_sp,
             )
             generated_code0_tokens.append(token_0)
+
+            frame_breakdown_sums["cp_input_prep_ms"] += (_t_after_cp_input - _step_pc) * 1000
+            frame_breakdown_sums["cp_kv_restore_ms"] += (_t_after_kv - _t_after_cp_input) * 1000
+            frame_breakdown_sums["cp_prefill_ms"] += (_t_after_cp_prefill - _t_after_kv) * 1000
+            frame_breakdown_sums["cp_decode_ms"] += (_t_after_cp_decode - _t_after_cp_prefill) * 1000
+            frame_breakdown_sums["build_acc_embed_ms"] += (_t_after_build_embed - _t_embed0) * 1000
+            frame_breakdown_sums["talker_decode_ms"] += (t_talker_end - t_cp_end) * 1000
+            frame_breakdown_sums["codec0_sample_device_logits_ms"] += _c0_sp.get("device_logits", 0.0) * 1000
+            frame_breakdown_sums["codec0_sample_cpu_ms"] += _c0_sp.get("cpu_sample", 0.0) * 1000
+            frame_breakdown_sums["cp_prefill_sample_device_logits_ms"] += _prefill_sp.get("device_logits", 0.0) * 1000
+            frame_breakdown_sums["cp_prefill_sample_cpu_ms"] += _prefill_sp.get("cpu_sample", 0.0) * 1000
+            frame_breakdown_sums["cp_decode_samples_device_logits_ms"] += (
+                _decode_sp_agg.get("device_logits", 0.0) * 1000
+            )
+            frame_breakdown_sums["cp_decode_samples_cpu_ms"] += _decode_sp_agg.get("cpu_sample", 0.0) * 1000
+            frame_breakdown_frames += 1
 
             if token_0 == config.codec_eos_id:
                 print(f"  EOS at step {step + 1}")
@@ -1417,6 +1468,7 @@ def generate_codes_ttnn(
             "steady_frames_per_sec": 0.0,
             "num_generated_frames": 0,
             "use_2cq": use_2cq,
+            "frame_breakdown_avg_ms": {},
         }
 
     codes = torch.tensor(all_codes, dtype=torch.long)
@@ -1452,6 +1504,26 @@ def generate_codes_ttnn(
         print(f"  Avg Talker decode:              {sum(talker_times_ms)/len(talker_times_ms):.1f} ms/frame")
     if cp_times_ms:
         print(f"  Avg CodePredictor:              {sum(cp_times_ms)/len(cp_times_ms):.1f} ms/frame")
+    frame_breakdown_avg_ms = (
+        {k: v / frame_breakdown_frames for k, v in frame_breakdown_sums.items()} if frame_breakdown_frames > 0 else {}
+    )
+    if frame_breakdown_avg_ms:
+        print(f"  --- Frame breakdown (avg ms/frame, {frame_breakdown_frames} frames) ---")
+        print(f"    CP input prep (D2H talker hidden + embed): {frame_breakdown_avg_ms['cp_input_prep_ms']:.2f}")
+        print(f"    CP KV + mask restore H2D:                  {frame_breakdown_avg_ms['cp_kv_restore_ms']:.2f}")
+        print(f"    CP prefill trace + 1st sample:             {frame_breakdown_avg_ms['cp_prefill_ms']:.2f}")
+        print(f"    CP decode traces + samples:                {frame_breakdown_avg_ms['cp_decode_ms']:.2f}")
+        print(f"    Build accumulated codec embed (CPU):       {frame_breakdown_avg_ms['build_acc_embed_ms']:.2f}")
+        print(f"    Talker decode trace (wall sub-interval):   {frame_breakdown_avg_ms['talker_decode_ms']:.2f}")
+        print(
+            f"    Codec0 sample D2H logits / CPU:           {frame_breakdown_avg_ms['codec0_sample_device_logits_ms']:.2f} / {frame_breakdown_avg_ms['codec0_sample_cpu_ms']:.2f}"
+        )
+        print(
+            f"    CP prefill sample D2H / CPU:               {frame_breakdown_avg_ms['cp_prefill_sample_device_logits_ms']:.2f} / {frame_breakdown_avg_ms['cp_prefill_sample_cpu_ms']:.2f}"
+        )
+        print(
+            f"    CP decode samples D2H / CPU (sum 14):       {frame_breakdown_avg_ms['cp_decode_samples_device_logits_ms']:.2f} / {frame_breakdown_avg_ms['cp_decode_samples_cpu_ms']:.2f}"
+        )
     print(
         f"  Traced: Talker decode, CP prefill, CP decode x{len(cp_decode_trace_ids[0])} (double-buffered) "
         f"(Talker prefill: non-traced)"
@@ -1466,6 +1538,8 @@ def generate_codes_ttnn(
         "steady_frames_per_sec": tokens_per_sec,
         "num_generated_frames": len(all_codes),
         "use_2cq": use_2cq,
+        "frame_breakdown_avg_ms": frame_breakdown_avg_ms,
+        "frame_breakdown_frames": frame_breakdown_frames,
     }
     return codes, compile_timings
 
