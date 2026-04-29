@@ -28,6 +28,8 @@ ENV_NUM_LINKS = "CCL_BROADCAST_NUM_LINKS"
 ENV_MAX_PAYLOAD_SIZE = "CCL_BROADCAST_MAX_PAYLOAD_SIZE_BYTES"
 MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
+BCAST_CORE = ttnn.CoreCoord(11, 8)
+
 
 def _validate_broadcast_num_links(num_links: int) -> None:
     DeepseekMinimalBroadcast.get_num_semaphores(num_links)
@@ -113,7 +115,6 @@ def test_ccl_broadcast(
     # Create submesh
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
-    bcast_core = ttnn.CoreCoord(0, 0)
     test_inputs = build_broadcast_test_inputs(
         mesh_device=submesh,
         mesh_rows=mesh_rows,
@@ -124,7 +125,7 @@ def test_ccl_broadcast(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -228,7 +229,6 @@ def test_ccl_broadcast_loop(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    bcast_core = ttnn.CoreCoord(0, 0)
     test_inputs = build_broadcast_test_inputs(
         mesh_device=submesh,
         mesh_rows=mesh_rows,
@@ -239,7 +239,7 @@ def test_ccl_broadcast_loop(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -318,7 +318,6 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     slice_size = output_shape[0]
-    bcast_core = ttnn.CoreCoord(0, 0)
 
     for host_iter in range(num_host_iters):
         sender_tensor = _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, host_iter)
@@ -332,7 +331,7 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
             tensor_mem_layout=tensor_mem_layout,
             layout=layout,
             input_dtype=input_dtype,
-            bcast_core=bcast_core,
+            bcast_core=BCAST_CORE,
             num_links=num_links,
             input_tensor_torch=sender_tensor,
         )
@@ -399,7 +398,6 @@ def test_ccl_broadcast_remainder_chunk(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    bcast_core = ttnn.CoreCoord(0, 0)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
     test_inputs = build_broadcast_test_inputs(
@@ -412,7 +410,7 @@ def test_ccl_broadcast_remainder_chunk(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -477,7 +475,6 @@ def test_ccl_broadcast_auto_chunk(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    bcast_core = ttnn.CoreCoord(0, 0)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
     test_inputs = build_broadcast_test_inputs(
@@ -490,7 +487,7 @@ def test_ccl_broadcast_auto_chunk(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch
@@ -532,7 +529,6 @@ def _run_ccl_broadcast_torus_8x4_functional_case(
     tensor_mem_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
     layout = ttnn.TILE_LAYOUT
     input_dtype = ttnn.bfloat16
-    bcast_core = ttnn.CoreCoord(0, 0)
 
     num_devices = mesh_rows * mesh_cols
     submesh = mesh_device
@@ -548,7 +544,7 @@ def _run_ccl_broadcast_torus_8x4_functional_case(
         tensor_mem_layout=tensor_mem_layout,
         layout=layout,
         input_dtype=input_dtype,
-        bcast_core=bcast_core,
+        bcast_core=BCAST_CORE,
         num_links=num_links,
     )
     sender_tensor = test_inputs.input_tensor_torch

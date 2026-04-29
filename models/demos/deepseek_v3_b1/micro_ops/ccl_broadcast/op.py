@@ -590,6 +590,7 @@ class DeepseekMinimalBroadcast:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         ncrisc_args=[(config.get_worker_core(coord), [])],
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 # Create program descriptor (only reader and writer, no compute)
