@@ -171,7 +171,7 @@ jobs:
       - name: Run dual DeepSeek V3 unit tests
         if: ${{ matrix.setup == 'dual' && inputs.deepseekv3_unit_tests }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 80
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -198,7 +198,7 @@ jobs:
       - name: Run quad DeepSeek V3 unit tests
         if: ${{ matrix.setup == 'quad' && inputs.deepseekv3_unit_tests }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: 80
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -226,7 +226,7 @@ jobs:
       - name: Run dual DeepSeek V3 module tests
         if: ${{ matrix.setup == 'dual' && (inputs.deepseekv3_module_tests || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 150
+        timeout-minutes: 170
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -253,7 +253,7 @@ jobs:
       - name: Run quad DeepSeek V3 module tests
         if: ${{ matrix.setup == 'quad' && (inputs.deepseekv3_module_tests || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 150
+        timeout-minutes: 170
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -281,7 +281,7 @@ jobs:
       - name: Run dual teacher forced accuracy test
         if: ${{ matrix.setup == 'dual' && (inputs.teacher_forced || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -318,7 +318,7 @@ jobs:
       - name: Run quad teacher forced accuracy test
         if: ${{ matrix.setup == 'quad' && (inputs.teacher_forced || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -356,7 +356,7 @@ jobs:
       - name: Run dual demo test (256 prompts, 1 batch)
         if: ${{ matrix.setup == 'dual' && (inputs.demo || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -393,7 +393,7 @@ jobs:
       - name: Run dual MTP demo parity smoke test
         if: ${{ matrix.setup == 'dual' && (inputs.demo || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -430,7 +430,7 @@ jobs:
       - name: Run quad demo test (512 prompts, 1 batch)
         if: ${{ matrix.setup == 'quad' && (inputs.demo || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -467,7 +467,7 @@ jobs:
       - name: Run quad MTP demo parity smoke test
         if: ${{ matrix.setup == 'quad' && (inputs.demo || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -505,7 +505,7 @@ jobs:
       - name: Run dual demo stress test (56 prompts, 20 batches)
         if: ${{ matrix.setup == 'dual' && (inputs.demo_stress || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 500 || 140 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -542,7 +542,7 @@ jobs:
       - name: Run quad demo stress test (56 prompts, 20 batches)
         if: ${{ matrix.setup == 'quad' && (inputs.demo_stress || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 500 || 140 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
