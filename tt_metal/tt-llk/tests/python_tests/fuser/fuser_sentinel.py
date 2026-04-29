@@ -25,8 +25,8 @@ class FuserSentinel:
     _math_format: Optional[FormatConfig] = field(default=None, repr=False)
     _pack_format: Optional[FormatConfig] = field(default=None, repr=False)
 
+    @staticmethod
     def _find_format_node(
-        self,
         operation: "FusedOperation",
     ) -> "ComputeNode":
         """Find the first compute node with operand inputs for format inference.
@@ -43,8 +43,8 @@ class FuserSentinel:
                 return node
         return None
 
+    @staticmethod
     def _compute_format_config(
-        self,
         config: "GlobalConfig",
         operation: "FusedOperation",
         compute_node: "ComputeNode",
@@ -77,8 +77,8 @@ class FuserSentinel:
             chip_arch=config.architecture,
         )
 
+    @staticmethod
     def _compute_format_config_from_output(
-        self,
         config: "GlobalConfig",
         operation: "FusedOperation",
     ) -> FormatConfig:
