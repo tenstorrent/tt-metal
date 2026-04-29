@@ -1,4 +1,4 @@
-<!-- template-version: 3 -->
+<!-- template-version: 4 -->
 
 # Gemma-4
 
@@ -49,9 +49,9 @@ The 26B-A4B and 31B variants are too large to fit on a single Wormhole device or
 
 - Cloned [tt-metal](https://github.com/tenstorrent/tt-metal) with submodules.
 - TT-Metalium / TT-NN installed: see [INSTALLING.md](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
-- Model-specific dependencies:
+- Model-specific dependencies (tt-metal uses [`uv`](https://docs.astral.sh/uv/) for Python package management — install via `uv pip`, not plain `pip`):
   ```
-  pip install -r models/demos/gemma4/requirements.txt
+  uv pip install -r models/demos/gemma4/requirements.txt
   ```
 - HuggingFace cache populated with `HF_HOME` set, plus `HF_HUB_OFFLINE=1` to skip network access.
 
