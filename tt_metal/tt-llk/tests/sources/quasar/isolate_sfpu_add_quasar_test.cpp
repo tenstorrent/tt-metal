@@ -165,7 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Preload the unpacker pipeline so that SFPU is not starved
         constexpr int preload_count = 3;
 #pragma GCC unroll preload_count
-        for (std::uint32_t i = 0; i < preload_count; i++)
+        for (std::uint32_t j = 0; j < preload_count; j++)
         {
             TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
             TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
@@ -181,7 +181,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Remaining SFPU iterations with no unpacker instructions (since they are preloaded)
 #pragma GCC unroll preload_count
-        for (std::uint32_t i = 0; i < preload_count; i++)
+        for (std::uint32_t j = 0; j < preload_count; j++)
         {
             TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
             _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write
