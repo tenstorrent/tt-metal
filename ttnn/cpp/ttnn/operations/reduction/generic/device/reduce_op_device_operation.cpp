@@ -26,6 +26,7 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::tt_metal;
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
