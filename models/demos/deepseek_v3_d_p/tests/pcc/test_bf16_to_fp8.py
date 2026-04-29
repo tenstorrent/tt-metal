@@ -7,8 +7,12 @@ Standalone accuracy test for ttnn.experimental.deepseek_prefill.bf16_to_fp8.
 
 The op takes a BF16 TILE-layout tensor and returns a UINT8 TILE-layout tensor whose
 bytes are Fp8_e4m3-encoded values (the same trick used by the dispatch op's FP8 path).
-Compare the device output against a torch reference that casts the same BF16 input to
-torch.float8_e4m3fn, and check both bit-exact agreement and PCC.
+Workflow:
+  - Input x is bf16 on both sides.
+  - Device path: bf16 -> fp8 (uint8 bytes) -> view(float8_e4m3fn) -> float32.
+  - Reference: x.to(float32) — lossless bf16 widening, no fp8 quantization.
+  - Compare via PCC (~0.99 threshold) — measures fp8 quantization noise relative
+    to the lossless input.
 """
 
 import pytest
