@@ -101,13 +101,13 @@ class TtPrefillTransformer(LightweightModule):
         state_dict: dict,
         num_layers: int,
         seq_len: int,
+        dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
         padding_side: str = "right",
-        capacity_factor: int = 2,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
@@ -165,12 +165,12 @@ class TtPrefillTransformer(LightweightModule):
                 state_dict=layer_state,
                 layer_idx=i,
                 seq_len=seq_len,
+                dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 num_links=num_links,
                 topology=topology,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 is_balanced=is_balanced,
-                capacity_factor=capacity_factor,
                 gate_fallback_mode=gate_fallback_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
@@ -263,7 +263,7 @@ class TtPrefillTransformer(LightweightModule):
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
-            h, _ = layer(h, rope_tensors, kvpe_cache, cache_layer_idx=i)
+            h, _ = layer(h, rope_tensors, kvpe_cache, cache_layer_idx=i, return_intermediates=return_intermediates)
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)

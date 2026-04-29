@@ -26,7 +26,7 @@ namespace {
 
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
-using test_helpers::MakeMinimalWorker;
+using test_helpers::MakeMinimalWorkUnit;
 
 constexpr CoreCoord kCore{0, 0};
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_thread_barrier.cpp";
@@ -88,17 +88,17 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     std::vector<KernelConfig> kernel_configs;
-    std::vector<std::string> worker_kernel_names;
+    std::vector<std::string> work_unit_kernel_names;
 
     if (is_quasar) {
-        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", node, static_cast<uint8_t>(expected_num_threads));
+        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", static_cast<uint8_t>(expected_num_threads));
         spec.source = KernelSpec::SourceFilePath{kKernelPath};
         spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
-        worker_kernel_names = {"dm_barrier_kernel"};
+        work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
         auto make_gen1 = [&](const std::string& name, tt::tt_metal::DataMovementProcessor proc, uint32_t layout_base) {
-            auto spec = MakeMinimalGen1DMKernel(name, node, proc);
+            auto spec = MakeMinimalGen1DMKernel(name, proc);
             spec.source = KernelSpec::SourceFilePath{kKernelPath};
             spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
             return KernelConfig{name, spec, make_layout(layout_base, kRounds)};
@@ -106,13 +106,13 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
         kernel_configs.push_back(make_gen1("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0, l1_base));
         uint32_t ncrisc_base = l1_base + kernel_configs[0].layout.total_words * sizeof(uint32_t);
         kernel_configs.push_back(make_gen1("ncrisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_1, ncrisc_base));
-        worker_kernel_names = {"brisc_barrier_kernel", "ncrisc_barrier_kernel"};
+        work_unit_kernel_names = {"brisc_barrier_kernel", "ncrisc_barrier_kernel"};
     }
 
     ProgramSpec spec;
     spec.program_id = "kernel_thread_barrier";
     for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
-    spec.workers = {MakeMinimalWorker("worker_0", node, worker_kernel_names)};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
     Program program = MakeProgramFromSpec(spec);
 

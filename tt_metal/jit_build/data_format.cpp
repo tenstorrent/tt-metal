@@ -19,7 +19,8 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::Bfp8,      DataFormat::Bfp8_b,   DataFormat::Bfp4,      DataFormat::Bfp4_b,  DataFormat::Bfp2,
     DataFormat::Bfp2_b,    DataFormat::Float16,  DataFormat::Float16_b, DataFormat::Float32, DataFormat::RawUInt32,
     DataFormat::RawUInt16, DataFormat::RawUInt8, DataFormat::Tf32,      DataFormat::Lf8,     DataFormat::Fp8_e4m3,
-    DataFormat::Int8,      DataFormat::Int16,    DataFormat::Int32,    DataFormat::UInt8,     DataFormat::UInt32,  DataFormat::UInt16,
+    DataFormat::MxFp4,     DataFormat::Int8,     DataFormat::Int16,     DataFormat::Int32,   DataFormat::UInt8,
+    DataFormat::UInt32,    DataFormat::UInt16,
 };
 
 static const std::unordered_map<DataFormat, DataFormat> CONVERT_EXP_WIDTH = {
@@ -40,11 +41,13 @@ bool is_bfp_format(DataFormat data_format) {
         (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::Bfp2));
 }
 
+bool is_mx_format(DataFormat data_format) { return (data_format == DataFormat::MxFp4); }
+
 bool is_exp_b_format(DataFormat data_format) {
     return (
         (data_format == DataFormat::Tf32 || data_format == DataFormat::Float16_b) ||
         (data_format == DataFormat::Bfp8_b) || (data_format == DataFormat::Bfp4_b) ||
-        (data_format == DataFormat::Bfp2_b));
+        (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::MxFp4));
 }
 
 ExpPrecision get_exp_precision(DataFormat data_format) {
@@ -127,6 +130,10 @@ DataFormat get_single_unpack_dst_format(
                 (unpack_conditional_dst_format == DataFormat::Float32),
             "fp32 conditional format can only be fp16a/b or fp32");
         dst_format = unpack_conditional_dst_format;
+    }
+
+    if (is_mx_format(src_format)) {
+        dst_format = DataFormat::Float16_b;  // Fixed unpack_dst format for mx formats.
     }
 
     return dst_format;
@@ -280,6 +287,9 @@ DataFormat get_single_pack_src_format(
             } else {
                 pack_src_format = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
             }
+        } else if (is_mx_format(data_format)) {
+            pack_src_format =
+                is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
         } else {
             pack_src_format = data_format;
         }
@@ -295,6 +305,11 @@ DataFormat get_single_pack_src_format(
             } else {
                 pack_src_format_tmp = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
             }
+        }
+
+        if (is_mx_format(data_format)) {
+            pack_src_format_tmp =
+                is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
         }
 
         if (pack_src_format_tmp != DataFormat::Float32) {

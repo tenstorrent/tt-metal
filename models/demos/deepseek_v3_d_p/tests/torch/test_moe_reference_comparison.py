@@ -220,7 +220,9 @@ def test_moe_reference_pcc():
     n_shared_experts = 1
     batch_size = 1
     dispatch_group_size = 1  # Single "chip" for host-side test
-    capacity_factor = 2.0
+    # ceil(N/2) of the most conservative integer N such that dgs*seq*N >= theoretical
+    # worst-case dispatch buffer. Real traffic never approaches the worst case.
+    dispatch_buffer_capacity_factor = 8
 
     logger.debug(f"Test config: seq_len={seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
     logger.debug(f"  n_routed_experts={n_routed_experts}, num_experts_per_tok={num_experts_per_tok}")
@@ -253,13 +255,18 @@ def test_moe_reference_pcc():
     )
 
     # Compute derived constants for tt_ref_moe
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip=seq_len,
-        num_routed_experts=n_routed_experts,
-        num_experts_per_tok=num_experts_per_tok,
-        num_devices=dispatch_group_size,
-        dispatch_group_size=dispatch_group_size,
-        capacity_factor=capacity_factor,
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len,
+        n_routed_experts,
+        num_experts_per_tok,
+        dispatch_group_size,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
 
     # Create expert dispatch table
@@ -278,6 +285,7 @@ def test_moe_reference_pcc():
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
@@ -310,8 +318,8 @@ def test_moe_reference_pcc():
     weights_tt = weights.view(dispatch_group_size, seq_len, num_experts_per_tok)
     indices_tt = indices.view(dispatch_group_size, seq_len, num_experts_per_tok).to(torch.int32)
 
-    # Compute expert_offsets and expert_token_counts
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    # Compute expert_offsets, expert_token_counts, and expert_region_offsets
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices_tt,
         dispatch_group_size=dispatch_group_size,
         num_routed_experts=n_routed_experts,
@@ -330,6 +338,7 @@ def test_moe_reference_pcc():
             indices_tt,
             expert_offsets,
             expert_token_counts,
+            expert_region_offsets,
             return_intermediates=False,
         )
     logger.debug(f"tt_ref_moe output shape: {tt_output.shape}")

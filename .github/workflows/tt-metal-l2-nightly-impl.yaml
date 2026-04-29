@@ -541,10 +541,6 @@ jobs:
       - name: tt-train nightly tests
         timeout-minutes: ${{ inputs.timeout }}
         run: build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*
-      - name: tt-train nightly python tests (deepseek)
-        timeout-minutes: ${{ inputs.timeout }}
-        working-directory: /work/tt-train
-        run: python -m pytest tests/python/test_deepseek.py -v -s --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

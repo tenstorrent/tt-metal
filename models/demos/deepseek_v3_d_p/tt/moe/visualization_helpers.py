@@ -109,6 +109,77 @@ def log_expert_dispatch_table(
     logger.debug(f"\n{table_str}")
 
 
+def visualize_global_expert_idx_table(
+    global_expert_idx_table: torch.Tensor,
+    num_dispatch_groups: int,
+    dispatch_group_size: int,
+    experts_per_chip: int,
+    title: str = "Global Expert Index Table",
+) -> str:
+    """
+    Visualize the (group, chip, local_expert) -> global expert id table as ASCII.
+
+    Rows are chips, columns are dispatch groups. Each cell lists the global expert
+    ids assigned to that (dispatch_group, chip) in local-expert order.
+
+    Args:
+        global_expert_idx_table: Shape (num_dispatch_groups, dispatch_group_size, experts_per_chip)
+        num_dispatch_groups: Number of dispatch groups (EP ranks)
+        dispatch_group_size: Number of chips per dispatch group
+        experts_per_chip: Number of experts per chip
+        title: Title for the table
+
+    Returns:
+        Formatted ASCII table string
+    """
+    headers = ["Chip"] + [f"Dispatch Group {g}" for g in range(num_dispatch_groups)]
+    rows = []
+    for chip in range(dispatch_group_size):
+        row = [chip]
+        for dispatch_group in range(num_dispatch_groups):
+            experts = [
+                global_expert_idx_table[dispatch_group, chip, local_expert].item()
+                for local_expert in range(experts_per_chip)
+            ]
+            row.append(f"[{','.join(map(str, experts))}]")
+        rows.append(row)
+
+    table_str = tabulate(rows, headers=headers, tablefmt="pretty", stralign="center")
+
+    output = f"{title}:\n"
+    output += f"(Raw table shape: {tuple(global_expert_idx_table.shape)})\n"
+    output += table_str
+
+    return output
+
+
+def log_global_expert_idx_table(
+    global_expert_idx_table: torch.Tensor,
+    num_dispatch_groups: int,
+    dispatch_group_size: int,
+    experts_per_chip: int,
+    title: str = "Global Expert Index Table",
+) -> None:
+    """
+    Log global expert index table visualization using loguru.
+
+    Args:
+        global_expert_idx_table: Shape (num_dispatch_groups, dispatch_group_size, experts_per_chip)
+        num_dispatch_groups: Number of dispatch groups (EP ranks)
+        dispatch_group_size: Number of chips per dispatch group
+        experts_per_chip: Number of experts per chip
+        title: Title for the table
+    """
+    table_str = visualize_global_expert_idx_table(
+        global_expert_idx_table=global_expert_idx_table,
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        title=title,
+    )
+    logger.debug(f"\n{table_str}")
+
+
 def _extract_chip_status(result: ValidationResult) -> Tuple[Set[Tuple[int, int]], Set[Tuple[int, int]]]:
     """
     Extract sets of (dispatch_group, chip) pairs for failures and all validated cells.

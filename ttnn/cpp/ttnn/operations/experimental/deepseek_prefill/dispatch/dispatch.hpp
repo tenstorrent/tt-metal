@@ -24,7 +24,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = 0,
