@@ -221,8 +221,17 @@ class TensorCache:
         fingerprint: Fingerprint,
         fused_host: ttnn.Tensor,
         views: dict[str, "OverlappedTensor"],
+        *,
+        per_core: bool = False,
     ) -> ContentAddressedStoragePaths:
-        """Persist fused host tensor and per-view metadata (OverlappedTensor, without device)."""
+        """Persist fused host tensor and per-view metadata (OverlappedTensor, without device).
+
+        ``per_core`` is recorded so :meth:`_load_fused` can re-apply
+        :meth:`ttnn.MemoryConfig.experimental_set_per_core_allocation` on warm
+        load -- the flatbuffer schema does not currently round-trip the per-core
+        flag, so the warm path needs an external hint to restore the original
+        allocator semantics.
+        """
         dest, content_hash, size_bytes = self._write_artifact_blob_and_manifest(artifact_id, fingerprint, fused_host)
         metadata_dict = {
             "artifact_id": artifact_id,
@@ -230,6 +239,7 @@ class TensorCache:
             "content_hash": content_hash,
             "size_bytes": size_bytes,
             "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "per_core": per_core,
             "views": views_dict_from_overlapped(views),
         }
         with open(dest.object_dir / "metadata.json", "w") as f:
@@ -244,24 +254,39 @@ class TensorCache:
         move_to_device: bool = True,
         meta: dict | None = None,
     ) -> dict[str, "OverlappedTensor"]:
-        fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
+        if meta is None:
+            with open(paths.object_dir / "metadata.json") as f:
+                meta = json.load(f)
+        # ``per_core`` is a MemoryConfig flag that the tensor flatbuffer does
+        # not currently serialize, so it would be silently dropped by a plain
+        # ``ttnn.load_tensor(device=...)`` call.  When the cached spec was
+        # ``per_core=True``, load to host first, re-flag the MemoryConfig, then
+        # ``to_device`` so the device-side buffer uses
+        # :func:`experimental::per_core_allocation::set_per_core_allocation`
+        # instead of the global lockstep allocator.  Old caches without
+        # ``per_core`` in metadata default to ``False`` (lockstep), preserving
+        # backward compatibility.
+        per_core = bool(meta.get("per_core", False))
+        if move_to_device and device is not None and per_core:
+            fused = ttnn.load_tensor(paths.data_path, device=None)
+            mc = fused.memory_config()
+            mc.experimental_set_per_core_allocation(True)
+            fused = ttnn.to_device(fused, device, memory_config=mc)
+        else:
+            fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
         # If the loaded fused buffer ended up per-core allocated, verify that its
         # L1 base address is the same on every core it spans.  Downstream kernel
         # setup (e.g. attention_block/op.py::_fused_base_addr) queries a single
         # core and broadcasts that address to all cores via CB setup; non-uniform
         # addresses would silently corrupt matmul loads rather than fail loudly.
-        # `overlap_tensors` runs this same guard on the cold pack path only when
-        # `move_to_device=True`, which the cache path does not use, so without
-        # this check warm (and cache-path cold) loads would be unguarded.
+        # ``overlap_tensors`` runs this same guard on the cold pack path; this
+        # check covers the warm-load reconstitution above.
         if fused.is_per_core_allocated():
             from models.demos.deepseek_v3_b1.weights.overlap.packing import assert_uniform_per_core_addresses
             from models.demos.deepseek_v3_b1.weights.overlap.spec import _core_list
 
             cores = _core_list(fused.memory_config().shard_spec.grid)
             assert_uniform_per_core_addresses(fused, cores)
-        if meta is None:
-            with open(paths.object_dir / "metadata.json") as f:
-                meta = json.load(f)
         views_raw = meta.get("views")
         if not views_raw:
             raise ValueError(f"Missing views in metadata for fusion artifact: {paths.object_dir}")
@@ -469,7 +494,7 @@ class TensorCache:
             device,
             move_to_device=False,
         )
-        paths = self._store_fused(artifact_id, fingerprint, fused_host, views)
+        paths = self._store_fused(artifact_id, fingerprint, fused_host, views, per_core=spec.per_core)
         elapsed = time.perf_counter() - t0
         logger.info(
             "Cache miss (fused) for {} resolved in {:.3f}s, stored as {}",
