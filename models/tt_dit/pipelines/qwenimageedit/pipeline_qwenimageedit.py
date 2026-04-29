@@ -1175,9 +1175,12 @@ class QwenImageEditPipeline:
         """Encode prompts with image conditioning using the torch VL model."""
         self._ensure_vl_model_loaded()
 
+        # The Qwen2VL processor expects one image_grid_thw entry per `<|image_pad|>` token
+        # across ALL prompts, so when CFG duplicates the prompts (negative + positive) we
+        # must also duplicate the image list to keep the counts balanced.
         model_inputs = self._vl_processor(
             text=formatted_prompts,
-            images=images,
+            images=images * len(formatted_prompts),
             padding=True,
             return_tensors="pt",
         )
