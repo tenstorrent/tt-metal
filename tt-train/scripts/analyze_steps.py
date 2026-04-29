@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 
-def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
+def find_step_summaries(content: str) -> List[Dict[str, int | float | None]]:
     """Parse tt-train log content and extract step number, loss, and step time per step.
 
     Uses regex to find "Step: N", "Loss: X.Y", and "Time: X.Y ms" in order.
@@ -60,7 +60,7 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
     return step_summary
 
 
-def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, float]:
+def analyze_step_summary(summary: List[Dict[str, int | float | None]]) -> Dict[str, float | None]:
     """Compute and print step metrics from a list of step records.
 
     Metrics: last loss, and average step time (excluding the first two steps

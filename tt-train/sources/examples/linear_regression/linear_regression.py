@@ -114,7 +114,7 @@ def train_ttml_linear_regression(
     print(f"   - Total parameters: {total_params:,}")
 
     available_dram = get_available_device_memory_in_bytes()
-    print(f"   - Available Device Memory: {available_dram/(1024*1024):.2f} MB")
+    print(f"   - Available Device Memory: {available_dram/(1024*1024):,.2f} MB")
 
     # Memory snapshot after model creation
     if track_memory:
