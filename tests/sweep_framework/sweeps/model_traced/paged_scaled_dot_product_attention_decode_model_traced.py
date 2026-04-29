@@ -274,8 +274,6 @@ def run(
             shape_e = tuple(cur_pos_info["shape"])
         if cur_pos_info.get("dtype") is not None:
             dtype_e = cur_pos_info["dtype"]
-        if cur_pos_info.get("layout") is not None:
-            input_e_layout = cur_pos_info["layout"]
         if cur_pos_info.get("memory_config") is not None:
             input_e_memory_config = cur_pos_info["memory_config"]
         if cur_pos_info.get("tensor_placement") is not None:
