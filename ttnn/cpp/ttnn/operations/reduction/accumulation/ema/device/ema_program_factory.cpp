@@ -180,10 +180,8 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     uint32_t dst_start_tile = 0;
     for (const auto& range : all_cores.ranges()) {
         for (const auto& core : range) {
-            reader_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{src_buffer->address(), src_start_tile});
-            writer_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), dst_start_tile});
+            reader_desc.emplace_runtime_args(core, {src_buffer, src_start_tile});
+            writer_desc.emplace_runtime_args(core, {dst_buffer, dst_start_tile});
             src_start_tile += total_tiles_per_core;
             dst_start_tile += total_tiles_per_core;
         }

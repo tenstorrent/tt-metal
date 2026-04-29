@@ -223,37 +223,33 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src_buffer->address(),
-                num_tiles_per_core,
-                tiles_per_row,
-                input_tile_offset,
-                tile_offset,
-                tile_offset / input_tile_offset,
-                tile_offset % input_tile_offset,
-                static_cast<uint32_t>(operation_attributes.flip)});
+            {src_buffer,
+             num_tiles_per_core,
+             tiles_per_row,
+             input_tile_offset,
+             tile_offset,
+             tile_offset / input_tile_offset,
+             tile_offset % input_tile_offset,
+             static_cast<uint32_t>(operation_attributes.flip)});
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                dst_buffer->address(),
-                num_tiles_per_core,
-                tiles_per_row,
-                input_tile_offset,
-                tile_offset,
-                tile_offset / input_tile_offset,
-                tile_offset % input_tile_offset,
-                static_cast<uint32_t>(operation_attributes.flip)});
+            {dst_buffer,
+             num_tiles_per_core,
+             tiles_per_row,
+             input_tile_offset,
+             tile_offset,
+             tile_offset / input_tile_offset,
+             tile_offset % input_tile_offset,
+             static_cast<uint32_t>(operation_attributes.flip)});
 
         if (core_group_1.contains(core)) {
-            compute_desc_1.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core, tiles_per_row});
+            compute_desc_1.emplace_runtime_args(core, {num_tiles_per_core, tiles_per_row});
         } else if (core_group_2.contains(core)) {
             TT_ASSERT(compute_desc_2.has_value());
-            compute_desc_2->runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core, tiles_per_row});
+            compute_desc_2->emplace_runtime_args(core, {num_tiles_per_core, tiles_per_row});
         } else {
             TT_THROW("Core not in any predefined core range.");
         }

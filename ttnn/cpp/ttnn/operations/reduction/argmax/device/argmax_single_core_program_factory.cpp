@@ -176,8 +176,7 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     // Runtime args
     const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
     for (const auto& core : cores) {
-        reader_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{src_buffer->address(), dst_buffer->address()});
+        reader_desc.emplace_runtime_args(core, {src_buffer, dst_buffer});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

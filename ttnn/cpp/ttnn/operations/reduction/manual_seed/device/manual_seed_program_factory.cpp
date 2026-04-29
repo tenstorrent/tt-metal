@@ -154,8 +154,7 @@ tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSetCoresProgramFactory::crea
         const auto& core = cores[core_id];
 
         // Set runtime args for reader kernel
-        reader_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{user_ids_tensor_buffer->address(), core_id});
+        reader_desc.emplace_runtime_args(core, {user_ids_tensor_buffer, core_id});
     }
     desc.kernels.push_back(std::move(reader_desc));
 
@@ -233,10 +232,7 @@ tt::tt_metal::ProgramDescriptor ManualSeedSetSeedsSetCoresProgramFactory::create
         const auto& core = cores[core_id];
 
         // Set runtime args for reader kernel
-        reader_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                user_ids_tensor_buffer->address(), seeds_tensor_buffer->address(), core_id});
+        reader_desc.emplace_runtime_args(core, {user_ids_tensor_buffer, seeds_tensor_buffer, core_id});
     }
     desc.kernels.push_back(std::move(reader_desc));
 

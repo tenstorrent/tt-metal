@@ -190,33 +190,29 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
             TT_THROW("Core not in specified core ranges.");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input.buffer()->address(),
-                num_reduce_input_tile,
-                num_tiles_per_core,
-                input_tile_offset,
-                tile_offset,
-                HtWt,
-                CHtWt,
-                static_cast<uint32_t>(dim)});
+            {input.buffer(),
+             num_reduce_input_tile,
+             num_tiles_per_core,
+             input_tile_offset,
+             tile_offset,
+             HtWt,
+             CHtWt,
+             static_cast<uint32_t>(dim)});
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output.buffer()->address(),
-                num_tiles_per_core,
-                tile_offset,
-                static_cast<uint32_t>(ttnn::operations::is_dram(output))});
+            {output.buffer(),
+             num_tiles_per_core,
+             tile_offset,
+             static_cast<uint32_t>(ttnn::operations::is_dram(output))});
 
         if (core_group_1.contains(core)) {
-            compute_desc_1.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{num_reduce_input_tile, num_tiles_per_core});
+            compute_desc_1.emplace_runtime_args(core, {num_reduce_input_tile, num_tiles_per_core});
         } else if (core_group_2.contains(core)) {
             TT_FATAL(compute_desc_2.has_value(), "compute_desc_2 needs to have a value");
-            compute_desc_2->runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{num_reduce_input_tile, num_tiles_per_core});
+            compute_desc_2->emplace_runtime_args(core, {num_reduce_input_tile, num_tiles_per_core});
         } else {
             TT_THROW("Core not in specified core ranges.");
         }

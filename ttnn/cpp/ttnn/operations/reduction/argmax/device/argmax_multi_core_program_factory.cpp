@@ -383,16 +383,15 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Refer to the kernel code for explanation of the args
     for (uint32_t i = 0; i < num_cores0; ++i) {
         const CoreCoord& core = cores_coords0.at(i);
-        reader_desc0.runtime_args.emplace_back(
+        reader_desc0.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src_buffer->address(),
-                dst_buffer->address(),
-                i,
-                i * src_read_size0,
-                i * red_dim_units0,
-                (i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0,
-                (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
+            {src_buffer,
+             dst_buffer,
+             i,
+             i * src_read_size0,
+             i * red_dim_units0,
+             (i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0,
+             (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
     }
 
     desc.kernels.push_back(std::move(reader_desc0));
@@ -414,16 +413,15 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
 
         for (uint32_t i = 0; i < num_cores1; ++i) {
             const CoreCoord& core = cores_coords1.at(i);
-            reader_desc1.runtime_args.emplace_back(
+            reader_desc1.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    src_buffer->address(),
-                    dst_buffer->address(),
-                    static_cast<uint32_t>(num_cores0 + i),
-                    src_offset1 + (i * src_read_size1),
-                    red_dim_offset1 + (i * red_dim_units1),
-                    (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
-                    (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+                {src_buffer,
+                 dst_buffer,
+                 static_cast<uint32_t>(num_cores0 + i),
+                 src_offset1 + (i * src_read_size1),
+                 red_dim_offset1 + (i * red_dim_units1),
+                 (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
+                 (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
         }
 
         desc.kernels.push_back(std::move(reader_desc1));
