@@ -1609,7 +1609,11 @@ def main():
                     else:
                         print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, TPS: {tps:.0f}")
 
-                    if args.model_save_path and global_step % training_config.model_save_interval == 0:
+                    if (
+                        args.model_save_path
+                        and training_config.model_save_interval > 0
+                        and global_step % training_config.model_save_interval == 0
+                    ):
                         save_checkpoint(
                             f"{args.model_save_path}_step_{global_step}.pkl",
                             global_step,
