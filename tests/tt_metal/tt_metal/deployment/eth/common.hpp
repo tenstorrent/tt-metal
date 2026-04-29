@@ -1,6 +1,8 @@
 #ifndef _ETH_COMMON_HPP
 #define _ETH_COMMON_HPP
 
+#include <chrono>
+
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -115,6 +117,82 @@ static void wait_to_finish(
     if (!same_device) {
         fixture->RunProgram(recv_mesh_device, recv_workload, true);
     }
+
+    fixture->FinishCommands(send_mesh_device);
+    if (!same_device) {
+        fixture->FinishCommands(recv_mesh_device);
+    }
+}
+
+[[maybe_unused]]
+static void track_eth_progress_timeout(
+    tt::tt_metal::IDevice* const send_device,
+    tt::tt_metal::IDevice* const recv_device,
+    const CoreCoord& send_core,
+    const CoreCoord& recv_core,
+    uint32_t iter_l1_addr,
+    uint32_t expected_count) {
+    /* =================== */
+    uint32_t prev_send = -1;
+    uint32_t prev_recv = -1;
+
+    for (;;) {
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(10ms);
+
+        uint32_t curr_send = read_eth_l1_u32(send_device, send_core, iter_l1_addr);
+        uint32_t curr_recv = read_eth_l1_u32(recv_device, recv_core, iter_l1_addr);
+
+        if ((curr_send == expected_count - 1) && (curr_recv == expected_count - 1)) {
+            break;
+        }
+
+        // log_info(tt::LogTest, "Read {} {}, waiting until {}", curr_send, curr_recv, expected_count);
+
+        if (curr_send == prev_send || curr_recv == prev_recv) {
+            log_critical(tt::LogTest, "Timed out! You probably need to reset the device (tt-smi -r)");
+            exit(1);
+        }
+
+        prev_send = curr_send;
+        prev_recv = curr_recv;
+    }
+}
+
+template <typename FIXTURE>
+[[maybe_unused]]
+static void wait_to_finish_eth_timeout(
+    FIXTURE* fixture,
+    tt_metal::Program& send_program,
+    tt_metal::Program& recv_program,
+    const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
+    distributed::MeshCoordinateRange& device_range,
+    const CoreCoord& send_core,
+    const CoreCoord& recv_core,
+    uint32_t recv_l1_address,
+    uint32_t iter_l1_addr,
+    uint32_t expected_count) {
+    /* ==================== */
+    bool same_device = send_mesh_device == recv_mesh_device;
+
+    distributed::MeshWorkload send_workload;
+    distributed::MeshWorkload recv_workload_;
+    distributed::MeshWorkload& recv_workload = same_device ? send_workload : recv_workload_;
+
+    send_workload.add_program(device_range, std::move(send_program));
+    if (!same_device) {
+        recv_workload.add_program(device_range, std::move(recv_program));
+    }
+
+    fixture->RunProgram(send_mesh_device, send_workload, true);
+    if (!same_device) {
+        fixture->RunProgram(recv_mesh_device, recv_workload, true);
+    }
+
+    auto* const send_device = send_mesh_device->get_devices()[0];
+    auto* const recv_device = recv_mesh_device->get_devices()[0];
+    track_eth_progress_timeout(send_device, recv_device, send_core, recv_core, iter_l1_addr, expected_count);
 
     fixture->FinishCommands(send_mesh_device);
     if (!same_device) {
