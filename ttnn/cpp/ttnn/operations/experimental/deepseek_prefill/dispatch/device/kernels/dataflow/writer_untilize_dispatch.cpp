@@ -51,9 +51,8 @@ void kernel_main() {
     constexpr uint32_t cb_metadata_scratch_id = get_compile_time_arg_val(7);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(8);
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(9);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(10);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(11);
-    constexpr auto output_args = TensorAccessorArgs<12>();
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(10);
+    constexpr auto output_args = TensorAccessorArgs<11>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;

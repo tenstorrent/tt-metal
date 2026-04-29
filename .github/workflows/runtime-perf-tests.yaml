@@ -1,6 +1,10 @@
 name: "(Runtime) Performance Tests"
 
+# Weekly schedule for dispatch perf baselines; staggered to reduce runner contention.
+# Manual validation completed before enabling (see PR #40962 discussion).
 on:
+  schedule:
+    - cron: "0 6 * * 0" # 06:00 UTC every Sunday
   workflow_dispatch:
     inputs:
       wormhole:

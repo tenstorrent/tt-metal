@@ -44,17 +44,18 @@
   team: models
 
 # TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.1-8B data-parallel e2e tests (Galaxy)
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
-  model: llama3.1-8b-dp-galaxy
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
-      tier: 1
-  owner_id: U08BH66EXAL # Radoica Draskic
-  team: models
+# Disabled: failing with "Could not find any forwarding direction from src (M0, D0) to dst (M0, D19)" — under investigation in https://github.com/tenstorrent/tt-metal/issues/42553
+# - name: Llama 3.1-8B data-parallel e2e tests (Galaxy)
+#   cmd: |
+#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+#     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+#   model: llama3.1-8b-dp-galaxy
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 20
+#       tier: 1
+#   owner_id: U08BH66EXAL # Radoica Draskic
+#   team: models
 
 - name: Llama 3.2-1B e2e tests
   cmd: |
@@ -147,17 +148,18 @@
   team: models
 
 # TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.3-70B data-parallel e2e tests (Galaxy)
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
-  model: llama3.3-70b-dp-galaxy
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
-      tier: 1
-  owner_id: U08BH66EXAL # Radoica Draskic
-  team: models
+# Disabled: failing with "Could not find any forwarding direction from src (M0, D0) to dst (M0, D19)" — under investigation in https://github.com/tenstorrent/tt-metal/issues/42553
+# - name: Llama 3.3-70B data-parallel e2e tests (Galaxy)
+#   cmd: |
+#     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+#     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+#   model: llama3.3-70b-dp-galaxy
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 20
+#       tier: 1
+#   owner_id: U08BH66EXAL # Radoica Draskic
+#   team: models
 
 # ── Qwen ───────────────────────────────────────────────────────────
 

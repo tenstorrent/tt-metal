@@ -68,11 +68,11 @@ class TtPrefillBlock(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         config: PretrainedConfig,
         seq_len: int = 1024,
+        dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 2,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
-        capacity_factor: int = 32,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
@@ -131,13 +131,13 @@ class TtPrefillBlock(LightweightModule):
             mesh_config = extract_mesh_config(mesh_device)
             sp_factor = mesh_device.shape[sp_axis]
             seq_len_per_chip = seq_len // sp_factor
-            experts_per_chip, _, _ = compute_constants(
+            experts_per_chip, _, _, _ = compute_constants(
                 seq_len_per_chip,
                 DeepSeekV3Config.NUM_ROUTED_EXPERTS,
                 DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
                 mesh_device.get_num_devices(),
                 mesh_config.dispatch_group_size,
-                capacity_factor,
+                dispatch_buffer_capacity_factor,
             )
 
             TtMoe.build_ttnn_cache(
@@ -171,12 +171,12 @@ class TtPrefillBlock(LightweightModule):
         state_dict: dict,
         layer_idx: int,
         seq_len: int,
+        dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
-        capacity_factor: int = 2,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
@@ -241,7 +241,6 @@ class TtPrefillBlock(LightweightModule):
                 emb_dim=emb_dim,
                 num_links=num_links,
                 topology=topology,
-                capacity_factor=capacity_factor,
                 gate_fallback_mode=gate_fallback_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
@@ -249,6 +248,7 @@ class TtPrefillBlock(LightweightModule):
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
                 layer_idx=layer_idx,
+                dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
             )
         else:
             self.ffn = TtFfn(
@@ -269,12 +269,12 @@ class TtPrefillBlock(LightweightModule):
         emb_dim,
         num_links,
         topology,
-        capacity_factor,
         gate_fallback_mode,
         routed_expert_activations_dtype,
         routed_expert_weights_dtype,
         shared_expert_activations_dtype,
         shared_expert_weights_dtype,
+        dispatch_buffer_capacity_factor,
         weight_cache_path=None,
         layer_idx=0,
     ):
@@ -282,13 +282,18 @@ class TtPrefillBlock(LightweightModule):
         sp_factor = mesh_device.shape[sp_axis]
         seq_len_per_chip = seq_len // sp_factor
 
-        experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-            seq_len_per_chip=seq_len_per_chip,
-            num_routed_experts=DeepSeekV3Config.NUM_ROUTED_EXPERTS,
-            num_experts_per_tok=DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
-            num_devices=mesh_device.get_num_devices(),
-            dispatch_group_size=mesh_config.dispatch_group_size,
-            capacity_factor=capacity_factor,
+        (
+            experts_per_chip,
+            metadata_len,
+            max_dispatch_buffer_token_size,
+            max_dispatched_tokens_per_expert,
+        ) = compute_constants(
+            seq_len_per_chip,
+            DeepSeekV3Config.NUM_ROUTED_EXPERTS,
+            DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
+            mesh_device.get_num_devices(),
+            mesh_config.dispatch_group_size,
+            dispatch_buffer_capacity_factor,
         )
 
         return TtMoe(
@@ -300,6 +305,7 @@ class TtPrefillBlock(LightweightModule):
             num_experts_per_tok=DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             hidden_dim=DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
@@ -324,12 +330,16 @@ class TtPrefillBlock(LightweightModule):
         kvpe_cache: ttnn.Tensor,
         cache_layer_idx: int = 0,
         return_kv_cache: bool = False,
+        return_intermediates: bool = False,
     ):
         """
         Args:
             x: [1, 1, seq_len_local, emb_dim_per_tp] TILE_LAYOUT, TP-sharded
             rope_tensors: dict with keys "cos_matrix", "sin_matrix", "trans_matrix"
             return_kv_cache: if True, also return KVPE cache from MLA
+            return_intermediates: if True, forward to TtMoe so it runs its
+                intermediates-gated checks (per-chip dispatch buffer overflow,
+                region-offset bounds). Has no effect on dense layers.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None
@@ -345,7 +355,7 @@ class TtPrefillBlock(LightweightModule):
         ffn_norm_out = self.ffn_norm(x)
 
         if self.is_moe:
-            ffn_out = self._moe_path(ffn_norm_out)
+            ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
@@ -356,11 +366,11 @@ class TtPrefillBlock(LightweightModule):
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
         return x, kv_cache
 
-    def _moe_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
+    def _moe_path(self, ffn_norm_out: ttnn.Tensor, return_intermediates: bool = False) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
 
-        moe_out, _ = self.ffn(moe_input)
+        moe_out, _ = self.ffn(moe_input, return_intermediates=return_intermediates)
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
         return moe_out
