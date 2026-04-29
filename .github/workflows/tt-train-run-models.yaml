@@ -51,7 +51,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: python tt-train/scripts/run_models.py --filter "tinyllama_shakespeare"; ls -l},
+          {name: tt-train, cmd: python tt-train/scripts/run_models.py; ls -l},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
@@ -108,12 +108,6 @@ jobs:
           TTML_BUILD_DIR="$TT_METAL_RUNTIME_ROOT/build/tt-train/sources/ttml"
           echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
           echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
-
-          # REMOVE LATER
-          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata
-          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata/model_checkpoints
-          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata/model_checkpoints/pytorch
-          wget -O - http://large-file-cache.large-file-cache.svc.cluster.local/mldata/model_checkpoints/pytorch/huggingface
 
       - name: Install Python dependencies
         run: |
