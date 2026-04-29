@@ -1,11 +1,12 @@
 training_config:
   project_name: "tt_train_nano_gpt" # not really nanogpt, but want to use the same wandb project name for now
   seed: 5489
-  model_save_interval: 1
+  model_save_interval: 500
   batch_size: 1
   num_epochs: 1
   max_steps: 5000
-  use_clip_grad_norm: false
+  scheduler_type: warmup_linear
+  use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama.yaml"
   optimizer:
