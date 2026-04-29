@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 import math
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from models.common.utility_functions import torch_random, run_for_wormhole_b0
 
 
@@ -189,7 +189,7 @@ def test_fill_pad_int(
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
-    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+    assert_equal(padded_torch_tensor, padded_torch_output_tensor)
 
 
 @pytest.mark.parametrize("fill_value", [1])

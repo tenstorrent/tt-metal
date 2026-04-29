@@ -17,8 +17,12 @@
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+
+#include <nanobind/stl/vector.h>
 
 // NOLINTBEGIN(bugprone-unused-raii)
 
@@ -357,6 +361,27 @@ void py_module(nb::module_& mod) {
         )doc");
 
     mod.def(
+        "copy_host_to_device_tensor_partial",
+        [](const ttnn::Tensor& host_tensor,
+           ttnn::Tensor& device_tensor,
+           const tt::tt_metal::CoreRangeSet& logical_core_filter,
+           const std::optional<QueueId>& cq_id) {
+            ttnn::experimental::core_subset_write::copy_to_device_filtered(
+                host_tensor, device_tensor, logical_core_filter, cq_id);
+        },
+        nb::arg("host_tensor"),
+        nb::arg("device_tensor"),
+        nb::arg("logical_core_filter"),
+        nb::arg("cq_id") = nb::none(),
+        R"doc(
+        Copies host tensor data into the pre-allocated device tensor, writing only shards mapped to
+        cores in ``logical_core_filter``. The device tensor must use a sharded buffer layout.
+
+        - Empty ``logical_core_filter`` is a no-op (no shards are written).
+        - Non-empty ``logical_core_filter`` with an interleaved device buffer raises an error.
+        )doc");
+
+    mod.def(
         "copy_device_to_host_tensor",
         [](const ttnn::Tensor& device_tensor,
            ttnn::Tensor& host_tensor,
@@ -505,6 +530,47 @@ void py_module(nb::module_& mod) {
         >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
         ...     ttnn.split_work_to_cores(core_rangeset, 100)
         >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<uint32_t, uint32_t, uint32_t, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("num_cores"),
+        nb::arg("grid_size_x"),
+        nb::arg("grid_size_y"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a grid specification to a list of CoreCoord objects.
+
+            Args:
+                num_cores (int): Number of cores to generate coordinates for.
+                grid_size_x (int): Width of the core grid.
+                grid_size_y (int): Height of the core grid.
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
+
+            Example:
+            >>> cores = ttnn.grid_to_cores(4, 8, 8)
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<CoreCoord, CoreCoord, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("start"),
+        nb::arg("end"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a core range to a list of CoreCoord objects.
+
+            Args:
+                start (CoreCoord): Start coordinate of the range.
+                end (CoreCoord): End coordinate of the range (inclusive).
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
         )doc");
 }
 

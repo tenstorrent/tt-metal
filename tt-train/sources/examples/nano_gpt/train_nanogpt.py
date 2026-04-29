@@ -22,7 +22,7 @@ import math
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal, Union
+from typing import Optional, Tuple, Literal, Union, Callable
 import time
 import pickle
 
@@ -49,6 +49,11 @@ from ttml.models.deepseek import (
     DeepSeek,
     DeepSeekConfig,
 )
+from ttml.models.qwen3 import (
+    Qwen3,
+    Qwen3Config,
+    Qwen3RopeScalingConfig,
+)
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
@@ -56,7 +61,20 @@ from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
 
 # Union type for models that share the same forward(input, mask) interface
-Model = Union[NanoGPT, Llama, DeepSeek]
+Model = Union[NanoGPT, Llama, DeepSeek, Qwen3]
+
+# Registry mapping model_type -> calculate_flops_per_token callable
+from ttml.models.deepseek.flops import calculate_flops_per_token as _deepseek_flops
+from ttml.models.nanogpt.flops import calculate_flops_per_token as _gpt2_flops
+from ttml.models.llama.flops import calculate_flops_per_token as _llama_flops
+from ttml.models.qwen3.flops import calculate_flops_per_token as _qwen3_flops
+
+FLOPS_REGISTRY: dict[str, Callable] = {
+    "deepseek": _deepseek_flops,
+    "gpt2": _gpt2_flops,
+    "llama": _llama_flops,
+    "qwen3": _qwen3_flops,
+}
 
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -133,9 +151,9 @@ class ModelConfig:
     Conversion to model-specific config (e.g. LlamaConfig) happens at model creation time.
     """
 
-    model_type: str = "gpt2"  # "gpt2", "llama", or "deepseek"
+    model_type: str = "gpt2"  # "gpt2", "llama", "deepseek", or "qwen3"
     model_path: str = ""
-    vocab_size: int = 256
+    vocab_size: int = 0  # 0 = auto-detect from data (char tokenization); >0 = use this value (pre-tokenized data)
     embedding_dim: int = 384
     num_blocks: int = 6
     num_heads: int = 6
@@ -171,6 +189,9 @@ class ModelConfig:
     qk_nope_head_dim: int = 64
     qk_rope_head_dim: int = 32
     v_head_dim: int = 64
+    # Qwen3-specific fields
+    head_dim: Optional[int] = None  # Explicit head_dim (can differ from embedding_dim / num_heads)
+    attention_bias: bool = False
 
 
 class LossAverageMeter:
@@ -517,6 +538,19 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
         config.qk_nope_head_dim = transformer_config.get("qk_nope_head_dim", config.qk_nope_head_dim)
         config.qk_rope_head_dim = transformer_config.get("qk_rope_head_dim", config.qk_rope_head_dim)
         config.v_head_dim = transformer_config.get("v_head_dim", config.v_head_dim)
+    elif config.model_type == "qwen3":
+        config.num_groups = transformer_config.get("num_groups", config.num_groups)
+        config.theta = transformer_config.get("theta", 1000000.0)
+        config.intermediate_dim = transformer_config.get("intermediate_dim", config.intermediate_dim)
+        config.head_dim = transformer_config.get("head_dim", config.head_dim)
+        config.attention_bias = transformer_config.get("attention_bias", config.attention_bias)
+
+        if "rope_scaling" in transformer_config:
+            rope_scaling = transformer_config["rope_scaling"]
+            config.scaling_factor = rope_scaling.get("scaling_factor", config.scaling_factor)
+            config.high_freq_factor = rope_scaling.get("high_freq_factor", config.high_freq_factor)
+            config.low_freq_factor = rope_scaling.get("low_freq_factor", config.low_freq_factor)
+            config.original_context_length = rope_scaling.get("original_context_length", config.original_context_length)
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -863,6 +897,37 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             runner_type=model_config.runner_type,
         )
         return DeepSeek(deepseek_config)
+    elif model_config.model_type == "qwen3":
+        head_dim = model_config.head_dim
+        if head_dim is None:
+            head_dim = model_config.embedding_dim // model_config.num_heads
+        intermediate_size = model_config.intermediate_dim
+        if intermediate_size is None:
+            intermediate_size = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
+        rope_scaling_config = Qwen3RopeScalingConfig(
+            scaling_factor=model_config.scaling_factor,
+            high_freq_factor=model_config.high_freq_factor,
+            low_freq_factor=model_config.low_freq_factor,
+            original_context_length=model_config.original_context_length,
+        )
+        qwen3_config = Qwen3Config(
+            hidden_size=model_config.embedding_dim,
+            intermediate_size=intermediate_size,
+            num_hidden_layers=model_config.num_blocks,
+            num_attention_heads=model_config.num_heads,
+            num_key_value_heads=model_config.num_groups,
+            head_dim=head_dim,
+            vocab_size=model_config.vocab_size,
+            max_position_embeddings=model_config.max_sequence_length,
+            rms_norm_eps=1e-6,
+            attention_bias=model_config.attention_bias,
+            attention_dropout=model_config.dropout_prob,
+            rope_theta=model_config.theta,
+            runner_type=model_config.runner_type,
+            weight_tying=model_config.weight_tying,
+            rope_scaling=rope_scaling_config,
+        )
+        return Qwen3(qwen3_config)
     else:
         raise ValueError(f"Unsupported model type: {model_config.model_type}")
 
@@ -1034,7 +1099,7 @@ def main():
     parser = argparse.ArgumentParser(description="NanoGPT Example")
 
     # Default config path (relative to configs root)
-    default_config_path = "training_shakespeare_nanogpt.yaml"
+    default_config_path = "training_shakespeare_nanogpt_char.yaml"
 
     parser.add_argument(
         "-c",
@@ -1169,11 +1234,9 @@ def main():
             print("Using default model config")
             model_config = ModelConfig()
     except FileNotFoundError as e:
-        print(f"Warning: Config file not found: {e}")
-        print("Using default configs")
-        yaml_config = {}
-        training_config = TrainingConfig()
-        model_config = ModelConfig()
+        print(f"Error: Config file not found: {e}")
+        ttml.autograd.AutoContext.get_instance().close_device()
+        raise
 
     # Override with command line args (only if provided)
     if args.data_path:
@@ -1271,13 +1334,43 @@ def main():
         print("1. Loading and preparing data...")
         print(f"   - Data path: {training_config.data_path}")
 
-        # Load data
-        text = read_file_to_str(training_config.data_path)
         seq_len = model_config.max_sequence_length
+        is_pretokenized = training_config.data_path.endswith((".yaml", ".yml"))
 
-        # Create dataset
-        dataset, tokenizer = create_dataset_from_text(text, seq_len)
-        model_config.vocab_size = tokenizer.vocab_size
+        if is_pretokenized:
+            import yaml
+
+            if model_config.vocab_size == 0:
+                raise ValueError(
+                    f"Pre-tokenized data ({training_config.data_path}) requires vocab_size to be "
+                    f"set in the model config. Omitting vocab_size is only valid for plain text data."
+                )
+            with open(training_config.data_path, "r") as f:
+                token_data = yaml.safe_load(f)
+            tokens = np.array(token_data["tokens"], dtype=np.uint32)
+            data_vocab_size = int(token_data["tokenizer_vocab_size"])
+            max_token_id = int(tokens.max())
+            if max_token_id >= model_config.vocab_size:
+                raise ValueError(
+                    f"Tokenized data contains token ID {max_token_id} but model vocab_size is "
+                    f"{model_config.vocab_size}. Use a tokenized dataset that matches the model's "
+                    f"vocabulary (data file reports tokenizer_vocab_size={data_vocab_size})."
+                )
+            dataset = InMemoryTokenDataset(tokens, seq_len)
+            tokenizer = None
+            print(f"   - Pre-tokenized data: {len(tokens):,} tokens (vocab {data_vocab_size:,})")
+        else:
+            if model_config.vocab_size > 0:
+                raise ValueError(
+                    f"Plain text data ({training_config.data_path}) uses character tokenization, "
+                    f"which auto-detects vocab_size from the text. Remove vocab_size from the model "
+                    f"config (or set it to 0). Got vocab_size={model_config.vocab_size}.\n"
+                    f"For pre-tokenized data with a fixed vocab, use a .yaml data file instead."
+                )
+            text = read_file_to_str(training_config.data_path)
+            dataset, tokenizer = create_dataset_from_text(text, seq_len)
+            model_config.vocab_size = tokenizer.vocab_size
+            print(f"   - Character tokenization: {tokenizer.vocab_size} unique characters")
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")
         print(f"   - Dataset size: {len(dataset)} samples")
@@ -1315,6 +1408,8 @@ def main():
                 print(
                     f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
                 )
+                total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+                print(f"   - Total parameters: {total_params:,}")
             except Exception as e:
                 print(f"Error loading checkpoint: {e}")
                 print("Starting fresh training instead...")
@@ -1347,15 +1442,14 @@ def main():
             )
             print(f"   - Total parameters: {total_params:,}")
 
-        # Compute FLOPs per token for throughput reporting
+        # Compute FLOPs per token for throughput reporting (all model types)
         flops_per_token = 0
-        if model_config.model_type == "deepseek":
-            from ttml.models.deepseek import DeepSeekConfig, calculate_flops_per_token
+        flops_fn = FLOPS_REGISTRY.get(model_config.model_type)
+        if flops_fn is not None:
+            flops_per_token = flops_fn(model.config, model_config.max_sequence_length)
 
-            ds_cfg = model.config if hasattr(model, "config") and isinstance(model.config, DeepSeekConfig) else None
-            if ds_cfg is not None:
-                flops_per_token = calculate_flops_per_token(ds_cfg, model_config.max_sequence_length)
-                print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
+        if flops_per_token > 0:
+            print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
 
         # Memory snapshot after model creation
         if args.track_memory:
