@@ -7,18 +7,17 @@ the generated main.py.
 """
 
 import torch
-import ttnn
-
 from vae.consteval import (
-    prepare_conv_weights,
+    make_ones_scalars,
+    make_scalar,
+    make_upsample_matrix,
     prepare_conv_bias,
+    prepare_conv_weights,
     reshape_gn_weight,
     reshape_gn_weight_attn,
-    make_scalar,
-    make_ones_scalars,
-    make_upsample_matrix,
 )
 
+import ttnn
 
 # Arg index -> state_dict key mapping (from build_mapping.py analysis)
 ARG_TO_STATE_DICT_KEY = {

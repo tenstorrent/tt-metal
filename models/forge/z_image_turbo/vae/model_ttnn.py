@@ -1,9 +1,9 @@
 """TTNN VAE Decoder model for Tongyi-MAI/Z-Image-Turbo."""
 
-import torch
-import ttnn
 from vae.model_pt import SCALING_FACTOR, SHIFT_FACTOR, VaeDecoderPT
 from vae.params import load_weights
+
+import ttnn
 
 DRAM_RM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
 
