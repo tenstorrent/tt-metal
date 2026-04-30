@@ -61,7 +61,7 @@ from ttml.models.deepseek import (
 )
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
-from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
+from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig, DeviceConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
 
@@ -2133,9 +2133,12 @@ def main():
         batch_size = training_config.batch_size
         max_steps = training_config.max_steps
         dataset_len = len(dataset)
+        num_devices = DeviceConfig(yaml_config).total_devices()
 
         # Flag to track if first iteration is complete (for memory tracking)
         is_everything_compiled = False
+        # Accumulates step_time across gradient-accumulation micro-steps; reset after each optimizer step.
+        macro_batch_step_time = 0.0
 
         # Helper for memory snapshots (only takes snapshots during first iteration)
         def memory_snapshot(name: str):
@@ -2147,7 +2150,7 @@ def main():
         # new packed-token step-driven loop. Returns True if the outer loop
         # should stop (max_steps reached after a real optimizer step).
         def _run_step(input_tokens, target_tokens, actual_batch_size, epoch_idx):
-            nonlocal global_step, is_everything_compiled
+            nonlocal global_step, is_everything_compiled, macro_batch_step_time
 
             profiler_marker(None, "dataloader_step_done")
 
@@ -2170,6 +2173,8 @@ def main():
                 memory_snapshot_fn=memory_snapshot if args.track_memory else None,
             )
 
+            macro_batch_step_time += step_time
+
             if not should_step:
                 return False
 
@@ -2177,28 +2182,31 @@ def main():
             avg_loss = gradient_accumulator.average_loss()
             loss_meter.update(avg_loss)
 
-            tps = (actual_batch_size * seq_len) / (step_time / 1000.0)
+            global_tokens = actual_batch_size * num_devices * seq_len
+            tps = global_tokens / (macro_batch_step_time / 1000.0) if macro_batch_step_time > 0 else 0.0
             achieved_tflops = None
             mfu = None
-            if flops_per_token > 0 and step_time > 0:
+            if flops_per_token > 0 and macro_batch_step_time > 0:
                 achieved_tflops = tps * flops_per_token / 1e12
                 mfu_str = ""
                 if peak_tflops > 0:
                     mfu = achieved_tflops / peak_tflops * 100.0
                     mfu_str = f", MFU: {mfu:.1f}%"
                 print(
-                    f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, "
+                    f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {macro_batch_step_time:.2f} ms, "
                     f"TPS: {tps:.0f}, TFLOPS: {achieved_tflops:.2f}{mfu_str}"
                 )
             else:
-                print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, TPS: {tps:.0f}")
+                print(
+                    f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {macro_batch_step_time:.2f} ms, TPS: {tps:.0f}"
+                )
 
             if wandb_enabled and (global_step % args.wandb_log_interval == 0 or global_step >= max_steps):
                 log_data = {
                     "train/loss": avg_loss,
                     "train/loss_running_avg": loss_meter.average(),
                     "train/learning_rate": optimizer.get_lr(),
-                    "perf/step_time_ms": step_time,
+                    "perf/step_time_ms": macro_batch_step_time,
                     "perf/tokens_per_sec": tps,
                     "system/epoch": epoch_idx,
                 }
@@ -2223,6 +2231,7 @@ def main():
                     train_iter_state=iter_state,
                 )
 
+            macro_batch_step_time = 0.0
             gradient_accumulator.reset()
 
             if model_config.model_type == "deepseek" and hasattr(model, "get_moe_layers"):

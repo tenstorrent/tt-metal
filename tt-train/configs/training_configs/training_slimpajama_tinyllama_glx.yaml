@@ -30,10 +30,8 @@ training_config:
 
   # Periodic validation loss eval (matches TinyLlama paper:
   # eval_step_interval=5000 / eval_iters=100). Scaled to this 3000-step run.
-  # eval_interval: 500
-  # eval_iters: 100
-  eval_interval: 1
-  eval_iters: 10
+  eval_interval: 500
+  eval_iters: 100
 
   # Optimizer hyperparameters lifted from the TinyLlama paper (arxiv 2401.02385,
   # pretrain/tinyllama.py): lr=4e-4, beta1=0.9, beta2=0.95, weight_decay=0.1.
