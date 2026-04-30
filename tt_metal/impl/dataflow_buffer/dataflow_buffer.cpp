@@ -102,14 +102,25 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
 
 namespace detail {
 
-::dfb::PackedTileCounter TileCounterAllocator::allocate(const CoreCoord& core, uint8_t tensix_id) {
+::dfb::PackedTileCounter TileCounterAllocator::allocate(
+    const CoreCoord& core, uint8_t tensix_id, bool use_t6_only) {
     TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
-    auto& tc_ids = next_tc_id_[core];
-    TT_FATAL(
-        tc_ids[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
-        "Out of tile counters for tensix {} on core ({}, {})",
-        tensix_id, core.x, core.y);
-    uint8_t tc_id = tc_ids[tensix_id]++;
+    auto& counters = next_tc_id_[core];
+
+    uint8_t tc_id;
+    if (use_t6_only) {
+        TT_FATAL(
+            ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
+            "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
+            tensix_id, core.x, core.y);
+        tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
+    } else {
+        TT_FATAL(
+            counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
+            "Out of DM-visible tile counters for tensix {} on core ({}, {})",
+            tensix_id, core.x, core.y);
+        tc_id = counters.dm_next[tensix_id]++;
+    }
     return static_cast<::dfb::PackedTileCounter>(
         (tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
 }
@@ -563,6 +574,25 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         "ALL consumer pattern supports at most 4 consumers, but {} were specified",
         config.num_consumers);
 
+    if (config.tensix_scope.has_value()) {
+        TT_FATAL(
+            *config.tensix_scope != TensixScope::INTER,
+            "Inter-tensix DFBs are not yet supported. Use TensixScope::INTRA for same-Neo packer→unpacker DFBs.");
+        // INTRA: each Neo has an independent packer (TRISC2) → unpacker (TRISC0) credit flow, one Tensix-only TC per Neo.
+        // Always STRIDED for both producer and consumer — blocked access and remapper are never used.
+        // num_producers == num_consumers == number of Neos (one packer-unpacker pair per Neo).
+        TT_FATAL(
+            config.num_producers == config.num_consumers,
+            "Intra-tensix DFBs require equal producers (packers) and consumers (unpackers), got {} and {}",
+            config.num_producers, config.num_consumers);
+        TT_FATAL(
+            config.pap == dfb::AccessPattern::STRIDED && config.cap == dfb::AccessPattern::STRIDED,
+            "Intra-tensix DFBs require STRIDED access for both producer (packer) and consumer (unpacker)");
+        TT_FATAL(
+            !config.enable_implicit_sync,
+            "Intra-tensix DFBs do not support implicit sync (ISR-based credits)");
+    }
+
     auto dfb = std::make_shared<DataflowBufferImpl>();
 
     dfb->id = static_cast<uint32_t>(this->dataflow_buffers_.size());
@@ -729,21 +759,84 @@ void ProgramImpl::finalize_single_dfb_config(
     const auto& config = dfb->config;
     std::vector<DFBRiscConfig> new_hw_risc_configs;
 
+    // Finds the DfbGroup whose hw_risc_configs match new_hw_risc_configs (creating one
+    // if none exists), extends its core_ranges to include `core`, and appends an
+    // l1_by_core entry.  base_addr/limit are not part of the equality check because
+    // they are derived per-core in serialize_for_core() from each core's alloc_addr.
+    auto bin_into_group = [&]() {
+        auto hw_risc_configs_equal = [](const std::vector<DFBRiscConfig>& a, const std::vector<DFBRiscConfig>& b) {
+            if (a.size() != b.size()) {
+                return false;
+            }
+            for (size_t i = 0; i < a.size(); i++) {
+                if (a[i].risc_id != b[i].risc_id || a[i].is_producer != b[i].is_producer) {
+                    return false;
+                }
+                const auto& ca = a[i].config;
+                const auto& cb = b[i].config;
+                if (ca.num_tcs_to_rr != cb.num_tcs_to_rr ||
+                    ca.broadcast_tc != cb.broadcast_tc ||
+                    ca.remapper_pair_index != cb.remapper_pair_index ||
+                    ca.consumer_tcs != cb.consumer_tcs ||
+                    ca.remapper_consumer_ids_mask != cb.remapper_consumer_ids_mask ||
+                    ca.producer_client_type != cb.producer_client_type) {
+                    return false;
+                }
+                for (int j = 0; j < ca.num_tcs_to_rr; j++) {
+                    if (ca.packed_tile_counter[j] != cb.packed_tile_counter[j]) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+
+        DfbGroup* matching_group = nullptr;
+        for (auto& grp : dfb->groups) {
+            if (hw_risc_configs_equal(grp.hw_risc_configs, new_hw_risc_configs)) {
+                matching_group = &grp;
+                break;
+            }
+        }
+        if (matching_group == nullptr) {
+            DfbGroup new_group;
+            new_group.hw_risc_configs = new_hw_risc_configs;
+            dfb->groups.push_back(std::move(new_group));
+            matching_group = &dfb->groups.back();
+        }
+        CoreRange core_as_range(core, core);
+        if (matching_group->core_ranges.ranges().empty()) {
+            matching_group->core_ranges = CoreRangeSet(core_as_range);
+        } else {
+            matching_group->core_ranges = matching_group->core_ranges.merge(CoreRangeSet(core_as_range));
+        }
+        matching_group->l1_by_core.emplace_back(core, 0u);
+    };
+
     TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
     TT_FATAL(config.consumer_risc_mask != 0, "consumer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
 
-    TT_FATAL(
-        (config.producer_risc_mask & config.consumer_risc_mask) == 0,
-        "producer_risc_mask and consumer_risc_mask must not overlap");
+    const bool is_intra_tensix =
+        config.tensix_scope.has_value() && *config.tensix_scope == TensixScope::INTRA;
+
+    // Intra-tensix: producer and consumer share the same Neo bit — overlap is intentional.
+    if (!is_intra_tensix) {
+        TT_FATAL(
+            (config.producer_risc_mask & config.consumer_risc_mask) == 0,
+            "producer_risc_mask and consumer_risc_mask must not overlap");
+    }
 
     bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
     bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
     bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
     bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
-    TT_FATAL(
-        !(producer_is_tensix_only && consumer_is_tensix_only),
-        "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
-        "counters");
+
+    if (producer_is_tensix_only && consumer_is_tensix_only) {
+        TT_FATAL(
+            config.tensix_scope.has_value(),
+            "Both producer and consumer are Tensix-only RISCs. Set tensix_scope to INTRA (same Neo) or INTER "
+            "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
+    }
 
     // TRISC pack/unpack store ring extent in uint16_t L1-aligned units; host must reject oversized rings.
     if (MetalContext::instance().hal().has_tile_counter_registers()) {
@@ -777,6 +870,49 @@ void ProgramImpl::finalize_single_dfb_config(
     }
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
+
+    // ---------------------------------------------------------------------------
+    // Intra-tensix: packer TRISC2 (producer) → unpacker TRISC0 (consumer) within the same Neo.
+    // No DM RISC, no remapper, no strided/blocked access pattern — each Neo is a fully
+    // independent packer→unpacker credit flow backed by one Tensix-only TC on that Neo.
+    // For N Neos (num_producers == num_consumers == N): N Tensix-only TCs, one per Neo.
+    // ---------------------------------------------------------------------------
+    if (is_intra_tensix) {
+        // Iterate over every Neo bit in producer_risc_mask and allocate a separate Tensix-only
+        // TC for each, giving each Neo its own independent credit counter.
+        dfb->use_remapper = false;
+
+        for (uint8_t risc_id = ::dfb::TENSIX_RISC_OFFSET;
+             risc_id < ::dfb::TENSIX_RISC_OFFSET + ::dfb::NUM_TENSIX;
+             risc_id++) {
+            if (!(config.producer_risc_mask & (1u << risc_id))) {
+                continue;
+            }
+            uint8_t tensix_id = risc_id - ::dfb::TENSIX_RISC_OFFSET;
+
+            ::dfb::PackedTileCounter t6_only_tc =
+                tile_counter_allocator_.allocate(core, tensix_id, /*use_t6_only=*/true);
+
+            log_info(
+                tt::LogMetal,
+                "Intra-tensix DFB {}: Neo{} Tensix-only TC (tensix_id={}, tc_id={})",
+                dfb->id,
+                tensix_id,
+                (uint32_t)::dfb::get_tensix_id(t6_only_tc),
+                (uint32_t)::dfb::get_counter_id(t6_only_tc));
+
+            DFBRiscConfig risc_config;
+            risc_config.risc_id = risc_id;
+            risc_config.is_producer = true;
+            risc_config.config.packed_tile_counter[0] = t6_only_tc;
+            risc_config.config.num_tcs_to_rr = 1;
+            risc_config.config.broadcast_tc = false;
+            new_hw_risc_configs.push_back(risc_config);
+        }
+
+        bin_into_group();
+        return;
+    }
 
     // DM-DM ALL: producer broadcasts to N TCs (one per consumer) instead of using remapper.
     // No Tensix involved on either side.
@@ -1137,58 +1273,7 @@ void ProgramImpl::finalize_single_dfb_config(
     log_debug(
         tt::LogMetal, "DFB {} finalized risc_mask: 0x{:x} use_remapper: {}", dfb->id, dfb->risc_mask, use_remapper);
 
-    // Bin this core into a DfbGroup with matching HW config (TC/remapper fields).
-    // base_addr/limit are not set here; they are derived per-core in DataflowBufferImpl::serialize_for_core()
-    // from each core's alloc_addr, so they are intentionally ignored in this HW config equality check.
-    auto hw_risc_configs_equal = [](const std::vector<DFBRiscConfig>& a, const std::vector<DFBRiscConfig>& b) -> bool {
-        if (a.size() != b.size()) {
-            return false;
-        }
-        for (size_t i = 0; i < a.size(); i++) {
-            if (a[i].risc_id != b[i].risc_id || a[i].is_producer != b[i].is_producer) {
-                return false;
-            }
-            const auto& ca = a[i].config;
-            const auto& cb = b[i].config;
-            if (ca.num_tcs_to_rr != cb.num_tcs_to_rr ||
-                ca.broadcast_tc != cb.broadcast_tc ||
-                ca.remapper_pair_index != cb.remapper_pair_index ||
-                ca.consumer_tcs != cb.consumer_tcs ||
-                ca.remapper_consumer_ids_mask != cb.remapper_consumer_ids_mask ||
-                ca.producer_client_type != cb.producer_client_type) {
-                return false;
-            }
-            for (int j = 0; j < ca.num_tcs_to_rr; j++) {
-                if (ca.packed_tile_counter[j] != cb.packed_tile_counter[j]) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    };
-
-    DfbGroup* matching_group = nullptr;
-    for (auto& grp : dfb->groups) {
-        if (hw_risc_configs_equal(grp.hw_risc_configs, new_hw_risc_configs)) {
-            matching_group = &grp;
-            break;
-        }
-    }
-    if (matching_group == nullptr) {
-        DfbGroup new_group;
-        new_group.hw_risc_configs = new_hw_risc_configs;
-        dfb->groups.push_back(std::move(new_group));
-        matching_group = &dfb->groups.back();
-    }
-
-    // Extend core_ranges to include this core.
-    CoreRange core_as_range(core, core);
-    if (matching_group->core_ranges.ranges().empty()) {
-        matching_group->core_ranges = CoreRangeSet(core_as_range);
-    } else {
-        matching_group->core_ranges = matching_group->core_ranges.merge(CoreRangeSet(core_as_range));
-    }
-    matching_group->l1_by_core.emplace_back(core, 0u);
+    bin_into_group();
 }
 
 void ProgramImpl::invalidate_dataflow_buffer_allocation() {
