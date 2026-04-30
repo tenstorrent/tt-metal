@@ -74,15 +74,12 @@ def test_unet_2d_condition_model_512x512(
     ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
-    load_from_disk = False
-    if not load_from_disk:
-        model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
-        config = model.config
-        torch.save(model, "unet.pt")
-        torch.save(config, "unet_config.pt")
-    else:
-        model = torch.load("unet.pt")
-        config = torch.load("unet_config.pt")
+    model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
+    config = model.config
+    # NOTE: Removed dead torch.save/load_from_disk block. load_from_disk was hardcoded False,
+    # so torch.save(model, "unet.pt") ran every test invocation (~860M params, ~1-3GB disk I/O)
+    # but nothing ever loaded it back. Likely a leftover from early development when caching the
+    # HuggingFace model download locally was useful for iteration speed.
 
     parameters = preprocess_model_parameters(
         model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
