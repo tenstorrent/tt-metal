@@ -11,6 +11,7 @@ from typing import Optional, Tuple
 import torch
 import ttnn
 from ttnn import ShardTensor2dMesh
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
@@ -457,14 +458,29 @@ def run(
                         mapper_dims = (None, effective_dim)
                     else:
                         mapper_dims = (effective_dim, None)
-                    tt_input = ttnn.from_torch(
-                        torch_input,
-                        layout=layout,
-                        dtype=input_dtype,
-                        memory_config=input_memory_config,
-                        mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
-                        device=device,
-                    )
+                    # Master's all_gather input was created via replicate_with_topology:
+                    # data is the full pre-shard tensor on every chip with a [Replicate,
+                    # Shard(-1)] topology stamped. Going through ShardTensor2dMesh would
+                    # actually shard to per-chip slices and shrink original_shape by mesh
+                    # axis size, so use replicate_with_topology to match master.
+                    if input_a_tensor_placement:
+                        tt_input = replicate_with_topology(
+                            torch_input,
+                            device,
+                            input_dtype,
+                            layout,
+                            input_memory_config,
+                            input_a_tensor_placement,
+                        )
+                    else:
+                        tt_input = ttnn.from_torch(
+                            torch_input,
+                            layout=layout,
+                            dtype=input_dtype,
+                            memory_config=input_memory_config,
+                            mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
+                            device=device,
+                        )
                 else:
                     tt_input = ttnn.from_torch(
                         torch_input,

@@ -40,7 +40,6 @@ IGNORED_KEYS = frozenset(
         "sweep_source_hash",
         "device_ids",
         "mesh_device",
-        "original_shape",
     }
 )
 
@@ -114,11 +113,9 @@ def deep_diff(master: Any, sweep: Any, prefix: str = "") -> list[Diff]:
         for k in all_keys:
             child_path = f"{prefix}.{k}" if prefix else k
             if k not in master:
-                cat = _classify(child_path)
-                diffs.append(Diff(child_path, "<missing>", sweep[k], cat if cat != "value" else "extra_key"))
+                diffs.append(Diff(child_path, "<missing>", sweep[k], "extra_key"))
             elif k not in sweep:
-                cat = _classify(child_path)
-                diffs.append(Diff(child_path, master[k], "<missing>", cat if cat != "value" else "extra_key"))
+                diffs.append(Diff(child_path, master[k], "<missing>", "extra_key"))
             else:
                 diffs.extend(deep_diff(master[k], sweep[k], child_path))
     elif isinstance(master, list) and isinstance(sweep, list):

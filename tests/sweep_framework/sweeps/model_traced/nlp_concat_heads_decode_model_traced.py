@@ -127,19 +127,42 @@ def run(
         shape = (shape[0], shape[1], num_heads, shape[3])
 
     # When input is sharded on a non-head axis (typically dim -1 / hidden),
-    # V2 has expanded that dim to the GLOBAL value but the master trace and
-    # shard_spec are per-chip. replicate_with_topology puts the same tensor
-    # on every chip — so we must shrink the shape on the shard axis to
-    # per-chip first, otherwise the per-chip tensor width disagrees with
-    # shard_spec and the kernel rejects it.
+    # V2 may have expanded that dim to the GLOBAL value, in which case we
+    # need to shrink to per-chip before replicate_with_topology so the
+    # per-chip tensor width matches shard_spec. But traced V2 vectors
+    # already carry the per-chip shape (matches master original_shape) —
+    # detect that case by comparing shape[-1] to the shard_spec width and
+    # skip the shrink to avoid driving width below the shard_spec.
     _nchd_axis, _nchd_factor = _nchd_input_shard_axis_and_factor(input_a_tensor_placement)
     n_in = len(shape)
     _nchd_axis_norm = (_nchd_axis if _nchd_axis >= 0 else _nchd_axis + n_in) if _nchd_axis is not None else None
+
+    def _shard_spec_width(mc):
+        try:
+            ss = getattr(mc, "shard_spec", None)
+            if ss is not None and getattr(ss, "shape", None) is not None:
+                return int(ss.shape[1])
+        except Exception:
+            pass
+        if isinstance(mc, dict):
+            ss = mc.get("data", {}).get("shard_spec")
+            if isinstance(ss, dict) and isinstance(ss.get("shape"), list) and len(ss["shape"]) >= 2:
+                return int(ss["shape"][1])
+        return None
+
+    _ss_w = _shard_spec_width(input_a_memory_config)
+    _already_per_chip = (
+        _ss_w is not None
+        and _nchd_axis_norm is not None
+        and _nchd_axis_norm == n_in - 1
+        and shape[-1] == _ss_w
+    )
     if (
         _nchd_factor > 1
         and _nchd_axis_norm is not None
         and _nchd_axis_norm != 2  # dim 2 is the heads axis; do not shrink it
         and shape[_nchd_axis_norm] % _nchd_factor == 0
+        and not _already_per_chip
     ):
         shape = tuple((s_ // _nchd_factor) if i == _nchd_axis_norm else s_ for i, s_ in enumerate(shape))
 

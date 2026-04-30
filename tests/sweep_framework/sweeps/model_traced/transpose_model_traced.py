@@ -139,17 +139,19 @@ def run(
 
     if output_tensor is None:
         fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
-        if not is_host:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        output_tensor = _run_transpose(input_tensor_a, fallback_kwargs)
+        # NOTE: do NOT rebuild input_tensor_a — when the original was created via
+        # create_tensor_on_mesh with sharded topology, plain from_torch here would
+        # produce a second trace entry with [Replicate]-only placement, which the
+        # validator joins to instead of the correct first-call entry. Reuse the
+        # original input; if it still fails the trace was already captured.
+        try:
+            output_tensor = _run_transpose(input_tensor_a, fallback_kwargs)
+        except Exception:
+            output_tensor = None
 
     e2e_perf = stop_measuring_time(start_time)
 
+    if output_tensor is None:
+        return [(False, "transpose execution failed (trace captured)"), e2e_perf]
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

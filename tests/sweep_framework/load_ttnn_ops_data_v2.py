@@ -1423,7 +1423,6 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             config_dict.pop("executions", None)
             config_dict.pop("source", None)
             config_dict.pop("machine_info", None)
-
             config_dict["config_hash"] = config_hash
             config_dict["executions"] = []
             ops[op_name][config_id] = config_dict
@@ -1805,11 +1804,6 @@ def reconstruct_from_manifest(
     if output_path:
         with open(output_path, "w") as f:
             json.dump(merged, f, indent=2, sort_keys=True)
-        from model_tracer.generic_ops_tracer import recompute_config_hashes
-
-        recompute_config_hashes(output_path)
-        with open(output_path, "r") as f:
-            merged = json.load(f)
         print(f"Saved to {output_path}")
 
     return merged

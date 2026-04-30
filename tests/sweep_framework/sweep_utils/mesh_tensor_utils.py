@@ -370,6 +370,33 @@ def create_tensor_on_mesh(
     Returns:
         TTNN tensor on mesh device with proper placement
     """
+    # Trace-validation path: when placement has Shard, the master records the
+    # per-chip .shape (which equals the torch input shape). Going through
+    # ShardTensor2dMesh would re-shard the input and produce a smaller per-chip
+    # shape, so delegate to replicate_with_topology, which keeps .shape =
+    # input shape and stamps the correct sharded topology metadata.
+    if tensor_placement:
+        _placement_str = str(tensor_placement.get('placement', ''))
+        if 'PlacementShard' in _placement_str:
+            try:
+                actual_mesh = mesh_device.shape
+                _ar, _ac = actual_mesh[0], actual_mesh[1]
+            except Exception:
+                _ar, _ac = 1, 1
+            import ast as _ast0
+            _ms_raw = tensor_placement.get('mesh_device_shape', '[1, 1]')
+            if isinstance(_ms_raw, str):
+                try:
+                    _ms_raw = _ast0.literal_eval(_ms_raw)
+                except Exception:
+                    _ms_raw = [1, 1]
+            _tr = _ms_raw[0] if len(_ms_raw) > 0 else 1
+            _tc = _ms_raw[1] if len(_ms_raw) > 1 else 1
+            if _ar >= _tr and _ac >= _tc:
+                return replicate_with_topology(
+                    torch_tensor, mesh_device, dtype, layout, memory_config, tensor_placement
+                )
+
     # Determine mesh mapper based on placement
     if tensor_placement:
         import re

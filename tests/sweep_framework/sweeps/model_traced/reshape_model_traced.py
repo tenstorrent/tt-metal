@@ -222,16 +222,24 @@ def run(
             return out[slices]
         return torch.reshape(per_chip_input, tgt_shape)
 
-    if _shard_factor > 1 and _shard_axis is not None:
-        n_in = torch_input.ndim
-        in_axis = _shard_axis if _shard_axis >= 0 else _shard_axis + n_in
-        chunks = torch.chunk(torch_input, _shard_factor, dim=in_axis)
-        per_chip_outs = [_per_chip_reshape(c) for c in chunks]
-        # Output preserves the same negative-index shard axis as the input
-        # (typical for ttnn.reshape; e.g. Shard(-1) → Shard(-1)).
-        torch_output = torch.cat(per_chip_outs, dim=_shard_axis)
-    else:
-        torch_output = _per_chip_reshape(torch_input)
+    # The torch golden is only used for PCC; the trace-validation goal is for
+    # ttnn.reshape to be called with the master arg0 below. If the per-chip
+    # reshape can't be computed (e.g., target shape is global but input was
+    # already sharded by the framework), keep going with a dummy golden so
+    # ttnn.reshape still executes and the trace is captured.
+    try:
+        if _shard_factor > 1 and _shard_axis is not None:
+            n_in = torch_input.ndim
+            in_axis = _shard_axis if _shard_axis >= 0 else _shard_axis + n_in
+            chunks = torch.chunk(torch_input, _shard_factor, dim=in_axis)
+            per_chip_outs = [_per_chip_reshape(c) for c in chunks]
+            # Output preserves the same negative-index shard axis as the input
+            # (typical for ttnn.reshape; e.g. Shard(-1) → Shard(-1)).
+            torch_output = torch.cat(per_chip_outs, dim=_shard_axis)
+        else:
+            torch_output = _per_chip_reshape(torch_input)
+    except RuntimeError:
+        torch_output = torch_input  # placeholder; PCC will likely fail but trace will capture
 
     is_host = storage_type and "HOST" in str(storage_type)
 

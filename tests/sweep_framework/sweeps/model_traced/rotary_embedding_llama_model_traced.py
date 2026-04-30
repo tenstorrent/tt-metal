@@ -443,22 +443,11 @@ def run(
             return mc.get("data", {}).get("memory_layout") == "HEIGHT_SHARDED"
         return False
 
+    # V2 vectors carry the per-chip shape (master's original_shape).
+    # create_tensor_on_mesh routes Shard placements through
+    # replicate_with_topology, which keeps per-chip .shape == torch input shape
+    # and stamps the master topology — so we keep shape_a as-is.
     _rel_a_axis, _rel_a_factor = _rel_input_shard_axis_and_factor(input_a_tensor_placement)
-    if _rel_a_factor > 1 and _rel_a_axis is not None and _is_height_sharded(input_a_memory_config):
-        _shape_a_list = list(shape_a)
-        _ax = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + len(_shape_a_list)
-        if 0 <= _ax < len(_shape_a_list) and _shape_a_list[_ax] % _rel_a_factor == 0:
-            _shape_a_list[_ax] = _shape_a_list[_ax] // _rel_a_factor
-            shape_a = type(shape_a)(_shape_a_list) if isinstance(shape_a, tuple) else _shape_a_list
-    if not is_traced_config:
-        # If shape_b/shape_c were derived from the (now-shrunk) shape_a, keep them
-        # consistent with the per-chip head_dim.
-        _hdim_per_chip = shape_a[3] if len(shape_a) >= 4 else None
-        if _hdim_per_chip is not None and "input_b_shape" not in _kwargs:
-            shape_b = [shape_b[0], shape_b[1], shape_b[2], _hdim_per_chip]
-        if _hdim_per_chip is not None and "input_c_shape" not in _kwargs:
-            shape_c = [shape_c[0], shape_c[1], shape_c[2], _hdim_per_chip]
-        batch, n_heads, seq_len, head_dim = shape_a
 
     # Detect decode mode from memory config
     # Decode mode uses HEIGHT_SHARDED memory layout
@@ -593,17 +582,18 @@ def run(
         # shards Q along the shard axis. Run rope per-chunk with the replicated
         # cos/sin and concat along the shard axis to produce the global golden
         # that matches what mesh_tensor_to_torch reassembles.
+        torch_output_tensor = apply_rotary_emb_golden(
+            torch_input_tensor.float(),
+            torch_cos_cache.float(),
+            torch_sin_cache.float(),
+        ).to(torch.bfloat16)
+        # All chips have the same per-chip data; Shard(-1) topology causes
+        # mesh_tensor_to_torch to concatenate chip outputs along the shard
+        # axis, so tile the golden the same way.
         if _rel_a_factor > 1 and _rel_a_axis is not None:
-            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_input_tensor.ndim
-            chunks = torch.chunk(torch_input_tensor.float(), _rel_a_factor, dim=_ax_g)
-            per_chip = [apply_rotary_emb_golden(c, torch_cos_cache.float(), torch_sin_cache.float()) for c in chunks]
-            torch_output_tensor = torch.cat(per_chip, dim=_ax_g).to(torch.bfloat16)
-        else:
-            torch_output_tensor = apply_rotary_emb_golden(
-                torch_input_tensor.float(),  # Use float for golden computation
-                torch_cos_cache.float(),
-                torch_sin_cache.float(),
-            ).to(torch.bfloat16)
+            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
+            if 0 <= _ax_g < torch_output_tensor.ndim:
+                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
 
     # --- Create TTNN Tensors ---
     if is_decode_mode:
