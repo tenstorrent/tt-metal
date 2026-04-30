@@ -195,7 +195,10 @@ def pytest_addoption(parser):
 
 @pytest.fixture(scope="module")
 def video_tests(request):
-    _MAX_TESTS = request.config.getoption("--max_tests") or 10**6  # default: run all
+    try:
+        _MAX_TESTS = request.config.getoption("--max_tests") or 10**6
+    except ValueError:
+        _MAX_TESTS = int(os.environ.get("MAX_TESTS", 10**6))
     all_tests = load_jsonl(TEST_JSONL)
     results_map = {r["test_index"]: r for r in load_jsonl(RESULTS_JSONL)}
 
