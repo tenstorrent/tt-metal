@@ -226,11 +226,22 @@ async function run() {
         if (stayedFailingDetails.length === 0) {
           core.warning(`failures_to_elevate=${failuresToElevate} requested but there are zero stayed-failing pipelines. Skipping elevation.`);
         } else {
+          // detectJobLevelRegressions may have already pushed synthesized
+          // regression entries for some stayed-failing pipelines (e.g. when
+          // a still-failing pipeline has NEW failing jobs this run).  Skip
+          // those pipelines during elevation to avoid duplicate top-level
+          // Slack messages keyed by the same "<workflow> / <job>" boundary.
+          const alreadyRegressedNames = new Set(regressedDetails.map(r => r && r.name).filter(Boolean));
           let remaining = failuresToElevate;
           let totalElevatedJobs = 0;
           const elevated = [];
+          const skippedForOverlap = [];
           for (const pipeline of stayedFailingDetails) {
             if (remaining <= 0) break;
+            if (alreadyRegressedNames.has(pipeline.name)) {
+              skippedForOverlap.push(pipeline.name);
+              continue;
+            }
             const jobs = Array.isArray(pipeline.failing_jobs) ? pipeline.failing_jobs : [];
             if (jobs.length === 0) continue;
             const take = jobs.slice(0, remaining);
@@ -247,9 +258,14 @@ async function run() {
             `failures_to_elevate=${failuresToElevate}: elevated ${totalElevatedJobs} job(s) ` +
             `across ${elevated.length} pipeline(s) to regressions for this run.`
           );
+          if (skippedForOverlap.length > 0) {
+            core.info(
+              `Skipped ${skippedForOverlap.length} stayed-failing pipeline(s) during elevation because they already have a regression entry: ${skippedForOverlap.join(', ')}`
+            );
+          }
           if (totalElevatedJobs < failuresToElevate) {
             core.warning(
-              `Only ${totalElevatedJobs} stayed-failing job(s) were available (requested ${failuresToElevate}).`
+              `Only ${totalElevatedJobs} stayed-failing job(s) were available to elevate (requested ${failuresToElevate}).`
             );
           }
           regressedDetails.push(...elevated);
