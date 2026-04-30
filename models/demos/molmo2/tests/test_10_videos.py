@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
@@ -142,7 +143,6 @@ def mesh_device():
 @pytest.fixture(scope="module")
 def tt_model(mesh_device):
     """Load TTNN Molmo2 model (once per module)."""
-    import torch
     from transformers import AutoModelForImageTextToText
 
     from models.demos.molmo2.tt.model import TtMolmo2Model
@@ -239,8 +239,7 @@ def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
 
     for rank, entry in enumerate(video_tests):
         idx = entry["idx"]
-        _, video_url, max_tokens = extract_video_info(entry["test"])
-        prompt, _, _ = extract_video_info(entry["test"])
+        prompt, video_url, max_tokens = extract_video_info(entry["test"])
         vpath = entry["vpath"]
         ref = entry["ref_response"]
 
