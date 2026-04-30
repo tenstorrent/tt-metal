@@ -214,6 +214,22 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
 }
 
+TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
+    constexpr size_t buffer_size = 16;
+
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = buffer_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = buffer_size};
+    auto mesh_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    std::vector<uint8_t> small_src_vec(buffer_size / 2, 0);
+    std::vector<uint8_t> exact_src_vec(buffer_size, 0);
+    std::vector<uint8_t> large_src_vec(buffer_size * 2, 0);
+
+    EXPECT_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
+    EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, exact_src_vec, true));
+    EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, large_src_vec, true));
+}
+
 TEST_F(MeshBufferTest2x4, Deallocation) {
     // Verify that a buffer is deallocated on the MeshDevice when it goes
     // out of scope on host. Create a buffer with a certain config in limited
