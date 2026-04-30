@@ -287,6 +287,77 @@ def _apply_cached_freqs_patch():
     dit_mod.ZImageTransformerTTNN._apply_rope = _apply_rope_cached
 
 
+def _apply_fused_mlp_gate_patch():
+    """Fuse w1 and w3 projections into a single matmul_split (like QKV fusion)."""
+    import dit.model_ttnn as dit_mod
+
+    def _prep_fused_w1w3(dit_instance):
+        prefixes = (
+            [f"noise_refiner.{i}" for i in range(2)]
+            + [f"context_refiner.{i}" for i in range(2)]
+            + [f"layers.{i}" for i in range(30)]
+        )
+        for prefix in prefixes:
+            w1_key = f"{prefix}.feed_forward.w1.weight_mmT"
+            w3_key = f"{prefix}.feed_forward.w3.weight_mmT"
+            if w1_key in dit_instance.weights and w3_key in dit_instance.weights:
+                fused = ttnn.concat(
+                    [dit_instance.weights[w1_key], dit_instance.weights[w3_key]],
+                    dim=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                dit_instance.weights[f"{prefix}.feed_forward.w1w3_fused_mmT"] = fused
+
+    FAST_MATMUL_KERNEL = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    def _fused_mlp(self, x, seq_len, block_prefix):
+        fused_key = f"{block_prefix}.feed_forward.w1w3_fused_mmT"
+        w2T = self.weights[f"{block_prefix}.feed_forward.w2.weight_mmT"]
+
+        if fused_key in self.weights:
+            fused_w = self.weights[fused_key]
+            config = dit_mod._get_matmul_config(seq_len, dit_mod.HIDDEN_DIM, 2 * dit_mod.MLP_PER_DEV, self._core_grid)
+            gate_2d, up_2d = ttnn.experimental.minimal_matmul_split(
+                x,
+                fused_w,
+                chunks=2,
+                dim=-1,
+                config=config,
+                compute_kernel_config=FAST_MATMUL_KERNEL,
+                dtype=ttnn.DataType.BFLOAT16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            old_gate = gate_2d
+            gate_2d = ttnn.silu(old_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(old_gate, False)
+            h = ttnn.multiply(gate_2d, up_2d, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(gate_2d, False)
+            ttnn.deallocate(up_2d, False)
+        else:
+            w1T = self.weights[f"{block_prefix}.feed_forward.w1.weight_mmT"]
+            w3T = self.weights[f"{block_prefix}.feed_forward.w3.weight_mmT"]
+            gate = self._mm(x, w1T, seq_len, dit_mod.HIDDEN_DIM, dit_mod.MLP_PER_DEV)
+            old_gate = gate
+            gate = ttnn.silu(old_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(old_gate, False)
+            up = self._mm(x, w3T, seq_len, dit_mod.HIDDEN_DIM, dit_mod.MLP_PER_DEV)
+            h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(gate, False)
+            ttnn.deallocate(up, False)
+
+        out = self._mm(h, w2T, seq_len, dit_mod.MLP_PER_DEV, dit_mod.HIDDEN_DIM)
+        ttnn.deallocate(h, False)
+        return self._all_reduce(out, seq_len)
+
+    dit_mod.ZImageTransformerTTNN._mlp = _fused_mlp
+    dit_mod.ZImageTransformerTTNN._prep_fused_w1w3 = _prep_fused_w1w3
+
+
 def _convert_mlp_weights_to_bfp8(dit):
     """Convert MLP matmul weights from BF16 to BFLOAT8_B to halve DRAM bandwidth."""
     converted = 0
@@ -408,9 +479,13 @@ def main():
     _apply_compute_config_patch()
     _apply_fast_activations_patch()
     _apply_cached_freqs_patch()
+    _apply_fused_mlp_gate_patch()
 
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
+
+    print("Fusing w1+w3 MLP weights ...")
+    dit._prep_fused_w1w3()
 
     print("Converting MLP weights to BFP8 ...")
     _convert_mlp_weights_to_bfp8(dit)
