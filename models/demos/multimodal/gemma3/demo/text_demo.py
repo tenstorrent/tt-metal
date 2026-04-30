@@ -16,10 +16,12 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
+from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator as Generator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
-from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
@@ -1087,7 +1089,7 @@ def test_demo_text(
                 if out_tok.shape != (global_batch_size, 1):
                     out_tok = out_tok.reshape(global_batch_size, -1)[:, -1:]
             else:
-                _, out_tok = sample_host(
+                _, out_tok = TtGemmaModel.sample_host(
                     logits,
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
