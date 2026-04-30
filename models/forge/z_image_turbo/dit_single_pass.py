@@ -104,7 +104,7 @@ def _apply_compute_config_patch():
             weight_tensor=weight,
             config=config,
             compute_kernel_config=FAST_MATMUL_KERNEL,
-            dtype=dtype,
+            dtype=ttnn.DataType.BFLOAT8_B,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
