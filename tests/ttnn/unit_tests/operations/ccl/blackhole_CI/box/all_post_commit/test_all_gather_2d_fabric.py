@@ -40,7 +40,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_2d_fabric(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     ag_output_shape,
     dim,
     num_links,
@@ -57,12 +57,12 @@ def test_all_gather_2d_fabric(
     use_semaphore_free_all_gather_impl,
     function_level_defaults,
 ):
-    num_devices = bh_1d_mesh_device.shape[0]
-    cluster_axis_actual = 0
-    mesh_shape = (num_devices, 1)
+    num_devices = bh_2d_mesh_device.shape[0]
+    cluster_axis = 0
 
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, cluster_axis_actual)
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+
     run_all_gather_impl(
         submesh_device,
         num_devices,
@@ -76,11 +76,10 @@ def test_all_gather_2d_fabric(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis_actual,
+        cluster_axis=cluster_axis,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
         use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )
-    ttnn.ReadDeviceProfiler(submesh_device)

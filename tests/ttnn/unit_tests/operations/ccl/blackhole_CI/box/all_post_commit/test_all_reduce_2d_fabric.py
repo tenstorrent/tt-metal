@@ -11,6 +11,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 from models.common.utility_functions import skip_for_n_or_less_dev, skip_for_n_dev
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
     round_up,
@@ -88,7 +89,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_
     indirect=True,
 )
 def test_all_reduce_2d_fabric(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     output_shape,
     cluster_axis,
     input_dtype,
@@ -102,7 +103,11 @@ def test_all_reduce_2d_fabric(
     trace_mode,
     function_level_defaults,
 ):
-    num_devices = bh_1d_mesh_device.shape[0]
+    num_devices = bh_2d_mesh_device.shape[0]
+    cluster_axis = 0
+
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
@@ -110,7 +115,7 @@ def test_all_reduce_2d_fabric(
     profiler = BenchmarkProfiler()
 
     run_all_reduce_impl(
-        bh_1d_mesh_device,
+        submesh_device,
         output_shape,
         cluster_axis,
         input_dtype,

@@ -36,8 +36,6 @@ def test_all_broadcast_2d_fabric(
     num_iters,
     function_level_defaults,
 ):
-    # Use the first row of the 2D mesh - create a 1D submesh
-    # For (4,2) mesh, this creates a (4,1) submesh using 4 devices
     num_devices = bh_2d_mesh_device.shape[0]
     cluster_axis = 0
 
