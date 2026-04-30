@@ -855,11 +855,3 @@ class FILL_INT_FORMAT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
-
-
-@dataclass
-class IS_INT_FILL(TemplateParameter):
-    is_int_fill: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool IS_INT_FILL = {str(self.is_int_fill).lower()};"

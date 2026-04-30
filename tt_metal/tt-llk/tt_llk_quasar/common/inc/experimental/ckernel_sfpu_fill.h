@@ -15,19 +15,28 @@ namespace ckernel
 namespace sfpu
 {
 
-// Broadcast a float constant to all elements of Dest.
+// Broadcast a 32-bit bit-pattern to all elements of Dest verbatim.
+// value: Raw bits written as-is
+// detail — the same bits are reassembled and stored via SFPSTORE(sfpmem::DEFAULT).
 template <int ITERATIONS>
-inline void _calculate_fill_(const float value)
+inline void _calculate_fill_bitcast_(const std::uint32_t value)
 {
-    std::uint32_t bits = __builtin_bit_cast(std::uint32_t, value);
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, bits & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, bits >> 16);
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, value >> 16);
 #pragma GCC unroll 8
     for (std::uint32_t d = 0; d < ITERATIONS; d++)
     {
         TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();
     }
+}
+
+// Broadcast a float constant to all elements of Dest.
+template <int ITERATIONS>
+inline void _calculate_fill_(const float value)
+{
+    std::uint32_t bits = __builtin_bit_cast(std::uint32_t, value);
+    _calculate_fill_bitcast_<ITERATIONS>(bits);
 }
 
 // Broadcast an integer constant to all elements of Dest using an explicit SFPMEM store mode.
@@ -64,15 +73,6 @@ inline void _calculate_fill_int_(const std::uint32_t value)
         TTI_SFPSTORE(p_sfpu::LREG1, SFPMEM_MODE, ADDR_MOD_7, 0, 0);
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();
     }
-}
-
-// Broadcast a 32-bit bit-pattern to all elements of Dest verbatim.
-// value: Raw bits written as-is; the float bit-cast below is just a delegation
-// detail — the same bits are reassembled and stored via SFPSTORE(sfpmem::DEFAULT).
-template <int ITERATIONS>
-inline void _calculate_fill_bitcast_(const std::uint32_t value)
-{
-    _calculate_fill_<ITERATIONS>(__builtin_bit_cast(float, value));
 }
 
 } // namespace sfpu

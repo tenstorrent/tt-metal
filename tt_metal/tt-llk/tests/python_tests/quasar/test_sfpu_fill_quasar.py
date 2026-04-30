@@ -26,7 +26,6 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     FILL_INT_FORMAT,
     IMPLIED_MATH_FORMAT,
-    IS_INT_FILL,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
@@ -126,8 +125,11 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
     FILL_CONST_VALUE = 5.0; integer formats use _calculate_fill_int_ with
     FILL_INT_FORMAT baked in as a constexpr so the SFPMEM store mode is
     selected at compile time with no runtime dispatch (kernel writes
-    FILL_INT_VALUE = 5 via SFPLOADI + SFPSTORE). FILL_INT_FORMAT is always
-    forwarded — the merged kernel derives IS_INT_FILL from it at compile time.
+    FILL_INT_VALUE = 5 via SFPLOADI + SFPSTORE). The merged kernel selects
+    the int vs float path at runtime from formats.unpack_A_src; FILL_INT_FORMAT
+    is always forwarded with a value that is safe for _calculate_fill_int_'s
+    static_assert (the input format on the int path, Int32 placeholder on the
+    float path).
 
     Since fill ignores input values, the input stimuli are arbitrary —
     typed stimuli are still generated so the unpack path sees a valid buffer.
@@ -186,7 +188,6 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
             FILL_INT_FORMAT(formats.input_format if is_int_fill else DataFormat.Int32),
-            IS_INT_FILL(is_int_fill),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

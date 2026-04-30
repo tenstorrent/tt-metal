@@ -11,16 +11,21 @@
 #include "sfpu_stub.h"
 
 using namespace ckernel;
-#include "params.h" // FILL_INT_FORMAT, IS_INT_FILL, IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en
+#include "params.h" // FILL_INT_FORMAT, IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en
 
-// IS_INT_FILL and FILL_INT_FORMAT are independent template parameters supplied by the harness.
-// IS_INT_FILL selects the kernel path (int_fill or fill); FILL_INT_FORMAT only matters on the int path
+// The kernel path (int_fill vs fill) is selected at runtime from formats.unpack_A_src.
+// FILL_INT_FORMAT (forwarded by the harness) drives the SFPMEM store mode used by
+// _calculate_fill_int_. Because the kernel compiles both branches, the harness must
+// always pass a FILL_INT_FORMAT that is safe for _calculate_fill_int_'s static_assert
+// (one of Int32/Int16/Int8/UInt8); on float-fill variants it is a placeholder that
+// is never executed at runtime.
 
-// is_fp32_dest_acc_en mirrors:
-//   - EN_FP32_MATH_FORMAT for float fills (true for Float32, false for Float16/Float16_b)
-//   - EN_INT32_MATH_FORMAT for int fills   (true for Int32,   false for Int16/Int8/UInt8)
-constexpr bool EN_FP32_MATH_FORMAT  = !IS_INT_FILL && is_fp32_dest_acc_en;
-constexpr bool EN_INT32_MATH_FORMAT = IS_INT_FILL && is_fp32_dest_acc_en;
+// Returns true when the unpack source format is one of the integer formats supported
+// by _calculate_fill_int_ (Int32/Int16/Int8/UInt8).
+inline bool is_int_fill_format(DataFormat fmt)
+{
+    return fmt == DataFormat::Int32 || fmt == DataFormat::Int16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8;
+}
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -39,7 +44,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, EN_FP32_MATH_FORMAT, EN_INT32_MATH_FORMAT>();
+
+    const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        if (is_int_fill)
+        {
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+        }
+        else
+        {
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+        }
+    }
+    else
+    {
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+    }
 
     buffer_descriptor_u bd_val = {0};
 
@@ -86,13 +107,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     DataFormat math_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, EN_FP32_MATH_FORMAT, EN_INT32_MATH_FORMAT>(math_format, math_format);
+    const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
+
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        if (is_int_fill)
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+        }
+        else
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+        }
+    }
+    else
+    {
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+    }
 
     constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
 
     _llk_math_eltwise_unary_sfpu_init_();
 
-    if constexpr (IS_INT_FILL)
+    if (is_int_fill)
     {
         // Int path: _calculate_fill_int_ writes FILL_INT_VALUE to every element of Dest
         // via SFPLOADI + SFPSTORE; the SFPMEM store mode is selected by FILL_INT_FORMAT
