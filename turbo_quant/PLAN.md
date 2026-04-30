@@ -132,9 +132,26 @@ Two T3K-specific findings worth flagging:
    64/32 = 2) so the bug surfaces less; only on T3K with total_work=4
    does K really run at K=8 or K=14 and trigger the drift. Hybrid path
    forces `num_cores_per_head=1` at `ttnn_integration.py:1065` so it's
-   unaffected. Enabling K>1 in hybrid requires fixing the merge first
-   — likely FP32 intermediates in the online-softmax correction
-   (`sdpa_tq_decode.cpp` merge path). Non-trivial kernel work; deferred.
+   unaffected. Enabling K>1 in hybrid requires fixing the merge first.
+
+   **Kernel fix attempts (2026-04-30):** tagged checkpoint
+   `pre-K-split-fix-checkpoint` (commit c82766dabec) before trying.
+   - Setting `.fp32_dest_acc_en = true` on the TQ-SDPA `ComputeConfig`
+     broke K=1 entirely: output magnitude jumped ~9× (max 2.25 vs
+     expected 0.24, cos to baseline 0.79).
+   - Tried full vanilla SDPA compute config (HiFi4 + fp32_dest_acc_en
+     + math_approx_mode=False) — same K=1 break.
+   - Vanilla SDPA decode runs with fp32_dest_acc_en=True via Llama's
+     `compute_kernel_config_sdpa` (model_config.py:771) and works, so
+     the break is TQ-kernel-specific. The TQ kernel uses a different
+     `mm_init` pattern (passes cb_out into the initial init rather
+     than cb_qk_im) and likely has other per-op assumptions tied to
+     BF16-dst mode that need updating.
+   - Reverted clean. Proper fix needs an audit of every
+     `mm_init`/`pack_reconfig_data_format`/`reconfig_data_format` call
+     in `sdpa_tq_decode.cpp` for FP32-dst correctness, plus likely
+     adjusting the dequant→matmul pipeline (the BFP4-norm rescale has
+     format assumptions). Multi-hour focused PR.
 
 2. **Optimal W on T3K is 128, not 64 (the N150 winner).** Sharding-induced
    numerical drift in the chunked online softmax appears to be partially
