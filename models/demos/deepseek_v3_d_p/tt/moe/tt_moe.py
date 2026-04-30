@@ -271,7 +271,6 @@ class TtMoe(LightweightModule):
         dispatch_sd = ttnn.SubDevice([dispatch_cores])
         shared_sd = ttnn.SubDevice([shared_cores])
         self.sd_manager_id = mesh_device.create_sub_device_manager([dispatch_sd, shared_sd], 0)
-        mesh_device.load_sub_device_manager(self.sd_manager_id)
         self.dispatch_sd_id = ttnn.SubDeviceId(0)
         self.shared_sd_id = ttnn.SubDeviceId(1)
         logger.debug(
@@ -461,6 +460,7 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
         signpost("shared_expert_and_dispatch_start")
+        self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
         # Step 1: Shared expert (enabled)
@@ -484,6 +484,7 @@ class TtMoe(LightweightModule):
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
+        self.mesh_device.clear_loaded_sub_device_manager()
         x = ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)

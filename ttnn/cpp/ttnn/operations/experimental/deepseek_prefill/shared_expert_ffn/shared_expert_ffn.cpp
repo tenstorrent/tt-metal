@@ -4,6 +4,7 @@
 
 #include "shared_expert_ffn.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
@@ -24,6 +25,16 @@ ttnn::Tensor shared_expert_ffn(
     tt::tt_fabric::Topology topology,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    // sub_device_id shifts the matmul's start to the sub-device origin but doesn't cap the grid
+    // extent; without core_grid, the auto-pick uses the full chip and overflows the sub-device.
+    std::optional<ttnn::CoreGrid> mm_core_grid;
+    if (subdevice_id.has_value()) {
+        auto sd_cores = x.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *subdevice_id);
+        auto bbox = sd_cores.bounding_box();
+        mm_core_grid =
+            ttnn::CoreGrid{bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
+    }
+
     auto gate_out = ttnn::matmul(
         /*input_tensor_a=*/x,
         /*input_tensor_b=*/gate_proj,
@@ -34,7 +45,7 @@ ttnn::Tensor shared_expert_ffn(
         /*program_config=*/std::nullopt,
         /*activation=*/std::string("silu"),
         /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
+        /*core_grid=*/mm_core_grid,
         /*output_tile=*/std::nullopt,
         /*optional_output_tensor=*/std::nullopt,
         /*global_cb=*/std::nullopt,
@@ -50,21 +61,16 @@ ttnn::Tensor shared_expert_ffn(
         /*program_config=*/std::nullopt,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
+        /*core_grid=*/mm_core_grid,
         /*output_tile=*/std::nullopt,
         /*optional_output_tensor=*/std::nullopt,
         /*global_cb=*/std::nullopt,
         /*sub_device_id=*/subdevice_id);
 
-    // When a sub-device is specified, shard gate_out/up_out onto cores inside
-    // that sub-device before the elementwise multiply. Without this the binary
-    // op's worker grid (binary_device_operation.cpp:459-465) is the union of
-    // every loaded sub-device's cores, which puts the multiply on the dispatch
-    // sub-device's cores too and serializes the whole pipeline. With sharded
-    // inputs the binary op's sharded branch picks only the sub-devices whose
-    // worker cores intersect the shard grid.
+    // When both inputs are DRAM-interleaved, multiply_ runs on the full core grid; when sharded,
+    // it only runs on the shard's cores. Shard onto the provided sub-device's worker cores so the
+    // op is confined to them.
     if (subdevice_id.has_value()) {
-        constexpr uint32_t TILE = 32;
         auto* device = x.device();
         auto sub_device_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *subdevice_id);
 
@@ -74,13 +80,13 @@ ttnn::Tensor shared_expert_ffn(
             total_h *= padded[i];
         }
         uint32_t total_w = padded[padded.size() - 1];
-        uint32_t total_h_tiles = (total_h + TILE - 1) / TILE;
+        uint32_t total_h_tiles = (total_h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
         uint32_t avail = sub_device_cores.num_cores();
         uint32_t num_cores = std::min(total_h_tiles, avail);
         while (num_cores > 1 && total_h_tiles % num_cores != 0) {
             --num_cores;
         }
-        uint32_t shard_h = (total_h_tiles / num_cores) * TILE;
+        uint32_t shard_h = (total_h_tiles / num_cores) * tt::constants::TILE_HEIGHT;
 
         auto shard_grid = tt::tt_metal::select_from_corerangeset(sub_device_cores, 0, num_cores - 1, /*row_wise=*/true);
         auto shard_spec =
@@ -111,7 +117,7 @@ ttnn::Tensor shared_expert_ffn(
         /*program_config=*/std::nullopt,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
+        /*core_grid=*/mm_core_grid,
         /*output_tile=*/std::nullopt,
         /*optional_output_tensor=*/std::nullopt,
         /*global_cb=*/std::nullopt,
