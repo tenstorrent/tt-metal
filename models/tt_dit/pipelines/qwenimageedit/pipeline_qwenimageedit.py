@@ -21,7 +21,6 @@ from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
-from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2VLProcessor
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -285,14 +284,11 @@ class QwenImageEditPipeline:
                 parallel_config=self._encoder_parallel_config,
                 use_torch=use_torch_text_encoder,
                 is_fsdp=True,
+                build_vision_encoder=not use_torch_text_encoder,
             )
 
-        # VL processor and torch VL model for image-conditioned encoding.
-        # The torch model is loaded lazily and freed after use to save ~16GB RAM.
-        logger.info("loading VL processor for image conditioning...")
-        self._vl_processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
-        self._torch_vl_model = None
-        self._vl_checkpoint = checkpoint_name
+        # Image-conditioned VL preprocessing (token expansion + ``pixel_values``) is handled
+        # inside ``Qwen25VlTokenizerEncoderPair`` via ``Qwen25VlMultimodalPreprocessor``.
 
         if not dynamic_load_encoder or use_torch_text_encoder:
             self._load_transformers(self.encoder_submesh_idx)
@@ -547,39 +543,44 @@ class QwenImageEditPipeline:
             self._deallocate_vae()
             self._load_transformers(self.vae_submesh_idx)
 
-    def _ensure_vl_model_loaded(self) -> None:
-        """Lazily load the torch VL model for image-conditioned encoding."""
-        if self._torch_vl_model is None:
-            logger.info("loading torch VL model for image conditioning...")
-            self._torch_vl_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                self._vl_checkpoint, subfolder="text_encoder"
-            )
-            self._torch_vl_model.eval()
-
-    def _free_vl_model(self) -> None:
-        """Free torch VL model to reclaim ~16GB RAM after encoding is done."""
-        if self._torch_vl_model is not None:
-            logger.info("freeing torch VL model (~16GB RAM reclaimed)")
-            del self._torch_vl_model
-            self._torch_vl_model = None
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
-            import gc
-
-            gc.collect()
-
     def prepare_vae(self) -> None:
         if not self._vae_decoder.is_loaded():
             self._deallocate_transformers(self.vae_submesh_idx)
             with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
                 self._reload_vae()
 
+    def _get_tt_vae_latents_normalization(self, shard_shape: tuple[int, ...]):
+        key = tuple(shard_shape)
+        cached = getattr(self, "_tt_vae_norm_cache", None)
+        if cached is None:
+            cached = {}
+            self._tt_vae_norm_cache = cached
+        if key in cached:
+            return cached[key]
+        mean_BCHW = self._latents_mean.squeeze(2).to(torch.bfloat16).contiguous()
+        inv_std_BCHW = (1.0 / self._latents_std).squeeze(2).to(torch.bfloat16).contiguous()
+        tt_mean = tensor.from_torch(mean_BCHW, device=self.vae_device, layout=ttnn.TILE_LAYOUT)
+        tt_inv_std = tensor.from_torch(inv_std_BCHW, device=self.vae_device, layout=ttnn.TILE_LAYOUT)
+        cached[key] = (tt_mean, tt_inv_std)
+        return tt_mean, tt_inv_std
+
     def _encode_vae_image(self, image_BCHW: torch.Tensor) -> torch.Tensor:
-        """Encode an image through the VAE to get latent representation (B,C,1,H,W)."""
+        """Encode an image through the VAE to get latent representation ``(B, C, H, W)``."""
         if self._vae_encoder is not None:
             height_par = self._wan_vae_parallel_config.height_parallel.factor * self._vae_scale_factor
             with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
                 tt_image, logical_h = self._vae_encoder.prepare_input(image_BCHW, height_par)
                 tt_latents_BCTHW, new_logical_h = self._vae_encoder.forward(tt_image, logical_h)
+
+                B, C, T, H_sh, W_sh = tt_latents_BCTHW.shape
+                tt_mean, tt_inv_std = self._get_tt_vae_latents_normalization((B, C, T, H_sh, W_sh))
+                tt_latents_BCHW = ttnn.reshape(tt_latents_BCTHW, (B, C, T * H_sh, W_sh))
+                tt_latents_BCHW = ttnn.to_layout(tt_latents_BCHW, ttnn.TILE_LAYOUT)
+                tt_latents_BCHW = ttnn.subtract(tt_latents_BCHW, tt_mean)
+                tt_latents_BCHW = ttnn.multiply(tt_latents_BCHW, tt_inv_std)
+                tt_latents_BCHW = ttnn.to_layout(tt_latents_BCHW, ttnn.ROW_MAJOR_LAYOUT)
+                tt_latents_BCTHW = ttnn.reshape(tt_latents_BCHW, (B, C, T, H_sh, W_sh))
+
                 image_latents = self._vae_encoder.postprocess_output(tt_latents_BCTHW, new_logical_h)
             image_latents = image_latents.to(dtype=image_BCHW.dtype)
         else:
@@ -591,11 +592,12 @@ class QwenImageEditPipeline:
                     image_latents = encoder_output.latents
                 else:
                     raise AttributeError("Could not access latents from VAE encoder output")
+            image_latents = (image_latents - self._latents_mean.to(image_latents.device, image_latents.dtype)) / (
+                self._latents_std.to(image_latents.device, image_latents.dtype)
+            )
 
-        image_latents = (image_latents - self._latents_mean.to(image_latents.device, image_latents.dtype)) / (
-            self._latents_std.to(image_latents.device, image_latents.dtype)
-        )
-        return image_latents
+        # Drop the temporal singleton dim; image VAE always runs with T=1.
+        return image_latents.squeeze(2)
 
     def _prepare_image_latents(
         self,
@@ -604,12 +606,21 @@ class QwenImageEditPipeline:
         height: int,
         width: int,
         dtype: torch.dtype,
-    ) -> torch.Tensor | None:
-        """Encode images through VAE and pack into latent format for concatenation."""
+    ) -> list[torch.Tensor] | None:
+        """Encode images through VAE and return one host ``[B, C, H, W]`` tensor per
+        reference image, batch-replicated to ``batch_size``.
+
+        Latent packing and the cross-image concat both run on device in ``__call__``
+        (via ``tensor.pack_latents_device`` + ``ttnn.concat``) so the equivalent host
+        compute here is skipped. Returning a list of unpacked tensors also lets the
+        transformer loop upload each image once per submesh and pack in-place,
+        consistent with how ``noise_latents`` is already handled for all
+        ``sp_factor`` configurations.
+        """
         if not images:
             return None
 
-        all_image_latents = []
+        all_image_latents: list[torch.Tensor] = []
         for img in images:
             img = img.to(dtype=torch.float32)
             image_latents = self._encode_vae_image(img)
@@ -618,11 +629,9 @@ class QwenImageEditPipeline:
                 additional = batch_size // image_latents.shape[0]
                 image_latents = torch.cat([image_latents] * additional, dim=0)
 
-            h, w = image_latents.shape[3], image_latents.shape[4]
-            packed = _pack_latents(image_latents, batch_size, self._num_channels_latents, h, w)
-            all_image_latents.append(packed)
+            all_image_latents.append(image_latents.to(dtype=dtype))
 
-        return torch.cat(all_image_latents, dim=1).to(dtype=dtype)
+        return all_image_latents
 
     def run_single_edit(
         self,
@@ -757,9 +766,15 @@ class QwenImageEditPipeline:
             noise_h, noise_w = noise_latents.shape[3], noise_latents.shape[4]
             sp_factor = self._parallel_config.sequence_parallel.factor
             noise_seq_len = (noise_h // 2) * (noise_w // 2)
-            total_spatial_seq = noise_seq_len + (
-                image_latents_packed.shape[1] if image_latents_packed is not None else 0
-            )
+            image_seq_len = 0
+            if image_latents_packed is not None:
+                # image_latents_packed is now a list of [B, C, H, W] host tensors (one
+                # per reference image). Each contributes (H/2)*(W/2) packed spatial
+                # tokens once packed on device in the loop below.
+                for img_lat in image_latents_packed:
+                    _, _, h_lat, w_lat = img_lat.shape
+                    image_seq_len += (h_lat // 2) * (w_lat // 2)
+            total_spatial_seq = noise_seq_len + image_seq_len
 
             # RoPE: build img_shapes accounting for noise + image patches
             p = self._patch_size
@@ -806,7 +821,25 @@ class QwenImageEditPipeline:
                     noise_w,
                 )
                 if image_latents_packed is not None:
-                    tt_image_packed = tensor.from_torch(image_latents_packed, device=submesh_device, on_host=False)
+                    # Upload each VAE image tensor [B, C, H, W] and pack on device so
+                    # the host-side ``_pack_latents`` permute/reshape is skipped.
+                    tt_image_packed_list = []
+                    for img_lat in image_latents_packed:
+                        tt_img_bchw = tensor.from_torch(img_lat, device=submesh_device, on_host=False)
+                        _, _, h_lat, w_lat = img_lat.shape
+                        tt_image_packed_list.append(
+                            tensor.pack_latents_device(
+                                tt_img_bchw,
+                                transformer_batch_size,
+                                self._num_channels_latents,
+                                h_lat,
+                                w_lat,
+                            )
+                        )
+                    if len(tt_image_packed_list) == 1:
+                        tt_image_packed = tt_image_packed_list[0]
+                    else:
+                        tt_image_packed = ttnn.concat(tt_image_packed_list, dim=1)
                     tt_initial_latents = ttnn.concat([tt_noise_packed, tt_image_packed], dim=1)
                 else:
                     tt_initial_latents = tt_noise_packed
@@ -1170,42 +1203,34 @@ class QwenImageEditPipeline:
         images: list,
         num_images_per_prompt: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode prompts with image conditioning using the torch VL model."""
-        self._ensure_vl_model_loaded()
-
-        # The Qwen2VL processor expects one image_grid_thw entry per `<|image_pad|>` token
-        # across ALL prompts, so when CFG duplicates the prompts (negative + positive) we
-        # must also duplicate the image list to keep the counts balanced.
-        model_inputs = self._vl_processor(
-            text=formatted_prompts,
-            images=images * len(formatted_prompts),
-            padding=True,
-            return_tensors="pt",
+        """Encode prompts with image conditioning using the on-device Qwen2.5-VL encoder."""
+        result_hidden, result_mask = self._text_encoder.encode_with_images(
+            formatted_prompts,
+            list(images) * len(formatted_prompts),
+            num_images_per_prompt=num_images_per_prompt,
+            omit_final_host_gather=True,
         )
 
-        with torch.no_grad():
-            outputs = self._torch_vl_model(
-                input_ids=model_inputs.input_ids,
-                attention_mask=model_inputs.attention_mask,
-                pixel_values=model_inputs.pixel_values.to(self._torch_vl_model.dtype),
-                image_grid_thw=model_inputs.image_grid_thw,
-                output_hidden_states=True,
-            )
+        if isinstance(result_hidden, ttnn.Tensor):
+            prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(result_hidden)[0])
+            encoder_mask = result_mask
+            if (
+                prompt_embeds.shape[1] == IMAGE_PROMPT_PAD_SEQ_LEN
+                and encoder_mask.shape[1] == IMAGE_PROMPT_PAD_SEQ_LEN
+                and num_images_per_prompt == 1
+            ):
+                return prompt_embeds, encoder_mask
 
-        hidden_states = outputs.hidden_states[-1]
+            hidden_states = prompt_embeds
+            attention_mask = encoder_mask
+        else:
+            hidden_states = result_hidden
+            attention_mask = result_mask
 
-        # Free VL model immediately after encoding to reclaim RAM
-        self._free_vl_model()
-
-        split_hidden = self._extract_masked_hidden(hidden_states, model_inputs.attention_mask)
+        split_hidden = self._extract_masked_hidden(hidden_states, attention_mask)
         split_hidden = [e[PROMPT_DROP_IDX_EDIT:] for e in split_hidden]
         attn_masks = [torch.ones(e.size(0), dtype=torch.long) for e in split_hidden]
 
-        # Pad every call to the same fixed length so the traced prompt-input
-        # placeholder has a stable shape across multiple interactive prompts.
-        # (Padding only to the per-batch max would let two prompts with different
-        # token counts mismatch the baked trace shape and fail the
-        # ``copy_host_to_device_tensor`` shape check.)
         natural_max = max(e.size(0) for e in split_hidden)
         if natural_max > IMAGE_PROMPT_PAD_SEQ_LEN:
             msg = (
@@ -1217,9 +1242,6 @@ class QwenImageEditPipeline:
         max_seq = IMAGE_PROMPT_PAD_SEQ_LEN
         prompt_embeds = torch.stack([torch.cat([u, u.new_zeros(max_seq - u.size(0), u.size(1))]) for u in split_hidden])
         encoder_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq - u.size(0))]) for u in attn_masks])
-
-        prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-        encoder_mask = encoder_mask.repeat_interleave(num_images_per_prompt, dim=0)
 
         prompt_embeds[torch.logical_not(encoder_mask.bool())] = 0.0
 
