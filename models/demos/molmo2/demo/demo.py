@@ -194,11 +194,15 @@ def tt_model(mesh_device):
 
     cfg = Molmo2Config(mesh_device=mesh_device)
     ccl = TT_CCL(mesh_device)
+    from pathlib import Path
+
+    weight_cache = Path("/tmp/molmo2_weight_cache")
+    weight_cache.mkdir(parents=True, exist_ok=True)
     model = TtMolmo2Model(
         mesh_device=mesh_device,
         tt_ccl=ccl,
         state_dict=state_dict,
-        weight_cache_path=None,
+        weight_cache_path=weight_cache,
         dtype=ttnn.bfloat16,
         configuration=cfg,
     )
@@ -251,19 +255,34 @@ def run_demo(
     S = input_ids.shape[1]
     logger.info(f"  Inputs ready: batch={batch_size} seq_len={S}  preprocess={time.time()-t0:.2f}s")
 
-    # ---- Prefill ----
-    logger.info("Prefill (warm-up + KV cache fill)...")
+    # ---- Warm-up (compile) pass — not timed ----
+    # Run a minimal text-only prefill to trigger TTNN JIT compilation before measuring.
+    # This avoids counting first-run kernel compile time in the benchmark.
+    if not getattr(model, "_demo_warmed_up", False):
+        logger.info("Warm-up compile pass (not timed)...")
+        t_warmup = time.time()
+        warmup_ids = input_ids[:1, :32]  # first 32 tokens, text path only
+        _ = model.forward_prefill(input_ids=warmup_ids, pixel_values=None, user_id=0)
+        # One decode step to compile the decode kernels
+        warmup_tok = int(warmup_ids[0, -1].item())
+        _ = model.forward_decode_step(warmup_tok, 32)
+        model._demo_warmed_up = True
+        logger.info(f"  Warm-up done in {time.time()-t_warmup:.2f}s (not counted in timing)")
+
+    # ---- Timed prefill ----
+    logger.info("Prefill (filling KV cache)...")
     t_prefill = time.time()
     logits = model.forward_prefill(
-        input_ids=input_ids[:1],  # warm-up with 1 user
+        input_ids=input_ids[:1],
         pixel_values=pv_batched[:1] if pv_batched is not None else None,
         pooled_patches_idx=pool_idx[:1] if pool_idx is not None else None,
         token_type_ids=token_type_ids[:1] if token_type_ids is not None else None,
         user_id=0,
     )
-    logger.info(f"  Warm-up prefill: {time.time()-t_prefill:.2f}s")
+    prefill_ms = (time.time() - t_prefill) * 1000
+    logger.info(f"  Prefill: {prefill_ms:.0f}ms  ({S} tokens, {S / (prefill_ms / 1000):.0f} tok/s)")
 
-    # Full-batch prefill (if batch > 1, repeat for each user with separate KV slot)
+    # Additional users (batch > 1)
     for user_id in range(1, batch_size):
         model.forward_prefill(
             input_ids=input_ids[user_id : user_id + 1],
@@ -273,18 +292,18 @@ def run_demo(
             user_id=user_id,
         )
 
-    # ---- Decode ----
-    logger.info("Starting decode loop...")
+    # ---- Timed decode loop ----
+    logger.info("Starting decode loop (TTNN)...")
     all_outputs = [[] for _ in range(batch_size)]
     user_done = [False] * batch_size
 
-    # First token comes from the last prefill's logits (user 0)
-    next_tokens = torch.argmax(logits[:, -1:], dim=-1).squeeze(-1)  # [batch=1] → extend
+    # First token from prefill logits (user 0)
+    next_tokens = torch.argmax(logits[:, -1:], dim=-1).squeeze(-1)  # [1]
     next_tokens = next_tokens.expand(batch_size)
     for u in range(batch_size):
         all_outputs[u].append(int(next_tokens[u].item()))
 
-    current_pos = S  # position after the prefill
+    current_pos = S
 
     t_decode_start = time.time()
     for iteration in range(max_new_tokens - 1):
@@ -293,8 +312,6 @@ def run_demo(
 
         t_iter = time.time()
 
-        # Each user shares the same current_pos in this simple implementation
-        # (in a full batched implementation, pos would be tracked per user)
         new_logits_list = []
         for u in range(batch_size):
             tok = int(next_tokens[u].item())
@@ -304,7 +321,6 @@ def run_demo(
             else:
                 new_logits_list.append(None)
 
-        # Sample next tokens
         new_next = []
         for u, lg in enumerate(new_logits_list):
             if user_done[u] or lg is None:
