@@ -44,6 +44,7 @@ static void prepare_bidir_integrity(
     uint32_t recvbuf1,
     tt_metal::Program* send_program) {
     /* =================== */
+    tensix_counter_dram(fixture, mesh_device, dram_start_addr, dram_end_addr, read_bank);
     tensix_zero_dram(fixture, mesh_device, dram_start_addr, dram_end_addr, write_bank);
 
     auto send_eth_config = tt_metal::EthernetConfig{
@@ -117,9 +118,6 @@ static bool run_test_integrity_dram_bidir(
     const uint32_t recv_bank_id1 = next_bank_id++;
 
     struct l1_allocator alloc = new_erisc_allocator();
-
-    tensix_counter_dram(fixture, recv_mesh_device, dram_start_addr, dram_end_addr, send_bank_id0);
-    tensix_counter_dram(fixture, send_mesh_device, dram_start_addr, dram_end_addr, send_bank_id1);
 
     uint32_t iter_l1_address = l1_alloc(&alloc, sizeof(uint64_t));
     uint32_t send_delta_addr = l1_alloc(&alloc, sizeof(uint64_t));
