@@ -193,6 +193,11 @@ public:
     virtual bool is_fabric_channels_not_ready_for_traffic() const { return false; }
     virtual bool is_fabric_teardown_timed_out() const { return false; }
     virtual void set_fabric_teardown_timed_out() {}
+    // Called by FabricFirmwareInitializer when a non-MMIO device enters dead_relay_devices_
+    // via the probe_dead path (FIX E2).  Setting this flag ensures RiscFirmwareInitializer::
+    // teardown() populates relay_broken_non_mmio so FIX AY + FIX AC fire and reset the stale
+    // ERISC firmware — preventing UMD topology discovery failures on the next open (#42429).
+    virtual void set_fabric_relay_path_broken() {}
 
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.

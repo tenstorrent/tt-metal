@@ -1593,10 +1593,20 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
             // dispatch to be skipped entirely even though it would succeed over PCIe.
             if (is_non_mmio && (relay_broken || !probe_dead_channels.empty())) {
                 dead_relay_devices_.insert(dev->id());
+                // FIX E2 + FIX AY gap fix (#42429): Set fabric_relay_path_broken_ on the device so
+                // RiscFirmwareInitializer::teardown() includes it in relay_broken_non_mmio.  Without
+                // this, devices in the probe_dead path (firmware never loaded, relay never established)
+                // escape the FIX AY + FIX AC teardown cleanup because those fixes are gated on
+                // relay_broken_non_mmio, which is only populated from is_fabric_relay_path_broken() and
+                // is_fabric_channels_not_ready_for_traffic().  Skipping FIX AY leaves stale corrupt
+                // ERISC firmware on non-MMIO chips, which blocks UMD gateway heartbeat probes on the
+                // next open and causes "ASIC not found in chip_topology_mapping_" TT_FATAL.
+                dev->set_fabric_relay_path_broken();
                 log_warning(
                     tt::LogMetal,
                     "compile_and_configure_fabric: Device {} ETH relay compromised (relay_broken={}, "
-                    "probe_dead_channels={}) — marking as dead-relay device. "
+                    "probe_dead_channels={}) — marking as dead-relay device and setting "
+                    "fabric_relay_path_broken_ so FIX AY/AC teardown fires. "
                     "Dispatch kernel initialization will be skipped (#42429 FIX E2).",
                     dev->id(),
                     relay_broken,
