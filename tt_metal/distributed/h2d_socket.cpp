@@ -275,7 +275,7 @@ void H2DSocket::reserve_bytes(uint32_t num_bytes) {
 }
 
 bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
-    TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking for space.");
     uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
 
@@ -328,6 +328,7 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     TT_FATAL(pcie_alignment_ > 0, "PCIe alignment not initialized.");
     TT_FATAL(page_size % pcie_alignment_ == 0, "Page size must be PCIE-aligned.");
     TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
+    TT_FATAL(fifo_size_ % page_size == 0, "Page size must evenly divide FIFO size.");
 
     uint32_t next_fifo_wr_ptr = align(write_ptr_, page_size);
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
