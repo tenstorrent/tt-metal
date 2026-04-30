@@ -344,24 +344,11 @@ void kernel_main() {
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
-                                PACK(TTI_SEMWAIT(
-                                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                                    semaphore::t6_sem(semaphore::MATH_PACK),
-                                    p_stall::STALL_ON_ZERO));
-
-                                // Flip destination register offset for PACKER access
-                                PACK(TT_SETC16(
-                                    DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                    ActivationApplyHelper<
-                                        activation_type,
-                                        activation_param0,
-                                        activation_param1,
-                                        activation_param2>::apply(i);
-                                }
-
-                                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                                apply_activation_from_pack<
+                                    activation_type,
+                                    activation_param0,
+                                    activation_param1,
+                                    activation_param2>(out_subblock_num_tiles);
 #else
                                 tile_regs_wait();
 #endif

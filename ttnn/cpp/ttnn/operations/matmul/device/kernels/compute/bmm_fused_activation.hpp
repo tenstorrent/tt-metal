@@ -123,12 +123,18 @@ struct ActivationApplyHelper {
     }
 };
 
-template <KernelActivation ACT>
-FORCE_INLINE void init_sfpu_activation_pack() {
-    ActivationInitHelper<ACT, 0, 0>::init();
-}
+template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
+FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
+    PACK(TTI_SEMWAIT(
+        p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
 
-template <KernelActivation ACT>
-FORCE_INLINE void sfpu_activation_pack(uint32_t tile_index) {
-    ActivationApplyHelper<ACT, 0, 0>::apply(tile_index);
+    // Flip destination register offset for PACKER access
+    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+        ActivationApplyHelper<ACT, PARAM0, PARAM1, PARAM2>::apply(i);
+    }
+
+    // Wait for SFPU completion before packing
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 }
