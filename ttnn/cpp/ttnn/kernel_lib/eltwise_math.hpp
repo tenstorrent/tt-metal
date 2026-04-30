@@ -31,6 +31,7 @@
 
 // Additional headers for ops below
 #include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/fill.h"
 
 namespace compute_kernel_lib {
 
@@ -44,6 +45,19 @@ struct Negative : UnaryOp<Negative<ApproxMode, Slot>, Slot> {
 
     ALWI static void init() { ckernel::negative_tile_init(); }
     ALWI static void call(uint32_t dst) { ckernel::negative_tile(dst); }
+};
+
+// =============================================================================
+// FillInt — fills a DEST slot with a runtime int scalar (templated on DataFormat).
+// =============================================================================
+
+template <DataFormat DF, Dst Slot = Dst::D0>
+struct FillInt : UnaryOp<FillInt<DF, Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = false;
+    uint32_t value;
+
+    ALWI static void init() { ckernel::fill_tile_init(); }
+    ALWI void call(uint32_t dst) const { ckernel::fill_tile_int<DF>(dst, value); }
 };
 
 }  // namespace compute_kernel_lib

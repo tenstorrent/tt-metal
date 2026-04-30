@@ -6,6 +6,8 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/add_int_sfpu.h"
+#include "api/compute/mul_int_sfpu.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
@@ -54,6 +56,27 @@ struct SubBinary : BinaryOp<SubBinary<In0, In1, Out>, In0, In1, Out> {
 
     ALWI static void init() { ckernel::sub_binary_tile_init(); }
     ALWI static void call(uint32_t i0, uint32_t i1, uint32_t out_idx) { ckernel::sub_binary_tile(i0, i1, out_idx); }
+};
+
+// =============================================================================
+// Integer SFPU binary tile ops — addcmul / addcdiv int paths use these.
+// Both signatures take a DataFormat template arg (caller picks Int32 etc).
+// =============================================================================
+
+template <DataFormat DF, Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct MulIntBinary : BinaryOp<MulIntBinary<DF, In0, In1, Out>, In0, In1, Out> {
+    static constexpr bool clobbers_sfpu_lut = false;
+
+    ALWI static void init() { ckernel::mul_int_tile_init<DF>(); }
+    ALWI static void call(uint32_t i0, uint32_t i1, uint32_t out_idx) { ckernel::mul_int_tile<DF>(i0, i1, out_idx); }
+};
+
+template <DataFormat DF, Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct AddIntBinary : BinaryOp<AddIntBinary<DF, In0, In1, Out>, In0, In1, Out> {
+    static constexpr bool clobbers_sfpu_lut = false;
+
+    ALWI static void init() { ckernel::add_int_tile_init(); }
+    ALWI static void call(uint32_t i0, uint32_t i1, uint32_t out_idx) { ckernel::add_int_tile<DF>(i0, i1, out_idx); }
 };
 
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
