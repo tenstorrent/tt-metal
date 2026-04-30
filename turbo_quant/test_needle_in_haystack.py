@@ -159,17 +159,22 @@ def build_haystack_prompt(
     return full_tokens, target_pos, distractor_global_positions
 
 
-def migrate_prefill_kv_interleaved(
-    tt_model, prompt_len, bits, mesh_device, seed, cache_dtype, cluster_shape, paged, block_size
+def migrate_prefill_kv_to_compressed_tq(
+    tt_model, prompt_len, bits, mesh_device, seed, cluster_shape, block_size, recent_window=0
 ):
-    """Memory-efficient migrate: process one layer at a time.
+    """Memory-efficient migrate: prefill K/V → quantized indices + norms in TQ cache.
 
-    Phase-batched migrate (eval_e2e_prefill.py) needs contiguous DRAM for all
-    32 layers' new tensors at once. At long context that's 2 GB+ which DRAM
-    can't accommodate after model+activations. This version reads, quantizes,
-    and writes back ONE LAYER AT A TIME — peak device-DRAM growth is bounded
-    to one tensor's worth (~33 MB at 16K) regardless of total context length.
-    Slower decode (potential fragmentation) but correctness-preserving.
+    Replaces the pre-rescaled flow that wrote `centroid × norm` BFP8 values back
+    into `layer_past` (no compression on device). Instead writes BFP4 indices and
+    BFP8 norms directly into `tq_cache.k_indices_dev` / `tq_cache.k_norms_dev`,
+    then frees the prefill `layer_past` — leaving only the compressed TQ cache.
+
+    Per token per layer (32 KV heads, 128 head_dim, in standard 8B model):
+      Before: layer_past BFP8 = 64 KB/token; TQ cache also allocated → ~97 KB/tok
+      After:  TQ cache only = ~33 KB/token (1.9× compression vs BFP8 baseline)
+
+    Each layer is processed independently, peak DRAM growth bounded to one
+    tensor's worth (~33 MB at 16K) regardless of total context length.
     """
     head_dim = tt_model.layers[0].attention.head_dim
     cpu_quantizer = TurboQuantMSE(head_dim=head_dim, bits=bits, seed=seed, device="cpu", dtype=torch.float32)
@@ -182,9 +187,12 @@ def migrate_prefill_kv_interleaved(
         composer = None
         mapper = None
 
-    print(f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ (interleaved)...")
+    print(
+        f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to compressed TQ (memory_efficient=True)..."
+    )
     for li, layer in enumerate(tt_model.layers):
-        # Read K and V to CPU, deallocate immediately.
+        tq = layer.attention.tq_cache
+        # Read K and V from layer_past (paged BFP8) to CPU and dealloc immediately.
         k_bf16 = ttnn.typecast(layer.attention.layer_past[0], ttnn.bfloat16)
         v_bf16 = ttnn.typecast(layer.attention.layer_past[1], ttnn.bfloat16)
         k_cpu = ttnn.to_torch(k_bf16, mesh_composer=composer).float()
@@ -195,127 +203,130 @@ def migrate_prefill_kv_interleaved(
         ttnn.deallocate(layer.attention.layer_past[1])
         layer.attention.layer_past = None
 
-        # Reshape paged: [max_blocks, n_kv_heads, block_size, head_dim] → [1, n_kv_heads, max_seq, head_dim]
-        if paged:
-            max_blocks, n_kv_heads, blk, _ = k_cpu.shape
-            max_seq = max_blocks * blk
-            k_cpu = k_cpu.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim).unsqueeze(0)
-            v_cpu = v_cpu.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim).unsqueeze(0)
-        else:
-            max_seq = k_cpu.shape[2]
+        # Reshape paged → flat seq: [max_blocks, n_kv_heads, block_size, head_dim]
+        # → [n_kv_heads, max_seq, head_dim] then add batch dim for quantizer.
+        max_blocks, n_kv_heads, blk, _ = k_cpu.shape
+        max_seq = max_blocks * blk
+        k_flat = k_cpu.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim).unsqueeze(0)  # [1, H, S, D]
+        v_flat = v_cpu.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim).unsqueeze(0)
+        del k_cpu, v_cpu
 
-        k_prefix = k_cpu[:, :, :prompt_len, :]
-        v_prefix = v_cpu[:, :, :prompt_len, :]
-        k_idx, k_norms = cpu_quantizer.quantize(k_prefix)
-        k_centroids = cpu_quantizer.codebook.centroids[k_idx.long()]
-        k_rescaled = (k_centroids * k_norms).to(torch.bfloat16)
-        cpu_quantizer._skip_rotation = True  # rotation absorbed
+        k_prefix = k_flat[:, :, :prompt_len, :]  # [1, H, P, D]
+        v_prefix = v_flat[:, :, :prompt_len, :]
+
+        # Quantize on CPU. K: needs rotation; V: rotation absorbed into W_v already.
+        k_idx, k_norms = cpu_quantizer.quantize(k_prefix)  # idx [1,H,P,D] long, norms [1,H,P,1] float
+        cpu_quantizer._skip_rotation = True
         v_idx, v_norms = cpu_quantizer.quantize(v_prefix)
         cpu_quantizer._skip_rotation = False
-        v_centroids = cpu_quantizer.codebook.centroids[v_idx.long()]
-        v_rescaled = (v_centroids * v_norms).to(torch.bfloat16)
 
-        n_kv_heads = k_prefix.shape[1]
-        k_full = torch.zeros(1, n_kv_heads, max_seq, head_dim, dtype=torch.bfloat16)
-        v_full = torch.zeros_like(k_full)
-        k_full[:, :, :prompt_len, :] = k_rescaled
-        v_full[:, :, :prompt_len, :] = v_rescaled
-        if paged:
-            k_full = k_full.squeeze(0).reshape(n_kv_heads, max_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
-            v_full = v_full.squeeze(0).reshape(n_kv_heads, max_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
+        # Build full-size paged tensors with zeros for [prompt_len..max_seq] —
+        # the TQ cache is allocated for the full max_seq_len.
+        k_idx_full = torch.zeros((1, n_kv_heads, max_seq, head_dim), dtype=torch.bfloat16)
+        v_idx_full = torch.zeros_like(k_idx_full)
+        k_norms_full = torch.zeros((1, n_kv_heads, max_seq, 1), dtype=torch.bfloat16)
+        v_norms_full = torch.zeros_like(k_norms_full)
+        # Indices stored as bf16-encoded integers (the codebook bucket id 0..2^bits-1).
+        k_idx_full[:, :, :prompt_len, :] = k_idx.to(torch.bfloat16)
+        v_idx_full[:, :, :prompt_len, :] = v_idx.to(torch.bfloat16)
+        k_norms_full[:, :, :prompt_len, :] = k_norms.to(torch.bfloat16)
+        v_norms_full[:, :, :prompt_len, :] = v_norms.to(torch.bfloat16)
 
-        # Allocate new layer_past for THIS layer.
-        layer.attention.layer_past = [
-            ttnn.from_torch(
-                k_full,
-                dtype=cache_dtype,
+        # Reshape back to paged layout: [max_blocks, n_kv_heads, block_size, head_dim].
+        k_idx_paged = (
+            k_idx_full.squeeze(0).reshape(n_kv_heads, max_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
+        )
+        v_idx_paged = (
+            v_idx_full.squeeze(0).reshape(n_kv_heads, max_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
+        )
+        k_norms_paged = k_norms_full.squeeze(0).reshape(n_kv_heads, max_blocks, blk, 1).permute(1, 0, 2, 3).contiguous()
+        v_norms_paged = v_norms_full.squeeze(0).reshape(n_kv_heads, max_blocks, blk, 1).permute(1, 0, 2, 3).contiguous()
+
+        # Replace the zero-init device tensors with the populated ones.
+        ttnn.deallocate(tq.k_indices_dev[li] if li < len(tq.k_indices_dev) else tq.k_indices_dev[0])
+        ttnn.deallocate(tq.v_indices_dev[li] if li < len(tq.v_indices_dev) else tq.v_indices_dev[0])
+        ttnn.deallocate(tq.k_norms_dev[li] if li < len(tq.k_norms_dev) else tq.k_norms_dev[0])
+        ttnn.deallocate(tq.v_norms_dev[li] if li < len(tq.v_norms_dev) else tq.v_norms_dev[0])
+
+        idx_dtype = ttnn.bfloat4_b
+        norms_dtype = ttnn.bfloat8_b
+        tq.k_indices_dev[li] = ttnn.from_torch(
+            k_idx_paged,
+            dtype=idx_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        tq.v_indices_dev[li] = ttnn.from_torch(
+            v_idx_paged,
+            dtype=idx_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        tq.k_norms_dev[li] = ttnn.from_torch(
+            k_norms_paged,
+            dtype=norms_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        tq.v_norms_dev[li] = ttnn.from_torch(
+            v_norms_paged,
+            dtype=norms_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        del k_idx_full, v_idx_full, k_norms_full, v_norms_full
+        del k_idx_paged, v_idx_paged, k_norms_paged, v_norms_paged
+
+        # Hybrid: populate FP ring with the last W prompt positions for this layer.
+        # K must be rotated by Π_K to match the TQ cache convention (which stores
+        # Π·K so that Q_rot · K_stored^T = Q · K^T after rotation cancels). V is
+        # already rotated because W_v has Π_V absorbed (rotation_absorbed=True).
+        if recent_window > 0:
+            W = recent_window
+            ring_W = tq.ring_W_padded
+            ring_blocks = tq.ring_blocks
+            start = prompt_len - W
+            k_recent = k_flat.squeeze(0)[:, start:prompt_len, :]  # [H, W, D] un-rotated
+            v_recent = v_flat.squeeze(0)[:, start:prompt_len, :]  # [H, W, D] already rotated
+            # Rotate K: [H, W, D] @ [D, D] = [H, W, D]
+            k_recent = k_recent.float() @ cpu_quantizer.rotation
+            k_ring = torch.zeros((ring_blocks, n_kv_heads, blk, head_dim), dtype=torch.bfloat16)
+            v_ring = torch.zeros_like(k_ring)
+            for i in range(W):
+                ring_idx = (start + i) % ring_W
+                blk_i = ring_idx // blk
+                off = ring_idx % blk
+                k_ring[blk_i, :, off, :] = k_recent[:, i, :].to(torch.bfloat16)
+                v_ring[blk_i, :, off, :] = v_recent[:, i, :].to(torch.bfloat16)
+            ttnn.deallocate(tq.k_ring_dev[li] if li < len(tq.k_ring_dev) else tq.k_ring_dev[0])
+            ttnn.deallocate(tq.v_ring_dev[li] if li < len(tq.v_ring_dev) else tq.v_ring_dev[0])
+            tq.k_ring_dev[li] = ttnn.from_torch(
+                k_ring,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
-            ),
-            ttnn.from_torch(
-                v_full,
-                dtype=cache_dtype,
+            )
+            tq.v_ring_dev[li] = ttnn.from_torch(
+                v_ring,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
-            ),
-        ]
-        del k_full, v_full, k_cpu, v_cpu, k_prefix, v_prefix, k_centroids, v_centroids
+            )
+        del k_flat, v_flat
         if (li + 1) % 8 == 0:
             print(f"    layer {li + 1}/{len(tt_model.layers)} migrated")
-
-
-def populate_fp_ring_from_prefill(tt_model, prompt_len, recent_window, mesh_device, cluster_shape):
-    """Copy the last `recent_window` positions of each layer's KV into its FP ring.
-
-    Reads layer_past (paged TQ cache) via to_torch, slices the last W prompt
-    positions, and writes them into k_ring_dev/v_ring_dev at ring positions
-    [(P-W) % ring_W..(P-1) % ring_W].
-    """
-    print(f"  Populating FP ring with last {recent_window} prefill positions...")
-    num_devices = cluster_shape[1] if cluster_shape else 1
-    if num_devices > 1:
-        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=cluster_shape)
-        mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=cluster_shape)
-    else:
-        composer = None
-        mapper = None
-
-    for layer in tt_model.layers:
-        tq = layer.attention.tq_cache
-        if tq.recent_window == 0:
-            continue
-        W = tq.recent_window
-        # Read full layer_past, slice the last W positions.
-        # layer_past shape (paged): [max_num_blocks, n_kv_heads, block_size, head_dim]
-        k_full = ttnn.to_torch(layer.attention.layer_past[0], mesh_composer=composer).float()
-        v_full = ttnn.to_torch(layer.attention.layer_past[1], mesh_composer=composer).float()
-        # Reshape to [n_kv_heads, max_seq, head_dim]
-        max_blocks, n_kv_heads, block_size, head_dim = k_full.shape
-        max_seq = max_blocks * block_size
-        k_seq = k_full.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim)
-        v_seq = v_full.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim)
-
-        # Slice last W positions [P-W..P-1].
-        start = prompt_len - W
-        k_recent = k_seq[:, start:prompt_len, :]  # [H, W, D]
-        v_recent = v_seq[:, start:prompt_len, :]
-
-        # Write into ring at positions [(P-W) % ring_W..(P-1) % ring_W].
-        # Ring layout: [ring_blocks, n_kv_heads, block_size, head_dim].
-        ring_W = tq.ring_W_padded
-        ring_blocks = tq.ring_blocks
-        k_ring = torch.zeros((ring_blocks, n_kv_heads, block_size, head_dim), dtype=torch.bfloat16)
-        v_ring = torch.zeros_like(k_ring)
-        for i in range(W):
-            ring_idx = (start + i) % ring_W
-            blk = ring_idx // block_size
-            off = ring_idx % block_size
-            k_ring[blk, :, off, :] = k_recent[:, i, :].to(torch.bfloat16)
-            v_ring[blk, :, off, :] = v_recent[:, i, :].to(torch.bfloat16)
-
-        # Replace the existing zero ring tensors.
-        ttnn.deallocate(tq.k_ring_dev[0])
-        ttnn.deallocate(tq.v_ring_dev[0])
-        tq.k_ring_dev[0] = ttnn.from_torch(
-            k_ring,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-        tq.v_ring_dev[0] = ttnn.from_torch(
-            v_ring,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
 
 
 def build_parser():
@@ -472,44 +483,47 @@ def main():
     first_new_tok_id = int(next_tok.squeeze().item())
     print(f"  First new token: {first_new_tok_id} → {tokenizer.decode([first_new_tok_id])!r}")
 
-    # ----- Migrate prefill KV to TQ -----
-    migrate_prefill_kv_interleaved(
+    # ----- Allocate compressed TQ cache (memory_efficient=True) -----
+    n_local_kv_heads = model_args.n_kv_heads // model_args.cluster_shape[1]
+    print(
+        f"\nAllocating {args.bits}-bit compressed TQ cache (memory_efficient=True, "
+        f"recent_window={args.tq_recent_window})..."
+    )
+    shared_tq = TTNNTurboQuantCache(
+        mesh_device,
+        num_layers=len(tt_model.layers),
+        num_kv_heads=n_local_kv_heads,
+        head_dim=model_args.head_dim,
+        max_seq_len=args.max_seq_len,
+        bits=args.bits,
+        memory_efficient=True,  # paged BFP4 indices + BFP8 norms + fused SDPA
+        paged_config=paged_attention_config,
+        max_batch_size=1,
+        seed=args.seed,
+        recent_window=args.tq_recent_window,
+    )
+    shared_tq.rotation_absorbed = True
+    for layer_idx, layer in enumerate(tt_model.layers):
+        layer.attention.tq_cache = shared_tq
+        layer.attention.tq_layer_idx = layer_idx
+    if args.tq_recent_window > 0:
+        tt_model.tq_ring_W = shared_tq.recent_window
+        tt_model.tq_ring_W_padded = shared_tq.ring_W_padded
+
+    # ----- Migrate prefill KV → compressed TQ (writes indices+norms, frees layer_past) -----
+    # If hybrid (recent_window > 0), also populates the FP ring from the last
+    # W prompt positions in the same pass — done inline because layer_past is
+    # freed per layer and can't be re-read afterwards.
+    migrate_prefill_kv_to_compressed_tq(
         tt_model,
         prompt_len=prompt_len,
         bits=args.bits,
         mesh_device=mesh_device,
         seed=args.seed,
-        cache_dtype=ttnn.bfloat8_b,
         cluster_shape=model_args.cluster_shape,
-        paged=True,
         block_size=paged_attention_config.block_size,
+        recent_window=args.tq_recent_window,
     )
-
-    # ----- Attach TQ caches -----
-    n_local_kv_heads = model_args.n_kv_heads // model_args.cluster_shape[1]
-    print(f"\nAttaching {args.bits}-bit TQ cache (recent_window={args.tq_recent_window})...")
-    for layer in tt_model.layers:
-        tq = TTNNTurboQuantCache(
-            mesh_device,
-            num_layers=1,
-            num_kv_heads=n_local_kv_heads,
-            head_dim=model_args.head_dim,
-            max_seq_len=args.max_seq_len,
-            bits=args.bits,
-            seed=args.seed,
-            memory_efficient=False,
-            paged_config=paged_attention_config if args.tq_recent_window > 0 else None,
-            max_batch_size=1,
-            recent_window=args.tq_recent_window,
-        )
-        tq.rotation_absorbed = True
-        layer.attention.tq_cache = tq
-
-    # ----- For hybrid: populate FP ring from last W prefill positions -----
-    if args.tq_recent_window > 0:
-        populate_fp_ring_from_prefill(
-            tt_model, prompt_len, args.tq_recent_window, mesh_device, model_args.cluster_shape
-        )
 
     # ----- Decode -----
     print("\n=== Decode ===")
