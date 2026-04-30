@@ -54,12 +54,13 @@ def decode_forward(
     # QKV projection. With TP>1 the per-device QKV is small enough to fit in
     # an L1 width-sharded layout that nlp_create_qkv_heads_decode consumes
     # directly. With TP=1 (e.g. single Blackhole card) the per-device QKV is
-    # TP× larger and overflows the per-core CB if width-sharded; use L1
-    # interleaved instead. NOTE: DRAM interleaved was tried first but produced
-    # silent corruption — the auto-selected matmul program config strides the
-    # output such that every other pair of tiles is zero, which downstream
-    # nlp_create_qkv_heads_decode reads linearly and thus zeros every odd head.
-    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.L1_MEMORY_CONFIG
+    # TP× larger and overflows the per-core CB if width-sharded, so we use
+    # DRAM interleaved instead. The kernel-side aligned-read fix in
+    # nlp_create_qkv_heads_decode (PR #43292) handles the BH NOC alignment
+    # constraint for DRAM-interleaved inputs; before that fix this path
+    # produced silent corruption (every odd Q/K/V head returned the previous
+    # user's row).
+    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.DRAM_MEMORY_CONFIG
     xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
     ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
