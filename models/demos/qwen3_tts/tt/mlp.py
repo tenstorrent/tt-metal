@@ -18,6 +18,8 @@ from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_pr
 _DRAM_SHARD_DOWN = os.environ.get("QWEN3_TTS_MLP_DRAM_SHARD_DOWN", "0") == "1"
 _DRAM_SHARD_GATE_UP = os.environ.get("QWEN3_TTS_MLP_DRAM_SHARD_GATE_UP", "0") == "1"
 _DECODE_SHARDED = os.environ.get("QWEN3_TTS_DECODE_SHARDED", "0") == "1"
+_PREFILL_OPTI = os.environ.get("QWEN3_TTS_PREFILL_OPTI", "0") == "1"
+_PREFILL_SEQ = 128  # ISL target for prefill optimization
 
 
 class MLP(LightweightModule):
@@ -183,6 +185,17 @@ class MLP(LightweightModule):
                 m_tiles=1, k_tiles=n_tiles, num_cores_x=cols, num_cores_y=rows
             )
 
+        # NOTE: DRAM-sharded matmul kernel only supports M=tile_height (32, decode-only).
+        # For prefill at M=128, the kernel TT_FATALs ("currently only support in0 tensor
+        # height of tile height"). Prefill matmuls keep using the existing 1D-mcast path;
+        # the wins for prefill come from sharded layernorms and sharded NLP head ops.
+        self._prefill_gate_up_dramshard_progcfg = None
+        self._prefill_gate_up_in0_memcfg = None
+        self._prefill_gate_up_out_memcfg = None
+        self._prefill_down_dramshard_progcfg = None
+        self._prefill_down_in0_memcfg = None
+        self._prefill_down_out_memcfg = None
+
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
@@ -265,43 +278,54 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # Gate / Up projections
-        use_dram_shard_gate_up = (
+        # Gate / Up projections — pick decode (M=1) or prefill (M=ISL) configs.
+        is_prefill_opti = (
+            mode == "prefill" and seq_len == _PREFILL_SEQ and self._prefill_gate_up_dramshard_progcfg is not None
+        )
+        is_decode_opti = (
             (mode == "decode" or seq_len == 1) and self.gate_proj_dram_sharded is not None and seq_len < 1024
         )
-        # Whole-MLP sharded chain (when both gate/up and down DRAM-shard flags are on
-        # and we're in decode): gate_proj output, ttnn.mul(silu)*up output, and
-        # down_proj input all use the same 64-core width-sharded layout (k_tiles=192,
-        # 96 cols/core), so we can flow data through without any S→I→S round-trip.
-        # Saves ~4 conversion ops per layer (and the host dispatch overhead they carry).
-        use_dram_shard_down = (
+        use_dram_shard_gate_up = is_prefill_opti or is_decode_opti
+        gu_progcfg = (
+            self._prefill_gate_up_dramshard_progcfg if is_prefill_opti else self._decode_gate_up_dramshard_progcfg
+        )
+        gu_in0_memcfg = self._prefill_gate_up_in0_memcfg if is_prefill_opti else self._decode_gate_up_in0_memcfg
+        gu_out_memcfg = self._prefill_gate_up_out_memcfg if is_prefill_opti else self._decode_gate_up_out_memcfg
+
+        is_prefill_opti_d = (
+            mode == "prefill" and seq_len == _PREFILL_SEQ and self._prefill_down_dramshard_progcfg is not None
+        )
+        is_decode_opti_d = (
             (mode == "decode" or seq_len == 1) and self.down_proj_dram_sharded is not None and seq_len < 1024
         )
+        use_dram_shard_down = is_prefill_opti_d or is_decode_opti_d
+        d_progcfg = self._prefill_down_dramshard_progcfg if is_prefill_opti_d else self._decode_down_dramshard_progcfg
+        d_in0_memcfg = self._prefill_down_in0_memcfg if is_prefill_opti_d else self._decode_down_in0_memcfg
+        d_out_memcfg = self._prefill_down_out_memcfg if is_prefill_opti_d else self._decode_down_out_memcfg
+
         sharded_chain = use_dram_shard_gate_up and use_dram_shard_down
 
         if use_dram_shard_gate_up:
             # Width-shard x once and reuse for both gate and up matmuls.
-            # Skip I→S if x is already in the matching layout (e.g. piped through
-            # from a sharded layernorm in decoder_layer).
-            if x.memory_config() == self._decode_gate_up_in0_memcfg:
+            if x.memory_config() == gu_in0_memcfg:
                 x_sharded = x
                 _own_x_sharded = False
             else:
-                x_sharded = ttnn.to_memory_config(x, self._decode_gate_up_in0_memcfg)
+                x_sharded = ttnn.to_memory_config(x, gu_in0_memcfg)
                 _own_x_sharded = True
             gate_sharded = ttnn.linear(
                 x_sharded,
                 self.gate_proj_dram_sharded,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_gate_up_dramshard_progcfg,
-                memory_config=self._decode_gate_up_out_memcfg,
+                program_config=gu_progcfg,
+                memory_config=gu_out_memcfg,
             )
             up_sharded = ttnn.linear(
                 x_sharded,
                 self.up_proj_dram_sharded,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_gate_up_dramshard_progcfg,
-                memory_config=self._decode_gate_up_out_memcfg,
+                program_config=gu_progcfg,
+                memory_config=gu_out_memcfg,
             )
             if _own_x_sharded:
                 ttnn.deallocate(x_sharded)
@@ -329,7 +353,7 @@ class MLP(LightweightModule):
                 gate_sharded,
                 up_sharded,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-                memory_config=self._decode_gate_up_out_memcfg,
+                memory_config=gu_out_memcfg,
             )
             ttnn.deallocate(gate_sharded)
             ttnn.deallocate(up_sharded)
@@ -337,8 +361,8 @@ class MLP(LightweightModule):
                 hidden_sharded,
                 self.down_proj_dram_sharded,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_down_dramshard_progcfg,
-                memory_config=self._decode_down_out_memcfg,
+                program_config=d_progcfg,
+                memory_config=d_out_memcfg,
             )
             ttnn.deallocate(hidden_sharded)
             if _DECODE_SHARDED and mode == "decode" and self._decode_down_n_padded == self.hidden_size:
@@ -377,14 +401,14 @@ class MLP(LightweightModule):
             ttnn.deallocate(gate_out)
             ttnn.deallocate(up_out)
             if use_dram_shard_down:
-                hidden_sharded = ttnn.to_memory_config(hidden, self._decode_down_in0_memcfg)
+                hidden_sharded = ttnn.to_memory_config(hidden, d_in0_memcfg)
                 ttnn.deallocate(hidden)
                 out_sharded = ttnn.linear(
                     hidden_sharded,
                     self.down_proj_dram_sharded,
                     compute_kernel_config=self.compute_kernel_config,
-                    program_config=self._decode_down_dramshard_progcfg,
-                    memory_config=self._decode_down_out_memcfg,
+                    program_config=d_progcfg,
+                    memory_config=d_out_memcfg,
                 )
                 ttnn.deallocate(hidden_sharded)
                 output_padded = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
