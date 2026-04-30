@@ -2744,6 +2744,28 @@ void Device::wait_for_fabric_workers_ready() {
         return;
     }
 
+    // FIX QV (#42429): MMIO devices whose master ERISC router channel is pre-dead have
+    // fabric_channels_not_ready_for_traffic_=true set by FIX QU after configure_fabric().
+    // Phase 3 loaded Tensix MUX firmware on these channels (configure_fabric_cores runs
+    // before the flag is set), but the MUX firmware immediately writes TERMINATED because
+    // its associated ERISC router channel is dead.  Phase 4 polls for READY_FOR_TRAFFIC and
+    // always times out (5000ms) on each such channel — each test TearDown costs +5s and
+    // ultimately throws, marking the test FAILED instead of SKIPPED.
+    //
+    // Skip Phase 4 (and Phase 5) for such devices: the MUX won't carry traffic
+    // (test guards skip ops when this flag is set via FIX QS), so the poll is unnecessary.
+    // This mirrors the Phase 4+5 skip for fabric_relay_path_broken_ on non-MMIO devices.
+    if (fabric_channels_not_ready_for_traffic_) {
+        log_warning(
+            tt::LogMetal,
+            "wait_for_fabric_workers_ready: Device {} has channels not ready for traffic "
+            "(fabric_channels_not_ready_for_traffic_) — skipping Phase 4 MUX poll + Phase 5 "
+            "handshake (MMIO dead-master-chan device; MUX will be TERMINATED, not READY_FOR_TRAFFIC). "
+            "(#42429 FIX QV)",
+            this->id());
+        return;
+    }
+
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
     const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
