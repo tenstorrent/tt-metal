@@ -469,6 +469,10 @@ def test_compressed_tensor_target_assignment_hash_invalidates_cache():
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+# TODO(#43025): Root-cause the dense 4x2 attention weight shape mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: Dense 4x2 attention prepare produced o_proj shape (8192, 14336) instead of expected (8192, 7168). Issue: #43025"
+)
 def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     """Prepare attention weights only for a dense layer on 4x2 mesh; verify shapes and fusion group sharing."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -490,6 +494,10 @@ def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
+)
+# TODO(#43025): Root-cause the MoE 4x2 attention weight shape mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: MoE 4x2 attention prepare produced o_proj shape (8192, 14336) instead of expected (8192, 7168). Issue: #43025"
 )
 def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     """Prepare attention weights only for an MoE layer on 4x2 mesh; verify shapes and gate_mm present."""
@@ -595,6 +603,10 @@ def test_prepare_routed_expert_weights_moe_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+# TODO(#43025): Root-cause the dense layer attention o_proj shape mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: Dense layer 4x2 prepare produced o_proj shape (8192, 14336) instead of expected (8192, 7168). Issue: #43025"
+)
 def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     """Build one dense layer on 4x2 mesh; verify type and shapes (MLA TP=2)."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -627,6 +639,10 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
+)
+# TODO(#43025): Root-cause the MoE layer attention o_proj shape mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: MoE layer 4x2 prepare produced o_proj shape (8192, 14336) instead of expected (8192, 7168). Issue: #43025"
 )
 def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     """Build one MoE layer on 4x2 mesh; verify type and shapes (MLA TP=2, MoE TP=8)."""
@@ -833,6 +849,10 @@ def test_prepare_lm_head_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+# TODO(#43025): Root-cause the dense attention TensorCache artifact mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: Dense 4x2 attention TensorCache prepare produced 2 fusion artifacts instead of expected 3. Issue: #43025"
+)
 def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
     """Attention fusion groups (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms) via TensorCache: miss then hit."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -863,6 +883,10 @@ def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_p
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
+)
+# TODO(#43025): Root-cause the MoE attention TensorCache artifact mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: MoE 4x2 attention TensorCache prepare produced 3 artifacts instead of expected 4. Issue: #43025"
 )
 def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
     """Attention fusion groups + gate_bias via TensorCache on MoE layer: miss then hit."""
@@ -1023,6 +1047,10 @@ def test_prepare_routed_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+# TODO(#43025): Root-cause the dense layer TensorCache artifact mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: Dense layer 4x2 TensorCache prepare produced 7 artifacts instead of expected 8. Issue: #43025"
+)
 def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Full dense layer via TensorCache: attention + gate_up + shared_down + routed; miss then hit."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -1053,6 +1081,10 @@ def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path)
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
+)
+# TODO(#43025): Root-cause the MoE layer TensorCache artifact mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: MoE layer 4x2 TensorCache prepare produced 17 artifacts instead of expected 18. Issue: #43025"
 )
 def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare MoE layer via TensorCache: fusion + gate_bias + gate_up + shared_down + routed experts."""

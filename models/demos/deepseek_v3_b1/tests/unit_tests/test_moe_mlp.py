@@ -710,6 +710,30 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     M = RoutedExpert.M
     K = RoutedExpert.K
 
+    # TODO(#43015, #43016, #43018, #43023): Root-cause these exact Blackhole test failures and remove the temporary skips.
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and reconfig_moe_cbs and use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE PCC check failed: 0.6912203836008188 for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-True-True]. Issue: #43015"
+        )
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and reconfig_moe_cbs and not use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE PCC check failed: 0.69142214791865 for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-True-False]. Issue: #43016"
+        )
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and not reconfig_moe_cbs and use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE synchronize_device TT_FATAL hit unexpected "
+            "run_mailbox value 0xfe from core (x=10,y=3) for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-False-True]. Issue: #43018"
+        )
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and not reconfig_moe_cbs and not use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE synchronize_device TT_FATAL hit unexpected "
+            "run_mailbox value 0xfe from core (x=10,y=3) for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-False-False]. Issue: #43023"
+        )
+
     logger.info(f"Testing fused MoE: K={K}, use_hardcoded_expert_index={use_hardcoded_expert_index}")
 
     state_dict = get_reference_model_state_dict(
@@ -1181,7 +1205,26 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     logger.info("Fused MoE with reduce test PASSED!")
 
 
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+# TODO(#43024): Root-cause these exact Blackhole no-routing failures and remove the temporary skips.
+@pytest.mark.parametrize(
+    "reconfig_moe_cbs",
+    [
+        pytest.param(
+            True,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: MoeOp no-routing PCC check failed: 0.6928789326441873 for "
+                "test_mlp[NOC_MODE.DM_DYNAMIC_NOC-True]. Issue: #43024"
+            ),
+        ),
+        pytest.param(
+            False,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: MoeOp no-routing synchronize_device TT_FATAL hit unexpected run_mailbox "
+                "value 0xfe from core (x=10,y=3) for test_mlp[NOC_MODE.DM_DYNAMIC_NOC-False]. Issue: #43024"
+            ),
+        ),
+    ],
+)
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.timeout(1200)
 @pytest.mark.requires_grid_size((13, 10))

@@ -3767,6 +3767,8 @@ def test_d2h(
     indirect=True,
 )
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
+# TODO(#42720): Investigate the bh_galaxy hang/error and remove this temporary skip.
+@pytest.mark.skip(reason="Hang or error when tested on bh_galaxy. Issue: #42720")
 def test_d2d_to_d2h_pipeline(
     bh_2d_mesh_device,
     use_fp32,
@@ -4073,6 +4075,8 @@ def test_d2d_to_d2h_pipeline(
     indirect=True,
 )
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
+# TODO(#42720): Investigate the bh_galaxy hang/error and remove this temporary skip.
+@pytest.mark.skip(reason="[SKIP REASON]: hang or error when tested on bh_galaxy")
 def test_4stage_galaxy_1_iteration(
     bh_2d_mesh_device,
     use_fp32,
@@ -4407,6 +4411,10 @@ def test_4stage_galaxy_1_iteration(
     indirect=True,
 )
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
+# TODO: Investigate the bh_galaxy Fabric Router Sync timeout and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: Fabric Router Sync timeout after 10000 ms on bh_galaxy. Device 3: Expected status 0xa2b2c2d2, got 0xa1b1c1d1"
+)
 def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
@@ -4478,6 +4486,11 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_p
         }
     ],
     indirect=True,
+)
+# TODO(#43012): Root-cause this 4x2 FABRIC_2D mesh setup timeout and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: persistent LM-head pipeline mesh_device setup hits Fabric Router Sync timeout after "
+    "10000 ms on bh_galaxy. Device 3: Expected status 0xa2b2c2d2, got 0xa1b1c1d1. Issue: #43012"
 )
 @pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_persistent_mode(mesh_device, use_fp32, device_params):
@@ -4693,6 +4706,11 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
     ],
     indirect=True,
 )
+# TODO(#43012): Root-cause this 4x2 FABRIC_2D mesh setup timeout and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: persistent LM-head real-weights pipeline mesh_device setup hits Fabric Router Sync "
+    "timeout after 10000 ms on bh_galaxy. Device 3: Expected status 0xa2b2c2d2, got 0xa1b1c1d1. Issue: #43012"
+)
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_state_dict):
     """
@@ -4802,6 +4820,12 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
         }
     ],
     indirect=True,
+)
+# TODO(#43085): Root-cause this 4x2 FABRIC_2D_TORUS_Y mesh setup timeout and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: persistent LM-head pod mesh_device setup hits Fabric Router Sync timeout after "
+    "10000 ms on bh_galaxy with FabricConfig.FABRIC_2D_TORUS_Y. Device 0: Expected status 0xa2b2c2d2, "
+    "got 0xa0b0c0d0. Issue: #43085"
 )
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
