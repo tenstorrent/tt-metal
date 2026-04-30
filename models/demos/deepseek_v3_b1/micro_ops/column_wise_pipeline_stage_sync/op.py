@@ -47,6 +47,8 @@ class ColumnWisePipelineStageSync:
 
         if entry_device_mesh_col == exit_device_mesh_col:
             raise ValueError("entry and exit mesh columns cannot be the same")
+        if entry_device_mesh_col >= 2 or exit_device_mesh_col >= 2:
+            raise ValueError("requires operating on a 2 column mesh")
 
         # mesh details
         mesh_shape = mesh_device.shape
