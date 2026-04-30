@@ -369,11 +369,13 @@ class TtMolmo2TextAttention(LightweightModule):
         k_rotated = ttnn.experimental.rotary_embedding(k_pre, rot_mats[0], rot_mats[1])
         ttnn.deallocate(k_pre)
 
-        # Slice back to original seq_len (rotary_embedding pads to tile multiple)
+        # Slice back to original seq_len (rotary_embedding pads to tile multiple).
+        # Do NOT deallocate q_rotated/k_rotated here: when seq_len is tile-aligned
+        # (e.g. after power-of-2 padding), the slice IS the same tensor and an
+        # explicit deallocate would free q/k while they're still in use.
+        # They are freed implicitly when q and k go out of scope below.
         q = q_rotated[:, :, :seq_len, :]
         k = k_rotated[:, :, :seq_len, :]
-        ttnn.deallocate(q_rotated)
-        ttnn.deallocate(k_rotated)
 
         # KV cache fill: cast to bfloat8_b to match cache dtype
         keys = kv_cache[0] if kv_cache else self.layer_past[0]
