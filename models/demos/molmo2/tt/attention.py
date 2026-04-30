@@ -396,8 +396,8 @@ class TtMolmo2TextAttention(LightweightModule):
             pad_len = S_padded - seq_len
 
             def _pad_seq(t, n_heads):
-                pad = ttnn.zeros(
-                    [1, n_heads, pad_len, self.padded_head_dim],
+                pad = ttnn.from_torch(
+                    torch.zeros(1, n_heads, pad_len, self.padded_head_dim, dtype=torch.bfloat16),
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.mesh_device,
