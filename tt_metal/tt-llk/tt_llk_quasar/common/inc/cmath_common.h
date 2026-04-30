@@ -142,31 +142,6 @@ inline void _inc_dst_addr_()
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, NUM_ROWS, p_setrwc::SET_D);
 }
 
-/**
- * @brief Sets destination register base address depending on tile idx
- * @param tile_idx: Tile index in the dest reg
- * 16bit dest reg data format -> tile_idx = 0 - 7
- * 32bit dest reg data format -> tile_idx = 0 - 3
- */
-template <ckernel::trisc::DstTileShape TILE_SHAPE>
-inline void _set_dst_write_addr_(const std::uint32_t tile_index)
-{
-    const std::uint32_t tile_shape_idx =
-        (TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x16) ? 5 : 4);
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
-    ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
-}
-
-inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
-{
-    const std::uint32_t tile_shape_idx =
-        (num_rows_per_tile == 64)
-            ? 6
-            : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
-    ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
-}
-
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2A src is relative to dest_section_base + dest_counter.
