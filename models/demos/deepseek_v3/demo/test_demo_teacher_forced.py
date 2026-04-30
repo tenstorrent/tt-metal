@@ -221,56 +221,65 @@ def test_demo_teacher_forcing_accuracy(
         f.write("\n")
     logger.info("Saved {} prompt outputs to {}", len(output_records), GENERATED_OUTPUTS_FILE)
 
-    # Always validate teacher-forced decode IDs before trusting aggregate top-k stats.
+    # Teacher-forcing contract: every user must receive the exact forced decode from the reference.
+    # Per-token top-1 / top-5 rates are always recomputed here; run_demo aggregates are logged only
+    overall_top1_matches = 0
+    overall_top5_matches = 0
+    overall_compared = 0
     for idx, (entry, gen) in enumerate(zip(entries, generations)):
-        expected_forced = entry["generated_tokens"][0].tolist()[:max_new_tokens]
-        got_forced = [int(x) for x in gen.get("tokens", [])]
+        gen_tokens = gen.get("tokens", [])
+        expected_forced = entry["generated_tokens"][0, :max_new_tokens].tolist()
+        got_forced = [int(x) for x in gen_tokens][:max_new_tokens]
         assert got_forced == expected_forced, (
             f"Prompt {idx}: teacher-forced token mismatch.\n"
             f"First 20 expected: {expected_forced[:20]}\n"
             f"First 20 got     : {got_forced[:20]}"
         )
 
+        tt_preds = [int(x) for x in gen.get("predicted_tokens", [])]
+        top5_tokens = entry["top5_tokens"]
+        tf_prompt_len = int(entry["tf_prompt_len"])
+        gen_len = int(entry["generated_tokens"].shape[1])
+        compared = min(len(tt_preds), gen_len, max_new_tokens)
+        assert compared > 0, f"Prompt {idx}: no tokens available to compare"
+
+        for i in range(compared):
+            pos = tf_prompt_len + i
+            hf_top5 = top5_tokens[pos].tolist()
+            hf_top1 = hf_top5[0]
+            tt_pred = tt_preds[i]
+            if tt_pred == hf_top1:
+                overall_top1_matches += 1
+            if tt_pred in hf_top5:
+                overall_top5_matches += 1
+            overall_compared += 1
+
+    total_top1 = overall_top1_matches / overall_compared if overall_compared else 0.0
+    total_top5 = overall_top5_matches / overall_compared if overall_compared else 0.0
+
     statistics = results.get("statistics", {})
     agg_top1 = statistics.get("teacher_forcing_top1")
     agg_top5 = statistics.get("teacher_forcing_top5")
     agg_total = statistics.get("teacher_forcing_total_tokens")
-
-    if agg_top1 is not None and agg_top5 is not None and agg_total is not None and agg_total > 0:
-        total_top1 = float(agg_top1)
-        total_top5 = float(agg_top5)
-        overall_compared = int(agg_total)
+    if agg_top1 is not None and agg_top5 is not None and agg_total is not None and int(agg_total) > 0:
         logger.info(
-            "Using aggregate accuracy from run_demo: {} tokens, top1={:.2%}, top5={:.2%}",
-            overall_compared,
-            total_top1,
-            total_top5,
+            "run_demo aggregate teacher_forcing (informational): {} tokens, top1={:.2%}, top5={:.2%}",
+            int(agg_total),
+            float(agg_top1),
+            float(agg_top5),
         )
-    else:
-        overall_top1_matches = 0
-        overall_top5_matches = 0
-        overall_compared = 0
-        for idx, (entry, gen) in enumerate(zip(entries, generations)):
-            tt_preds = [int(x) for x in gen.get("predicted_tokens", [])]
-            top5_tokens = entry["top5_tokens"]
-            tf_prompt_len = int(entry["tf_prompt_len"])
-            gen_len = int(entry["generated_tokens"].shape[1])
-            compared = min(len(tt_preds), gen_len, max_new_tokens)
-            assert compared > 0, f"Prompt {idx}: no tokens available to compare"
-
-            for i in range(compared):
-                pos = tf_prompt_len + i
-                hf_top5 = top5_tokens[pos].tolist()
-                hf_top1 = hf_top5[0]
-                tt_pred = tt_preds[i]
-                if tt_pred == hf_top1:
-                    overall_top1_matches += 1
-                if tt_pred in hf_top5:
-                    overall_top5_matches += 1
-                overall_compared += 1
-
-        total_top1 = overall_top1_matches / overall_compared if overall_compared else 0.0
-        total_top5 = overall_top5_matches / overall_compared if overall_compared else 0.0
+        if overall_compared > 0 and abs(float(agg_top1) - total_top1) > 5e-4:
+            logger.warning(
+                "run_demo teacher_forcing_top1 {:.6f} vs recomputed from predictions {:.6f}",
+                float(agg_top1),
+                total_top1,
+            )
+        if overall_compared > 0 and abs(float(agg_top5) - total_top5) > 5e-4:
+            logger.warning(
+                "run_demo teacher_forcing_top5 {:.6f} vs recomputed from predictions {:.6f}",
+                float(agg_top5),
+                total_top5,
+            )
 
     logger.info(
         "Aggregate teacher-forcing accuracy over {} prompts / {} tokens: top1={:.2%}, top5={:.2%}",
