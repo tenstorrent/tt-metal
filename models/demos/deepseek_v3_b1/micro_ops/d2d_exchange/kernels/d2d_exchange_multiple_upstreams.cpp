@@ -250,15 +250,15 @@ void kernel_main() {
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        downstream_fabric_connection.set_stateful_cmd_bufs(
-            downstream_stateful_data_cmd_buf, downstream_stateful_sync_cmd_buf);
+        tt::tt_fabric::fabric_detail::set_stateful_cmd_buf_pair(
+            downstream_fabric_connection, downstream_stateful_data_cmd_buf, downstream_stateful_sync_cmd_buf);
     }
     if constexpr (use_fabric_on_receiver) {
         upstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
         if constexpr (use_fabric_on_sender) {
-            upstream_fabric_connection.set_stateful_cmd_bufs(
-                upstream_dual_stateful_data_cmd_buf, upstream_dual_stateful_sync_cmd_buf);
+            tt::tt_fabric::fabric_detail::set_stateful_cmd_buf_pair(
+                upstream_fabric_connection, upstream_dual_stateful_data_cmd_buf, upstream_dual_stateful_sync_cmd_buf);
         }
     }
 
