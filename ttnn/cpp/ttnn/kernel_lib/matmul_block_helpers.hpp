@@ -168,6 +168,21 @@ struct NoPreKBlock {
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
  *                     input CB waits. Receives (block, num_k_blocks, is_last).
  *                     Use for per-K-block preprocessing such as in0_transpose.
+ *   pin_interm_to_captured_base
+ *                     Default false. When true, the helper captures interm_buf's
+ *                     fifo_rd_ptr / fifo_wr_ptr at entry and resets them per K-block
+ *                     (and once after the K-loop on the pack_last_to_interm path) to
+ *                     keep interm_buf operating at a fixed L1 base across all blocks.
+ *                     Required when interm_buf is allocated to alias the output buffer
+ *                     in L1 (e.g. conv2d's `partials_cb_uses_output=true` path) — the
+ *                     K-loop's natural fifo advance would otherwise wrap and overwrite
+ *                     previously packed output. Pin pattern matches conv2d's original
+ *                     manual K-loop:
+ *                       pack_last_to_interm:        rd+wr reset for block < num-1
+ *                       !pack_last_to_interm: rd reset for block < num-1; wr reset for
+ *                                             block < num-2 (so the last reload still
+ *                                             finds the second-to-last block's data at
+ *                                             advanced wr_ptr).
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
@@ -264,6 +279,7 @@ template <
     bool retain_in1 = false,
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock,
+    bool pin_interm_to_captured_base = false,
     typename Buf = ::experimental::CircularBuffer>
 ALWI void matmul_block(
     Buf& in0_buf,

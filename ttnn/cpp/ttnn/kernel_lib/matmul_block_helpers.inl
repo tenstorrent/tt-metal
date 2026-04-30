@@ -99,6 +99,7 @@ template <
     bool retain_in1,
     typename PostComputeFn,
     typename PreKBlockFn,
+    bool pin_interm_to_captured_base,
     typename Buf>
 ALWI void matmul_block(
     Buf& in0_buf,
@@ -172,6 +173,18 @@ ALWI void matmul_block(
     ASSERT(in1_cb_id != out_cb_id);
 
     ASSERT(out_num_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
+
+    // Capture interm_buf rd/wr ptrs once at entry. Used by the pin_interm_to_captured_base
+    // path to keep interm_buf operating at a fixed L1 base across the K-loop, matching the
+    // original conv2d kernel's per-K-block fifo reset behavior. The initializers are
+    // unconditional so the compiler keeps the locals when pin=true, but they're unused
+    // (and DCE'd) when pin=false.
+    [[maybe_unused]] uint32_t interm_pin_rd_ptr = 0;
+    [[maybe_unused]] uint32_t interm_pin_wr_ptr = 0;
+    if constexpr (pin_interm_to_captured_base) {
+        UNPACK((interm_pin_rd_ptr = get_local_cb_interface(interm_cb_id).fifo_rd_ptr));
+        PACK((interm_pin_wr_ptr = get_local_cb_interface(interm_cb_id).fifo_wr_ptr));
+    }
 
     for (uint32_t b = 0; b < batch; b++) {
         bool enable_reload = false;
@@ -325,6 +338,14 @@ ALWI void matmul_block(
                         }
                         tile_regs_wait();
 
+                        if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
+                            // Pack-DF must match interm_cb format for non-last spills. Without this,
+                            // pack DF stays at whatever the previous op (kernel-entry mm_block_init,
+                            // or a tilize/transpose pre_k_block) configured — typically the output
+                            // CB's format — and intermediate spills land in the wrong format. Mirrors
+                            // conv2d's per-K-block `pack_reconfig_data_format(curr_matmul_out_cb)`.
+                            PACK((pack_reconfig_data_format(interm_cb_id)));
+                        }
                         if constexpr (packer_l1_acc) {
                             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
                         }
@@ -387,6 +408,42 @@ ALWI void matmul_block(
                 }
             }
 
+            // pin_interm_to_captured_base: mirror conv2d's per-K-block fifo reset so the
+            // K-loop's natural rd/wr ptr advance doesn't desync from the output buffer when
+            // interm_buf aliases out_buf in L1. See the helper's @param docstring for the
+            // why; the iteration logic is conv2d's original (lines 478-510) verbatim.
+            //
+            // pack_last_to_interm  : reset rd+wr while block < num-1     (original FUSE_BIAS path).
+            // !pack_last_to_interm : reset rd while block < num-1, reset wr while block < num-2 —
+            //                        the wr ptr is allowed to advance one block on the
+            //                        second-to-last iteration so the last K-block's reload
+            //                        finds those partials at advanced wr_ptr (original
+            //                        !FUSE_BIAS path).
+            // packer_l1_acc tightens the wr/rd reset to block < num-2 in the !pack_last path,
+            // matching the original kernel's L1_acc drain bound.
+            if constexpr (pin_interm_to_captured_base) {
+                if (num_k_blocks > 1) {
+                    if constexpr (pack_last_to_interm) {
+                        if (block < num_k_blocks - 1) {
+                            UNPACK((get_local_cb_interface(interm_cb_id).fifo_rd_ptr = interm_pin_rd_ptr));
+                            PACK((get_local_cb_interface(interm_cb_id).fifo_wr_ptr = interm_pin_wr_ptr));
+                        }
+                    } else if constexpr (packer_l1_acc) {
+                        if (block < num_k_blocks - 2) {
+                            UNPACK((get_local_cb_interface(interm_cb_id).fifo_rd_ptr = interm_pin_rd_ptr));
+                            PACK((get_local_cb_interface(interm_cb_id).fifo_wr_ptr = interm_pin_wr_ptr));
+                        }
+                    } else {
+                        if (block < num_k_blocks - 1) {
+                            UNPACK((get_local_cb_interface(interm_cb_id).fifo_rd_ptr = interm_pin_rd_ptr));
+                        }
+                        if (block < num_k_blocks - 2) {
+                            PACK((get_local_cb_interface(interm_cb_id).fifo_wr_ptr = interm_pin_wr_ptr));
+                        }
+                    }
+                }
+            }
+
             // retain_in0: SDPA reuses Q across K chunks, so caller keeps in0 front
             // on the last iteration. Intermediate blocks always pop.
             if constexpr (!retain_in0) {
@@ -407,6 +464,15 @@ ALWI void matmul_block(
                     in1_buf.pop_front(in1_block_num_tiles);
                 }
             }
+        }
+
+        // pin_interm_to_captured_base + pack_last_to_interm: the last K-block above advanced
+        // wr_ptr by one block (no per-iter reset on the last block), and rd_ptr by one block
+        // (from its reload pop). Restore rd_ptr so the downstream consumer (bias-add, untilize)
+        // reads from the same L1 cell where the last K-block packed. Mirrors conv2d's
+        // original line 535: `matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output`.
+        if constexpr (pin_interm_to_captured_base && pack_last_to_interm) {
+            UNPACK((get_local_cb_interface(interm_cb_id).fifo_rd_ptr = interm_pin_rd_ptr));
         }
     }
 }
