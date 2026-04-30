@@ -58,10 +58,8 @@ class DotsVisionModelArgs(DotsModelArgs):
         if hf_config is None and os.getenv("HF_MODEL") is None:
             os.environ["HF_MODEL"] = "rednote-hilab/dots.mocr"
 
-        if not args:
-            super().__init__(mesh_device, hf_config=hf_config, **kwargs)
-        else:
-            super().__init__(*args, hf_config=hf_config, **kwargs)
+        init_args = (mesh_device,) if not args else args
+        super().__init__(*init_args, hf_config=hf_config, **kwargs)
 
         if hf_config is None:
             hf_config = getattr(self, "hf_config", None)

@@ -768,7 +768,6 @@ def run_ttnn_backend(
                         f"[TTNN] Switching text_qkv_permute {int(bool(text_qkv_permute))} -> {int(best_perm)} "
                         f"(PCC {p_base} -> {best_p})"
                     )
-                    text_qkv_permute = best_perm
                     logits = best_logits
 
         ttft = time.perf_counter() - t0
@@ -806,17 +805,14 @@ def run_ttnn_backend(
         return decoded
     finally:
         # Explicitly drop objects that may hold MeshDevice references before closing the mesh.
-        try:
-            if generator is not None:
-                del generator
-            if visual is not None:
-                del visual
-            if tt_model is not None:
-                del tt_model
-            if ref is not None:
-                del ref
-        except Exception:
-            pass
+        if generator is not None:
+            del generator
+        if visual is not None:
+            del visual
+        if tt_model is not None:
+            del tt_model
+        if ref is not None:
+            del ref
         try:
             import gc
 
@@ -833,15 +829,10 @@ def run_ttnn_backend(
             close_dots_mesh_device(mesh_device)
         finally:
             # Drop Python refs to mesh wrappers so nanobind can tear down cleanly at interpreter exit.
-            try:
+            if "mesh_device" in locals():
                 del mesh_device
-            except Exception:
-                pass
-            try:
-                if parent_mesh_ref is not None:
-                    del parent_mesh_ref
-            except Exception:
-                pass
+            if parent_mesh_ref is not None:
+                del parent_mesh_ref
             try:
                 import gc
 

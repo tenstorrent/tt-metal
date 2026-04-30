@@ -87,7 +87,9 @@ class DotsTransformer(TTTransformer):
             )
         return outputs
 
-    def prepare_inputs_prefill(self, tokens, rot_mats=None, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_inputs_prefill(
+        self, tokens, rot_mats=None, start_pos=0, page_table=None, chunk_page_table=None, **kwargs
+    ):
         """
         Prepare prefill inputs where ``tokens`` is actually a **fused embedding tensor**.
 
@@ -109,6 +111,7 @@ class DotsTransformer(TTTransformer):
                 start_pos=start_pos,
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
+                **kwargs,
             )
 
         assert tokens.dim() == 3, "tokens should be embeddings [B, S, D]"

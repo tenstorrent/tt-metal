@@ -186,8 +186,6 @@ class Generator(WarmupForwardMixin):
             ttnn = get_ttnn()
             if ttnn is None:
                 raise RuntimeError("ttnn is required for prefill_forward")
-            # No env-var dependency: keep debug sync disabled by default.
-            debug_sync = False
             t0 = time.time()
             logger.info(f"Prefill(single-user): preparing inputs seq_len={seq_len} user_id={user_id}")
 
@@ -310,9 +308,6 @@ class Generator(WarmupForwardMixin):
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
-            if debug_sync:
-                logger.info("Prefill(single-user): synchronizing mesh device")
-                ttnn.synchronize_device(self.mesh_device)
 
             logger.info("Prefill(single-user): transferring logits to host (tt_logits.cpu())")
             logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
@@ -365,4 +360,8 @@ class Generator(WarmupForwardMixin):
                 ttnn.release_trace(self.mesh_device, self.trace_id)
             if hasattr(self, "trace_id_text"):
                 ttnn.release_trace(self.mesh_device, self.trace_id_text)
-        self._ttt.__del__()
+        if hasattr(self, "_ttt"):
+            if hasattr(self._ttt, "close"):
+                self._ttt.close()
+            elif hasattr(self._ttt, "cleanup"):
+                self._ttt.cleanup()

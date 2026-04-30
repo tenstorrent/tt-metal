@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -444,95 +445,47 @@ class DotsMlpTt(LightweightModule):
             self.b1 = self.b2 = self.b3 = None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Host fallback: avoids TT matmul shape strictness when physical padding persists (K=1632 vs 1536).
-        # Keep always-on for now (no env-var dependency).
-        host_mlp = True
-        if host_mlp:
-            xt = ttnn.to_torch(x)  # [1, 1, S, D_pad]
-            ttnn.deallocate(x)
-            xt = xt[..., : int(self.cfg.embed_dim)].to(torch.float32)
-            # [S, D]
-            x2 = xt.reshape(-1, xt.shape[-1])
-            y1 = x2 @ self._torch_w1.T
-            y3 = x2 @ self._torch_w3.T
-            if self._torch_b1 is not None:
-                y1 = y1 + self._torch_b1
-            if self._torch_b3 is not None:
-                y3 = y3 + self._torch_b3
-            mid = torch.nn.functional.silu(y1) * y3
-            out = mid @ self._torch_w2.T
-            if self._torch_b2 is not None:
-                out = out + self._torch_b2
-            out = out.to(torch.bfloat16).reshape(xt.shape[0], xt.shape[1], xt.shape[2], -1).contiguous()
-            return ttnn.from_torch(
-                out,
-                dtype=ttnn.bfloat16,
-                device=self.mesh,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        if int(x.shape[-1]) < int(self.cfg.embed_dim):
+            raise RuntimeError(
+                f"DotsMlpTt: unexpected hidden dim {int(x.shape[-1])} < embed_dim {int(self.cfg.embed_dim)}"
             )
-
-        # Some upstream ops can leave the last dim *physically* padded (seen as matmul K=1632)
-        # even when the logical dim prints as 1536. When that happens, a TILE-layout slice may
-        # not remove the padding, and matmul validation fails. Most robust: D2H -> slice -> H2D.
-        #
-        # No env-var dependency: keep trimming behavior always enabled and debug disabled.
-        debug_shapes = False
-        force_host_trim = True
-        need_trim = int(x.shape[-1]) != int(self.cfg.embed_dim)
-        if force_host_trim or need_trim:
-            if int(x.shape[-1]) < int(self.cfg.embed_dim):
-                raise RuntimeError(
-                    f"DotsMlpTt: unexpected hidden dim {int(x.shape[-1])} < embed_dim {int(self.cfg.embed_dim)}"
+        xt = ttnn.to_torch(x)
+        # xt: [1, 1, S, D_pad]
+        xt = xt[..., : int(self.cfg.embed_dim)].contiguous()
+        ttnn.deallocate(x)
+        x = ttnn.from_torch(
+            xt,
+            dtype=ttnn.bfloat16,
+            device=self.mesh,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        # Defensive: some TTNN versions may still materialize padded tile widths even when the
+        # logical shape is 1536. Verify via a quick D2H; if still padded, re-upload the trimmed tensor.
+        try:
+            xt2 = ttnn.to_torch(x)
+            if int(xt2.shape[-1]) != int(self.cfg.embed_dim):
+                xt2 = xt2[..., : int(self.cfg.embed_dim)].contiguous()
+                ttnn.deallocate(x)
+                x = ttnn.from_torch(
+                    xt2,
+                    dtype=ttnn.bfloat16,
+                    device=self.mesh,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
                 )
-            xt = ttnn.to_torch(x)
-            # xt: [1, 1, S, D_pad]
-            xt = xt[..., : int(self.cfg.embed_dim)].contiguous()
-            ttnn.deallocate(x)
-            x = ttnn.from_torch(
-                xt,
-                dtype=ttnn.bfloat16,
-                device=self.mesh,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        except Exception:
+            pass
+        try:
+            xt_dbg = ttnn.to_torch(x)
+            logger.info(
+                f"[DotsMlpTt] pre-linear shapes: ttnn={list(x.shape)} torch={list(xt_dbg.shape)} "
+                f"embed_dim={int(self.cfg.embed_dim)}"
             )
-            # Defensive: some TTNN versions may still materialize padded tile widths even when the
-            # logical shape is 1536. Verify via a quick D2H; if still padded, re-upload the trimmed tensor.
-            try:
-                xt2 = ttnn.to_torch(x)
-                if int(xt2.shape[-1]) != int(self.cfg.embed_dim):
-                    if debug_shapes:
-                        from loguru import logger
-
-                        logger.warning(
-                            f"[DotsMlpTt] host-trim verify: still padded after upload "
-                            f"(torch_last_dim={int(xt2.shape[-1])}, embed_dim={int(self.cfg.embed_dim)})"
-                        )
-                    xt2 = xt2[..., : int(self.cfg.embed_dim)].contiguous()
-                    ttnn.deallocate(x)
-                    x = ttnn.from_torch(
-                        xt2,
-                        dtype=ttnn.bfloat16,
-                        device=self.mesh,
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-                    )
-            except Exception:
-                pass
-        if debug_shapes:
-            from loguru import logger
-
-            try:
-                xt_dbg = ttnn.to_torch(x)
-                logger.info(
-                    f"[DotsMlpTt] pre-linear shapes: ttnn={list(x.shape)} torch={list(xt_dbg.shape)} "
-                    f"embed_dim={int(self.cfg.embed_dim)}"
-                )
-            except Exception as e:
-                logger.info(f"[DotsMlpTt] pre-linear shapes: ttnn={list(x.shape)} (torch read failed: {e})")
+        except Exception as e:
+            logger.info(f"[DotsMlpTt] pre-linear shapes: ttnn={list(x.shape)} (torch read failed: {e})")
         s = x.shape[-2]
         if s >= 1024:
             x = ttnn.reshape(x, (1, s // 1024, 1024, -1))
