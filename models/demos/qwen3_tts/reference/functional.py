@@ -821,7 +821,7 @@ def codebook_lookup(
     Returns:
         Embeddings of shape [batch, seq_len, latent_dim]
     """
-    batch_size, num_quantizers, seq_len = token_ids.shape
+    _, num_quantizers, seq_len = token_ids.shape
 
     # Sum embeddings from all codebooks
     embeddings = None
