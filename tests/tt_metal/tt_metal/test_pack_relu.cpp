@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/buffer_kernel_binding.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
@@ -109,16 +110,10 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
     detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(
-        program,
-        reader,
-        core,
-        {dram_buffer_src_addr, 0, num_tiles, static_cast<uint32_t>(src_dram_buffer->aligned_page_size())});
-    SetRuntimeArgs(
-        program,
-        writer,
-        core,
-        {dram_buffer_dst_addr, 0, num_tiles, static_cast<uint32_t>(dst_dram_buffer->aligned_page_size())});
+    using tt::tt_metal::experimental::BindBufferToKernel;
+    using tt::tt_metal::experimental::BufferRole;
+    BindBufferToKernel(program, reader, core, *src_dram_buffer, num_tiles, BufferRole::Read);
+    BindBufferToKernel(program, writer, core, *dst_dram_buffer, num_tiles, BufferRole::Write);
     SetRuntimeArgs(program, compute, core, {relu_config});
 
     detail::LaunchProgram(dev, program, true);

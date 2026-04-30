@@ -24,6 +24,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_kernel_binding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_page_mapping.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_accessor_args.cpp

@@ -9,6 +9,7 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/buffer_kernel_binding.hpp>
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -540,29 +541,10 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {cb_index, /*use_dfbs=*/false}});
 
-        // DRAM buffers use page_size = buffer_size (whole buffer), so compute
-        // the per-tile stride directly. single_tile_size is the real per-tile
-        // stride here since tiles are packed contiguously inside the buffer.
-        SetRuntimeArgs(
-            program_,
-            reader_kernel,
-            core,
-            {
-                (uint32_t)src_dram_buffer->address(),
-                0,
-                (uint32_t)num_tiles,
-                single_tile_size,
-            });
-        SetRuntimeArgs(
-            program_,
-            writer_kernel,
-            core,
-            {
-                (uint32_t)dst_dram_buffer->address(),
-                0,
-                (uint32_t)num_tiles,
-                single_tile_size,
-            });
+        using tt::tt_metal::experimental::BindBufferToKernel;
+        using tt::tt_metal::experimental::BufferRole;
+        BindBufferToKernel(program_, reader_kernel, core, *src_dram_buffer, num_tiles, BufferRole::Read);
+        BindBufferToKernel(program_, writer_kernel, core, *dst_dram_buffer, num_tiles, BufferRole::Write);
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());

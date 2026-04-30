@@ -7,6 +7,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/buffer_kernel_binding.hpp>
 #include <functional>
 #include <iomanip>
 #include <map>
@@ -227,20 +228,7 @@ private:
 // Type alias for a shared pointer to a Buffer in DRAM
 using DramBuffer = std::shared_ptr<distributed::MeshBuffer>;
 
-// Generates the runtime arguments for the DRAM kernel
-static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
-    // create_dram_mesh_buffer() configures page_size = byte_size (whole-buffer
-    // single page), so page_size/aligned_page_size would over-return the
-    // stride. Derive per-tile stride from total size / num_tiles instead.
-    const uint32_t per_tile_stride =
-        num_tiles == 0 ? 0 : static_cast<uint32_t>(dram_buffer->device_local_size() / num_tiles);
-    return {
-        static_cast<uint32_t>(dram_buffer->address()),
-        static_cast<uint32_t>(0),
-        static_cast<uint32_t>(num_tiles),
-        per_tile_stride,
-    };
-}
+// (legacy helper removed — runtime args are now packed by BindBufferToKernel)
 
 // Creates a circular buffer (L1 cache) for the specified core and data format
 static CBHandle create_circular_buffer(
@@ -292,8 +280,13 @@ static DramBuffer prepare_reader(
             .compile_args = {DEFAULT_INPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the reader kernel
-    tt_metal::SetRuntimeArgs(
-        program_, reader_kernel, config.core, get_dram_kernel_runtime_arguments(input_dram_buffer, config.num_tiles));
+    tt_metal::experimental::BindBufferToKernel(
+        program_,
+        reader_kernel,
+        config.core,
+        *input_dram_buffer,
+        config.num_tiles,
+        tt_metal::experimental::BufferRole::Read);
 
     return input_dram_buffer;
 }
@@ -324,8 +317,13 @@ static DramBuffer prepare_writer(
             .compile_args = {DEFAULT_OUTPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the writer kernel
-    tt_metal::SetRuntimeArgs(
-        program_, writer_kernel, config.core, get_dram_kernel_runtime_arguments(output_dram_buffer, config.num_tiles));
+    tt_metal::experimental::BindBufferToKernel(
+        program_,
+        writer_kernel,
+        config.core,
+        *output_dram_buffer,
+        config.num_tiles,
+        tt_metal::experimental::BufferRole::Write);
     return output_dram_buffer;
 }
 

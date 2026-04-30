@@ -17,6 +17,7 @@
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/buffer_kernel_binding.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include <tt_stl/assert.hpp>
@@ -111,13 +112,14 @@ static vector<uint32_t> run_mxfp4_typecast(
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
 
     detail::WriteToBuffer(src_buffer, src_vec);
-    // Pass aligned DRAM page stride so the reader/writer advance the DRAM
-    // pointer by the allocator's aligned_page_size (576 for MxFp4 on Quasar
-    // due to 64B DRAM alignment) while the DFB streams native 544-byte tiles.
-    uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
-    SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles, src_dram_stride});
-    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles, dst_dram_stride});
+    // BindBufferToKernel computes the DRAM page stride (= buffer.size() /
+    // num_tiles) and packs {addr, bank_id, num_tiles, stride} into the
+    // kernel's runtime args. The kernel reads them via BoundBuffer<DRAM>, so
+    // it never sees the L1 (544 B) vs DRAM-aligned (576 B) asymmetry.
+    using tt_metal::experimental::BindBufferToKernel;
+    using tt_metal::experimental::BufferRole;
+    BindBufferToKernel(program, reader, core, *src_buffer, num_tiles, BufferRole::Read);
+    BindBufferToKernel(program, writer, core, *dst_buffer, num_tiles, BufferRole::Write);
 
     detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 

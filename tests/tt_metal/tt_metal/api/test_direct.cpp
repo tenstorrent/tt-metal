@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/buffer_kernel_binding.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <iostream>
@@ -259,30 +260,12 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
-    // DRAM buffer is configured with page_size = byte_size (whole buffer),
-    // so aligned_page_size() returns the whole-buffer stride, not per-tile.
-    // Derive the per-tile DRAM stride directly from byte_size / num_tiles.
-    const uint32_t per_tile_stride = static_cast<uint32_t>(byte_size / test_config.num_tiles);
-    tt_metal::SetRuntimeArgs(
-        program_,
-        reader_kernel,
-        test_config.core,
-        {
-            static_cast<uint32_t>(input_dram_byte_address),
-            0,
-            static_cast<uint32_t>(test_config.num_tiles),
-            per_tile_stride,
-        });
-    tt_metal::SetRuntimeArgs(
-        program_,
-        writer_kernel,
-        test_config.core,
-        {
-            static_cast<uint32_t>(output_dram_byte_address),
-            0,
-            static_cast<uint32_t>(test_config.num_tiles),
-            per_tile_stride,
-        });
+    using tt_metal::experimental::BindBufferToKernel;
+    using tt_metal::experimental::BufferRole;
+    BindBufferToKernel(
+        program_, reader_kernel, test_config.core, *input_dram_buffer, test_config.num_tiles, BufferRole::Read);
+    BindBufferToKernel(
+        program_, writer_kernel, test_config.core, *output_dram_buffer, test_config.num_tiles, BufferRole::Write);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -434,10 +417,9 @@ bool reader_datacopy_writer(
 
     uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
-    // DRAM buffer uses page_size = byte_size (whole-buffer), so derive the
-    // per-tile stride directly. byte_size covers all test_config.num_tiles
-    // tiles across all threads; the stride between consecutive tiles in DRAM
-    // is byte_size / test_config.num_tiles.
+    // Multi-threaded case: kernel arg `num_tiles` is per-thread, but DRAM
+    // stride is per-buffer-tile. BindBufferToKernel assumes those are the
+    // same number, so this site keeps the manual SetRuntimeArgs form.
     const uint32_t per_tile_stride = static_cast<uint32_t>(byte_size / test_config.num_tiles);
     tt_metal::SetRuntimeArgs(
         program_,
