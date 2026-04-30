@@ -15,7 +15,9 @@ from models.demos.qwen3_tts.tt.attention import Attention
 from models.demos.qwen3_tts.tt.mlp import MLP
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
-_PREFILL_SEQ = 128
+# Prefill bucket sizes for which we pre-build sharded layernorm configs.
+# Matches SUPPORTED_PREFILL_LENS in demo_full_ttnn_tts.py.
+_PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
 
 
 def _build_sharded_rmsnorm_configs(device, dim: int, num_cores: int, m: int = 32):
@@ -142,17 +144,18 @@ class DecoderLayer(LightweightModule):
         # layout can match the QKV / MLP matmul in0 grid where possible.
         # Talker (hidden=2048): 64 cores (1 tile/core).
         # CodePredictor (hidden=1024): 32 cores.
-        # Sharded RMSNorm configs for decode (m=32) and prefill ISL=128 (m=128).
-        # Pick the largest num_cores ≤ 64 that divides dim/TILE so the output shard
-        # layout matches the QKV / MLP gate-up matmul in0 grid where applicable.
+        # Sharded RMSNorm configs for decode (m=32) and each prefill bucket size.
+        # num_cores: largest ≤ 64 that divides dim/TILE so the output shard layout
+        # matches the QKV / MLP gate-up matmul in0 grid where applicable.
         dim_tiles = hidden_size // 32
         ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
         self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
             device, hidden_size, ln_num_cores, m=32
         )
-        self._prefill_ln_in_memcfg, self._prefill_ln_progcfg = _build_sharded_rmsnorm_configs(
-            device, hidden_size, ln_num_cores, m=_PREFILL_SEQ
-        )
+        # Map bucket seq_len -> (in_memcfg, prog_config).
+        self._prefill_ln_configs = {
+            m: _build_sharded_rmsnorm_configs(device, hidden_size, ln_num_cores, m=m) for m in _PREFILL_SEQS
+        }
 
     def forward(
         self,
@@ -197,10 +200,13 @@ class DecoderLayer(LightweightModule):
         """
         # Resolve which sharded layernorm configs to use (decode-style or prefill-ISL=128).
         seq_len_at_entry = x.shape[-2]
-        prefill_path = mode == "prefill" and seq_len_at_entry == _PREFILL_SEQ
+        prefill_path = mode == "prefill" and seq_len_at_entry in self._prefill_ln_configs
         decode_path = mode == "decode"
-        ln_in_memcfg = self._prefill_ln_in_memcfg if prefill_path else self._decode_ln_in_memcfg
-        ln_progcfg = self._prefill_ln_progcfg if prefill_path else self._decode_ln_progcfg
+        if prefill_path:
+            ln_in_memcfg, ln_progcfg = self._prefill_ln_configs[seq_len_at_entry]
+        else:
+            ln_in_memcfg = self._decode_ln_in_memcfg
+            ln_progcfg = self._decode_ln_progcfg
 
         # Pre-norm attention
         residual = x
