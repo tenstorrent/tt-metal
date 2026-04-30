@@ -6,7 +6,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 
 using namespace tt::tt_metal;
 
