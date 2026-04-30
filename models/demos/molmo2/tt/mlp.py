@@ -3,16 +3,19 @@
 
 """Molmo2 text decoder SwiGLU MLP — column-parallel (TP) layout.
 
-T3K layout (8-way tensor-parallel):
-  w1/w3 (gate/value): column-parallel — each device holds [4096, intermediate/8] columns.
-  w2 (down):          row-parallel    — each device holds [intermediate/8, 4096] rows.
-  After w2: ttnn.all_reduce(cluster_axis=1) combines partial sums.
+Mirrors the text-attention AllGather pattern for trace compatibility:
+  w1/w3 (gate/value): column-parallel — each device [4096, intermediate/8] columns.
+  w2 (down):          replicated      — each device holds the full [intermediate, 4096].
 
-Memory comparison vs replicated (per device, S=34560):
-  Replicated:      w1_out = [S, 12288] bfloat16 ≈ 850 MB/device (OOMs for S > ~10k)
-  Column-parallel: w1_out = [S, 1536]  bfloat16 ≈ 106 MB/device (fits for S=34560)
+After SwiGLU: ttnn.all_gather combines partial [S, intermediate/8] outputs
+into [S, intermediate] on each device, then replicated w2 produces [S, 4096].
 
-PCC vs replicated: 0.999944 (verified by unit test for S=256).
+This is the same pattern as attention column-parallel QKV + AllGather + replicated wo.
+It is trace-safe (AllGather works in decode-trace replay; AllReduce does not).
+
+Memory: AllGather intermediate [S, intermediate] bfloat16 is ≤201 MB at S=8192.
+For S > 8192 (e.g. 384-frame videos), Phase 2 should use AllReduce in the
+non-traced prefill path with row-parallel w2.
 
 Key difference from standard LLaMA SwiGLU:
   ff_proj [24576, 4096] stores value (up) in the FIRST half and gate in the SECOND half.
@@ -28,7 +31,7 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMolmo2TextMLP(LightweightModule):
-    """Text decoder SwiGLU MLP — 8-way column/row-parallel tensor parallelism."""
+    """Text decoder SwiGLU MLP — column-parallel w1/w3 + AllGather + replicated w2."""
 
     def __init__(
         self,
@@ -49,7 +52,7 @@ class TtMolmo2TextMLP(LightweightModule):
 
         layer_name = f"model.transformer.blocks.{layer_num}.mlp"
         cache_name = (
-            (lambda n: weight_cache_path / f"{layer_name}.tp8.{n}")
+            (lambda n: weight_cache_path / f"{layer_name}.tp8ag.{n}")
             if weight_cache_path and not configuration.dummy_weights
             else (lambda _: None)
         )
@@ -64,16 +67,10 @@ class TtMolmo2TextMLP(LightweightModule):
         w_value = ff_proj[: self.intermediate_size]  # [12288, 4096]
         w_gate = ff_proj[self.intermediate_size :]  # [12288, 4096]
 
-        # ShardTensorToMesh(dim=N) shards across ALL devices along dim N.
-        # ShardTensor2dMesh(dims=(row_dim, col_dim)) shards row_dim across mesh rows
-        # and col_dim across mesh cols — with mesh_shape=[1,8], only col_dim is
-        # effectively sharded (1 row = no row sharding). Using ShardTensorToMesh
-        # is simpler and unambiguous (same pattern used by the ViT blocks).
-        col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)  # shard output dim
-        row_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # shard input dim
+        # Column-parallel: shard output (intermediate) dim across devices
+        col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
 
         def _col(w, name):
-            """Column-parallel: shard output dim (last) across 8 devices."""
             return ttnn.as_tensor(
                 w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 4096, 12288] → each device [4096, 1536]
                 dtype=ttnn.bfloat8_b,
@@ -84,29 +81,28 @@ class TtMolmo2TextMLP(LightweightModule):
                 cache_file_name=cache_name(name),
             )
 
-        def _row(w, name):
-            """Row-parallel: shard input dim across 8 devices."""
-            return ttnn.as_tensor(
-                w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 12288, 4096] → each device [1536, 4096]
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=row_mapper,
-                cache_file_name=cache_name(name),
-            )
+        self.w1 = _col(w_gate, "w1_gate_col")
+        self.w3 = _col(w_value, "w3_value_col")
 
-        self.w1 = _col(w_gate, "w1_gate_tp8")
-        self.w3 = _col(w_value, "w3_value_tp8")
-
+        # w2 replicated: each device holds the full [12288, 4096] weight.
+        # After AllGather the SwiGLU output is [S, 12288] on each device,
+        # so replicated w2 computes the full [S, 4096] output independently.
         ff_out = state_dict[f"{layer_name}.ff_out.weight"]  # [4096, 12288]
-        self.w2 = _row(ff_out, "w2_down_tp8")
+        self.w2 = ttnn.as_tensor(
+            ff_out.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 12288, 4096]
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=cache_name("w2_down_replicated"),
+        )
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
-        """Column-parallel SwiGLU: silu(w1(x)) * w3(x) → w2 → AllReduce.
+        """Column-parallel SwiGLU + AllGather + replicated w2.
 
-        Each device computes a [S, intermediate/num_devices] partial result.
-        AllReduce combines the partial w2 outputs into the full [S, 4096] result.
+        Same AllGather pattern as attention (column-parallel QKV → AllGather → replicated wo).
+        Trace-safe: AllGather replays correctly; AllReduce does not.
         """
         w1_out = ttnn.linear(
             x,
@@ -124,7 +120,7 @@ class TtMolmo2TextMLP(LightweightModule):
         )
         ttnn.deallocate(x)
 
-        # silu(gate) * value  (each device: [S, intermediate/num_devices])
+        # silu(gate) * value  — each device: [S, intermediate/num_devices]
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
@@ -135,22 +131,24 @@ class TtMolmo2TextMLP(LightweightModule):
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
-        # Row-parallel w2: each device produces partial [S, 4096] sum
-        w2_out = ttnn.linear(
+        # AllGather: [S, intermediate/num_devices] → [S, intermediate] on each device.
+        # Equivalent to attention's AllGather after per-head computation.
+        # Trace-safe (unlike AllReduce).
+        w2_in_full = ttnn.all_gather(
             w2_in,
+            dim=3,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(w2_in)
+
+        # Replicated w2 projects [S, intermediate] → [S, dim] independently on each device
+        out = ttnn.linear(
+            w2_in_full,
             self.w2,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(w2_in)
-
-        # AllReduce across T3K ring — combines partial sums into full output
-        out = ttnn.all_reduce(
-            w2_out,
-            cluster_axis=1,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(w2_out)
+        ttnn.deallocate(w2_in_full)
         return out
