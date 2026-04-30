@@ -1,5 +1,52 @@
 # TurboQuant KV Cache Quantization
 
+## ⚡ Optimization A — Lookup-Table Attention (2026-04-30)
+
+The biggest unexplored win: replace `dequant K + Q·K matmul` with a
+precomputed lookup table.
+
+**The math** (per Q head, per K position p):
+
+```
+Standard: K_full[d] = centroids[K_idx[d]] * K_norm  (per-element dequant)
+          score = Q · K_full
+
+Lookup:   T[d, c] = Q[d] * centroids[c]              # precompute once
+          score = K_norm * sum_d T[d, K_idx[d]]      # per K position
+```
+
+The trick is that `Q · centroid_for_each_element_of_K` reorganizes into
+`sum over d of (Q[d] * centroid[K_idx[d]])`, and since K_idx[d] indexes
+into a tiny 8-entry table, we can precompute `Q[d] * centroid[c]` for
+all 8 candidates upfront. Per K element drops from a full 28-step
+centroid cascade + matmul contribution to a single gather-and-add.
+
+**Math validated** (`test_lookup_attention.py`): standard and lookup paths
+match at max diff 5.96e-8, cosine 1.000000 on random inputs. Algorithm
+is mathematically equivalent — no accuracy loss.
+
+**Expected impact:**
+- Per-chunk dequant: ~115 K SFPU ops → eliminated
+- Per-chunk QK matmul: a few hundred FPU ops → replaced by 32 K SFPU ops
+- Net: ~3-4× SFPU op reduction on K-attention compute
+- The dequant is most of the +42 ms gap on T3K. Plausibly closes ~30 ms of
+  it, putting Track A K=1 at ~25 ms/tok on T3K (1.8× baseline). Combined
+  with K-split fix → could approach baseline.
+
+**Implementation path:**
+1. ✅ **Python reference** (`turbo_quant/test_lookup_attention.py`) — done.
+2. **TT-NN-level prototype** — implement the lookup using existing
+   `ttnn.matmul` + gather ops to validate end-to-end on hardware. Won't
+   be faster than current kernel (dispatch overhead), but proves the
+   path is viable.
+3. **Fused kernel** — replace `dequant_k_chunk` + `Q*K matmul` in
+   `sdpa_tq_decode.cpp` with the lookup-table version. The output goes
+   into `cb_qk_im` exactly as before, downstream softmax unchanged.
+   Multi-day kernel work.
+4. **V side** — optionally apply similar trick to the V·attention matmul.
+   Less clean (the gather depends on output position d) but ~2× win on
+   V-side compute. Could be deferred.
+
 ## 🎯 4-Step Plan to Match Baseline BFP8 Latency (2026-04-30)
 
 **End goal:** Track B latency ≈ baseline BFP8 latency, with KV cache
