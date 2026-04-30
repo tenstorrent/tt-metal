@@ -15,7 +15,7 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b
-          - llama90b-vl
+          - llama3.2-90b-vision
           - qwen3-32b
           - qwen2.5-32b
           - qwen2.5-coder-32b

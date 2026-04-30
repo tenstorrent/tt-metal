@@ -45,7 +45,7 @@ inline void calculate_lgamma_stirling() {
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, sfpi::RoundMode::NearestEven));
+            res = sfpi::float_to_fp16b(res, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = res;
@@ -78,7 +78,7 @@ inline void calculate_lgamma_adjusted(
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
         } else {
             sfpi::vInt exp = sfpi::exexp(in);
             sfpi::vInt man = sfpi::exman9(in);

@@ -12,9 +12,7 @@ from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceGolden, get_golden_generator
-from helpers.llk_params import (
-    ReducePool,
-)
+from helpers.llk_params import DataFormat, ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
@@ -121,7 +119,21 @@ class ReduceFpu(Fpu):
         enforce_fp32_accumulation = (
             compute_unit.enforce_fp32_accumulation.cpp_enum_value
         )
-        is_int_fpu_en = "false"
+        _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
+        is_int_fpu_en = (
+            "true"
+            if (
+                (
+                    compute_unit.src_a is not None
+                    and compute_unit.src_a.data_format in _int_fpu_formats
+                )
+                or (
+                    compute_unit.src_b is not None
+                    and compute_unit.src_b.data_format in _int_fpu_formats
+                )
+            )
+            else "false"
+        )
 
         # Create a temporary TensorShape object with Src_A tile dimensions
         tile_shape = compute_unit.src_a.tile_shape
