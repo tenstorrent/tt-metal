@@ -21,13 +21,7 @@ from vae.model_pt import SCALING_FACTOR, SHIFT_FACTOR, VaeDecoderPT
 from vae.params import load_weights
 
 import ttnn
-
-DRAM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
-
-
-class LightweightModule:
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
+from models.common.lightweightmodule import LightweightModule
 
 
 class VaeDecoderTTNN(LightweightModule):
@@ -71,9 +65,9 @@ class VaeDecoderTTNN(LightweightModule):
         # conv_in
         x = ttnn.to_layout(latent, ttnn.Layout.TILE, None, memory_config=None)
         ttnn.deallocate(latent, False)
-        nhwc = ttnn.permute(x, [0, 2, 3, 1], memory_config=DRAM, pad_value=0.0)
+        nhwc = ttnn.permute(x, [0, 2, 3, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(x, False)
-        x = ttnn.reshape(nhwc, [1, 1, 4096, 16], memory_config=DRAM)
+        x = ttnn.reshape(nhwc, [1, 1, 4096, 16], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(nhwc, False)
         x = self._conv2d(x, "conv_in", 16, 512, 64, 64, 0, ttnn.Conv2dL1Full)
 
@@ -148,9 +142,9 @@ class VaeDecoderTTNN(LightweightModule):
         x = self._group_norm_silu_from_nchw(x, "conv_norm_out", 128, 512)
         x = self._conv2d(x, "conv_out", 128, 3, 512, 512, 192, ttnn.Conv2dDRAMSliceWidth)
 
-        nhwc = ttnn.reshape(x, [1, 512, 512, 3], memory_config=DRAM)
+        nhwc = ttnn.reshape(x, [1, 512, 512, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x, False)
-        nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=DRAM, pad_value=0.0)
+        nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(nhwc, False)
 
         out = ttnn.to_torch(
@@ -186,52 +180,52 @@ class VaeDecoderTTNN(LightweightModule):
             ),
             compute_config=None,
             slice_config=ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=0),
-            memory_config=DRAM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     # ── GroupNorm + SiLU ──────────────────────────────────────────────────────
 
     def _gn_core(self, gn, gn_inv, gn_eps, weight, bias):
         """GN layout [1,32,cpg,spatial] F32 → normed+affine+SiLU → BF16. Deallocates gn."""
-        s = ttnn.sum(gn, [2, 3], True, memory_config=DRAM, compute_kernel_config=None)
-        mean = ttnn.multiply(s, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        s = ttnn.sum(gn, [2, 3], True, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=None)
+        mean = ttnn.multiply(s, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(s, False)
-        centered = ttnn.subtract(gn, mean, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        centered = ttnn.subtract(gn, mean, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mean, False)
         ttnn.deallocate(gn, False)
 
-        sq = ttnn.multiply(centered, centered, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
-        s2 = ttnn.sum(sq, [2, 3], True, memory_config=DRAM, compute_kernel_config=None)
+        sq = ttnn.multiply(centered, centered, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        s2 = ttnn.sum(sq, [2, 3], True, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=None)
         ttnn.deallocate(sq, False)
-        var = ttnn.multiply(s2, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        var = ttnn.multiply(s2, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(s2, False)
-        var_eps = ttnn.add(var, gn_eps, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        var_eps = ttnn.add(var, gn_eps, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(var, False)
-        inv_std = ttnn.rsqrt(var_eps, fast_and_approximate_mode=False, memory_config=DRAM)
+        inv_std = ttnn.rsqrt(var_eps, fast_and_approximate_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(var_eps, False)
 
-        normed = ttnn.multiply(centered, inv_std, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        normed = ttnn.multiply(centered, inv_std, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(inv_std, False)
         ttnn.deallocate(centered, False)
 
-        scaled = ttnn.multiply(normed, weight, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        scaled = ttnn.multiply(normed, weight, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(normed, False)
-        shifted = ttnn.add(scaled, bias, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        shifted = ttnn.add(scaled, bias, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(scaled, False)
 
-        activated = ttnn.silu(shifted, memory_config=DRAM)
+        activated = ttnn.silu(shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(shifted, False)
-        bf16 = ttnn.typecast(activated, ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        bf16 = ttnn.typecast(activated, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(activated, False)
         return bf16
 
     def _gn_to_conv_fmt(self, bf16, channels, h, w):
         """GN-layout BF16 → reshape NCHW → permute NHWC → reshape conv format."""
-        nchw = ttnn.reshape(bf16, [1, channels, h, w], memory_config=DRAM)
+        nchw = ttnn.reshape(bf16, [1, channels, h, w], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(bf16, False)
-        nhwc = ttnn.permute(nchw, [0, 2, 3, 1], memory_config=DRAM, pad_value=0.0)
+        nhwc = ttnn.permute(nchw, [0, 2, 3, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(nchw, False)
-        conv_fmt = ttnn.reshape(nhwc, [1, 1, h * w, channels], memory_config=DRAM)
+        conv_fmt = ttnn.reshape(nhwc, [1, 1, h * w, channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(nhwc, False)
         return conv_fmt
 
@@ -242,12 +236,12 @@ class VaeDecoderTTNN(LightweightModule):
         cpg = channels // 32
         spatial = hw * hw
 
-        f32 = ttnn.typecast(conv_fmt, ttnn.DataType.FLOAT32, memory_config=DRAM)
-        nhwc = ttnn.reshape(f32, [1, hw, hw, channels], memory_config=DRAM)
+        f32 = ttnn.typecast(conv_fmt, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        nhwc = ttnn.reshape(f32, [1, hw, hw, channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(f32, False)
-        nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=DRAM, pad_value=0.0)
+        nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(nhwc, False)
-        gn = ttnn.reshape(nchw, [1, 32, cpg, spatial], memory_config=DRAM)
+        gn = ttnn.reshape(nchw, [1, 32, cpg, spatial], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(nchw, False)
 
         bf16 = self._gn_core(gn, gn_inv, w["_gn_eps"], w[f"{prefix}.weight"], w[f"{prefix}.bias"])
@@ -260,8 +254,8 @@ class VaeDecoderTTNN(LightweightModule):
         cpg = channels // 32
         spatial = hw * hw
 
-        f32 = ttnn.typecast(x_nchw, ttnn.DataType.FLOAT32, memory_config=DRAM)
-        gn = ttnn.reshape(f32, [1, 32, cpg, spatial], memory_config=DRAM)
+        f32 = ttnn.typecast(x_nchw, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gn = ttnn.reshape(f32, [1, 32, cpg, spatial], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(f32, False)
 
         bf16 = self._gn_core(gn, gn_inv, w["_gn_eps"], w[f"{prefix}.weight"], w[f"{prefix}.bias"])
@@ -310,7 +304,7 @@ class VaeDecoderTTNN(LightweightModule):
                 ),
                 compute_config=None,
                 slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dL1Full, num_slices=0),
-                memory_config=DRAM,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
             conv1_in = self._group_norm_silu_from_conv_format(x, f"{prefix}.norm1", in_ch, hw)
@@ -333,25 +327,25 @@ class VaeDecoderTTNN(LightweightModule):
 
         if has_conv_shortcut or conv_format_input:
             residual = shortcut if has_conv_shortcut else x
-            added = ttnn.add(residual, conv2_out, dtype=ttnn.DataType.BFLOAT16, memory_config=DRAM)
+            added = ttnn.add(residual, conv2_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(conv2_out, False)
             ttnn.deallocate(residual, False)
 
-            nhwc = ttnn.reshape(added, [1, hw, hw, out_ch], memory_config=DRAM)
+            nhwc = ttnn.reshape(added, [1, hw, hw, out_ch], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(added, False)
-            nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=DRAM, pad_value=0.0)
+            nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
             ttnn.deallocate(nhwc, False)
         else:
-            nhwc = ttnn.reshape(conv2_out, [1, hw, hw, out_ch], memory_config=DRAM)
+            nhwc = ttnn.reshape(conv2_out, [1, hw, hw, out_ch], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(conv2_out, False)
-            nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=DRAM, pad_value=0.0)
+            nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
             ttnn.deallocate(nhwc, False)
-            added = ttnn.add(x, nchw, dtype=ttnn.DataType.BFLOAT16, memory_config=DRAM)
+            added = ttnn.add(x, nchw, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(nchw, False)
             ttnn.deallocate(x, False)
             nchw = added
 
-        result = ttnn.divide(nchw, w["_ones_4d"], dtype=ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        result = ttnn.divide(nchw, w["_ones_4d"], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(nchw, False)
         return result
 
@@ -366,46 +360,51 @@ class VaeDecoderTTNN(LightweightModule):
         spatial = h * w
 
         # Group norm (no SiLU) → 2D [spatial, channels]
-        x_f32 = ttnn.typecast(x, ttnn.DataType.FLOAT32, memory_config=DRAM)
-        gn = ttnn.reshape(x_f32, [1, 32, cpg, spatial], memory_config=DRAM)
+        x_f32 = ttnn.typecast(x, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gn = ttnn.reshape(x_f32, [1, 32, cpg, spatial], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_f32, False)
 
-        s = ttnn.sum(gn, [2, 3], True, memory_config=DRAM, compute_kernel_config=None)
-        mean = ttnn.multiply(s, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        s = ttnn.sum(gn, [2, 3], True, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=None)
+        mean = ttnn.multiply(s, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(s, False)
-        centered = ttnn.subtract(gn, mean, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        centered = ttnn.subtract(gn, mean, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mean, False)
         ttnn.deallocate(gn, False)
 
-        sq = ttnn.multiply(centered, centered, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
-        s2 = ttnn.sum(sq, [2, 3], True, memory_config=DRAM, compute_kernel_config=None)
+        sq = ttnn.multiply(centered, centered, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        s2 = ttnn.sum(sq, [2, 3], True, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=None)
         ttnn.deallocate(sq, False)
-        var = ttnn.multiply(s2, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        var = ttnn.multiply(s2, gn_inv, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(s2, False)
-        var_eps = ttnn.add(var, wt["_gn_eps"], dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        var_eps = ttnn.add(var, wt["_gn_eps"], dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(var, False)
-        inv_std = ttnn.rsqrt(var_eps, fast_and_approximate_mode=False, memory_config=DRAM)
+        inv_std = ttnn.rsqrt(var_eps, fast_and_approximate_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(var_eps, False)
 
-        normed = ttnn.multiply(centered, inv_std, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        normed = ttnn.multiply(centered, inv_std, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(inv_std, False)
         ttnn.deallocate(centered, False)
 
         scaled = ttnn.multiply(
-            normed, wt[f"{prefix}.group_norm.weight"], dtype=ttnn.DataType.FLOAT32, memory_config=DRAM
+            normed,
+            wt[f"{prefix}.group_norm.weight"],
+            dtype=ttnn.DataType.FLOAT32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(normed, False)
-        shifted = ttnn.add(scaled, wt[f"{prefix}.group_norm.bias"], dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        shifted = ttnn.add(
+            scaled, wt[f"{prefix}.group_norm.bias"], dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(scaled, False)
 
-        bf16 = ttnn.typecast(shifted, ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        bf16 = ttnn.typecast(shifted, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(shifted, False)
 
-        x_3d = ttnn.reshape(bf16, [1, channels, spatial], memory_config=DRAM)
+        x_3d = ttnn.reshape(bf16, [1, channels, spatial], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(bf16, False)
-        x_perm = ttnn.permute(x_3d, [0, 2, 1], memory_config=DRAM, pad_value=0.0)
+        x_perm = ttnn.permute(x_3d, [0, 2, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(x_3d, False)
-        x_2d = ttnn.reshape(x_perm, [spatial, channels], memory_config=DRAM)
+        x_2d = ttnn.reshape(x_perm, [spatial, channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_perm, False)
 
         # QKV projections
@@ -413,11 +412,11 @@ class VaeDecoderTTNN(LightweightModule):
         k = self._attn_project(x_2d, f"{prefix}.to_k", spatial, channels)
         v = self._attn_project(x_2d, f"{prefix}.to_v", spatial, channels, deallocate_input=True)
 
-        q_bf16 = ttnn.typecast(q, ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        q_bf16 = ttnn.typecast(q, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(q, False)
-        k_bf16 = ttnn.typecast(k, ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        k_bf16 = ttnn.typecast(k, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(k, False)
-        v_bf16 = ttnn.typecast(v, ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        v_bf16 = ttnn.typecast(v, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(v, False)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
@@ -428,19 +427,19 @@ class VaeDecoderTTNN(LightweightModule):
             is_causal=False,
             scale=self.ATTN_SCALE,
             sliding_window_size=None,
-            memory_config=DRAM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(v_bf16, False)
         ttnn.deallocate(k_bf16, False)
         ttnn.deallocate(q_bf16, False)
 
-        attn_f32 = ttnn.typecast(attn_out, ttnn.DataType.FLOAT32, memory_config=DRAM)
+        attn_f32 = ttnn.typecast(attn_out, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out, False)
-        attn_bf16 = ttnn.typecast(attn_f32, ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        attn_bf16 = ttnn.typecast(attn_f32, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_f32, False)
 
         # Output projection
-        out_2d = ttnn.reshape(attn_bf16, [spatial, channels], memory_config=DRAM)
+        out_2d = ttnn.reshape(attn_bf16, [spatial, channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_bf16, False)
         out_proj = ttnn.linear(
             out_2d,
@@ -448,7 +447,7 @@ class VaeDecoderTTNN(LightweightModule):
             bias=wt[f"{prefix}.to_out.0.bias"],
             transpose_a=False,
             transpose_b=True,
-            memory_config=DRAM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -456,18 +455,20 @@ class VaeDecoderTTNN(LightweightModule):
         )
         ttnn.deallocate(out_2d, False)
 
-        out_3d = ttnn.reshape(out_proj, [1, spatial, channels], memory_config=DRAM)
+        out_3d = ttnn.reshape(out_proj, [1, spatial, channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_proj, False)
-        out_perm = ttnn.permute(out_3d, [0, 2, 1], memory_config=DRAM, pad_value=0.0)
+        out_perm = ttnn.permute(out_3d, [0, 2, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(out_3d, False)
-        out_nchw = ttnn.reshape(out_perm, [1, channels, h, w], memory_config=DRAM)
+        out_nchw = ttnn.reshape(out_perm, [1, channels, h, w], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_perm, False)
 
-        result = ttnn.add(out_nchw, x, dtype=ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        result = ttnn.add(out_nchw, x, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_nchw, False)
         ttnn.deallocate(x, False)
 
-        output = ttnn.divide(result, wt["_ones_4d"], dtype=ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        output = ttnn.divide(
+            result, wt["_ones_4d"], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(result, False)
         return output
 
@@ -479,7 +480,7 @@ class VaeDecoderTTNN(LightweightModule):
             bias=self.weights[f"{prefix}.bias"],
             transpose_a=False,
             transpose_b=True,
-            memory_config=DRAM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -487,9 +488,9 @@ class VaeDecoderTTNN(LightweightModule):
         )
         if deallocate_input:
             ttnn.deallocate(x_2d, False)
-        proj_f32 = ttnn.typecast(proj, ttnn.DataType.FLOAT32, memory_config=DRAM)
+        proj_f32 = ttnn.typecast(proj, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(proj, False)
-        proj_4d = ttnn.reshape(proj_f32, [1, 1, spatial, channels], memory_config=DRAM)
+        proj_4d = ttnn.reshape(proj_f32, [1, 1, spatial, channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(proj_f32, False)
         return proj_4d
 
@@ -500,13 +501,15 @@ class VaeDecoderTTNN(LightweightModule):
         C, H, W = channels, hw_in, hw_in
         H_out, W_out = H * 2, W * 2
 
-        x_t = ttnn.permute(x, [0, 1, 3, 2], memory_config=DRAM, pad_value=0.0)
+        x_t = ttnn.permute(x, [0, 1, 3, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(x, False)
 
-        x_2d = ttnn.reshape(x_t, [C * W, H], memory_config=DRAM)
+        x_2d = ttnn.reshape(x_t, [C * W, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_t, False)
 
-        x_div = ttnn.divide(x_2d, self.weights["_ones_2d"], dtype=ttnn.DataType.BFLOAT16, memory_config=DRAM)
+        x_div = ttnn.divide(
+            x_2d, self.weights["_ones_2d"], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(x_2d, False)
 
         x_up_h = ttnn.matmul(
@@ -514,7 +517,7 @@ class VaeDecoderTTNN(LightweightModule):
             upsample_matrix,
             transpose_a=False,
             transpose_b=False,
-            memory_config=DRAM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -522,13 +525,13 @@ class VaeDecoderTTNN(LightweightModule):
         )
         ttnn.deallocate(x_div, False)
 
-        x_4d = ttnn.reshape(x_up_h, [1, C, W, H_out], memory_config=DRAM)
+        x_4d = ttnn.reshape(x_up_h, [1, C, W, H_out], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_up_h, False)
 
-        x_4d_t = ttnn.permute(x_4d, [0, 1, 3, 2], memory_config=DRAM, pad_value=0.0)
+        x_4d_t = ttnn.permute(x_4d, [0, 1, 3, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(x_4d, False)
 
-        x_2d_2 = ttnn.reshape(x_4d_t, [C * H_out, W], memory_config=DRAM)
+        x_2d_2 = ttnn.reshape(x_4d_t, [C * H_out, W], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_4d_t, False)
 
         x_up_w = ttnn.matmul(
@@ -536,7 +539,7 @@ class VaeDecoderTTNN(LightweightModule):
             upsample_matrix,
             transpose_a=False,
             transpose_b=False,
-            memory_config=DRAM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
             program_config=None,
             activation=None,
@@ -544,12 +547,12 @@ class VaeDecoderTTNN(LightweightModule):
         )
         ttnn.deallocate(x_2d_2, False)
 
-        x_nchw = ttnn.reshape(x_up_w, [1, C, H_out, W_out], memory_config=DRAM)
+        x_nchw = ttnn.reshape(x_up_w, [1, C, H_out, W_out], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_up_w, False)
 
-        nhwc = ttnn.permute(x_nchw, [0, 2, 3, 1], memory_config=DRAM, pad_value=0.0)
+        nhwc = ttnn.permute(x_nchw, [0, 2, 3, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(x_nchw, False)
-        conv_input = ttnn.reshape(nhwc, [1, 1, H_out * W_out, C], memory_config=DRAM)
+        conv_input = ttnn.reshape(nhwc, [1, 1, H_out * W_out, C], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(nhwc, False)
 
         conv_output = self._conv2d(conv_input, f"{prefix}.conv", C, C, H_out, W_out, conv_act_block_h, conv_slice_type)

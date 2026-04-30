@@ -46,6 +46,16 @@ LATENT_CHANNELS = 16
 DRAM_RM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
 
 
+def _dram_stats(mesh_device, label):
+    """Print DRAM allocation stats."""
+    ttnn.synchronize_device(mesh_device)
+    v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    alloc = v.num_banks * v.total_bytes_allocated_per_bank
+    total = v.num_banks * v.total_bytes_per_bank
+    free = v.num_banks * v.total_bytes_free_per_bank
+    print(f"  DRAM [{label}]: {alloc / 2**20:.1f} MB used / {total / 2**20:.1f} MB total ({free / 2**20:.1f} MB free)")
+
+
 # ── Tensor helpers ────────────────────────────────────────────────────────────
 
 
@@ -294,6 +304,7 @@ class ZImageTurbo:
         print(f"  VAE decode: {(time.time() - t0) * 1000:.0f} ms")
 
         print(f"  WARMUP TOTAL: {(time.time() - t_total) * 1000:.0f} ms")
+        _dram_stats(self.mesh_device, "after warmup")
         print("=" * 72)
         print("Trace captured. Ready for fast generation.\n")
         return image
@@ -309,6 +320,7 @@ class ZImageTurbo:
             raise RuntimeError("Call warmup() before generate().")
 
         t_total = time.time()
+        _dram_stats(self.mesh_device, "before generate")
 
         # 1) Text encoding (TE runs normally).
         t0 = time.time()
@@ -362,6 +374,7 @@ class ZImageTurbo:
         steady = step_times[1:] if len(step_times) > 1 else step_times
         avg_steady = sum(steady) / len(steady) if steady else 0
         print(f"  VAE: {vae_ms:.0f} ms  |  total: {total_ms:.0f} ms  " f"|  steady-state step: {avg_steady:.0f} ms avg")
+        _dram_stats(self.mesh_device, "after generate")
         return image
 
 
