@@ -388,19 +388,29 @@ class Attention(LightweightModule):
         # Per-bucket prefill sharded NLPConcat memcfgs.
         self._prefill_concat_configs = {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
 
-        # Pre-compute HEIGHT_SHARDED memory config for paged_update_cache input.
+        # Pre-compute HEIGHT_SHARDED memory configs for paged_update_cache inputs.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
         # For batch=1: tensor [1, 1, num_kv_heads, head_dim] padded to [1, 1, tile(kv_heads), head_dim].
         # Physical height = tile(kv_heads), width = head_dim, 1 shard on 1 core.
+        # The fused variant `paged_fused_update_cache` writes K and V together but
+        # requires their input shards to live on DISJOINT cores (it parallelizes across
+        # them). We give K core (0,0) and V core (1,0) so the fused kernel can run.
         TILE = 32
         kv_shard_height = ((num_kv_heads + TILE - 1) // TILE) * TILE  # ceil to tile: 8→32
-        compute_grid = device.compute_with_storage_grid_size()
-        paged_shard_grid = ttnn.num_cores_to_corerangeset(1, compute_grid, True)
-        self.paged_input_mem_config = ttnn.MemoryConfig(
+        _k_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        _v_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
+        self.paged_k_input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(paged_shard_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(_k_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
         )
+        self.paged_v_input_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_v_grid, [kv_shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        # Backwards-compat alias for any callers still expecting the merged name.
+        self.paged_input_mem_config = self.paged_k_input_mem_config
 
     def forward(
         self,
@@ -615,18 +625,24 @@ class Attention(LightweightModule):
 
             if is_decode:
                 if cur_pos_tensor is not None:
-                    # Trace-compatible path: paged_update_cache uses a device tensor for position.
+                    # Trace-compatible path: paged_fused_update_cache uses a device tensor for position.
                     # Reshape K/V from [batch, kv_heads, 1, dim] → [1, batch, kv_heads, dim]
                     # for paged_update_cache's expected input format.
                     # Have transpose write straight into the HEIGHT_SHARDED layout that
                     # paged_update_cache requires; eliminates a separate I→S per K/V.
-                    k_paged_hs = ttnn.transpose(k, 1, 2, memory_config=self.paged_input_mem_config)
-                    v_paged_hs = ttnn.transpose(v, 1, 2, memory_config=self.paged_input_mem_config)
+                    # K and V land on different cores (paged_fused_update_cache parallelizes
+                    # across them and rejects overlapping shard grids).
+                    k_paged_hs = ttnn.transpose(k, 1, 2, memory_config=self.paged_k_input_mem_config)
+                    v_paged_hs = ttnn.transpose(v, 1, 2, memory_config=self.paged_v_input_mem_config)
                     ttnn.deallocate(k)
                     ttnn.deallocate(v)
-                    # Write to cache at cur_pos_tensor position (in-place, trace-compatible)
-                    ttnn.experimental.paged_update_cache(k_cache, k_paged_hs, update_idxs_tensor=cur_pos_tensor)
-                    ttnn.experimental.paged_update_cache(v_cache, v_paged_hs, update_idxs_tensor=cur_pos_tensor)
+                    # Write K + V to cache at cur_pos_tensor position. The fused variant
+                    # writes both in one kernel launch — saves 1× dispatch overhead per
+                    # layer compared to two separate paged_update_cache calls. Same op
+                    # signature; trace-compatible.
+                    ttnn.experimental.paged_fused_update_cache(
+                        k_cache, k_paged_hs, v_cache, v_paged_hs, update_idxs_tensor=cur_pos_tensor
+                    )
                     ttnn.deallocate(k_paged_hs)
                     ttnn.deallocate(v_paged_hs)
                     # Read FULL cache for attention — fixed shape, trace-compatible.
