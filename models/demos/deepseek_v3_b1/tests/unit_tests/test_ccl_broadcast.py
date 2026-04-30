@@ -28,7 +28,7 @@ ENV_NUM_LINKS = "CCL_BROADCAST_NUM_LINKS"
 ENV_MAX_PAYLOAD_SIZE = "CCL_BROADCAST_MAX_PAYLOAD_SIZE_BYTES"
 MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
-BCAST_CORE = ttnn.CoreCoord(11, 8)
+BCAST_CORE = ttnn.CoreCoord(10, 8)
 
 
 def _validate_broadcast_num_links(num_links: int) -> None:
