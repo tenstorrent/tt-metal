@@ -11,7 +11,12 @@ import models.perf.device_perf_utils as perf_utils
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 211],
+        # 392 samples/s reflects the linear_config_1024 / GEGLU subblock-volume fix landed in
+        # 47df299ef68 ("model configs: kernel-A/B-verified subblock-volume fixes (single-chip
+        # WH)"), which roughly doubled segformer device-kernel throughput on Blackhole. The
+        # prior target of 211 was set before that fix and triggered the test's "too fast"
+        # upper-bound assertion (measured 391.99 samples/s).
+        [1, 392],
     ],
 )
 def test_perf_device_segformer_segmentation(batch_size, expected_perf, model_location_generator):
