@@ -5,6 +5,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -94,6 +95,11 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         const uint32_t tile_width = input_tensor_a.tensor_spec().tile().get_width();
         const uint32_t tile_height = input_tensor_a.tensor_spec().tile().get_height();
         TT_FATAL(
+            input_shape[rank - 1] > 0 && input_shape[rank - 2] > 0,
+            "Argmax TILE input: padded spatial face must be positive (padded_height={}, padded_width={})",
+            input_shape[rank - 2],
+            input_shape[rank - 1]);
+        TT_FATAL(
             input_shape[rank - 1] % tile_width == 0,
             "Last dimension {} must be divisible by tile width {}",
             input_shape[rank - 1],
@@ -154,6 +160,31 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.layout() == Layout::ROW_MAJOR,
             "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}",
             input_tensor_a.layout());
+        const auto& input_padded_shape = input_tensor_a.padded_shape();
+        const auto padded_shape_rank = input_padded_shape.size();
+        TT_FATAL(
+            input_padded_shape[padded_shape_rank - 1] > 0,
+            "Multicore argmax requires positive reduction dimension size (last padded dim), got {}",
+            input_padded_shape[padded_shape_rank - 1]);
+    }
+
+    {
+        using namespace tt::tt_metal;
+        const auto device_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
+        TT_FATAL(
+            device_grid_size.x > 0 && device_grid_size.y > 0,
+            "Device compute grid must be non-empty for argmax, got ({}, {})",
+            device_grid_size.x,
+            device_grid_size.y);
+        const CoreRangeSet device_grid =
+            num_cores_to_corerangeset(device_grid_size.x * device_grid_size.y, device_grid_size, false);
+        if (args.use_multicore && args.sub_core_grids.has_value()) {
+            TT_FATAL(
+                device_grid.contains(args.sub_core_grids.value()),
+                "Multicore argmax sub_core_grids {} must be contained in device grid {}",
+                args.sub_core_grids.value(),
+                device_grid);
+        }
     }
 }
 

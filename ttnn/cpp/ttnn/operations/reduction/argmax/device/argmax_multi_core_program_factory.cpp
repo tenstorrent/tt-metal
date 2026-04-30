@@ -196,9 +196,29 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =
         distribute_work_to_cores(device, red_dim_units, min_red_dim_units_per_core, sub_core_grids);
 
+    TT_FATAL(red_dim_units > 0, "Argmax multicore requires positive reduction dimension size, got {}", red_dim_units);
+
     const uint32_t num_cores0 = cores0.num_cores();
     const uint32_t num_cores1 = cores1.num_cores();
     const uint32_t num_total_cores = num_cores0 + num_cores1;
+
+    TT_FATAL(num_total_cores > 0, "Argmax multicore requires at least one worker core");
+    TT_FATAL(
+        all_cores.num_cores() == num_total_cores,
+        "Argmax multicore split core count mismatch: all_cores.num_cores()={} num_total_cores={}",
+        all_cores.num_cores(),
+        num_total_cores);
+
+    {
+        const auto device_core_grid = device->compute_with_storage_grid_size();
+        const CoreRangeSet device_worker_grid =
+            num_cores_to_corerangeset(device_core_grid.x * device_core_grid.y, device_core_grid, false);
+        TT_FATAL(
+            device_worker_grid.contains(all_cores),
+            "Argmax multicore program core grid {} must be contained in device grid {}",
+            all_cores,
+            device_worker_grid);
+    }
 
     // Page sizes for input and output tensors based on the ROW_MAJOR layout
     const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
@@ -275,6 +295,11 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Get physical coordinates of the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future
     const auto cores = corerange_to_cores(all_cores, num_total_cores, true);
+    TT_FATAL(
+        cores.size() == num_total_cores,
+        "Argmax multicore resolved core list size {} must match num_total_cores {}",
+        cores.size(),
+        num_total_cores);
     const auto reduce_core = device->worker_core_from_logical_core(cores.at(reduce_core_id));
 
     // Get first and last core's coordinates for the at max two groups of cores in all_cores
