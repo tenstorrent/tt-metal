@@ -84,6 +84,33 @@ def _apply_matmul_config_patch():
     dit_mod._get_matmul_config = _patched
 
 
+def _apply_compute_config_patch():
+    """Use HiFi2 + packer_l1_acc for matmuls (faster), keep HiFi4 for norms."""
+    import dit.model_ttnn as dit_mod
+
+    FAST_MATMUL_KERNEL = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    _orig_mm = dit_mod.ZImageTransformerTTNN._mm
+
+    def _fast_mm(self, x, weight, M, K, N, dtype=ttnn.DataType.BFLOAT16):
+        config = dit_mod._get_matmul_config(M, K, N, self._core_grid)
+        return ttnn.experimental.minimal_matmul(
+            input_tensor=x,
+            weight_tensor=weight,
+            config=config,
+            compute_kernel_config=FAST_MATMUL_KERNEL,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    dit_mod.ZImageTransformerTTNN._mm = _fast_mm
+
+
 def compute_pcc(a, b):
     a = a.float().flatten()
     b = b.float().flatten()
@@ -187,6 +214,7 @@ def main():
 
     print("Applying perf patches ...")
     _apply_matmul_config_patch()
+    _apply_compute_config_patch()
 
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
