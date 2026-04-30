@@ -82,7 +82,7 @@ def main():
     hook1 = talker.model.register_forward_pre_hook(capture_model_forward, with_kwargs=True)
     hook2 = talker.model.register_forward_hook(capture_model_output, with_kwargs=True)
 
-    wavs, sr = model.generate_voice_clone(
+    _, _ = model.generate_voice_clone(
         text=target_text,
         language="English",
         ref_audio=ref_audio_path,
