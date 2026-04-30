@@ -662,6 +662,43 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DataflowBufferSpecs
     //////////////////////////////////
 
+    // Validate the total number of DFBs in the ProgramSpec:
+    //  - For Gen1, there's a hard limit (hal::get_arch_num_circular_buffers())
+    //  - For Gen2, the true DFB limit is configuration-dependent, based on the availability
+    //    of tile counters. This won't actually get checked until the Program is enqueued :(
+    //  - However, the Gen1 check actually DOES apply to Gen2 as a strict upper limit.
+    //    In practice, we'll run out of tile counters long before we hit the HAL CB limit,
+    //    but then runtime software sizes some buffers based on this.
+    //
+    // For Quasar, this is a partial validation only!
+    // The true number of available DFBs depends on the tile counters, which are consumed in
+    // a DFB configuration-dependent way.
+    // Unfortunately, those checks won't trigger until the DFB code runs... not until the
+    // Program is actually enqueued :(
+    {
+        const uint32_t max_dfbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+        if (spec.dataflow_buffers.size() > max_dfbs) {
+            if (is_gen1_arch()) {
+                TT_THROW(
+                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The target "
+                    "architecture supports up to {}.",
+                    spec.program_id,
+                    spec.dataflow_buffers.size(),
+                    max_dfbs);
+            } else if (is_gen2_arch()) {
+                TT_THROW(
+                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The permitted "
+                    "number of DFBs for the target architecture is configuration-dependent, "
+                    "but {} is a hard upper limit.",
+                    spec.program_id,
+                    spec.dataflow_buffers.size(),
+                    max_dfbs);
+            } else {
+                TT_FATAL(false, "Unknown architecture");
+            }
+        }
+    }
+
     // Validate local DFB endpoint placement:
     // A local DFB's producer and consumer kernels must be on the same node (sharing SRAM memory).
     // For this to be true, the producer and consumer kernels need IDENTICAL WorkUnitSpec membership.
@@ -1282,6 +1319,46 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 }
 
 // ----------------------------------------------------------------------------
+// BuildUnpackToDestModeVector:
+// Translate the Metal 2.0 user-facing DFB-name->mode map into the (gross)
+// CB-indexed vector that the JIT data-format machinery expects.
+//
+// This DFB/CB translation layer is confusing. The gory details:
+//   - The JIT consumer (get_unpack_dst_formats) will read unpack_to_dest_mode at
+//     index cb_id, where cb_id is the slot used by set_dfb_data_fmt_and_tile
+//     in buf_dataformat_arr (aka, dfb->id).
+//   - The unpack_mode for a DFB "d" needs to be at unpack_modes[d->id]
+//   - The vector must be at least max_cbs long, or the consumer gets angry
+//     (it iterates buf_formats up to max_cbs).
+//   - This is true on WH, BH, and Quasar. (Yes, Quasar too.)
+//
+// What is the max CBs / DFBs?
+//   - WH/BH: Hardcoded as max_cbs. Different number on WH vs. BH.
+//   - Quasar has a variable cap, based on tile-counter registers.
+//     In actual practice, we'll run out LONG before we get the HAL-reported
+//     limit of 64.
+// ----------------------------------------------------------------------------
+
+std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
+    const std::vector<ComputeConfiguration::UnpackToDestModeEntry>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
+    for (const auto& [dfb_name, mode] : user_modes) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        // This TT_FATAL is unreachable, provided that validation wasn't skipped.
+        TT_FATAL(
+            dfb_id < max_cbs,
+            "Internal Error: DFB '{}' has id {} which exceeds the JIT data-format "
+            "slot count ({}); compute kernels cannot reference DFBs past this limit",
+            dfb_name,
+            dfb_id,
+            max_cbs);
+        unpack_modes[dfb_id] = mode;
+    }
+    return unpack_modes;
+}
+
+// ----------------------------------------------------------------------------
 // MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
@@ -1289,11 +1366,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
-    for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
-        unpack_modes[dfb_id] = mode;
-    }
+    std::vector<UnpackToDestMode> unpack_modes =
+        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return ComputeConfig{
         .math_fidelity = compute_config.math_fidelity,
@@ -1335,19 +1409,8 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    // Handle unpack_to_dest_mode:
-    //  - The user-facing KernelSpec provides the modes keyed by DFB name.
-    //  - The unpack_to_dest_mode vector in the QuasarComputeConfig is indexed by DFB ID.
-    //  - DFB IDs are always issued sequentially from zero, so this works.
-
-    // Size the vector to the number of DFBs.
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
-
-    // Populate unpack_modes using DFB ID as the index
-    for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
-        unpack_modes[dfb_id] = mode;
-    }
+    std::vector<UnpackToDestMode> unpack_modes =
+        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,

@@ -33,7 +33,11 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/host_api.hpp>  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
 
@@ -791,6 +795,37 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
 }
 
+TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
+    // The hard upper limit on DFBs is hal::get_arch_num_circular_buffers().
+    // Exceeding it should fail validation with a clear error, rather than blowing
+    // up downstream during JIT.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    const uint32_t too_many = tt::tt_metal::hal::get_arch_num_circular_buffers() + 1;
+    for (uint32_t i = 0; i < too_many; ++i) {
+        std::string name = "dfb_" + std::to_string(i);
+        auto dfb = MakeMinimalDFB(name);
+        dfb.data_format_metadata = tt::DataFormat::Float16_b;
+        spec.dataflow_buffers.push_back(dfb);
+        BindDFBToKernel(producer, name, "p_" + std::to_string(i), KernelSpec::DFBEndpointType::PRODUCER);
+        BindDFBToKernel(consumer, name, "c_" + std::to_string(i), KernelSpec::DFBEndpointType::CONSUMER);
+    }
+
+    spec.kernels = {producer, consumer};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    const std::string expected_substr = "too many DataflowBufferSpecs (" + std::to_string(too_many) + ")";
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected_substr)));
+}
+
 // ============================================================================
 // SECTION 3: WorkUnitSpec Validation Tests
 // ============================================================================
@@ -1235,6 +1270,53 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     }
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
+    // Regression test for the unpack_to_dest_mode sizing bug: the JIT consumer
+    // iterates hal::get_arch_num_circular_buffers() slots, so BuildUnpackToDestModeVector
+    // must size the vector to that count and place each user-supplied mode at slot dfb_id.
+    // Pre-fix code sized the vector to the number of DFBs, which produced silent
+    // OOB reads downstream when num_dfbs < max_cbs.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb0 = MakeMinimalDFB("dfb_0");
+    dfb0.data_format_metadata = tt::DataFormat::Float16_b;
+    auto dfb1 = MakeMinimalDFB("dfb_1");
+    dfb1.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer, "dfb_0", "out0", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer, "dfb_1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_0", "in0", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer, "dfb_1", "in1", KernelSpec::DFBEndpointType::CONSUMER);
+
+    auto& compute_config = std::get<ComputeConfiguration>(consumer.config_spec);
+    compute_config.unpack_to_dest_mode = {{"dfb_1", UnpackToDestMode::UnpackToDestFp32}};
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb0, dfb1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    Program program = MakeProgramFromSpec(spec);
+
+    // Inspect the constructed compute kernel's QuasarComputeConfig:
+    //  - vector must be sized to max_cbs (so JIT's iteration up to max_cbs is in-bounds)
+    //  - the user-supplied mode must land at slot dfb_id (not at iteration order)
+    //  - other slots stay Default
+    const auto& impl = program.impl();
+    auto consumer_kernel = impl.get_kernel_by_spec_name("consumer");
+    const auto built_config_variant = consumer_kernel->config();
+    const auto& built_config = std::get<experimental::quasar::QuasarComputeConfig>(built_config_variant);
+
+    EXPECT_EQ(built_config.unpack_to_dest_mode.size(), tt::tt_metal::hal::get_arch_num_circular_buffers());
+    EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_1")], UnpackToDestMode::UnpackToDestFp32);
+    EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_0")], UnpackToDestMode::Default);
 }
 
 // ============================================================================
