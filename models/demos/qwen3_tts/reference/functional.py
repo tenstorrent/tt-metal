@@ -2271,9 +2271,6 @@ def res2net_block(
     Returns:
         Output [batch, channels, seq_len]
     """
-    batch, channels, seq_len = x.shape
-    channels // scale
-
     # Split into scales using chunk (official uses torch.chunk)
     parts = list(torch.chunk(x, scale, dim=1))
     outputs = []

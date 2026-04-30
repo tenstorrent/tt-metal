@@ -113,7 +113,7 @@ def _create_mel_filterbank(sr, n_fft, n_mels, f_min=0, f_max=None):
     return filterbank
 
 
-def main():
+def main() -> int:
     print("=" * 80)
     print("Reference Implementation Roundtrip Demo")
     print("=" * 80)
@@ -158,7 +158,7 @@ def main():
     if not Path(audio_path).exists():
         print(f"   ERROR: {audio_path} not found!")
         print("   Please provide a reference audio file.")
-        return
+        return 1
 
     audio = load_audio(audio_path, target_sr=24000)
     duration = audio.shape[-1] / 24000
@@ -249,8 +249,8 @@ def main():
     print(f"  Reconstructed: {output_path}")
     print("=" * 80)
 
-    return codes, reconstructed, speaker_embedding
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
