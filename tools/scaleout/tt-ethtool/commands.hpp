@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <span>
 #include <string_view>
 
@@ -34,5 +35,12 @@ int run_link_status(LinkRef link);
 // `reinit_option` selects the flavor (see `eth_fw.hpp::ETH_PORT_REINIT_OPT_*`).
 // `retries` is the number of retry attempts the FW will perform. Returns process exit code.
 int run_link_reinit(LinkRef link, unsigned int reinit_option, unsigned int retries);
+
+// Trigger ETH_MSG_LINK_STATUS_CHECK on the specified ethernet link, refresh the
+// boot_results.eth_live_status counters in place (MAC TX/RX MIB snapshots, FEC
+// corrected/uncorrected codewords, retrain count, rx link up), print them, and
+// optionally have the FW DMA-copy the live status block to `copy_addr` in L1.
+// Pass `0xFFFFFFFF` to skip the L1 copy. Returns process exit code.
+int run_link_stats(LinkRef link, std::uint32_t copy_addr);
 
 }  // namespace tt_ethtool

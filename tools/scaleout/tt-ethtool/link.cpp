@@ -30,7 +30,7 @@ namespace tt_ethtool {
 
 namespace {
 
-constexpr auto kMailboxPollTimeout = std::chrono::seconds(10);
+constexpr auto kMailboxPollTimeout = std::chrono::seconds(60);
 constexpr auto kRetrainPollTimeout = std::chrono::seconds(10);
 constexpr auto kPollInterval = std::chrono::milliseconds(1);
 
@@ -55,6 +55,15 @@ std::uint32_t read_u32(tt::umd::Cluster& cluster, tt::ChipId chip_id, tt::umd::C
     std::uint32_t value = 0;
     cluster.read_from_device(&value, chip_id, core, addr, sizeof(value));
     return value;
+}
+
+std::uint64_t read_u64(tt::umd::Cluster& cluster, tt::ChipId chip_id, tt::umd::CoreCoord core, std::uint64_t addr) {
+    // The device stores 64-bit counters as two consecutive little-endian
+    // 32-bit words. Compose them on the host to keep the operation
+    // independent of UMD's chunked-read alignment requirements.
+    const std::uint32_t lo = read_u32(cluster, chip_id, core, addr);
+    const std::uint32_t hi = read_u32(cluster, chip_id, core, addr + sizeof(std::uint32_t));
+    return (static_cast<std::uint64_t>(hi) << 32) | lo;
 }
 
 void write_u32(
@@ -344,6 +353,89 @@ int run_link_status_action(LinkRef link) {
     }
 }
 
+int run_link_stats_action(LinkRef link, std::uint32_t copy_addr) {
+    if (!validate_link_ref(link)) {
+        return EXIT_FAILURE;
+    }
+
+    tt::umd::Cluster cluster;
+    const tt::ARCH arch = cluster.get_cluster_description()->get_arch(link.chip_id);
+    const tt::umd::CoreCoord core = get_eth_core(cluster, link.chip_id, link.channel);
+
+    if (arch != tt::ARCH::BLACKHOLE) {
+        std::cerr << fmt::format(
+            "Unsupported architecture for link stats: {}. Only Blackhole exposes "
+            "ETH_MSG_LINK_STATUS_CHECK with a snapshotting eth_live_status block.\n",
+            tt::arch_to_str(arch));
+        return EXIT_FAILURE;
+    }
+
+    namespace bh = eth_fw::blackhole;
+
+    std::cout << fmt::format(
+        "Refreshing chip {} channel {} live status (arch={}, NOC0=({},{}), copy_addr=0x{:08x}{})\n",
+        link.chip_id,
+        link.channel,
+        tt::arch_to_str(arch),
+        core.x,
+        core.y,
+        copy_addr,
+        copy_addr == bh::ETH_LIVE_STATUS_NO_COPY ? " [no copy]" : "");
+
+    // Trigger the FW to refresh boot_results.eth_live_status. arg0 doubles as
+    // the destination L1 address for an optional copy of the live status
+    // block; ETH_LIVE_STATUS_NO_COPY (0xFFFFFFFF) skips that copy.
+    bh_send_mailbox_msg(
+        cluster,
+        link.chip_id,
+        link.channel,
+        core,
+        bh::ETH_MSG_TYPE_LINK_STATUS_CHECK,
+        {copy_addr, 0, 0},
+        /*wait_for_done=*/true);
+
+    const std::uint32_t retrain_count = read_u32(cluster, link.chip_id, core, bh::ETH_RETRAIN_COUNT_ADDR);
+    const std::uint32_t rx_link_up = read_u32(cluster, link.chip_id, core, bh::ETH_RX_LINK_UP_ADDR);
+
+    struct CounterRow {
+        std::string_view label;
+        std::uint64_t value;
+    };
+
+    const std::array<CounterRow, 16> tx_rx_rows = {{
+        {"frames_txd", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_FRAMES_TXD_ADDR)},
+        {"frames_txd_ok", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_FRAMES_TXD_OK_ADDR)},
+        {"frames_txd_badfcs", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_FRAMES_TXD_BADFCS_ADDR)},
+        {"bytes_txd", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_BYTES_TXD_ADDR)},
+        {"bytes_txd_ok", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_BYTES_TXD_OK_ADDR)},
+        {"bytes_txd_badfcs", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_BYTES_TXD_BADFCS_ADDR)},
+        {"frames_rxd", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_FRAMES_RXD_ADDR)},
+        {"frames_rxd_ok", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_FRAMES_RXD_OK_ADDR)},
+        {"frames_rxd_badfcs", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_FRAMES_RXD_BADFCS_ADDR)},
+        {"frames_rxd_dropped", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_FRAMES_RXD_DROPPED_ADDR)},
+        {"bytes_rxd", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_BYTES_RXD_ADDR)},
+        {"bytes_rxd_ok", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_BYTES_RXD_OK_ADDR)},
+        {"bytes_rxd_badfcs", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_BYTES_RXD_BADFCS_ADDR)},
+        {"bytes_rxd_dropped", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_BYTES_RXD_DROPPED_ADDR)},
+        {"corr_cw", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_CORR_CW_ADDR)},
+        {"uncorr_cw", read_u64(cluster, link.chip_id, core, bh::ETH_LIVE_STATUS_UNCORR_CW_ADDR)},
+    }};
+
+    std::cout << fmt::format(
+        "Chip {} channel {} eth_live_status @ 0x{:08x}:\n"
+        "  retrain_count      : {}\n"
+        "  rx_link_up         : {}\n",
+        link.chip_id,
+        link.channel,
+        bh::ETH_LIVE_STATUS_BASE_ADDR,
+        retrain_count,
+        rx_link_up);
+    for (const auto& row : tx_rx_rows) {
+        std::cout << fmt::format("  {:<19}: {}\n", row.label, row.value);
+    }
+    return EXIT_SUCCESS;
+}
+
 int run_link_reinit_action(LinkRef link, unsigned int reinit_option, unsigned int retries) {
     namespace bh = eth_fw::blackhole;
     if (reinit_option > bh::ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER) {
@@ -422,5 +514,7 @@ int run_link_status(LinkRef link) { return run_link_status_action(link); }
 int run_link_reinit(LinkRef link, unsigned int reinit_option, unsigned int retries) {
     return run_link_reinit_action(link, reinit_option, retries);
 }
+
+int run_link_stats(LinkRef link, std::uint32_t copy_addr) { return run_link_stats_action(link, copy_addr); }
 
 }  // namespace tt_ethtool

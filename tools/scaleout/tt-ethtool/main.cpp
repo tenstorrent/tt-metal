@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <charconv>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -17,6 +18,7 @@ namespace {
 
 constexpr unsigned int kDefaultReinitOption = 2;  // MAC + SERDES from reset.
 constexpr unsigned int kDefaultReinitRetries = 1;
+constexpr std::uint32_t kNoCopyAddr = 0xFFFFFFFFu;
 
 void print_usage() {
     std::cout << "TT Ethernet Tool\n"
@@ -32,7 +34,14 @@ void print_usage() {
                  "                                 reinit-option: 0=mac-only, 1=mac+serdes-retrain,\n"
                  "                                                2=mac+serdes-reset (default),\n"
                  "                                                3=mac+serdes-reset-tx-barrier\n"
-                 "                                 retries:       FW retry attempts (default 1)\n";
+                 "                                 retries:       FW retry attempts (default 1)\n"
+                 "  link stats   <chip>:<channel> [<copy-addr>]\n"
+                 "                                 Refresh and print eth_live_status counters\n"
+                 "                                 (MAC TX/RX MIB, FEC corrected/uncorrected\n"
+                 "                                 codewords, retrain count, rx link up).\n"
+                 "                                 copy-addr: optional L1 address (hex or dec) for\n"
+                 "                                            the FW to copy the live status block\n"
+                 "                                            to. Default 0xFFFFFFFF (no copy).\n";
 }
 
 unsigned int parse_uint(std::string_view s, std::string_view what) {
@@ -46,9 +55,27 @@ unsigned int parse_uint(std::string_view s, std::string_view what) {
     return value;
 }
 
+// Parse a 32-bit unsigned int as hex (when prefixed with 0x/0X) or decimal.
+std::uint32_t parse_u32(std::string_view s, std::string_view what) {
+    int base = 10;
+    std::string_view body = s;
+    if (body.size() > 2 && body[0] == '0' && (body[1] == 'x' || body[1] == 'X')) {
+        body.remove_prefix(2);
+        base = 16;
+    }
+    std::uint32_t value = 0;
+    auto* begin = body.data();
+    auto* end = body.data() + body.size();
+    auto result = std::from_chars(begin, end, value, base);
+    if (result.ec != std::errc{} || result.ptr != end || body.empty()) {
+        throw std::invalid_argument(fmt::format("{}: '{}' is not a valid 32-bit unsigned integer", what, s));
+    }
+    return value;
+}
+
 int dispatch_link(int argc, char** argv) {
     if (argc < 4) {
-        std::cerr << "link subcommand requires: link <up|down|status|reinit> <chip>:<channel> [args]\n\n";
+        std::cerr << "link subcommand requires: link <up|down|status|reinit|stats> <chip>:<channel> [args]\n\n";
         print_usage();
         return EXIT_FAILURE;
     }
@@ -80,8 +107,20 @@ int dispatch_link(int argc, char** argv) {
         }
         return tt_ethtool::run_link_reinit(link, reinit_option, retries);
     }
+    if (action == "stats") {
+        std::uint32_t copy_addr = kNoCopyAddr;
+        if (argc >= 5) {
+            copy_addr = parse_u32(argv[4], "copy-addr");
+        }
+        if (argc > 5) {
+            std::cerr << "link stats takes at most one optional arg: <copy-addr>\n\n";
+            print_usage();
+            return EXIT_FAILURE;
+        }
+        return tt_ethtool::run_link_stats(link, copy_addr);
+    }
     std::cerr << fmt::format(
-        "Unknown link action: '{}' (expected 'up', 'down', 'status', or 'reinit')\n\n", action);
+        "Unknown link action: '{}' (expected 'up', 'down', 'status', 'reinit', or 'stats')\n\n", action);
     print_usage();
     return EXIT_FAILURE;
 }

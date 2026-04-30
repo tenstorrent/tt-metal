@@ -48,9 +48,25 @@ inline constexpr std::uint32_t ETH_MSG_STATUS_MASK = 0xFFFF0000u;
 inline constexpr std::uint32_t ETH_MSG_CALL = 0xCA110000u;
 inline constexpr std::uint32_t ETH_MSG_DONE = 0xD0E50000u;
 
-inline constexpr std::uint32_t ETH_MSG_TYPE_PORT_UP_CHECK = 0x0001u;
+// Run a link status check. The FW updates the live status counters in
+// boot_results.eth_live_status (MAC TX/RX MIB snapshots, FEC corrected /
+// uncorrected codewords, retrain count, rx link up, etc.) and optionally
+// copies the live status block to the L1 address provided in arg0.
+//   arg0: copy_addr (use ETH_LIVE_STATUS_NO_COPY to skip the copy)
+//   arg1: unused
+//   arg2: unused
+inline constexpr std::uint32_t ETH_MSG_TYPE_LINK_STATUS_CHECK = 0x0001u;
+
+// Older name for the same FW message; kept for callers that only care about
+// the fast link-up check side-effect.
+inline constexpr std::uint32_t ETH_MSG_TYPE_PORT_UP_CHECK = ETH_MSG_TYPE_LINK_STATUS_CHECK;
+
 inline constexpr std::uint32_t ETH_MSG_TYPE_PORT_REINIT_MACPCS = 0x0006u;
 inline constexpr std::uint32_t ETH_MSG_TYPE_PORT_ACTION = 0x0009u;
+
+// Sentinel arg0 value for ETH_MSG_LINK_STATUS_CHECK that tells the FW to
+// skip the L1 copy step and just refresh the live status counters in place.
+inline constexpr std::uint32_t ETH_LIVE_STATUS_NO_COPY = 0xFFFFFFFFu;
 
 // Arguments for ETH_MSG_PORT_ACTION(arg0, _, _)
 // See hal.hpp's `FWMailboxMsg::ETH_MSG_PORT_ACTION` doc comment.
@@ -69,8 +85,30 @@ inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER = 3;  /
 // `umd/device/types/blackhole_eth.hpp` for the full layout (BOOT_RESULTS_ADDR = 0x7CC00).
 inline constexpr std::uint32_t ETH_BOOT_RESULTS_BASE_ADDR = 0x7CC00;
 inline constexpr std::uint32_t ETH_PORT_STATUS_ADDR = 0x7CC04;    // eth_status_t.port_status
-inline constexpr std::uint32_t ETH_RETRAIN_COUNT_ADDR = 0x7CE00;  // eth_live_status_t.retrain_count
-inline constexpr std::uint32_t ETH_RX_LINK_UP_ADDR = 0x7CE04;     // eth_live_status_t.rx_link_up
+
+// eth_live_status_t base and field addresses. Matches the struct layout in
+// `tt_metal/hw/inc/internal/tt-1xx/blackhole/eth_fw_api.h`.
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BASE_ADDR = 0x7CE00;
+inline constexpr std::uint32_t ETH_RETRAIN_COUNT_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x00;  // u32
+inline constexpr std::uint32_t ETH_RX_LINK_UP_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x04;     // u32
+
+// Snapshot registers (all u64, little-endian on the device).
+inline constexpr std::uint32_t ETH_LIVE_STATUS_FRAMES_TXD_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x20;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_FRAMES_TXD_OK_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x28;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_FRAMES_TXD_BADFCS_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x30;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BYTES_TXD_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x38;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BYTES_TXD_OK_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x40;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BYTES_TXD_BADFCS_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x48;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_FRAMES_RXD_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x50;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_FRAMES_RXD_OK_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x58;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_FRAMES_RXD_BADFCS_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x60;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_FRAMES_RXD_DROPPED_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x68;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BYTES_RXD_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x70;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BYTES_RXD_OK_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x78;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BYTES_RXD_BADFCS_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x80;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_BYTES_RXD_DROPPED_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x88;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_CORR_CW_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x90;
+inline constexpr std::uint32_t ETH_LIVE_STATUS_UNCORR_CW_ADDR = ETH_LIVE_STATUS_BASE_ADDR + 0x98;
 
 // port_status_e values reported in eth_status_t.port_status.
 inline constexpr std::uint32_t PORT_STATUS_UNKNOWN = 0;
