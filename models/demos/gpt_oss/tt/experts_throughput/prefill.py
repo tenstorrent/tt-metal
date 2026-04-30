@@ -10,7 +10,7 @@ ThroughputExpertWeights to match the dispatch's expert-to-device mapping.
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
@@ -72,16 +72,17 @@ class DeepSeekPrefillConfig:
         self.seq_len_per_chip = seq_len_per_chip
         self.capacity_factor = capacity_factor
 
-        _, metadata_len, max_dispatched = compute_constants(
+        _, metadata_len, max_dispatch_buffer_token_size, max_dispatched = compute_constants(
             seq_len_per_chip=seq_len_per_chip,
             num_routed_experts=config.num_experts,
             num_experts_per_tok=config.num_experts_per_tok,
             num_devices=dispatch_group_size * num_dispatch_groups,
             dispatch_group_size=dispatch_group_size,
-            capacity_factor=capacity_factor,
+            dispatch_buffer_capacity_factor=int(capacity_factor),
         )
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
 
         # Standard GROUP-BASED dispatch table
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
@@ -92,6 +93,22 @@ class DeepSeekPrefillConfig:
             mesh_device, expert_dispatch_table, dispatch_axis=0
         )
 
+        # Global expert idx table for extract/insert ops (post-#41668)
+        global_expert_idx_tt = ttnn.from_torch(
+            ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=experts_per_chip,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+            ),
+            mesh_mapper=get_ep_mesh_mapper(mesh_device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        self.global_expert_idx_table = global_expert_idx_tt
+
         self.dispatch_module = TtDispatchModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -99,7 +116,7 @@ class DeepSeekPrefillConfig:
             num_routed_experts=config.num_experts,
             num_experts_per_tok=config.num_experts_per_tok,
             metadata_len=metadata_len,
-            max_dispatched_tokens_per_expert=max_dispatched,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=config.hidden_size,
             cluster_axis=0,
@@ -120,14 +137,46 @@ class DeepSeekPrefillConfig:
             init_zeros=True,
         )
 
-        self.routing_setup = TtMoERoutingSetup(mesh_device, expert_dispatch_table, num_links=num_links)
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device, expert_dispatch_table, num_links=num_links, experts_per_chip=experts_per_chip
+        )
 
         self.permuted_weights = None  # Set by mlp.py after host-side permutation
+        self._per_expert_weights = None
 
         logger.info(
             f"DeepSeekPrefillConfig: experts_per_chip={experts_per_chip}, "
-            f"max_dispatched={max_dispatched}, dgs={dispatch_group_size}, ndg={num_dispatch_groups}"
+            f"max_dispatched={max_dispatched}, max_buf={max_dispatch_buffer_token_size}, "
+            f"dgs={dispatch_group_size}, ndg={num_dispatch_groups}"
         )
+
+    def get_per_expert_weights(self, pw):
+        """Slice EPC-batched weights into per-expert tensors. Cached after first call."""
+        if self._per_expert_weights is not None:
+            return self._per_expert_weights
+
+        H = self.config.hidden_size
+        I = self.config.intermediate_size
+
+        slices = []
+        for e in range(self.experts_per_chip):
+            if pw.w1_w3_fused is not None:
+                w1_w3_e = ttnn.slice(pw.w1_w3_fused, [0, e, 0, 0], [1, e + 1, H, 2 * I], [1, 1, 1, 1])
+                w1_w3_bias_e = ttnn.slice(pw.w1_w3_bias_fused, [0, e, 0, 0], [1, e + 1, 1, 2 * I], [1, 1, 1, 1])
+                w2_e = ttnn.slice(pw.w2, [0, e, 0, 0], [1, e + 1, I, H], [1, 1, 1, 1])
+                w2_bias_e = ttnn.slice(pw.w2_bias, [0, e, 0, 0], [1, e + 1, 1, H], [1, 1, 1, 1])
+                slices.append((w1_w3_e, w1_w3_bias_e, w2_e, w2_bias_e))
+            else:
+                w1_e = ttnn.slice(pw.w1, [0, e, 0, 0], [1, e + 1, H, I], [1, 1, 1, 1])
+                w1_bias_e = ttnn.slice(pw.w1_bias, [0, e, 0, 0], [1, e + 1, 1, I], [1, 1, 1, 1])
+                w3_e = ttnn.slice(pw.w3, [0, e, 0, 0], [1, e + 1, H, I], [1, 1, 1, 1])
+                w3_bias_e = ttnn.slice(pw.w3_bias, [0, e, 0, 0], [1, e + 1, 1, I], [1, 1, 1, 1])
+                w2_e = ttnn.slice(pw.w2, [0, e, 0, 0], [1, e + 1, I, H], [1, 1, 1, 1])
+                w2_bias_e = ttnn.slice(pw.w2_bias, [0, e, 0, 0], [1, e + 1, 1, H], [1, 1, 1, 1])
+                slices.append((w1_e, w1_bias_e, w3_e, w3_bias_e, w2_e, w2_bias_e))
+
+        self._per_expert_weights = slices
+        return slices
 
 
 # Keep for backward compatibility
@@ -251,7 +300,6 @@ def _forward_prefill_deepseek_chunk(
 ):
     """One-shot DeepSeek prefill — input seq must equal prefill_config.seq_len_per_chip."""
     pc = prefill_config
-    # Use pre-permuted weights (GROUP-BASED ordering matching dispatch table)
     pw = getattr(pc, "permuted_weights", None) or weights
 
     # Step 1: All-gather x across TP axis
@@ -279,7 +327,7 @@ def _forward_prefill_deepseek_chunk(
         idx_for_routing = ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(idx_u16)
 
-    tt_offsets, tt_counts, _ = pc.routing_setup(
+    tt_offsets, tt_counts, expert_region_offsets, _ = pc.routing_setup(
         ttnn_top_k_experts_indices=idx_for_routing,
         num_routed_experts=config.num_experts,
         seq_len_per_chip=pc.seq_len_per_chip,
@@ -313,53 +361,95 @@ def _forward_prefill_deepseek_chunk(
     ttnn.deallocate(indices_rm)
     ttnn.deallocate(tt_offsets)
 
-    # Step 6: Expert compute using GROUP-permuted ThroughputExpertWeights
-    buf = ttnn.squeeze(dispatched, dim=0)
-    if len(buf.shape) == 3:
-        buf = ttnn.unsqueeze(buf, dim=0)
-    # NaN cleanup skipped — unfilled dispatch slots dont affect valid token outputs
-    buf_tiled = ttnn.to_layout(buf, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(dispatched)
-
+    # Step 6: Per-expert FFN using extract/insert (post-#41668 flat buffer).
+    H = config.hidden_size
+    I = config.intermediate_size
+    max_per_expert = pc.max_dispatched_tokens_per_expert
     memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    if pw.w1_w3_fused is not None:
-        w1_w3_out = ttnn.matmul(buf_tiled, pw.w1_w3_fused, memory_config=memory_config)
+    buf = ttnn.squeeze(dispatched, dim=0)
+    if len(buf.shape) >= 3:
+        buf = ttnn.squeeze(buf, dim=0)
+    buf_tiled = ttnn.to_layout(buf, ttnn.TILE_LAYOUT, memory_config=memory_config)
+    ttnn.deallocate(dispatched)
+    if buf_tiled.dtype != ttnn.bfloat8_b:
+        buf_work = ttnn.typecast(buf_tiled, ttnn.bfloat8_b)
         ttnn.deallocate(buf_tiled)
-        ttnn.add(w1_w3_out, pw.w1_w3_bias_fused, output_tensor=w1_w3_out)
-        shape = w1_w3_out.shape
-        w1_out = ttnn.slice(
-            w1_w3_out, [0, 0, 0, 0], [shape[0], shape[1], shape[2], config.intermediate_size], [1, 1, 1, 1]
-        )
-        w3_out = ttnn.slice(
-            w1_w3_out,
-            [0, 0, 0, config.intermediate_size],
-            [shape[0], shape[1], shape[2], 2 * config.intermediate_size],
-            [1, 1, 1, 1],
-        )
-        ttnn.deallocate(w1_w3_out)
     else:
-        w1_out = ttnn.matmul(buf_tiled, pw.w1, memory_config=memory_config)
-        ttnn.add(w1_out, pw.w1_bias, output_tensor=w1_out)
-        w3_out = ttnn.matmul(buf_tiled, pw.w3, memory_config=memory_config)
-        ttnn.deallocate(buf_tiled)
-        ttnn.add(w3_out, pw.w3_bias, output_tensor=w3_out)
+        buf_work = buf_tiled
 
-    activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+    per_expert_w = pc.get_per_expert_weights(pw)
 
-    expert_output = ttnn.matmul(activated, pw.w2, memory_config=memory_config)
-    ttnn.deallocate(activated)
-    ttnn.add(expert_output, pw.w2_bias, output_tensor=expert_output)
+    for local_expert in range(pc.experts_per_chip):
+        tokens = ttnn.experimental.deepseek_prefill.extract(
+            buf_work,
+            expert_region_offsets,
+            tt_counts,
+            pc.global_expert_idx_table,
+            local_expert_id=local_expert,
+            max_dispatched_tokens_per_expert=max_per_expert,
+        )
 
-    expert_out_rm = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(expert_output)
-    expert_out_rm = ttnn.unsqueeze(expert_out_rm, dim=0)
+        tokens_bf16 = ttnn.typecast(tokens, ttnn.bfloat16)
+        ttnn.deallocate(tokens)
+        tokens_4d = ttnn.reshape(tokens_bf16, (1, 1, max_per_expert, H))
 
-    # Step 7: Combine
-    combined = pc.combine_module(expert_out_rm, metadata, tt_counts)
+        if pw.w1_w3_fused is not None:
+            w1_w3_e, w1_w3_bias_e, w2_e, w2_bias_e = per_expert_w[local_expert]
+
+            w1_w3_out = ttnn.matmul(tokens_4d, w1_w3_e, memory_config=memory_config)
+            ttnn.deallocate(tokens_4d)
+            ttnn.deallocate(tokens_bf16)
+            ttnn.add(w1_w3_out, w1_w3_bias_e, output_tensor=w1_w3_out)
+            sh = w1_w3_out.shape
+            w1_out = ttnn.slice(w1_w3_out, [0, 0, 0, 0], [sh[0], sh[1], sh[2], I], [1, 1, 1, 1])
+            w3_out = ttnn.slice(w1_w3_out, [0, 0, 0, I], [sh[0], sh[1], sh[2], 2 * I], [1, 1, 1, 1])
+            ttnn.deallocate(w1_w3_out)
+        else:
+            w1_e, w1_bias_e, w3_e, w3_bias_e, w2_e, w2_bias_e = per_expert_w[local_expert]
+
+            w1_out = ttnn.matmul(tokens_4d, w1_e, memory_config=memory_config)
+            ttnn.add(w1_out, w1_bias_e, output_tensor=w1_out)
+            w3_out = ttnn.matmul(tokens_4d, w3_e, memory_config=memory_config)
+            ttnn.deallocate(tokens_4d)
+            ttnn.deallocate(tokens_bf16)
+            ttnn.add(w3_out, w3_bias_e, output_tensor=w3_out)
+
+        activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+
+        expert_out_4d = ttnn.matmul(activated, w2_e, memory_config=memory_config)
+        ttnn.deallocate(activated)
+        ttnn.add(expert_out_4d, w2_bias_e, output_tensor=expert_out_4d)
+
+        expert_out_2d = ttnn.reshape(expert_out_4d, (max_per_expert, H))
+        if expert_out_2d.dtype != ttnn.bfloat8_b:
+            expert_out_bf8 = ttnn.typecast(expert_out_2d, ttnn.bfloat8_b)
+            ttnn.deallocate(expert_out_4d)
+        else:
+            expert_out_bf8 = expert_out_2d
+
+        buf_work = ttnn.experimental.deepseek_prefill.insert(
+            buf_work,
+            expert_out_bf8,
+            expert_region_offsets,
+            tt_counts,
+            pc.global_expert_idx_table,
+            local_expert_id=local_expert,
+        )
+        ttnn.deallocate(expert_out_bf8)
+
+    expert_outputs_bf16 = ttnn.typecast(buf_work, ttnn.bfloat16)
+    ttnn.deallocate(buf_work)
+    expert_out_rm_2d = ttnn.to_layout(expert_outputs_bf16, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+    ttnn.deallocate(expert_outputs_bf16)
+    expert_out_rm = ttnn.reshape(expert_out_rm_2d, (1, 1, pc.max_dispatch_buffer_token_size, H))
+
+    # Step 7: Combine (post-#41668 takes token counts and region offsets)
+    combined = pc.combine_module(expert_out_rm, metadata, tt_counts, expert_region_offsets)
     ttnn.deallocate(expert_out_rm)
     ttnn.deallocate(metadata)
     ttnn.deallocate(tt_counts)
+    ttnn.deallocate(expert_region_offsets)
 
     # Step 8: Fused post-combine reduce (w_reduce/w_5d may be views of scores_for_reduce)
     w_reduce = ttnn.reshape(scores_for_reduce, (1, 1, pc.seq_len_per_chip, config.num_experts_per_tok))
@@ -374,8 +464,6 @@ def _forward_prefill_deepseek_chunk(
             combined, w_5d, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
     except Exception as _e:
-        from loguru import logger
-
         logger.warning(f"FUSED FALLBACK: {_e}")
         K = config.num_experts_per_tok
         seq = pc.seq_len_per_chip
