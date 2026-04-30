@@ -107,7 +107,8 @@ void kernel_main() {
         }
     }
 
-    // topk mask uses add_tiles_bcast_rows() in compute so no need for Ht loop
+    // Topk mask: load a single row of Kt tiles. The compute kernel applies it via
+    // add_block_bcast_rows_inplace(), which row-broadcasts this row across all Ht rows.
     uint32_t tile_id_topk = 0;
     cb_topk.reserve_back(Kt);
     for (uint32_t j = 0; j < Kt; ++j) {

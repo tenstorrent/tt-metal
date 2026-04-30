@@ -71,6 +71,8 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
         expert_logical_shape.rank(),
         expert_logical_shape,
         input_logical_shape[-1]);
+    TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be padded to 32, got {}", topk_shape[-2]);
+    TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be padded to 32, got {}", expert_shape[-2]);
 }
 
 TensorSpec MoeDeviceOperation::compute_output_specs(
