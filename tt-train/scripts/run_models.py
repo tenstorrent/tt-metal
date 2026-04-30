@@ -200,7 +200,7 @@ def main() -> int:
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
 
-        # Check if model should be skipped
+        # Check if model should be skipped if not supported by card
         if (skip_cards := model.get("skip-card")) is not None:
             skip_card = skip_cards if isinstance(skip_cards, list) else [skip_cards]
             if any(card.strip().lower() in card_type for card in skip_card):
