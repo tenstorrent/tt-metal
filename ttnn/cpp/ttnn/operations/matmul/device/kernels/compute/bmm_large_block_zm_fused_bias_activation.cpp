@@ -215,6 +215,7 @@ void kernel_main() {
         static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
     constexpr uint32_t activation_param0 = get_named_compile_time_arg_val("activation_param0");
     constexpr uint32_t activation_param1 = get_named_compile_time_arg_val("activation_param1");
+    constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
 
     ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
 #endif
@@ -353,8 +354,11 @@ void kernel_main() {
                                     DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                    ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(
-                                        i);
+                                    ActivationApplyHelper<
+                                        activation_type,
+                                        activation_param0,
+                                        activation_param1,
+                                        activation_param2>::apply(i);
                                 }
 
                                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

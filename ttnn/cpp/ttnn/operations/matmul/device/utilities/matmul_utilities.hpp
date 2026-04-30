@@ -234,31 +234,35 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
  * @brief Consolidated activation parameters structure
  *
  * Contains the activation type and its associated parameters in a single struct
+ * These values are passed as compile time arguments to the kernel
  */
 struct ActivationParams {
-    KernelActivation type;
-    uint32_t param0;
-    uint32_t param1;
+    KernelActivation type = KernelActivation::NONE;
+    uint32_t param0 = 0;
+    uint32_t param1 = 0;
+    uint32_t param2 = 0;
 };
 
 /**
  * @brief Extract activation parameters
  *
- * Extracts the activation type and both parameters
+ * Extracts the activation type and both parameters. Prepares parameter values for the kernel.
  *
  * @param activation The UnaryWithParam containing the activation operation and parameters
- * @return ActivationParams struct with type, param0, and param1
+ * @return ActivationParams struct with type and activation specific param0, param1, param2
  */
 inline ActivationParams get_activation_params(const ttnn::operations::unary::UnaryWithParam& activation) {
     using ttnn::operations::unary::UnaryOpType;
 
+    // Activation parameters provided by the ttnn op.
     std::span<const float> params = activation.get_params();
+    TT_FATAL(
+        params.size() <= 2, "Invalid number of activation parameters: {}. Expected no more than 2.", params.size());
     const bool has_first = !params.empty();
     const bool has_second = params.size() > 1;
 
-    ActivationParams result{};
-    result.param0 = 0;
-    result.param1 = 0;
+    // Activation parameters to be given to the kernel
+    ActivationParams result;
 
     switch (activation.op_type) {
         case UnaryOpType::GELU:
@@ -317,8 +321,19 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
         case UnaryOpType::SOFTPLUS:
             result.type = KernelActivation::SOFTPLUS;
             // param0 is beta (default 1.0)
-            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3f800000u;
             // param1 is threshold (default 20.0)
+            // we also prepare beta reciprocal as a kernel compile arg,
+            // which is passed as param2
+            if (has_first) {
+                float beta = params[0];
+                TT_FATAL(beta != 0, "SOFTPLUS activation beta parameter cannot be zero");
+                float beta_reciprocal = 1.0f / params[0];
+                result.param0 = std::bit_cast<uint32_t>(beta);
+                result.param2 = std::bit_cast<uint32_t>(beta_reciprocal);
+            } else {
+                result.param0 = 0x3f800000u;
+                result.param2 = 0x3f800000u;
+            }
             result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x41a00000u;
             break;
 

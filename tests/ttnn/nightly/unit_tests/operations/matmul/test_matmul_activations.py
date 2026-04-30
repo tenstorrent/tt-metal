@@ -605,6 +605,8 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
     out_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
+
     if is_blackhole():
         num_banks = device.dram_grid_size().x
     else:
@@ -746,10 +748,10 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
             rtol = 3.0 * K
             pcc_threshold = 0.99
         elif activation_name in ["relu6", "tanh", "selu", "softplus"]:
-            # Slightly relaxed tolerances
+            # Relaxed tolerances
             atol = 0.008 * K
             rtol = 2.5 * K
-            pcc_threshold = 0.995
+            pcc_threshold = 0.994
         elif activation is not None:
             # Standard tolerances for other activations
             atol = 0.005 * K

@@ -64,7 +64,7 @@ struct ActivationInitHelper {
     }
 };
 
-template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
+template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
 struct ActivationApplyHelper {
     // Compile-time validation
     static_assert(
@@ -121,14 +121,8 @@ struct ActivationApplyHelper {
             // PARAM0 is alpha, PARAM1 is lambda
             selu_tile_pack(tile_index, PARAM0, PARAM1);
         } else if constexpr (ACT == KernelActivation::SOFTPLUS) {
-            // PARAM0 is beta, PARAM1 is threshold
-            uint32_t beta = PARAM0;
-            float beta_f;
-            memcpy(&beta_f, &beta, sizeof(float));
-            float beta_recip_f = 1.0f / beta_f;
-            uint32_t beta_reciprocal;
-            memcpy(&beta_reciprocal, &beta_recip_f, sizeof(uint32_t));
-            softplus_tile_pack(tile_index, PARAM0, beta_reciprocal, PARAM1);
+            // PARAM0 is beta, PARAM2 beta reciprocal, PARAM1 is threshold
+            softplus_tile_pack(tile_index, PARAM0, PARAM2, PARAM1);
         }
     }
 };

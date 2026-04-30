@@ -706,6 +706,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
         compute_named_compile_args["activation_param0"] = params.param0;
         compute_named_compile_args["activation_param1"] = params.param1;
+        compute_named_compile_args["activation_param2"] = params.param2;
     }
 
     // Create compute kernel
@@ -1593,6 +1594,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
         compute_named_compile_args["activation_param0"] = params.param0;
         compute_named_compile_args["activation_param1"] = params.param1;
+        compute_named_compile_args["activation_param2"] = params.param2;
     }
 
     // Create compute kernel
@@ -2301,6 +2303,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
             compute_named_compile_args["activation_param0"] = params.param0;
             compute_named_compile_args["activation_param1"] = params.param1;
+            compute_named_compile_args["activation_param2"] = params.param2;
         }
     }
     if (packer_l1_acc_en) {

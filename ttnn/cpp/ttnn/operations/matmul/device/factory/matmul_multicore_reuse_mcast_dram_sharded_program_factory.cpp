@@ -475,6 +475,7 @@ create_program_dram_sharded(
         compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
         compute_named_compile_args["activation_param0"] = params.param0;
         compute_named_compile_args["activation_param1"] = params.param1;
+        compute_named_compile_args["activation_param2"] = params.param2;
     }
 
     // Create compute kernel
