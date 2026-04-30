@@ -1,16 +1,19 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the first 10 video tests back-to-back on the TTNN Molmo2 model.
+"""Run video tests back-to-back on the TTNN Molmo2 model.
 
 Warm-up (JIT compile + decode-trace capture) happens automatically on the
-first generate() call.  Tests 2–10 reuse the captured decode trace.
+first generate() call.  All subsequent tests reuse the captured decode trace.
 
 Usage:
     cd /home/ttuser/ssinghal/PR-fix/molmo2/tt-metal
     export TT_METAL_HOME=$(pwd) && export PYTHONPATH=$(pwd)
     source python_env/bin/activate
+    # Run all 105 tests:
     MESH_DEVICE=T3K pytest models/demos/molmo2/tests/test_10_videos.py -v -s
+    # Run first N tests:
+    MESH_DEVICE=T3K pytest models/demos/molmo2/tests/test_10_videos.py -v -s --max_tests 10
 
 Environment:
     MESH_DEVICE       T3K (default), N150, N300
@@ -186,8 +189,13 @@ def processor():
 # ---------------------------------------------------------------------------
 
 
+def pytest_addoption(parser):
+    parser.addoption("--max_tests", default=None, type=int, help="Max number of tests to run (default: all)")
+
+
 @pytest.fixture(scope="module")
-def video_tests():
+def video_tests(request):
+    _MAX_TESTS = request.config.getoption("--max_tests") or 10**6  # default: run all
     all_tests = load_jsonl(TEST_JSONL)
     results_map = {r["test_index"]: r for r in load_jsonl(RESULTS_JSONL)}
 
@@ -210,7 +218,7 @@ def video_tests():
                 "ref_response": (ref or "").strip(),
             }
         )
-        if len(collected) >= 10:
+        if len(collected) >= _MAX_TESTS:
             break
 
     assert collected, f"No video tests found. Check VIDEO_DIR={VIDEO_DIR}"
@@ -230,11 +238,14 @@ def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
 
     pass_count = fail_count = 0
     results = []
+    results_path = Path("/tmp/molmo2_ttnn_results.jsonl")
+    results_path.unlink(missing_ok=True)  # fresh file for this run
 
     logger.info(f"\n{'='*70}")
     logger.info(f"Running {len(video_tests)} video tests back-to-back")
     logger.info(f"  Decode trace: captured once after first prefill, reused for all")
     logger.info(f"  KV cache: reset before each test")
+    logger.info(f"  Results → {results_path}")
     logger.info(f"{'='*70}")
 
     for rank, entry in enumerate(video_tests):
@@ -257,7 +268,8 @@ def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
         # ---- TTNN generate ----
         # First test: triggers JIT compilation for prefill + captures decode trace.
         # Subsequent tests: reuse cached JIT kernels and the same decode trace.
-        t1 = time.time()
+        t_gen_start = time.time()
+        t_gen = t_prefill = t_decode = None
         try:
             generated_ids = model.generate(
                 input_ids=input_ids,
@@ -269,7 +281,8 @@ def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
                 temperature=0.0,
                 user_id=0,
             )
-            t_gen = time.time() - t1
+            t_gen = time.time() - t_gen_start
+            n_new = len(generated_ids)
 
             response = processor.tokenizer.decode(generated_ids.tolist(), skip_special_tokens=True).strip()
             ok = response == ref
@@ -279,36 +292,48 @@ def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
             else:
                 fail_count += 1
 
-            logger.info(f"  response: {response!r}  [{status}]  generate={t_gen:.1f}s")
+            tps = n_new / t_gen if t_gen > 0 else 0
+            logger.info(
+                f"  response: {response!r}  [{status}]  " f"generate={t_gen:.2f}s  tokens={n_new}  {tps:.1f} tok/s"
+            )
 
         except Exception as e:
-            t_gen = time.time() - t1
+            t_gen = time.time() - t_gen_start
             response = f"ERROR: {e}"
             status = "ERROR"
             fail_count += 1
-            logger.error(f"  EXCEPTION: {e}  ({t_gen:.1f}s)")
+            logger.error(f"  EXCEPTION: {e}  ({t_gen:.2f}s)")
 
-        results.append(
-            {
-                "test_index": idx,
-                "expected": ref,
-                "response": response,
-                "status": status,
-                "seq_len": S,
-                "time_s": round(time.time() - t0, 2),
-            }
-        )
+        record = {
+            "test_index": idx,
+            "expected": ref,
+            "response": response,
+            "status": status,
+            "seq_len": S,
+            "prep_s": round(t_prep, 3),
+            "gen_s": round(t_gen, 3) if t_gen is not None else None,
+            "total_s": round(time.time() - t0, 3),
+        }
+        results.append(record)
+        with open(results_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
 
     # ---- Summary ----
     n = len(video_tests)
+    gen_times = [r["gen_s"] for r in results if r["gen_s"] is not None and r["status"] != "ERROR"]
+    avg_gen = sum(gen_times) / len(gen_times) if gen_times else 0
+
     logger.info(f"\n{'='*70}")
     logger.info(f"RESULTS: {pass_count}/{n} PASS,  {fail_count}/{n} FAIL")
+    logger.info(f"Avg generate time (PASS tests): {avg_gen:.2f}s")
     logger.info(f"{'='*70}")
     for r in results:
         sym = "✓" if r["status"] == "PASS" else "✗"
         logger.info(
             f"  [{sym}] idx={r['test_index']:3d}  S={r['seq_len']:5d}  "
-            f"{r['time_s']:6.1f}s  got={r['response']!r}  exp={r['expected']!r}"
+            f"prep={r['prep_s']:5.1f}s  gen={r['gen_s'] or 'ERR':>6}s  "
+            f"got={r['response'][:20]!r}  exp={r['expected']!r}"
         )
+    logger.info(f"\nFull results written to {results_path}")
 
     assert fail_count == 0, f"{fail_count}/{n} tests failed — see log above"
