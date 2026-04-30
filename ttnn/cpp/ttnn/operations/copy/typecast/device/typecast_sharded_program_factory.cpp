@@ -128,7 +128,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
         KernelDescriptor kernel_desc;
         kernel_desc.kernel_source = TYPECAST_COMPUTE_KERNEL_PATH;
         kernel_desc.core_ranges = all_cores;
-        kernel_desc.compile_time_args = {1, num_tile_per_core, in_cb_id, out_cb_id};
+        kernel_desc.compile_time_args = {num_tile_per_core, in_cb_id, out_cb_id};
         kernel_desc.defines = make_typecast_compute_defines_desc(input_dtype, output_dtype);
         kernel_desc.config = ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
@@ -136,6 +136,11 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
             .math_approx_mode = false};
+        // per_core_block_cnt is now a runtime arg; sharded path always runs the compute
+        // body once per core (the inner loop iterates per_core_block_dim = num_tile_per_core).
+        for (const auto& core : tt::tt_metal::corerange_to_cores(all_cores)) {
+            kernel_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{1u});
+        }
         program_descriptor.kernels.push_back(std::move(kernel_desc));
     }
 

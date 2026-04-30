@@ -16,6 +16,7 @@ struct TypecastProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle typecast_reader_kernel_id{};
         tt::tt_metal::KernelHandle typecast_writer_kernel_id{};
+        tt::tt_metal::KernelHandle typecast_compute_kernel_id{};
         std::vector<CoreCoord> cores;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

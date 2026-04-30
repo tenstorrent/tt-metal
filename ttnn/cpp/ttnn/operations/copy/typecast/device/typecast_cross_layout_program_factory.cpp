@@ -148,31 +148,26 @@ static ProgramDescriptor create_tile_to_rm_descriptor(
     auto compute_defines = make_typecast_compute_defines_desc(input_dtype, output_dtype);
     compute_defines.emplace_back("UNTILIZE_OUTPUT", "1");
 
-    if (!core_range.ranges().empty()) {
+    // Single compute kernel binary across all cores.  per_core_block_cnt (nblocks_per_core
+    // for the main range, nblocks_per_core_cliff for the cliff core) is a runtime arg
+    // so the kernel binary depends only on ntiles_per_row, not on the work split.
+    {
         KernelDescriptor k;
         k.kernel_source = TYPECAST_COMPUTE_KERNEL_PATH;
-        k.core_ranges = core_range;
-        k.compile_time_args = {nblocks_per_core, ntiles_per_row, input_cb_index, output_cb_index};
+        k.core_ranges = all_cores;
+        k.compile_time_args = {ntiles_per_row, input_cb_index, output_cb_index};
         k.defines = compute_defines;
         k.config = ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise};
-        desc.kernels.push_back(std::move(k));
-    }
-
-    if (!core_range_cliff.empty()) {
-        KernelDescriptor k;
-        k.kernel_source = TYPECAST_COMPUTE_KERNEL_PATH;
-        k.core_ranges = core_range_cliff;
-        k.compile_time_args = {nblocks_per_core_cliff, ntiles_per_row, input_cb_index, output_cb_index};
-        k.defines = compute_defines;
-        k.config = ComputeConfigDescriptor{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .bfp8_pack_precise = args.bfp8_pack_precise};
+        const bool has_cliff_compute = !core_range_cliff.empty();
+        const uint32_t ncores_full = ncores - (has_cliff_compute ? 1u : 0u);
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const uint32_t cur_nblocks = (i < ncores_full) ? nblocks_per_core : nblocks_per_core_cliff;
+            k.runtime_args.emplace_back(cores[i], std::vector<uint32_t>{cur_nblocks});
+        }
         desc.kernels.push_back(std::move(k));
     }
 
@@ -335,33 +330,24 @@ static ProgramDescriptor create_rm_to_tile_descriptor(
         compute_defines.emplace_back("TYPECAST_OUTPUT_32BIT", "1");
     }
 
-    if (!core_range.ranges().empty()) {
+    // Single compute kernel binary across all cores (same rationale as TILE→RM path).
+    {
         KernelDescriptor k;
         k.kernel_source = TYPECAST_COMPUTE_KERNEL_PATH;
-        k.core_ranges = core_range;
-        k.compile_time_args = {
-            nblocks_per_core, ntiles_per_row, input_cb_index, output_cb_index, intermediate_cb_index};
+        k.core_ranges = all_cores;
+        k.compile_time_args = {ntiles_per_row, input_cb_index, output_cb_index, intermediate_cb_index};
         k.defines = compute_defines;
         k.config = ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = rm_to_tile_fp32_dest,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise};
-        desc.kernels.push_back(std::move(k));
-    }
-
-    if (!core_range_cliff.empty()) {
-        KernelDescriptor k;
-        k.kernel_source = TYPECAST_COMPUTE_KERNEL_PATH;
-        k.core_ranges = core_range_cliff;
-        k.compile_time_args = {
-            nblocks_per_core_cliff, ntiles_per_row, input_cb_index, output_cb_index, intermediate_cb_index};
-        k.defines = compute_defines;
-        k.config = ComputeConfigDescriptor{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = rm_to_tile_fp32_dest,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .bfp8_pack_precise = args.bfp8_pack_precise};
+        const bool has_cliff_compute = !core_range_cliff.empty();
+        const uint32_t ncores_full = ncores - (has_cliff_compute ? 1u : 0u);
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const uint32_t cur_nblocks = (i < ncores_full) ? nblocks_per_core : nblocks_per_core_cliff;
+            k.runtime_args.emplace_back(cores[i], std::vector<uint32_t>{cur_nblocks});
+        }
         desc.kernels.push_back(std::move(k));
     }
 

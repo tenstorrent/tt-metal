@@ -24,16 +24,23 @@
 #endif
 
 void kernel_main() {
-    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
-    constexpr uint32_t input_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(3);
+    // per_core_block_cnt is a runtime arg so the kernel binary is volume-independent;
+    // a single compiled program serves any tensor volume on a fixed grid (the host-side
+    // factories distribute the work across cores via per-core runtime args).
+    const uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(0);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(2);
+
+    if (per_core_block_cnt == 0) {
+        return;
+    }
 
     experimental::CircularBuffer cb_in(input_cb);
     experimental::CircularBuffer cb_out(output_cb);
 
 #if defined(TILIZE_INPUT)
-    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(3);
     experimental::CircularBuffer cb_inter(intermediate_cb);
 
     // Phase 1: tilize RM data from input_cb → intermediate_cb on clean hardware.

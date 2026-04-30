@@ -72,7 +72,10 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
         return TypecastShardedProgramFactory{};
     }
 
-    // Default: handles TILE, ROW_MAJOR, interleaved, sharded, sub_core_grids
+    // Default: TILE or ROW_MAJOR same-layout, any memory layout (interleaved or sharded),
+    // optional sub_core_grids.  Sharded operands are handled via TensorAccessor in the
+    // reader/writer kernels (NOC-based reads/writes from per-shard banks); no
+    // CB-buffer aliasing is used here, so set_globally_allocated_address is NOT required.
     log_debug(tt::LogOp, "Using TypecastProgramFactory");
     return TypecastProgramFactory{};
 }
@@ -170,17 +173,17 @@ ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(args, tensor_args);
 
-    // For same-layout tile operations, only volume matters (tiles are distributed uniformly).
-    // For row-major and cross-layout transforms, actual dimensions matter (ntiles_per_row,
-    // nblocks, stick sizes depend on shape, not just volume).
+    // For same-layout tile operations, the program structure is volume-independent:
+    // the unified factory uses a fixed grid (full compute grid or args.sub_core_grids)
+    // and passes per-core counts as runtime args; the sharded factory derives all
+    // structure from the shard_spec, which is captured in input.memory_config().
+    // Volume is not part of the hash so different volumes share one compiled program.
+    //
+    // For row-major and cross-layout transforms, actual dimensions still matter
+    // (ntiles_per_row, padded page sizes, stick sizes depend on shape).
     if (input_tensor.layout() == Layout::TILE && !is_cross_layout(args, tensor_args)) {
         return operation::hash_operation<TypecastDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape.volume(),
-            input_tensor.layout());
+            args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_tensor.layout());
     }
     return operation::hash_operation<TypecastDeviceOperation>(
         args,
