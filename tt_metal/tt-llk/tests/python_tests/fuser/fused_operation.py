@@ -24,7 +24,6 @@ class FusedOperation:
     max_output_dimensions: Tuple[int, int]
     stage_id: int = 0
     num_stages: int = 1
-    unpack_to_dest: bool = False
     throttle: int = 0
     stochastic_rnd: StochasticRounding = StochasticRounding.No
     tiny_tiles: bool = False

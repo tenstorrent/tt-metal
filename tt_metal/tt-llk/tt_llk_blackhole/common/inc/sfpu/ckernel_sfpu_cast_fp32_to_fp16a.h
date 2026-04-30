@@ -20,7 +20,7 @@ inline void _cast_fp32_to_fp16a_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         // sfpi::vFloat val = sfpi::dst_reg[0];
-        // sfpi::dst_reg[0] = float_to_fp16a(val, sfpi::RoundMode::NearestEven);
+        // sfpi::dst_reg[0] = sfpi::float_to_fp16a(val, sfpi::RoundMode::NearestEven);
         TTI_SFPLOAD(0, 0, ADDR_MOD_7, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 8);
         TTI_SFPSTORE(0, 1, ADDR_MOD_7, 0);

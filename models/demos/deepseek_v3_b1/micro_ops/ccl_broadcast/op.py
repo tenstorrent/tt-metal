@@ -328,8 +328,6 @@ class BroadcastConfig:
                     "is_root": row == self.root_row and col == self.root_col,
                     "num_neighbors": len(dst_nodes),
                     "dst_nodes": dst_nodes,
-                    "dst_mesh_ids": [int(node.mesh_id) for node in dst_nodes],
-                    "dst_chip_ids": [int(node.chip_id) for node in dst_nodes],
                     "worker_core": worker_core,
                     "worker_core_set": worker_core_set,
                     "my_noc_x": my_noc_x,
@@ -406,12 +404,10 @@ class BroadcastConfig:
         src_node = d["my_fabric_node_id"]
         payload = []
 
-        # Neighbor-blocked RT arg layout:
-        # for each neighbor: append dst ids first, then all link setup args.
-        for i in range(d["num_neighbors"]):
-            payload.append(d["dst_mesh_ids"][i])
-            payload.append(d["dst_chip_ids"][i])
-            dst_node = d["dst_nodes"][i]
+        # RT arg layout:
+        # 1. all fabric setup args for every (neighbor, link) connection
+        # 2. one dst_mesh_id / dst_chip_id pair per neighbor
+        for dst_node in d["dst_nodes"]:
             for link_idx in range(self.num_links):
                 setup_args = ttnn.setup_fabric_connection(src_node, dst_node, link_idx, program, core)
                 if self._setup_fabric_rt_arg_count is None:
@@ -421,6 +417,9 @@ class BroadcastConfig:
                         len(setup_args) == self._setup_fabric_rt_arg_count
                     ), "setup_fabric_connection arg width changed across calls"
                 payload.extend(setup_args)
+        for dst_node in d["dst_nodes"]:
+            payload.append(int(dst_node.mesh_id))
+            payload.append(int(dst_node.chip_id))
         return [len(payload)] + payload
 
     # Public RISC-named interface
@@ -590,6 +589,7 @@ class DeepseekMinimalBroadcast:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         ncrisc_args=[(config.get_worker_core(coord), [])],
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 # Create program descriptor (only reader and writer, no compute)

@@ -113,24 +113,24 @@ void validate_dfb_tile_counters(
         }
     }
 
-    // For BLOCKED mode, validate remapper pair indices
-    if (config.cap == dfb::AccessPattern::BLOCKED) {
+    // For ALL mode, validate remapper pair indices
+    if (config.cap == dfb::AccessPattern::ALL) {
         std::set<uint8_t> seen_remapper_indices;
         for (const auto& [risc_id, rc] : producer_configs) {
             uint8_t remapper_idx = rc->config.remapper_pair_index;
 
             // Check valid range (0-63)
-            EXPECT_LT(remapper_idx, 64) << "BLOCKED: Producer RISC " << (int)risc_id
+            EXPECT_LT(remapper_idx, 64) << "ALL: Producer RISC " << (int)risc_id
                                         << " has invalid remapper_pair_index " << (int)remapper_idx
                                         << " (must be 0-63)";
 
             // Check uniqueness among producers
             EXPECT_EQ(seen_remapper_indices.count(remapper_idx), 0)
-                << "BLOCKED: Producer RISC " << (int)risc_id << " has duplicate remapper_pair_index "
+                << "ALL: Producer RISC " << (int)risc_id << " has duplicate remapper_pair_index "
                 << (int)remapper_idx;
             seen_remapper_indices.insert(remapper_idx);
 
-            log_info(tt::LogTest, "BLOCKED: Producer {} has remapper_pair_index {}", risc_id, remapper_idx);
+            log_info(tt::LogTest, "ALL: Producer {} has remapper_pair_index {}", risc_id, remapper_idx);
         }
     }
 
@@ -140,7 +140,7 @@ void validate_dfb_tile_counters(
 
         const auto* producer_rc = producer_it->second;
 
-        // For BLOCKED mode, accumulate expected_consumer_tcs across all pairings for this producer
+        // For ALL mode, accumulate expected_consumer_tcs across all pairings for this producer
         uint32_t expected_consumer_tcs = 0;
         size_t consumer_idx = 0;
 
@@ -156,8 +156,8 @@ void validate_dfb_tile_counters(
             auto producer_ptc = producer_rc->config.packed_tile_counter[producer_tc_slot];
             auto consumer_ptc = consumer_rc->config.packed_tile_counter[consumer_tc_slot];
 
-            if (config.cap == dfb::AccessPattern::BLOCKED) {
-                // For BLOCKED mode, consumer TCs are different from producer TC (remapper-based)
+            if (config.cap == dfb::AccessPattern::ALL) {
+                // For ALL mode, consumer TCs are different from producer TC (remapper-based)
                 // Accumulate the consumer TC IDs into expected_consumer_tcs
                 if (consumer_idx < 4) {
                     uint8_t consumer_tc_id = dfb::get_counter_id(consumer_ptc);
@@ -167,7 +167,7 @@ void validate_dfb_tile_counters(
 
                 log_info(
                     tt::LogTest,
-                    "BLOCKED: Producer {} TC[{}]=(tensix:{}, tc:{}) -> Consumer {} TC[{}]=(tensix:{}, tc:{})",
+                    "ALL: Producer {} TC[{}]=(tensix:{}, tc:{}) -> Consumer {} TC[{}]=(tensix:{}, tc:{})",
                     producer_risc_id,
                     producer_tc_slot,
                     dfb::get_tensix_id(producer_ptc),
@@ -198,16 +198,16 @@ void validate_dfb_tile_counters(
             }
         }
 
-        if (config.cap == dfb::AccessPattern::BLOCKED) {
+        if (config.cap == dfb::AccessPattern::ALL) {
             uint32_t actual_consumer_tcs = producer_rc->config.consumer_tcs;
             ASSERT_EQ(actual_consumer_tcs, expected_consumer_tcs)
-                << "BLOCKED: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
+                << "ALL: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
                 << "Expected: 0x" << std::hex << expected_consumer_tcs << ", Actual: 0x" << actual_consumer_tcs
                 << std::dec;
 
             log_info(
                 tt::LogTest,
-                "BLOCKED: Producer {} consumer_tcs validated: 0x{:x}",
+                "ALL: Producer {} consumer_tcs validated: 0x{:x}",
                 producer_risc_id,
                 actual_consumer_tcs);
         }
@@ -455,7 +455,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
         .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
-        .cap = dfb::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -463,8 +463,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 1,  // BLOCKED: each consumer has num_producers TCs = 1
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 1,  // ALL: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0, {{1, 0, 0}}},  // Producer 0 TC[0] maps to Consumer risc 1 TC[0] via remapper
         }};
@@ -484,7 +484,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
         .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
-        .cap = dfb::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -492,8 +492,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 1,  // BLOCKED: each consumer has num_producers TCs = 1
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 1,  // ALL: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0,
              {
@@ -518,7 +518,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
         .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = dfb::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -526,8 +526,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0, {{4, 0, 0}}},  // Producer 0 TC[0] maps to Consumer risc 4 TC[0] via remapper
             {1, {{4, 0, 1}}},  // Producer 1 TC[0] maps to Consumer risc 4 TC[1] via remapper
@@ -550,7 +550,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
         .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
-        .cap = dfb::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -558,8 +558,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
              {
@@ -606,7 +606,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
         .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
-        .cap = dfb::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -614,8 +614,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
              {
@@ -644,7 +644,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
 
 // 2S x 4B: 2 producers (riscs 0,1) with 4 blocked consumers (riscs 2,3,4,5)
 // Each producer has 1 TC, each consumer has 2 TCs (num_producers TCs)
-// BLOCKED: Each consumer's TC[i] pairs with producer[i]
+// ALL: Each consumer's TC[i] pairs with producer[i]
 TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -657,7 +657,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
         .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
-        .cap = dfb::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::ALL,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -666,8 +666,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
 
     // consumer_risc_mask 0x3C = riscs 2,3,4,5
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 2,  // BLOCKED: each consumer has num_producers TCs = 2
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 2,  // ALL: each consumer has num_producers TCs = 2
         .producer_to_consumer_pairings = {
             {0,
              {

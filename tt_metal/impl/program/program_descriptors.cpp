@@ -191,9 +191,60 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         if (desc.cbs[ci].buffer) {
-            UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *desc.cbs[ci].buffer);
+            UpdateDynamicCircularBufferAddress(
+                program, program_cbs[ci]->id(), *desc.cbs[ci].buffer, desc.cbs[ci].address_offset);
         }
     }
+}
+
+template <typename Range>
+static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& core, const Range& args) {
+    KernelDescriptor::CoreRuntimeArgs values;
+    values.reserve(args.size());
+    for (const auto& arg : args) {
+        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
+            kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
+            values.push_back((*buf)->address());
+        } else {
+            values.push_back(std::get<uint32_t>(arg));
+        }
+    }
+    kd.runtime_args.emplace_back(core, std::move(values));
+}
+
+template <typename Range>
+static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& args) {
+    kd.common_runtime_args.reserve(args.size());
+    for (const auto& arg : args) {
+        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
+            kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), *buf});
+            kd.common_runtime_args.push_back((*buf)->address());
+        } else {
+            kd.common_runtime_args.push_back(std::get<uint32_t>(arg));
+        }
+    }
+}
+
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    emplace_runtime_args_impl(*this, core, args);
+}
+
+void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, const RTArgList& args) {
+    emplace_runtime_args_impl(*this, core, args.items_);
+}
+
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, const std::vector<std::variant<uint32_t, Buffer*>>& args) {
+    emplace_runtime_args_impl(*this, core, args);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    emplace_common_runtime_args_impl(*this, args);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(const RTArgList& args) {
+    emplace_common_runtime_args_impl(*this, args.items_);
 }
 
 }  // namespace tt::tt_metal

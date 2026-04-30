@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<24>();
+    constexpr auto q_args = TensorAccessorArgs<25>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -119,6 +119,8 @@ void kernel_main() {
         receiver_semaphore_noc_addr = get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
     }
 
+    // TODO: CB indices below are hardcoded and duplicated from the program factory.
+    // They should be passed as compile-time args so the factory is the single source of truth.
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
@@ -223,7 +225,12 @@ void kernel_main() {
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
-            if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+            const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
+
+            // Balanced causal skip: this Q chunk is handled by the paired device. Reader sends
+            // nothing (no Q, no K/V) — compute's normalize-only path on the last ring iter does
+            // not read Q (normalize uses only restored sum/out).
+            if (balanced_skip_q) {
                 continue;
             }
 
