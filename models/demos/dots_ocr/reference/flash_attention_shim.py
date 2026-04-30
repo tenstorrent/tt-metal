@@ -20,12 +20,15 @@ while keeping remote Hub files unmodified.
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 import types
 from importlib.machinery import ModuleSpec
 
 import torch
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 _SHIM_ATTR = "__dots_ocr_flash_attn_shim__"
 
@@ -159,10 +162,13 @@ def _unimplemented(*_args, **_kwargs):
 
 def install() -> None:
     """Register stub ``flash_attn`` packages if the real library is not importable."""
-    import flash_attn as fa  # noqa: F401
+    try:
+        import flash_attn as fa  # noqa: F401
 
-    if not getattr(fa, _SHIM_ATTR, False):
-        return
+        if not getattr(fa, _SHIM_ATTR, False):
+            return
+    except ImportError:
+        logger.warning("flash_attn is not installed, using shim")
 
     if "flash_attn" in sys.modules:
         m = sys.modules["flash_attn"]
@@ -199,8 +205,11 @@ def install() -> None:
     # ``transformers`` flash-attention probes use ``PACKAGE_DISTRIBUTION_MAPPING["flash_attn"]``.
     # Some Python / metadata setups omit ``flash_attn`` from ``packages_distributions()``, which
     # raises KeyError when importing Qwen2 modeling (even with eager attention).
-    from transformers.utils import import_utils
+    try:
+        from transformers.utils import import_utils
 
-    m = import_utils.PACKAGE_DISTRIBUTION_MAPPING
-    if isinstance(m, dict) and "flash_attn" not in m:
-        import_utils.PACKAGE_DISTRIBUTION_MAPPING = {**m, "flash_attn": ("flash-attn",)}
+        m = import_utils.PACKAGE_DISTRIBUTION_MAPPING
+        if isinstance(m, dict) and "flash_attn" not in m:
+            import_utils.PACKAGE_DISTRIBUTION_MAPPING = {**m, "flash_attn": ("flash-attn",)}
+    except Exception:
+        logger.warning("skipping flash_attn shim for transformers")
