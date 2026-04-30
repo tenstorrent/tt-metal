@@ -21,8 +21,8 @@ Phase 0: Catalog ─> Phase 1: Investigation ─> Phase 2: Verification
 Before starting, check if outputs from previous runs exist:
 
 1. `agent_logs/{category_slug}/catalog_*.md` → skip Phase 0
-2. `{category}_investigation.md` → skip Phase 1
-3. `{category}_helper_proposal.md` → skip Phase 3
+2. `{category_slug}_investigation.md` → skip Phase 1
+3. `{category_slug}_helper_proposal.md` → skip Phase 3
 4. Existing `.hpp`/`.inl` → start at Phase 4 (validation only)
 
 If prior outputs exist, resume from the earliest phase with missing outputs. Never ask the human to choose a path — the pipeline decides based on what exists.
@@ -47,7 +47,7 @@ All agents log breadcrumbs to `agent_logs/{category_slug}/`. See `tt_metal/third
 3. Assign ops to functional groups
 4. Locate all source files per op (wrapper header, LLK file, codegen entry, program factory, custom kernels)
 
-**Output**: `{category}_catalog.md` containing:
+**Output**: `{category_slug}_catalog.md` containing:
 - Full op list with gap analysis
 - Group-to-ops assignment table
 - Locator results table (op -> file paths)
@@ -75,7 +75,7 @@ Launch ONE investigation agent per functional group, all in parallel. Each agent
 
 All six focus areas are covered by a single agent per group. The agent's prompt specifies which focus areas to prioritize based on the category.
 
-**Output**: `{category}_investigation.md` (orchestrator consolidates per-group outputs)
+**Output (per group)**: `agent_logs/{category_slug}/{group_slug}_investigation.md`. No consolidation step — Phase 2 reads the per-group files directly. If the category has only one group, exactly one investigation file is produced.
 
 ---
 
@@ -85,11 +85,11 @@ All six focus areas are covered by a single agent per group. The agent's prompt 
 
 **Agent**: `llk_verification_agent.md` (subagent_type: Explore)
 
-**Input**: `{category}_investigation.md`
+**Input**: every `agent_logs/{category_slug}/{group_slug}_investigation.md` for this run. One verification agent per group, run in parallel.
 
 **What it does**: Takes each claim from investigation, checks against actual code. Returns CONFIRMED / INCORRECT / UNVERIFIABLE per claim.
 
-**Output**: `{category}_verification.md`
+**Output (per group)**: `agent_logs/{category_slug}/{group_slug}_verification.md`. No consolidation — Phase 3 reads the per-group files directly.
 
 INCORRECT verdicts are high-value — they directly change the helper design.
 
@@ -114,7 +114,7 @@ INCORRECT verdicts are high-value — they directly change the helper design.
 - Side-effect operations -> correctness requirements to preserve
 - CB compile-time analysis -> template vs runtime param decisions
 
-**Output**: `{category}_helper_proposal.md`
+**Output**: `{category_slug}_helper_proposal.md`
 
 **Checkpoint**: Review proposal before proceeding. Check LLK sequence validation table, before/after examples, tier assignments, loop ownership justification, parameter independence analysis.
 
@@ -126,7 +126,7 @@ INCORRECT verdicts are high-value — they directly change the helper design.
 
 **Agent**: `llk_validation_agent.md` (subagent_type: general-purpose)
 
-Runs 4 sub-stages sequentially. Each gates the next.
+Runs 3 sub-stages sequentially. Each gates the next.
 
 ### 4a: Raw LLK Validation
 
@@ -157,24 +157,12 @@ Write test kernels using the ACTUAL helper API (.hpp). Test:
 5. Policy variation (at least 2 input policies)
 6. Chain composition (combine new op with another in a chain)
 7. Feature flag matrix — for every template bool from the compile-time feature matrix,
-   test both true and false. Combinatorial testing is required when flags interact
-   (e.g., PACKER_L1_ACC × PACK_RELU × FUSE_BIAS). Use the investigation's
-   compile-time feature matrix to enumerate the combinations.
+   test both true and false. Combinatorial testing is required when flags interact.
+   Use the investigation's compile-time feature matrix to enumerate the combinations.
 
 - Helper fails but raw passed -> bug in .hpp/.inl, fix and re-run 4c only
 
-### 4d: Performance
-
-Benchmark helper vs raw LLK. Reuse raw kernels from 4a as baseline.
-
-- Test across tile count range (powers of 2, 8 to 32K)
-- Test full complexity spectrum (single op, chains, multi-slot loads)
-- Use min of trimmed runs
-- Report results table
-
-Thresholds: <2% OK, 2-5% REVIEW, >5% BLOCKER
-
-**Output**: `{category}_validation.md` with per-sub-stage results, parameter support matrix, performance table, generated test files.
+**Output**: `{category_slug}_validation.md` with per-sub-stage results, parameter support matrix, generated test files.
 
 ---
 
@@ -188,9 +176,9 @@ Thresholds: <2% OK, 2-5% REVIEW, >5% BLOCKER
 
 Steps:
 1. Read validated proposal (signatures, op structs, LLK sequences, parameter support)
-2. Create `{name}_helpers.hpp` + `{name}_helpers.inl`
+2. Create `{helper_name}_helpers.hpp` + `{helper_name}_helpers.inl`
 3. Migrate Tier 1 call sites
-4. Run Phase 4c/4d tests against final implementation
+4. Run Phase 4c tests against final implementation
 5. Commit
 
 **Output**: `.hpp`, `.inl`, migrated kernel files
@@ -201,10 +189,10 @@ Steps:
 
 **Goal**: Summarize the pipeline run.
 
-Generate `{category}_report.md` containing:
+Generate `{category_slug}_report.md` containing:
 1. Summary: what was created, overall result
 2. Pipeline phases: table with agents, outputs, status
-3. Validation results: per-op pass/fail, parameter support matrix, performance table
+3. Validation results: per-op pass/fail, parameter support matrix
 4. Migration status: which call sites were updated
 5. Open items: Tier 2/3 sites, unsupported parameter combos
 
@@ -220,7 +208,7 @@ Commit the report.
 | Investigation | `llk_investigation_agent.md` | 1 | Device + host + usage analysis (per group, parallel) |
 | Verification | `llk_verification_agent.md` | 2 | Confirm/deny claims against code |
 | Proposal | `llk_helper_proposal_agent.md` | 3 | Design helper API + op structs |
-| Validation | `llk_validation_agent.md` | 4 | Raw LLK -> params -> integration -> perf (TDD loop) |
+| Validation | `llk_validation_agent.md` | 4 | Raw LLK -> params -> integration (TDD loop) |
 | Implementation | (general-purpose) | 5 | Write .hpp/.inl, migrate sites |
 
 ### Dependency Graph
@@ -229,7 +217,7 @@ Commit the report.
 catalog ──> investigation (parallel per group)
                 │
                 v
-         verification ──> proposal ──> validation (4a->4b->4c->4d)
+         verification ──> proposal ──> validation (4a->4b->4c)
                                             │
                                             v
                                      implementation ──> report
@@ -244,7 +232,6 @@ Validation sub-stages can loop back:
 - **4a fails** (raw LLK invalid) -> fix proposal, re-enter Phase 3
 - **4b fails** (observed param combo) -> fix proposal, re-enter Phase 3
 - **4c fails** (helper bug, raw passed) -> fix .hpp/.inl, re-run 4c
-- **4d fails** (>5% overhead) -> fix .hpp/.inl, re-run 4c + 4d
 - **Phase 1 incomplete** (discovered during Phase 3) -> re-run Phase 1 for missing groups
 
 ---

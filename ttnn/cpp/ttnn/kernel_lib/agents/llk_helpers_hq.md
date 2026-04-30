@@ -6,15 +6,53 @@ Entry point for creating and maintaining `compute_kernel_lib` helpers — unifie
 
 | What you need | Document |
 |---|---|
-| **Writing helper code** (file structure, op structs, policies, CRTP bases, perf testing) | [llk_helpers_conventions.md](llk_helpers_conventions.md) |
+| **Writing helper code** (file structure, op structs, policies, CRTP bases, perf testing) | Per-helper learnings doc + the helper's own `.hpp` doc-comment |
 | **Running the agent pipeline** (catalog, investigate, propose, validate, implement) | [llk_helpers_pipeline.md](llk_helpers_pipeline.md) |
+
+## Slug Derivation
+
+Two identifiers appear throughout the pipeline. Both are derived, not freeform — every agent and every pipeline artifact uses the exact spellings produced by the rules below.
+
+**`{category_slug}`** — pipeline run identifier, names the helper *family* under investigation. Used in every artifact filename (`{category_slug}_catalog.md`, `{category_slug}_investigation.md`, ...) and as the breadcrumb directory name (`agent_logs/{category_slug}/`).
+
+```
+category_slug = category_name
+                  .strip()
+                  .lower()
+                  .replace(' ', '_')
+                  .replace('/', '_')
+                  .replace('-', '_')
+```
+
+Examples: `"Reduce"` → `reduce`; `"Tilize / Untilize"` → `tilize___untilize`; `"matmul-block"` → `matmul_block`.
+
+The `category_name` is the single argument the operator passes to launch the pipeline. It is recorded verbatim in the catalog frontmatter so resume runs can re-derive the slug.
+
+**`{helper_name}`** — basename of the final library file (`{helper_name}_helpers.hpp` / `.inl`). Decided in Phase 3 (Proposal) and recorded in the proposal frontmatter. A category with one helper has `helper_name == category_slug`; a category that produces multiple helpers has one `helper_name` per helper file, all listed in the proposal.
+
+**`{group_slug}`** — sub-group identifier inside a category, used only by Phase 1 investigation agents that fan out per group. Derived from the group label exactly like `category_slug`. Appears in per-group artifact paths (`agent_logs/{category_slug}/{group_slug}_investigation.md`).
+
+**Rule for every doc and agent prompt:** the three placeholders above are the only spellings allowed. Do not introduce `{category}`, `{name}`, `${CATEGORY_SLUG}`, `{{CATEGORY_SLUG}}`, or any other variant. If a new variant is needed (e.g. for a new artifact class), define it here first.
+
+## Pipeline Inputs
+
+| Input | Required? | Form | Purpose |
+|---|---|---|---|
+| `category_name` | **mandatory** | string (e.g. `"Reduce"`, `"Tilize / Untilize"`) | Identifies the helper family the pipeline targets. Drives `{category_slug}` derivation; recorded verbatim in catalog frontmatter. |
+| Prior-iteration learnings doc | optional | markdown file | Distilled context from previous helper-creation iterations: what was tried, what failed, what converged. Used by Phase 3 (Proposal) to converge faster on a sound design. Absence is normal for the first iteration of a helper family. |
+
+The learnings doc is **not** a substitute for Phase 0 / 1 / 2 outputs. It only narrows the design space at proposal time. When present, agents must cite which claims they pulled from it (so a stale claim can be retired). When absent, the proposal proceeds from raw investigation + verification only.
+
+## Existing Helpers
+
+Existing `compute_kernel_lib` helpers live in `ttnn/cpp/ttnn/kernel_lib/` as `{helper_name}_helpers.hpp` + `{helper_name}_helpers.inl` pairs. Read the relevant headers before running the pipeline — Phase 0 (Catalog) cross-references the existing surface to avoid duplicate proposals.
 
 ## When to Use What
 
 | Situation | Action |
 |---|---|
-| Adding ops to an existing helper | Read [conventions](llk_helpers_conventions.md) section 5 (op structs). Add CRTP struct + init/call. |
-| Creating a new helper (known ops, known LLK calls) | Read [conventions](llk_helpers_conventions.md), write .hpp/.inl directly, add perf tests. |
+| Adding ops to an existing helper | Read the helper's `.hpp` doc-comment + its learnings doc. Add CRTP struct + init/call. |
+| Creating a new helper (known ops, known LLK calls) | Read the prior-helper learnings docs, write `.hpp`/`.inl` directly, add perf tests. |
 | Creating a new helper (unknown territory) | Run the [pipeline](llk_helpers_pipeline.md) from Phase 0. |
 | Updating/improving an existing helper | Run [pipeline](llk_helpers_pipeline.md) from Phase 4 (validation only). |
 
@@ -26,7 +64,7 @@ Entry point for creating and maintaining `compute_kernel_lib` helpers — unifie
 | `llk_investigation_agent.md` | 1 | Device + host + usage analysis (per group) |
 | `llk_verification_agent.md` | 2 | Confirm/deny investigation claims |
 | `llk_helper_proposal_agent.md` | 3 | Design helper API + op structs |
-| `llk_validation_agent.md` | 4 | Raw LLK -> params -> integration -> perf |
+| `llk_validation_agent.md` | 4 | Raw LLK -> params -> integration |
 | `llk_review_fix_agent.md` | 4 | Document review and fix loop (within validation) |
 | `llk_device_validation_agent.md` | 4 | Device-side test generation (within validation) |
 
@@ -34,8 +72,8 @@ Entry point for creating and maintaining `compute_kernel_lib` helpers — unifie
 
 ```
 ttnn/cpp/ttnn/kernel_lib/
-  {name}_helpers.hpp      <- declarations, enums, structs, examples
-  {name}_helpers.inl      <- implementation
+  {helper_name}_helpers.hpp      <- declarations, enums, structs, examples
+  {helper_name}_helpers.inl      <- implementation
   agents/                 <- this directory (pipeline docs + agent prompts)
 ```
 
@@ -51,7 +89,7 @@ A helper that asks the caller to do `cb_wait_front(cb_in0, 1)` *before* invoking
 
 ### DEST capacity is compile-time, never literal
 
-Half-sync fp16 has 8 DEST slots; full-sync has 16; fp32-DEST mode halves both. Use `DEST_AUTO_LIMIT` from `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp` (constexpr, derived from `get_dest_limit()` / `DST_ACCUM_MODE`) anywhere a helper bounds DEST slot indices, batch sizes, or chain widths. A literal `8` in an enum or `static_assert` ships a helper that silently miscompiles the moment the kernel runs in a different DEST mode. `DEST_AUTO_LIMIT` is already used across `binary_op_helpers.inl`, `sfpu_helpers.hpp`, `untilize_helpers.inl` — match that convention.
+Half-sync fp16 has 8 DEST slots; full-sync has 16; fp32-DEST mode halves both. Use `DEST_AUTO_LIMIT` from `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp` (constexpr, derived from `get_dest_limit()` / `DST_ACCUM_MODE`) anywhere a helper bounds DEST slot indices, batch sizes, or chain widths. A literal `8` in an enum or `static_assert` ships a helper that silently miscompiles the moment the kernel runs in a different DEST mode. `DEST_AUTO_LIMIT` is already used across `tilize_helpers`, `untilize_helpers`, `reduce_helpers`, `matmul_helpers` — match that convention.
 
 ## Validation Tests
 
@@ -59,13 +97,6 @@ Every helper change (new helper OR update) MUST land alongside at least one
 pytest that runs a custom compute kernel on device and validates against a
 torch golden. Host-side `./build_metal.sh` is NOT sufficient — kernels JIT
 at runtime, so compilation success is not correctness.
-
-Existing suites — run these AND add to them for any change that touches the
-covered surface:
-
-| Suite | What it covers | Location |
-|---|---|---|
-| `test_helpers_chain_and_binary.py` | `sfpu_chain` Load lifecycle (fan-out, `LoadPolicy`, `NoWaitPop`); `binary_op` same-CB dedup; `DestReuseOp` as chain element; Load inside a PostOp chain (FPU-clash reinit) | `tests/ttnn/unit_tests/kernel_lib/` + kernels in `ttnn/cpp/ttnn/kernel_lib/tests/chain_and_binary/` |
 
 When a new surface is added (new enum value, new policy, new op struct, new
 reconfig path) the update MUST:
@@ -91,7 +122,7 @@ sub-stage 2c / 2d steps.
 
 Migration is the FINAL step — it consumes helpers that already exist and are validated. If a missing op struct, missing enum value, or missing API surface is discovered mid-migration, stop and close that gap first (Helper Update / Helper Creation), then resume.
 
-The steps below are helper-agnostic. Helper-specific guidance (policy enums, batching rules, op-struct catalog, fusion patterns) lives in the per-helper `.hpp` doc-comments and the helper's section of `llk_helpers_conventions.md` — read those for the helper you are migrating to before Step 1.
+The steps below are helper-agnostic. Helper-specific guidance (policy enums, batching rules, op-struct catalog, fusion patterns) lives in the per-helper `.hpp` doc-comments and the per-helper learnings doc — read those for the helper you are migrating to before Step 1.
 
 ### Step 1 — Audit the target kernel
 
@@ -115,7 +146,7 @@ For the kernel being migrated, enumerate:
 
 If the audit turns up ANY of these, return to a prior step before writing the migration:
 
-- A needed op struct, API, or fusion point does not exist → Helper Update (conventions §5) or Helper Creation, then resume.
+- A needed op struct, API, or fusion point does not exist → Helper Update or Helper Creation, then resume.
 - A required policy / enum value is missing (e.g. a CB lifecycle the helper does not yet model, a dtype-reconfig mode it does not emit) → Helper Update via pipeline, then resume.
 - The control-flow or LLK pattern is fundamentally unsupported (cumulative waits, deeply interleaved op classes with no fusion point, exotic pack patterns) → leave that block on raw LLK and move on.
 
@@ -173,12 +204,6 @@ pipeline run; later runs append rows as new kernels are encountered.
 | Step 1 (audit) | If the target kernel is missing from the manifest, find its pytest (grep program factories → test imports), verify it runs, then append a row. |
 | Step 4 (verify) | Run every pytest listed for the touched kernel(s). If the manifest row was stale (path moved, test renamed), fix the row before reporting the migration done. |
 | Step 5 (record) | If the migration adds coverage on a *new* kernel that the test file didn't previously exercise, note that in the `*_analysis.md`; the manifest row needs no change (same pytest still covers it). |
-
-**Infrastructure regression set**: a separate section at the top of the
-manifest lists pytests that must run after any change to the shared helpers
-(`binary_op_helpers`, `sfpu_chain`, `reduce_helpers_compute`). Agents
-*read* this set, they don't re-derive it — new rows get appended when a
-pipeline run proves a particular pytest exercises a newly-added surface.
 
 **Discovery procedure** (used once per kernel, then the result lives in the
 manifest):
