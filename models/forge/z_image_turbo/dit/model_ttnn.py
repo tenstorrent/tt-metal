@@ -374,10 +374,10 @@ class ZImageTransformerTTNN(LightweightModule):
 
         gate = self._mm(x, w1T, seq_len, HIDDEN_DIM, MLP_PER_DEV)
         old_gate = gate
-        gate = ttnn.silu(old_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.silu(old_gate, memory_config=ACT_MEM)
         ttnn.deallocate(old_gate, False)
         up = self._mm(x, w3T, seq_len, HIDDEN_DIM, MLP_PER_DEV)
-        h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ACT_MEM)
         ttnn.deallocate(gate, False)
         ttnn.deallocate(up, False)
         out = self._mm(h, w2T, seq_len, MLP_PER_DEV, HIDDEN_DIM)
@@ -779,9 +779,7 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         old_norm1 = norm1_x
-        norm1_x = ttnn.multiply(
-            old_norm1, scale_msa, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        norm1_x = ttnn.multiply(old_norm1, scale_msa, dtype=ttnn.DataType.BFLOAT16, memory_config=ACT_MEM)
         ttnn.deallocate(old_norm1, False)
         ttnn.deallocate(scale_msa, False)
         attn_out = self._attention(norm1_x, seq_len, block_prefix)
@@ -794,16 +792,14 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         ttnn.deallocate(attn_out, False)
-        gated_attn = ttnn.multiply(
-            gate_msa, norm2_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        gated_attn = ttnn.multiply(gate_msa, norm2_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ACT_MEM)
         ttnn.deallocate(gate_msa, False)
         ttnn.deallocate(norm2_out, False)
         x = ttnn.add(
             x_3d,
             gated_attn,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ACT_MEM,
         )
         ttnn.deallocate(x_3d, False)
         ttnn.deallocate(gated_attn, False)
@@ -816,12 +812,10 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         old_norm3 = norm3_x
-        norm3_x = ttnn.multiply(
-            old_norm3, scale_mlp, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        norm3_x = ttnn.multiply(old_norm3, scale_mlp, dtype=ttnn.DataType.BFLOAT16, memory_config=ACT_MEM)
         ttnn.deallocate(old_norm3, False)
         ttnn.deallocate(scale_mlp, False)
-        norm3_2d = ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        norm3_2d = ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ACT_MEM)
         ttnn.deallocate(norm3_x, False)
         mlp_out = self._mlp(norm3_2d, seq_len, block_prefix)
         ttnn.deallocate(norm3_2d, False)
@@ -833,9 +827,7 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         ttnn.deallocate(mlp_out, False)
-        gated_mlp = ttnn.multiply(
-            gate_mlp, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        gated_mlp = ttnn.multiply(gate_mlp, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ACT_MEM)
         ttnn.deallocate(gate_mlp, False)
         ttnn.deallocate(norm4_out, False)
         old_x = x
@@ -843,7 +835,7 @@ class ZImageTransformerTTNN(LightweightModule):
             old_x,
             gated_mlp,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ACT_MEM,
         )
         ttnn.deallocate(old_x, False)
         ttnn.deallocate(gated_mlp, False)
@@ -874,7 +866,7 @@ class ZImageTransformerTTNN(LightweightModule):
             x_3d,
             norm2_out,
             dtype=ttnn.DataType.BFLOAT16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ACT_MEM,
         )
         ttnn.deallocate(x_3d, False)
         ttnn.deallocate(norm2_out, False)
@@ -886,7 +878,7 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
-        norm3_2d = ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        norm3_2d = ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ACT_MEM)
         ttnn.deallocate(norm3_x, False)
         mlp_out = self._mlp(norm3_2d, seq_len, block_prefix)
         ttnn.deallocate(norm3_2d, False)
@@ -899,7 +891,7 @@ class ZImageTransformerTTNN(LightweightModule):
         )
         ttnn.deallocate(mlp_out, False)
         old_x = x
-        x = ttnn.add(old_x, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(old_x, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ACT_MEM)
         ttnn.deallocate(old_x, False)
         ttnn.deallocate(norm4_out, False)
         return x
