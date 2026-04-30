@@ -9,9 +9,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"

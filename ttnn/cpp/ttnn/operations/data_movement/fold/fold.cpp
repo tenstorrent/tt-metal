@@ -15,7 +15,6 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/fold/device/fold_device_op.hpp"
@@ -365,8 +364,9 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
         new_shard_spec.grid = new_core_range;
 
         auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
-        // need to reshard
-        return ttnn::reshard(input, new_mem_config, std::nullopt);
+        (void)new_mem_config;
+        // TODO(nuked-op reshard): restore real call
+        return input;
     }
     return input;
 }

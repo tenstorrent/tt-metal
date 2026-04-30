@@ -12,8 +12,6 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 // TODO(nuked-op tilize_with_val_padding/untilize_with_unpadding): headers removed
 #include "ttnn/operations/experimental/reshape/view.hpp"
@@ -72,7 +70,8 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     if (tensor.memory_config().is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
         MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        temp_tensor = ttnn::sharded_to_interleaved(tensor, temp_memory_config, std::nullopt);
+        // TODO(nuked-op sharded_to_interleaved): restore real call
+        temp_tensor = tensor;
     }
     if (memory_config.is_sharded()) {
         intermediate_out_memory_config =
@@ -88,8 +87,10 @@ ttnn::Tensor perform_reshape_on_2D_RM(
 
         // Recompute the shard spec for the output tensor shape
         auto output_mem_config = recompute_shard_spec_for_output(memory_config, temp_tensor2.tensor_spec());
+        (void)output_mem_config;
 
-        return ttnn::interleaved_to_sharded(temp_tensor2, output_mem_config, std::nullopt);
+        // TODO(nuked-op interleaved_to_sharded): restore real call
+        return temp_tensor2;
     }
     return temp_tensor2;
 }
@@ -237,7 +238,8 @@ ttnn::Tensor reshape_tiled(
             TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
             MemoryConfig working_input_memory_config{
                 TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-            tensor3d = ttnn::sharded_to_interleaved(tensor3d, working_input_memory_config, std::nullopt);
+            (void)working_input_memory_config;
+            // TODO(nuked-op sharded_to_interleaved): restore real call
         }
 
         if (tensor.dtype() == DataType::BFLOAT8_B) {
@@ -265,8 +267,9 @@ ttnn::Tensor reshape_tiled(
             // Recompute the shard spec for the output tensor shape
             auto output_mem_config =
                 detail::recompute_shard_spec_for_output(memory_config, output_tensor_3d.tensor_spec());
+            (void)output_mem_config;
 
-            output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
+            // TODO(nuked-op interleaved_to_sharded): restore real call
         }
 
         if (tensor.dtype() == DataType::BFLOAT8_B) {

@@ -34,7 +34,6 @@ file(
     reshape_view/device/device/*
     scatter/device/kernels/*
     sharded/device/kernels/*
-    sharded/reshard/device/kernels/*
     sort/device/kernels/*
     split/device/kernels/*
     slice/device/kernels/*
@@ -66,12 +65,6 @@ target_sources(
             repeat/repeat.hpp
             reshape_view/reshape.hpp
             reshape_view/reshape_common.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-            sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
-            sharded/reshard/reshard.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation_types.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
             slice/slice.hpp
             transpose/transpose.hpp
         FILE_SET kernels
@@ -219,30 +212,7 @@ target_sources(
             scatter/device/scatter_reduce_bfloat16_program_factory.hpp
             # sharded/
             sharded/sharded_common.hpp
-            sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op_types.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp
-            sharded/reshard/reshard_nanobind.hpp
-            sharded/reshard/device/reshard_device_operation.hpp
-            sharded/reshard/device/reshard_device_operation_types.hpp
-            sharded/reshard/device/reshard_program_factory_generic.hpp
-            sharded/reshard/device/reshard_program_factory_same_height.hpp
-            sharded/reshard/device/reshard_program_factory_same_width.hpp
-            sharded/reshard/device/nd_reshard_program_factory_copy_local.hpp
-            sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp
-            sharded/sharded_to_interleaved/sharded_to_interleaved.hpp
-            sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp
             # sharded_partial/
-            sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.hpp
-            sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_nanobind.hpp
-            sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp
-            sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op_types.hpp
-            sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.hpp
-            sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.hpp
-            sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_nanobind.hpp
-            sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.hpp
-            sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation_types.hpp
-            sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.hpp
             # slice/
             slice/slice_nanobind.hpp
             slice/device/slice_device_operation.hpp
@@ -375,26 +345,7 @@ target_sources(
         scatter/device/scatter_device_operation.cpp
         scatter/device/scatter_reduce_bfloat16_program_factory.cpp
         scatter/device/scatter_program_factory.cpp
-        sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
-        sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
-        sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
-        sharded/reshard/device/reshard_device_operation.cpp
-        sharded/reshard/device/reshard_program_factory_same_width.cpp
-        sharded/reshard/device/reshard_program_factory_same_height.cpp
-        sharded/reshard/device/reshard_program_factory_generic.cpp
-        sharded/reshard/device/nd_reshard_program_factory_copy_pages.cpp
-        sharded/reshard/device/nd_reshard_program_factory_copy_local.cpp
-        sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
-        sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.cpp
-        sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp
-        sharded/sharded_to_interleaved/sharded_to_interleaved.cpp
-        sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.cpp
-        sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.cpp
-        sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
-        sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.cpp
-        sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.cpp
-        sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
         slice/device/slice_device_operation.cpp
         slice/device/slice_program_factory_rm.cpp
         slice/device/slice_program_factory_rm_sharded.cpp
