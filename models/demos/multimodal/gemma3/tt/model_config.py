@@ -4,14 +4,18 @@
 
 import gc
 import os
-from functools import lru_cache
 
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
-from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
+from models.tt_transformers.tt.common import (
+    Mode,
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
+)
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import (
     HfAttentionWrapper,
@@ -29,21 +33,12 @@ ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
 
 def _gemma3_sdpa_decode_k_chunk_tokens() -> int:
-    default = 256
-    raw = os.environ.get("GEMMA3_SDPA_DECODE_K_CHUNK", "").strip()
-    if not raw:
-        return default
-    try:
-        n = int(raw, 10)
-    except ValueError:
-        logger.warning(f"GEMMA3_SDPA_DECODE_K_CHUNK={raw!r} is not an integer; using default {default}")
-        return default
-    if n <= 0 or (n & (n - 1)) != 0 or n % 32 != 0:
-        logger.warning(
-            f"GEMMA3_SDPA_DECODE_K_CHUNK={n} must be a power of 2 and a multiple of 32; using default {default}"
-        )
-        return default
-    return n
+    """Fixed K chunk for Gemma3 paged-decode tuning (text demo path)."""
+    return 256
+
+
+# Smallest K chunk allowed by SDPA decode (power of 2, multiple of 32); minimizes L1 for traced programs.
+_GEMMA3_TRACE_SDPA_DECODE_K_CHUNK = 32
 
 
 class ModelArgs(TTModelArgs):
@@ -83,6 +78,7 @@ class ModelArgs(TTModelArgs):
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        enable_program_trace: bool = False,
     ):
         # Resolve HF_MODEL to a local snapshot path before super().__init__() so that
         # all HF calls (AutoConfig, tokenizer, weights) skip the refs/main lookup,
@@ -94,6 +90,11 @@ class ModelArgs(TTModelArgs):
             if snapshot:
                 logger.info(f"[Gemma3] Resolved HF model '{hf_model}' to snapshot: {snapshot}")
                 os.environ["HF_MODEL"] = str(snapshot)
+        self._enable_program_trace = enable_program_trace
+        # Must run before super(): parent init or @lru_cache could otherwise pin SDPA decode to k_chunk=0 path.
+        if enable_program_trace:
+            self.force_fixed_decode_k_chunk = True
+            self._gemma3_sdpa_decode_k_chunk_override = _GEMMA3_TRACE_SDPA_DECODE_K_CHUNK
 
         super().__init__(
             mesh_device,
@@ -115,10 +116,39 @@ class ModelArgs(TTModelArgs):
         self.padded_vocab_size = 262400
         # Raise the per-device cap so on-device sampling is enabled for Gemma3's 131200-wide shard.
         self.device_sampling_max_per_device_vocab = 192 * 1024
-        self._force_sdpa_decode_hifi2_na()
+
+        if enable_program_trace:
+            self._relax_attention_ops_for_program_trace()
+
+        # HiFi2 NA fixes single-device decode token drift. It increases SDPA decode L1 usage and can
+        # overlap Metal's static circular-buffer region used for program tracing (or multi-device
+        # layouts), causing TT_THROW in validate_circular_buffer_region. Skip in those cases.
+        if not enable_program_trace:
+            self._force_sdpa_decode_hifi2_na()
+
+    def _relax_attention_ops_for_program_trace(self):
+        """Lower L1 for prefill+decode attention under program tracing (minimal_matmul / SDPA / linear)."""
+        trace_groups = (
+            OpGroup.LI_QKV_PREFILL,
+            OpGroup.LI_O_PREFILL,
+            OpGroup.SDPA_PREFILL,
+            OpGroup.LI_QKV_DECODE,
+            OpGroup.LI_O_DECODE,
+            OpGroup.SDPA_DECODE,
+        )
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {k: v for k, v in conf.tensor_dtype_settings.items() if v is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            for grp in trace_groups:
+                if grp in op_fidelity:
+                    op_fidelity[grp] = MathFidelitySetting.HIFI2_FP16
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
     def _force_sdpa_decode_hifi2_na(self):
-        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness."""
+        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness (single-device)."""
         for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
             tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
             op_fidelity = dict(conf.op_fidelity_settings)
@@ -160,13 +190,24 @@ class ModelArgs(TTModelArgs):
             return model_overrides[model_name][device_name] * 1024
         return super().get_max_prefill_chunk_size()
 
-    @lru_cache(maxsize=None)
+    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+        """Smaller MinimalMatmul blocks for traced long prefill (default 8³ overflows static CB vs L1)."""
+        if self._enable_program_trace and mode == Mode.PREFILL and seq_len > 128:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=4,
+                K_block_size=4,
+                N_block_size=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+            )
+        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
+
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False)
         if not force_fixed_k_chunk:
             return super().get_attn_sdpa_decode_program_config(prefetcher)
 
-        fixed_k_chunk_tokens = _gemma3_sdpa_decode_k_chunk_tokens()
+        override = getattr(self, "_gemma3_sdpa_decode_k_chunk_override", None)
+        fixed_k_chunk_tokens = _gemma3_sdpa_decode_k_chunk_tokens() if override is None else int(override)
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)

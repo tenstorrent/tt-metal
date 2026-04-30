@@ -90,6 +90,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.model import Transformer
@@ -101,6 +102,7 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         optimizations=optimizations,
+        enable_program_trace=enable_program_trace,
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
@@ -286,6 +288,7 @@ def prepare_generator_args(
     page_params,
     paged_attention,
     dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -315,6 +318,7 @@ def prepare_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             dummy_weights=dummy_weights,
+            enable_program_trace=enable_program_trace,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -922,6 +926,7 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
         dummy_weights=dummy_weights,
+        enable_program_trace=enable_trace,
     )
 
     if token_accuracy:

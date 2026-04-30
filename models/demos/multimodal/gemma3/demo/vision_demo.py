@@ -65,6 +65,7 @@ def create_multimodal_model(
     num_layers=None,
     paged_attention_config=None,
     dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
@@ -76,6 +77,7 @@ def create_multimodal_model(
         max_seq_len=max_seq_len,
         optimizations=optimizations,
         dummy_weights=dummy_weights,
+        enable_program_trace=enable_program_trace,
     )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 
@@ -114,6 +116,7 @@ def prepare_generator_args(
     optimizations=None,
     num_layers=None,
     dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -132,6 +135,7 @@ def prepare_generator_args(
             optimizations=optimizations,
             num_layers=num_layers,
             dummy_weights=dummy_weights,
+            enable_program_trace=enable_program_trace,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -260,6 +264,7 @@ def test_multimodal_demo_text(
         optimizations=optimizations,
         num_layers=num_layers,
         dummy_weights=dummy_weights,
+        enable_program_trace=enable_trace,
     )
 
     from transformers import AutoProcessor
