@@ -34,6 +34,10 @@ inputs:
   last-success-timestamps-path:
     description: 'Path to JSON mapping workflow_name -> last success timestamp info (optional)'
     required: false
+  failures_to_elevate:
+    description: 'Number of currently stayed-failing JOBS (not pipelines) to artificially elevate to regressions for this run. Walks stayed-failing pipelines in order, taking failing jobs until N is reached (or the pool is exhausted). Empty/0 = no-op. Useful for forcing end-to-end test runs of the regression notification pipeline.'
+    required: false
+    default: ''
 
 outputs:
   report:

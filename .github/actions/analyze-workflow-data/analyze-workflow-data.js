@@ -207,6 +207,56 @@ async function run() {
     // This identifies NEW failing jobs in pipelines that were already failing
     await detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, github.context);
 
+    // Optional: artificially elevate N stayed-failing JOBS (not pipelines) to
+    // regressions for this run.  Used by aggregate-workflow-data.yaml's
+    // workflow_dispatch to force end-to-end exercise of the notification
+    // pipeline without waiting for a real regression.
+    //
+    // Walks stayed-failing pipelines in order, taking failing jobs until N is
+    // reached.  Each elevated pipeline clones its envelope but replaces
+    // `failing_jobs` with the chosen subset, so the slack-report per-job loop
+    // and trigger-auto-triage both see a well-formed regression entry.  A
+    // single pipeline with many failing jobs can absorb the whole budget.
+    const failuresToElevateRaw = (core.getInput('failures_to_elevate') || '').trim();
+    if (failuresToElevateRaw !== '') {
+      const failuresToElevate = Number.parseInt(failuresToElevateRaw, 10);
+      if (!Number.isFinite(failuresToElevate) || failuresToElevate < 0 || String(failuresToElevate) !== failuresToElevateRaw) {
+        core.warning(`Invalid failures_to_elevate value: "${failuresToElevateRaw}" (expected non-negative integer). Skipping elevation.`);
+      } else if (failuresToElevate > 0) {
+        if (stayedFailingDetails.length === 0) {
+          core.warning(`failures_to_elevate=${failuresToElevate} requested but there are zero stayed-failing pipelines. Skipping elevation.`);
+        } else {
+          let remaining = failuresToElevate;
+          let totalElevatedJobs = 0;
+          const elevated = [];
+          for (const pipeline of stayedFailingDetails) {
+            if (remaining <= 0) break;
+            const jobs = Array.isArray(pipeline.failing_jobs) ? pipeline.failing_jobs : [];
+            if (jobs.length === 0) continue;
+            const take = jobs.slice(0, remaining);
+            if (take.length === 0) continue;
+            elevated.push({
+              ...pipeline,
+              failing_jobs: take,
+              _elevated_for_test: true,
+            });
+            remaining -= take.length;
+            totalElevatedJobs += take.length;
+          }
+          core.warning(
+            `failures_to_elevate=${failuresToElevate}: elevated ${totalElevatedJobs} job(s) ` +
+            `across ${elevated.length} pipeline(s) to regressions for this run.`
+          );
+          if (totalElevatedJobs < failuresToElevate) {
+            core.warning(
+              `Only ${totalElevatedJobs} stayed-failing job(s) were available (requested ${failuresToElevate}).`
+            );
+          }
+          regressedDetails.push(...elevated);
+        }
+      }
+    }
+
     // Persist generated payloads to files so downstream jobs can consume them
     // without pushing large JSON strings through workflow outputs/env vars.
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();

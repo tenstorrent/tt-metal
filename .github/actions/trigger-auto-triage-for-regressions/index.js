@@ -80,10 +80,12 @@ async function run() {
     // The action.yml default is true, so we default to 'true' string here.
     const sendSlackMessageFlag = core.getInput('send-slack-message') || 'true';
 
-    // Per-pipeline Slack thread timestamps.  Keys are the pipeline display name
-    // (workflow.name from the regression JSON, same value used as the map key
-    // when the slack-report action sends each regression as a separate message).
-    // Falls back to the global slackTs when a pipeline-specific ts is absent.
+    // Per-job (and per-workflow fallback) Slack thread timestamps.  Keys are
+    // "<workflow.name> / <job.name>" for per-job top-level messages, or just
+    // "<workflow.name>" for regressions that had no failing jobs.  This matches
+    // the boundary keys emitted by slack-report-analyze-workflow-data.
+    // When no entry is found, the lookup falls back to the workflow-name key,
+    // then to the global slackTs.
     const slackTsMapRaw = core.getInput('slack_ts_map') || '{}';
     let slackTsMap = {};
     try {
@@ -104,6 +106,22 @@ async function run() {
       slackTsMap = {};
       core.warning(`Failed to parse slack_ts_map, falling back to global slack_ts: ${e.message}`);
     }
+
+    // Optional global cap on auto-triage dispatches per invocation.
+    // Empty/unset = unlimited. Tracks successful createWorkflowDispatch calls
+    // (a failed dispatch doesn't count so transient GHA errors don't consume
+    // the budget).  Primarily for safe testing via workflow_dispatch.
+    const maxDispatchesRaw = (core.getInput('max_dispatches') || '').trim();
+    let maxDispatches = null;
+    if (maxDispatchesRaw !== '') {
+      const parsed = Number.parseInt(maxDispatchesRaw, 10);
+      if (!Number.isFinite(parsed) || parsed < 0 || String(parsed) !== maxDispatchesRaw) {
+        throw new Error(`Invalid max_dispatches value: "${maxDispatchesRaw}" (expected non-negative integer or empty).`);
+      }
+      maxDispatches = parsed;
+      core.info(`max_dispatches cap: ${maxDispatches}`);
+    }
+    let dispatchCount = 0;
 
     // Use the same ref as the workflow that is invoking this action so that
     // auto-triage.yml runs on the same branch (and picks up any in-branch changes),
@@ -157,7 +175,8 @@ async function run() {
       const failingJobs = allFailingJobs.slice(0, MAX_JOBS_PER_WORKFLOW);
       if (allFailingJobs.length > MAX_JOBS_PER_WORKFLOW) {
         core.warning(`Workflow ${workflowFileName} has ${allFailingJobs.length} failing jobs, capping auto-triage to first ${MAX_JOBS_PER_WORKFLOW} to control cost`);
-        // Use the first job's ts (or workflow-level fallback) for the cap message
+        // Resolve a sensible ts for the cap notification: prefer the first
+        // failing job's per-job ts, then the workflow-level keys, then global.
         const firstJobName = (typeof allFailingJobs[0] === 'object' && allFailingJobs[0]?.name) ? allFailingJobs[0].name : String(allFailingJobs[0]);
         const capTs = slackTsMap[`${workflow.name} / ${firstJobName}`] || slackTsMap[workflow.name] || slackTsMap[workflowFileName] || slackTs;
         if (capTs && slackChannelId && slackBotToken) {
@@ -171,16 +190,27 @@ async function run() {
         }
       }
 
+      if (maxDispatches !== null && dispatchCount >= maxDispatches) {
+        core.warning(`Reached max_dispatches=${maxDispatches}; skipping remaining auto-triage dispatches for this run.`);
+        break;
+      }
+
       for (const job of failingJobs) {
+        if (maxDispatches !== null && dispatchCount >= maxDispatches) {
+          core.warning(`Reached max_dispatches=${maxDispatches}; skipping remaining auto-triage dispatches for this run.`);
+          break;
+        }
+
         // Handle both old format (string) and new format ({name, url} object)
         const jobName = (typeof job === 'object' && job !== null && job.name) ? job.name : String(job);
 
-        // Resolve the Slack thread ts for this specific job.
-        // The slack-report action now keys the map as "workflow_name / job_name".
-        // Fall back to workflow-level key, then global ts for backward compatibility.
+        // Resolve the Slack thread ts for this specific job.  Primary key is
+        // "<workflow.name> / <jobName>" (the boundary key slack-report emits
+        // for per-job top-level messages).  Workflow-level keys are fallbacks
+        // for the zero-failing-jobs edge case; global slackTs is last resort.
         const jobTs = slackTsMap[`${workflow.name} / ${jobName}`] || slackTsMap[workflow.name] || slackTsMap[workflowFileName] || slackTs;
         if (jobTs && jobTs !== slackTs) {
-          core.info(`Using job-specific ts=${jobTs} for ${workflow.name} / ${jobName}`);
+          core.info(`Using per-job ts=${jobTs} for ${workflow.name} / ${jobName}`);
         }
 
         core.info(`Triggering auto-triage for workflow: ${workflowFileName}, job: ${jobName}`);
@@ -199,7 +229,8 @@ async function run() {
               slack_channel_id: slackChannelId
             }
           });
-          core.info(`✓ Successfully triggered auto-triage for ${workflowFileName} / ${jobName}`);
+          dispatchCount += 1;
+          core.info(`✓ Successfully triggered auto-triage for ${workflowFileName} / ${jobName} (dispatch ${dispatchCount}${maxDispatches !== null ? `/${maxDispatches}` : ''})`);
 
           // Add a small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -209,6 +240,12 @@ async function run() {
           // Continue with other jobs even if one fails
         }
       }
+    }
+
+    if (maxDispatches !== null) {
+      core.info(`Total auto-triage dispatches this run: ${dispatchCount}/${maxDispatches}`);
+    } else {
+      core.info(`Total auto-triage dispatches this run: ${dispatchCount}`);
     }
 
   } catch (error) {

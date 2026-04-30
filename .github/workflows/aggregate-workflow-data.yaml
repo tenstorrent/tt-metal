@@ -19,6 +19,14 @@ on:
       slack-channel-id:
         description: 'Slack channel ID for notifications. Leave empty to use repo secret SLACK_METAL_INFRA_CHANNEL_ID.'
         required: false
+      failures-to-elevate:
+        description: 'Number of currently stayed-failing JOBS (not pipelines) to artificially elevate to regressions for this run. Forces end-to-end exercise of the notification + auto-triage pipeline without waiting for a real regression. Empty/0 = no-op.'
+        required: false
+        default: ''
+      max-auto-triage-dispatches:
+        description: 'Hard cap on total auto-triage dispatches per run. Empty = unlimited. Pair with failures-to-elevate for safe dispatch-driven testing.'
+        required: false
+        default: ''
 
 jobs:
   fetch-data:
@@ -238,6 +246,7 @@ jobs:
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
           alert-all: 'false'
+          failures_to_elevate: ${{ github.event.inputs.failures-to-elevate || '' }}
       - name: Upload status changes artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -342,3 +351,4 @@ jobs:
           slack_channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
+          max_dispatches: ${{ github.event.inputs.max-auto-triage-dispatches || '' }}
