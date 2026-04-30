@@ -10,6 +10,7 @@
 #include <variant>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <ttnn/tensor/types.hpp>
 
 namespace ttnn::operations::full {
@@ -43,6 +44,15 @@ inline std::map<std::string, std::string> get_writer_defines(DataType dtype) {
         default: break;
     }
     return defines;
+}
+
+inline tt::tt_metal::KernelDescriptor::Defines defines_from_map(const std::map<std::string, std::string>& m) {
+    tt::tt_metal::KernelDescriptor::Defines out;
+    out.reserve(m.size());
+    for (const auto& [k, v] : m) {
+        out.emplace_back(k, v);
+    }
+    return out;
 }
 
 }  // namespace ttnn::operations::full
