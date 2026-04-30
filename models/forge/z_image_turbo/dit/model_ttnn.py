@@ -212,15 +212,15 @@ class ZImageTransformerTTNN(LightweightModule):
         return x
 
     def _mm(self, x, weight, M, K, N, dtype=ttnn.DataType.BFLOAT16):
-        """minimal_matmul with auto-configured blocking."""
-        config = _get_matmul_config(M, K, N, self._core_grid)
-        return ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=weight,
-            config=config,
-            compute_kernel_config=REDUCE_KERNEL,
-            dtype=dtype,
+        """matmul with pre-transposed weights (ttnn.matmul instead of minimal_matmul)."""
+        return ttnn.matmul(
+            x,
+            weight,
+            transpose_a=False,
+            transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=dtype,
+            compute_kernel_config=REDUCE_KERNEL,
         )
 
     # ── Optimized norm ─────────────────────────────────────────────────────────
