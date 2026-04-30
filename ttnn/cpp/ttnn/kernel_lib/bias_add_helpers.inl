@@ -26,7 +26,8 @@ ALWI void add_bias_bcast_rows(
     Buf& bias_buf,
     Buf& out_buf,
     BiasAddShape shape,
-    PostBiasFn post_bias) {
+    PostBiasFn post_bias,
+    uint32_t bias_offset) {
 
     const uint32_t partials_cb_id = buf_id(partials_buf);
     const uint32_t bias_cb_id = buf_id(bias_buf);
@@ -81,6 +82,7 @@ ALWI void add_bias_bcast_rows(
 
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                 const uint32_t col_base = in1_subblock * out_subblock_w;
+                const uint32_t bias_col_base = bias_offset + col_base;
 
                 tile_regs_acquire();
                 {
@@ -93,14 +95,14 @@ ALWI void add_bias_bcast_rows(
                                     partials_cb_id,
                                     bias_cb_id,
                                     partial_row_pos + c,
-                                    col_base + c,
+                                    bias_col_base + c,
                                     dst_idx);
                             } else {
                                 add_tiles(
                                     partials_cb_id,
                                     bias_cb_id,
                                     partial_row_pos + c,
-                                    col_base + c,
+                                    bias_col_base + c,
                                     dst_idx);
                             }
                             dst_idx++;
@@ -131,9 +133,11 @@ ALWI void add_bias_bcast_rows(
                 tile_regs_acquire();
 
                 // Bias addition: row-broadcast (one bias row per column, broadcast across M)
-                // or elementwise (bias has multiple M rows).
+                // or elementwise (bias has multiple M rows). bias_offset shifts the bias read
+                // base when the writer pushes the entire per-core bias slice once and the
+                // compute kernel walks through it across outer iterations.
                 for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                    uint32_t bias_tile_idx = in1_index_subblock_offset;
+                    uint32_t bias_tile_idx = bias_offset + in1_index_subblock_offset;
                     for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
                         if constexpr (broadcast == BiasBroadcast::RowBroadcast) {
                             add_tiles_bcast_rows(partials_cb_id, bias_cb_id, i, bias_tile_idx, i);

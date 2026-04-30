@@ -114,6 +114,12 @@ struct NoPostBias {
  *   shape         BiasAddShape — subblock counts, subblock size, row stride.
  *                 Build with BiasAddShape::of(...).
  *   post_bias     PostBiasFn instance (default: {}).
+ *   bias_offset   Tile offset added to all bias reads (default: 0). Used when the writer pushes
+ *                 the entire per-core bias slice once and the compute kernel walks through it
+ *                 across multiple outer iterations (e.g. conv2d's bias_block_offset advancing
+ *                 by in1_block_w per output column block). Caller manages the offset; helper
+ *                 just adds it to the bias tile index. Default 0 is the bmm pattern (writer
+ *                 pushes per outer iter; helper reads from front).
  *
  * @example
  *   // Simple row-broadcast bias, subblock-major output, no activation.
@@ -153,7 +159,12 @@ template <
     typename PostBiasFn = bias_add_config::NoPostBias,
     typename Buf = ::experimental::CircularBuffer>
 ALWI void add_bias_bcast_rows(
-    Buf& partials_buf, Buf& bias_buf, Buf& out_buf, BiasAddShape shape, PostBiasFn post_bias = {});
+    Buf& partials_buf,
+    Buf& bias_buf,
+    Buf& out_buf,
+    BiasAddShape shape,
+    PostBiasFn post_bias = {},
+    uint32_t bias_offset = 0);
 
 }  // namespace compute_kernel_lib
 
