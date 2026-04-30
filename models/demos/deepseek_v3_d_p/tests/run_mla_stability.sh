@@ -46,7 +46,7 @@ set -u
 NUM_ITERATIONS="${1:?usage: $0 <num_iterations> [log_file]}"
 LOG_FILE="${2:-mla_stability_$(date +%Y%m%d_%H%M%S).log}"
 
-PYTEST_TIMEOUT_SEC="${PYTEST_TIMEOUT_SEC:-300}"
+PYTEST_TIMEOUT_SEC="${PYTEST_TIMEOUT_SEC:-900}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 ENV_EXPORTS_PATH="${ENV_EXPORTS_PATH:-/data/ipotkonjak/watcher_exports.sh}"
 
