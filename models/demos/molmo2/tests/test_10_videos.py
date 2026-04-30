@@ -234,8 +234,9 @@ def video_tests(request):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.timeout(0)  # disable global 300s pytest-timeout; this test runs 105 videos
 def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
-    """Run 10 video tests back-to-back with a single warm-up and one decode trace."""
+    """Run video tests back-to-back with a single warm-up and one decode trace."""
     model, cfg = tt_model
     eos = processor.tokenizer.eos_token_id
 
