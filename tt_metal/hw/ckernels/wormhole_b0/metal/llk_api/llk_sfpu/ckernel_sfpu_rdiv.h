@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -24,27 +26,15 @@ inline void calculate_rdiv(const uint value) {
                 recip = _sfpu_reciprocal_<2>(in);
             } else {
                 recip = _sfpu_reciprocal_<1>(in);
-                recip = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(recip, 0));
+                recip = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(recip, sfpi::RoundMode::NearestEven));
             }
         }
         sfpi::vFloat result = recip * val;
 
         if constexpr (rounding_mode == RoundingMode::Trunc) {
-            // Use hand-optimised "trunc" implementation.
-            // Input is in L0.  Output is in L1, and L2/L3 get clobbered.
-            sfpi::l_reg[sfpi::LRegs::LReg0] = result;
-            _trunc_body_();
-            result = sfpi::l_reg[sfpi::LRegs::LReg1];
-            sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-            sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
+            result = _trunc_body_(result);
         } else if constexpr (rounding_mode == RoundingMode::Floor) {
-            // Use hand-optimised "floor" implementation.
-            // Input is in L0.  Output is in L1, and L2/L3 get clobbered.
-            sfpi::l_reg[sfpi::LRegs::LReg0] = result;
-            _floor_body_();
-            result = sfpi::l_reg[sfpi::LRegs::LReg1];
-            sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-            sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
+            result = _floor_body_(result);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

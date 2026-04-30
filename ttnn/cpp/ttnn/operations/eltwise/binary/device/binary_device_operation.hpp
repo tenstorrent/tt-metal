@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,13 @@
 #include <variant>
 
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -48,166 +48,48 @@ struct BinaryDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct ElementWiseMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle eltwise_binary_kernel_id{};
-            tt::tt_metal::CBHandle cb_src0{};
-            tt::tt_metal::CBHandle cb_src1{};
-            tt::tt_metal::CBHandle cb_output{};
-            CoreRangeSet all_device_cores;
-            uint32_t src0_single_tile_size{};
-            uint32_t src1_single_tile_size{};
-            uint32_t dst_single_tile_size{};
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct ElementWiseMultiCoreSfpu {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle eltwise_binary_kernel_id{};
-            tt::tt_metal::CBHandle cb_src0{};
-            tt::tt_metal::CBHandle cb_src1{};
-            tt::tt_metal::CBHandle cb_output{};
-            CoreRangeSet all_device_cores;
-            uint32_t src0_single_tile_size{};
-            uint32_t src1_single_tile_size{};
-            uint32_t dst_single_tile_size{};
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
     struct BroadcastWidthMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle bcast_kernel_id{};
-            CoreCoord compute_with_storage_grid_size;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle bcast_kernel_id{};
-            CoreCoord compute_with_storage_grid_size;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightAndWidthMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle bcast_kernel_id{};
-            CoreCoord compute_with_storage_grid_size;
-            tt::tt_metal::CBHandle cb_src0{};
-            uint32_t src0_single_tile_size{};
-            uint32_t src1_single_tile_size{};
-            uint32_t dst_single_tile_size{};
-            tt::tt_metal::CBHandle cb_output{};
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightMultiCoreSharded {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle out_cb;
-            uint32_t ncores_x;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightMultiCoreShardedOptimized {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle out_cb;
-            uint32_t ncores_x;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

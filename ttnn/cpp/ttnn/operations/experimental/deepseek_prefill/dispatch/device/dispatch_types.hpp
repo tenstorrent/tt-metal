@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ struct DispatchParams {
     tt::tt_fabric::Topology topology;
     MemoryConfig output_mem_config;
     CoreRangeSet worker_core_range_set;
+    bool use_l1_small_for_semaphores = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -36,7 +37,8 @@ struct DispatchParams {
         "num_links",
         "topology",
         "output_mem_config",
-        "worker_core_range_set");
+        "worker_core_range_set",
+        "use_l1_small_for_semaphores");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -50,7 +52,8 @@ struct DispatchParams {
             num_links,
             topology,
             output_mem_config,
-            worker_core_range_set);
+            worker_core_range_set,
+            use_l1_small_for_semaphores);
     };
 };
 

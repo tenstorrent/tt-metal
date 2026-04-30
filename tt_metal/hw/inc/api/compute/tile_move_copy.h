@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -38,16 +39,19 @@ ALWI void copy_tile_to_dst_init_short(
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
+    LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");
+    UNPACK((llk_unpack_A_init<false, DST_ACCUM_MODE>(cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(cbid)));
+#endif
 }
 /**
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
  */
 ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
     copy_tile_to_dst_init_short(cbid, 0, false, call_line);
-#endif  // TODO: AM; add Quasar implementation
 }
 
 // clang-format off
@@ -111,7 +115,10 @@ ALWI void copy_block_matmul_partials(
         in_cb_id, start_in_tile_index, ntiles)));
     MATH((llk_math_eltwise_unary_datacopy_block<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    UNPACK((llk_unpack_A_block(in_cb_id, start_in_tile_index, ntiles)));
+    MATH((llk_math_eltwise_unary_datacopy_block(start_dst_tile_index, ntiles, in_cb_id)));
+#endif
 }
 
 }  // namespace ckernel

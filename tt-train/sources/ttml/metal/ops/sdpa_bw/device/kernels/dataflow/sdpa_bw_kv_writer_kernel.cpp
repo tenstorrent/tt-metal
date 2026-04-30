@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,8 +37,8 @@ void kernel_main() {
     constexpr auto grad_value_args = TensorAccessorArgs<grad_key_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators for output gradients
-    const auto grad_key_addr_generator = TensorAccessor(grad_key_args, grad_key_addr, tile_bytes);
-    const auto grad_value_addr_generator = TensorAccessor(grad_value_args, grad_value_addr, tile_bytes);
+    const auto grad_key_addr_generator = TensorAccessor(grad_key_args, grad_key_addr);
+    const auto grad_value_addr_generator = TensorAccessor(grad_value_args, grad_value_addr);
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 

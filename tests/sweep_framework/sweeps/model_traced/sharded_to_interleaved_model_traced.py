@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -18,7 +18,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -47,32 +48,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -88,12 +68,44 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Parse input_a_memory_config if it's a dict (from vector data)
+    if isinstance(input_a_memory_config, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        input_a_memory_config = dict_to_memory_config(input_a_memory_config)
+
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    pos_args = extract_positional_args(kwargs)
+    traced_output_mem_config = pos_args.get(1, None)
+
+    # Determine the output memory config: prefer traced arg1 (positional), then explicit param
+    if traced_output_mem_config is not None:
+        s2i_output_config = traced_output_mem_config
+    elif output_memory_config is not None:
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        s2i_output_config = (
+            dict_to_memory_config(output_memory_config)
+            if isinstance(output_memory_config, dict)
+            else output_memory_config
+        )
+    else:
+        s2i_output_config = None
+
+    # Only pass output config if it's interleaved (sharded_to_interleaved requires interleaved output)
+    if s2i_output_config is not None and hasattr(s2i_output_config, "memory_layout"):
+        if s2i_output_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            s2i_output_config = None
+
+    # Remove output_memory_config / memory_config from op_kwargs since we pass it positionally
+    op_kwargs.pop("output_memory_config", None)
+    op_kwargs.pop("memory_config", None)
 
     # Handle input_a_shape - ensure it's always a tuple
     if input_a_shape is None:
@@ -144,7 +156,6 @@ def run(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Validate shard spec fits device before calling interleaved_to_sharded (TT_FATAL can't be caught)
         shard_ok = True
         try:
             shard_spec = input_a_memory_config.shard_spec
@@ -158,8 +169,20 @@ def run(
                 num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
                 if num_shards > num_cores:
                     shard_ok = False
+                shard_grid = shard_spec.grid
+                core_ranges = shard_grid.ranges() if hasattr(shard_grid, "ranges") else []
+                for cr in core_ranges:
+                    if cr.start.x >= grid.x or cr.start.y >= grid.y or cr.end.x >= grid.x or cr.end.y >= grid.y:
+                        shard_ok = False
+                        break
+                if shard_ok:
+                    total_shard_cores = 0
+                    for cr in core_ranges:
+                        total_shard_cores += (cr.end.x - cr.start.x + 1) * (cr.end.y - cr.start.y + 1)
+                    if total_shard_cores > num_cores:
+                        shard_ok = False
         except Exception:
-            pass
+            shard_ok = False
 
         if shard_ok:
             # Convert to sharded using the traced config
@@ -196,9 +219,12 @@ def run(
                 memory_config=input_a_memory_config,
             )
 
-    # Run sharded_to_interleaved
+    # Run sharded_to_interleaved (pass output config as positional arg to match master trace)
     start_time = start_measuring_time()
-    output_tensor = ttnn.sharded_to_interleaved(input_tensor, **op_kwargs)
+    if s2i_output_config is not None:
+        output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, **op_kwargs)
+    else:
+        output_tensor = ttnn.sharded_to_interleaved(input_tensor, **op_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     # Verify output is interleaved

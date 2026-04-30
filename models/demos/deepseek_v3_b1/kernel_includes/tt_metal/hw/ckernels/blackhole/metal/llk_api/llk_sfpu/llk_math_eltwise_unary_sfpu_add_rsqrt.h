@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,13 +12,13 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_add_rsqrt_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt, APPROXIMATE>(sfpu::init_add_rsqrt<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt>(sfpu::init_add_rsqrt<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, bool fp32_dest_acc_en, bool FAST_APPROX, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_add_rsqrt(
     uint dst_index, uint32_t param0, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_add_rsqrt<APPROXIMATE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>,
         dst_index,
         vector_mode,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
@@ -269,6 +269,83 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
     }
     return pad_metadata;
 }
+
+// Rect of real (non-border-pad) input inside the padded tensor, together with the
+// full padded dimensions. All bounds are inclusive — the pixel at (real_h_end,
+// real_w_end) is the last real pixel, matching the inclusive range expected by
+// std::clamp below.
+struct RealPaddingRect {
+    uint32_t pad_top;
+    uint32_t pad_left;
+    uint32_t real_h_end;  // inclusive
+    uint32_t real_w_end;  // inclusive
+    uint32_t padded_h;
+    uint32_t padded_w;
+};
+
+static RealPaddingRect compute_real_padding_rect_normal(const SlidingWindowConfig& config) {
+    RealPaddingRect rect;
+    rect.pad_top = config.get_pad_top();
+    rect.pad_left = config.get_pad_left();
+    rect.padded_h = config.input_hw.first + config.get_pad_h() + config.get_ceil_pad_h();
+    rect.padded_w = config.input_hw.second + config.get_pad_w() + config.get_ceil_pad_w();
+    rect.real_h_end = rect.pad_top + config.input_hw.first - 1;
+    rect.real_w_end = rect.pad_left + config.input_hw.second - 1;
+    return rect;
+}
+
+static RealPaddingRect compute_real_padding_rect_transposed(const SlidingWindowConfig& config) {
+    RealPaddingRect rect;
+    auto full_input_shape = config.get_transposed_full_input_shape();
+    rect.padded_h = full_input_shape[1];
+    rect.padded_w = full_input_shape[2];
+    auto real_padding = config.get_transposed_real_padding();
+    rect.pad_top = real_padding[0].first;
+    rect.pad_left = real_padding[1].first;
+    // Strided-input rect spans (input-1)*stride + 1 positions starting at pad_top/left.
+    uint32_t strided_h = (config.input_hw.first - 1) * config.stride_hw.first + 1;
+    uint32_t strided_w = (config.input_hw.second - 1) * config.stride_hw.second + 1;
+    rect.real_h_end = rect.pad_top + strided_h - 1;
+    rect.real_w_end = rect.pad_left + strided_w - 1;
+    return rect;
+}
+
+static void apply_replicate_padding(
+    std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<bool>& pad_metadata,
+    const SlidingWindowConfig& config) {
+    TT_FATAL(!config.is_bilinear, "Replicate padding is not yet supported for bilinear upsampling");
+
+    const RealPaddingRect rect =
+        config.is_transpose ? compute_real_padding_rect_transposed(config) : compute_real_padding_rect_normal(config);
+
+    for (uint32_t b = 0; b < config.batch_size; ++b) {
+        for (uint32_t h = 0; h < rect.padded_h; ++h) {
+            for (uint32_t w = 0; w < rect.padded_w; ++w) {
+                uint32_t idx = b * rect.padded_h * rect.padded_w + h * rect.padded_w + w;
+                if (!pad_metadata[idx]) {
+                    continue;
+                }
+                // Transposed conv: stride-interleaved zeros strictly inside the strided
+                // rect must stay zero (they encode the dilation-style stride expansion).
+                // Only border pads (outside the strided rect) get replicated. Bounds inclusive.
+                if (config.is_transpose && h >= rect.pad_top && h <= rect.real_h_end && w >= rect.pad_left &&
+                    w <= rect.real_w_end) {
+                    continue;
+                }
+                // Clamp to nearest real pixel (edge replication). For transposed conv the
+                // clamped coord may land on an off-stride interior cell whose metadata is
+                // itself a pad marker; copying it preserves the edge's stride pattern along
+                // halo rows/cols, which is the intended "solid replicate halo" semantics.
+                uint32_t clamped_h = std::clamp(h, rect.pad_top, rect.real_h_end);
+                uint32_t clamped_w = std::clamp(w, rect.pad_left, rect.real_w_end);
+                uint32_t src_idx = b * rect.padded_h * rect.padded_w + clamped_h * rect.padded_w + clamped_w;
+                tensor_metadata[idx] = tensor_metadata[src_idx];
+            }
+        }
+    }
+}
+
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
     if (config.is_bilinear) {
         return generate_op_trace_metadata_bilinear(config);
@@ -437,7 +514,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
 }
 
 std::vector<PixelMetadata> generate_tensor_metadata(
-    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& /*config*/, uint32_t shard_height) {
+    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height) {
     std::vector<PixelMetadata> tensor_metadata;
     tensor_metadata.reserve(pad_metadata.size());
 
@@ -456,6 +533,10 @@ std::vector<PixelMetadata> generate_tensor_metadata(
                 input_reshard_local_idx = 0;
             }
         }
+    }
+
+    if (config.padding_mode == PaddingMode::Replicate) {
+        apply_replicate_padding(tensor_metadata, pad_metadata, config);
     }
 
     return tensor_metadata;
@@ -890,10 +971,10 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
 }
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {
-    log_info(tt::LogOp, "========================================");
-    log_info(tt::LogOp, "  Sliding Window Op Config Visualization");
-    log_info(tt::LogOp, "========================================");
-    log_info(tt::LogOp, "Total Cores: {}", config.size());
+    log_debug(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "  Sliding Window Op Config Visualization");
+    log_debug(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "Total Cores: {}", config.size());
 
     // Calculate statistics
     uint32_t total_elements = 0;
@@ -906,19 +987,19 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
         min_config_size = std::min(min_config_size, static_cast<uint32_t>(core_config.size()));
     }
 
-    log_info(tt::LogOp, "Total Elements: {}", total_elements);
-    log_info(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
-    log_info(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
-    log_info(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "Total Elements: {}", total_elements);
+    log_debug(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
+    log_debug(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
+    log_debug(tt::LogOp, "========================================");
 
     // Visualize each core's configuration
     for (uint32_t core_id = 0; core_id < config.size(); ++core_id) {
         const auto& core_config = config[core_id];
-        log_info(tt::LogOp, "");
-        log_info(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
+        log_trace(tt::LogOp, "");
+        log_trace(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
 
         if (core_config.empty()) {
-            log_info(tt::LogOp, "  [EMPTY]");
+            log_trace(tt::LogOp, "  [EMPTY]");
             continue;
         }
 
@@ -940,7 +1021,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
                 break;
             }
 
-            log_info(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
+            log_trace(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
             idx += 2;  // Skip num_segments and alignment
 
             // Display segments (pairs of start-end indices)
@@ -950,7 +1031,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
                 uint16_t end_idx = core_config[idx + 1];
                 uint16_t range_size = (end_idx >= start_idx) ? (end_idx - start_idx + 1) : 0;
 
-                log_info(
+                log_trace(
                     tt::LogOp,
                     "    Segment {}: [{:5d} -> {:5d}] (len: {})",
                     segment_count,
@@ -964,7 +1045,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
 
             // If we didn't find all segments, something might be wrong
             if (segment_count < num_segments) {
-                log_info(
+                log_trace(
                     tt::LogOp, "    WARNING: Expected {} segments but only parsed {}", num_segments, segment_count);
                 break;
             }
@@ -975,11 +1056,11 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
         // Show remaining padding if any
         if (idx < core_config.size()) {
             uint32_t padding_count = core_config.size() - idx;
-            log_info(tt::LogOp, "  [Padding: {} elements]", padding_count);
+            log_trace(tt::LogOp, "  [Padding: {} elements]", padding_count);
         }
     }
 
-    log_info(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "========================================");
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
@@ -1191,7 +1272,8 @@ std::string SlidingWindowConfig::to_string() const {
            "_scale_h=" + std::to_string(scale_h) + "_scale_w=" + std::to_string(scale_w) +
            "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
-           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
+           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") +
+           (padding_mode == PaddingMode::Replicate ? "_replicate_pad" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window

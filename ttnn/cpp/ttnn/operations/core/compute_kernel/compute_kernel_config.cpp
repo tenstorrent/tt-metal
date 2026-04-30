@@ -1,8 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
+
 #include <tt-metalium/constants.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 
@@ -15,16 +18,14 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
-    tt::ARCH arch,
+    tt::ARCH,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
-    const MathFidelity default_fidelity,
+    const tt::tt_metal::MathFidelity default_fidelity,
     bool default_approx_mode,
     bool default_fp32_acc,
     bool default_l1_acc,
     bool default_dst_full_sync_en,
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level) {
-    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
-
     if (device_kernel_config.has_value()) {
         return device_kernel_config.value();
     }
@@ -36,6 +37,33 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
         .packer_l1_acc = default_l1_acc,
         .dst_full_sync_en = default_dst_full_sync_en,
         .throttle_level = default_throttle_level};
+}
+
+void verify_numerical_configuration(
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    tt::ARCH arch,
+    const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config) {
+    if (arch != tt::ARCH::WORMHOLE_B0) {
+        return;
+    }
+    if (!user_compute_kernel_config.has_value()) {
+        return;
+    }
+    const auto& cfg = user_compute_kernel_config.value();
+    if (!cfg.fp32_dest_acc_en || cfg.math_fidelity != tt::tt_metal::MathFidelity::HiFi4) {
+        return;
+    }
+    // Only print warning once per process
+    // (compare-and-swap so concurrent callers do not double-log).
+    static std::atomic<bool> warning_generated{false};
+    bool expected = false;
+    if (warning_generated.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        log_warning(
+            tt::LogOp,
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
+            "bug. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
+    }
 }
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -52,9 +80,9 @@ bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& comput
     return compute_kernel_config.value().dst_full_sync_en;
 }
 
-MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+tt::tt_metal::MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (not compute_kernel_config.has_value()) {
-        return MathFidelity::Invalid;
+        return tt::tt_metal::MathFidelity::Invalid;
     }
     return compute_kernel_config.value().math_fidelity;
 }
@@ -67,9 +95,8 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     return compute_kernel_config.value().throttle_level;
 }
 
-std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
-    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
+std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
+    tt::ARCH, const DeviceComputeKernelConfig compute_kernel_config) {
     return std::make_tuple(
         compute_kernel_config.math_fidelity,
         compute_kernel_config.math_approx_mode,

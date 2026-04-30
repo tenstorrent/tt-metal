@@ -1,15 +1,14 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-// #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-// #include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::binary {
 
@@ -26,8 +25,7 @@ BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::cached_program_t
-BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
+tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -48,13 +46,6 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     uint32_t H = ashape[-2];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t NC = N * C;
-
-    // uint32_t Wt = W / TILE_WIDTH;
-    // uint32_t Ht = H / TILE_HEIGHT;
-
-    // uint32_t num_tensor_tiles = NC * Ht * Wt;
-
-    tt_metal::Program program = tt_metal::CreateProgram();
 
     tt_metal::IDevice* device = a.device();
 
@@ -110,75 +101,96 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     TT_FATAL(ncores_x >= bN, "Batch size {} exceeds number of cores along x-axis {}", bN, ncores_x);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
-    uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core, {{src0_cb_index, act_df}})
-            .set_page_size(src0_cb_index, in_cb_pagesize)
-            .set_globally_allocated_address(*a.buffer());
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
-
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t output_cb_index = tt::CBIndex::c_2;
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core, {{output_cb_index, out_df}})
-            .set_page_size(output_cb_index, in_cb_pagesize)
-            .set_globally_allocated_address(*output.buffer());
-    auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+
+    uint32_t aligned_input_tile_nbytes = round_up_to_mul32(input_tile_size);
+    uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
 
     uint32_t h_blk = std::min(Ht, 8u);
     uint32_t w_blk = std::min(Wt, 8u);
 
     uint32_t num_input_tiles = w_blk;
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
-            .set_page_size(src1_cb_index, input1_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
+    auto* src0_buffer = a.buffer();
     auto* src1_buffer = b->buffer();
     auto* dst_buffer = output.buffer();
+
+    ProgramDescriptor desc;
+
+    // ---- Circular buffers ----
+
+    // src0 CB - sharded (globally allocated)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = aligned_input_tile_nbytes * num_tile_per_core,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = act_df,
+            .page_size = in_cb_pagesize,
+        }}},
+        .buffer = src0_buffer,
+    });
+
+    // src1 CB - interleaved
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * input1_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src1_cb_index),
+            .data_format = b_df,
+            .page_size = input1_tile_size,
+        }}},
+    });
+
+    // output CB - sharded (globally allocated)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = aligned_input_tile_nbytes * num_tile_per_core,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = out_df,
+            .page_size = in_cb_pagesize,
+        }}},
+        .buffer = dst_buffer,
+    });
+
+    // ---- Kernel compile-time args ----
+
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
-    KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_sharded_optimised.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);
-    // const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
-    auto bcast_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h_sharded_optimised.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
+
+    // ---- Reader kernel ----
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_sharded_optimised.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    // ---- Compute kernel ----
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h_sharded_optimised.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.defines = {bcast_defines.begin(), bcast_defines.end()};
+    compute_desc.config = ComputeConfigDescriptor{};
+
+    // ---- Per-core runtime args ----
 
     uint32_t ncores_y = ncores / ncores_x;
     TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be divisible by batch size of input1");
     uint32_t Ht_per_batch_b = std::min((NC * H / TILE_HEIGHT) / bN, Ht);
     uint32_t batch_b = Ht / Ht_per_batch_b;
-
-    log_debug(
-        tt::LogOp,
-        "ncores {}, ncores_x {}, Wt {}, Ht {}, h_blk {}, w_blk {}, src0_cb_index {}, src1_cb_index {}, output_cb_index "
-        "{}, dst_is_dram {}, Ht_per_batch_b {}, batch_b {}",
-        ncores,
-        ncores_x,
-        Wt,
-        Ht,
-        h_blk,
-        w_blk,
-        src0_cb_index,
-        src1_cb_index,
-        output_cb_index,
-        dst_is_dram,
-        Ht_per_batch_b,
-        batch_b);
 
     for (uint32_t i = 0; i < ncores; i++) {
         CoreCoord core;
@@ -201,12 +213,11 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
                 }
             }
         }
-        uint32_t tile_offset = Wt * ncores;  // used in multi batch weight for block sharded
-        tt_metal::SetRuntimeArgs(
-            program,
-            binary_reader_kernel_id,
+        uint32_t tile_offset = Wt * ncores;
+
+        reader_desc.runtime_args.emplace_back(
             core,
-            {
+            KernelDescriptor::CoreRuntimeArgs{
                 b->buffer()->address(),  // (0) src1_addr
                 Ht,                      // (1) Ht
                 Wt,                      // (2) Wt
@@ -216,13 +227,11 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
                 batch_b,                 // (6) in1 batch size
             });
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            bcast_kernel_id,
+        compute_desc.runtime_args.emplace_back(
             core,
-            {
+            KernelDescriptor::CoreRuntimeArgs{
                 NC,              // (0) B
-                Ht,              // (1) Hbatch  for block shardeshardedt
+                Ht,              // (1) Ht
                 Wt,              // (2) Wt
                 h_blk,           // (3) h block size
                 batch_b,         // (4) in1 batch size
@@ -230,103 +239,10 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
             });
     }
 
-    return {std::move(program), {binary_reader_kernel_id, bcast_kernel_id, cb_src0, out_cb, ncores_x}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    using namespace tt::constants;
-
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-    auto& output_tensor = tensor_return_value;
-
-    auto&& [binary_reader_kernel_id, bcast_kernel_id, cb_src0, out_cb, ncores_x] = cached_program.shared_variables;
-
-    auto& program = cached_program.program;
-    auto* src_buffer = input_tensor_a.buffer();
-    auto* dst_buffer = output_tensor.buffer();
-    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-    auto a = input_tensor_a;
-    auto b = input_tensor_b;
-    auto shard_spec = a.shard_spec().value();
-    auto all_cores = shard_spec.grid;
-    uint32_t ncores = shard_spec.num_cores();
-    uint32_t Wt = 0, Ht = 0;
-    const auto ashape = input_tensor_a.padded_shape();
-    uint32_t N = ashape[0], C = ashape[1];
-    uint32_t bN = input_tensor_b->padded_shape()[0];
-    uint32_t NC = N * C;
-    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        Wt = shard_spec.shape[1] / TILE_WIDTH;
-        Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else {
-        TT_THROW("Unsupported memory layout");
-    }
-    uint32_t ncores_y = ncores / ncores_x;
-    uint32_t Ht_per_b1 = 0;  // Ht per batch
-    for (uint32_t i = 0; i < ncores; i++) {
-        CoreCoord core;
-        uint32_t offset = 0;
-        if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            core = {i / ncores_x, i % ncores_x};
-            Ht_per_b1 = Ht;
-            if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
-                offset = Wt * (i / ncores_x) + Wt * ncores_y * ((i % ncores_x) / (ncores_x / bN));
-            } else {
-                offset = Wt * (i % ncores_x) + Wt * ncores_x * ((i / ncores_x) / (ncores_y / bN));
-            }
-        } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            core = {i % ncores_x, i / ncores_x};
-            if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
-                offset = Wt * (core.x + core.y * ncores_x);
-            } else {
-                offset = Wt * (ncores_y * core.x + core.y);
-                if (core.y == ncores_y) {
-                    offset = Wt * (ncores_y * ncores_x + core.x);
-                }
-            }
-            Ht_per_b1 = Ht / bN;
-        }
-        uint32_t tile_offset = Wt * ncores;
-
-        uint32_t h_blk = std::min(Ht, 8u);
-        uint32_t w_blk = std::min(Wt, 8u);
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            binary_reader_kernel_id,
-            core,
-            {
-                b->buffer()->address(),  // (0) src1_addr
-                Ht,                      // (1) Ht
-                Wt,                      // (2) Wt
-                offset,                  // (3) read offset in1
-                tile_offset,             // (4) in1 offset between batches
-                w_blk,                   // (5) block size in w
-                bN,                      // (6) in1 batch size
-            });
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            bcast_kernel_id,
-            core,
-            {
-                NC,         // (0) B
-                Ht,         // (1) Hbatch  for block shardeshardedt
-                Wt,         // (2) Wt
-                h_blk,      // (3) h block size
-                bN,         // (4) in1 batch size
-                Ht_per_b1,  // (5) Ht per in1 batch size (bN)
-            });
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::binary

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -168,6 +168,28 @@ ttnn::Shape compute_matmul_output_shape(
         output_shape[1] = input_shape_b[1];
     }
     return output_shape;
+}
+
+ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shape, const ttnn::Shape& bias_shape) {
+    int rank_a = static_cast<int>(matmul_shape.rank());
+    int rank_b = static_cast<int>(bias_shape.rank());
+    int max_rank = std::max(rank_a, rank_b);
+
+    std::vector<uint32_t> result_shape(max_rank);
+
+    for (int i = 0; i < max_rank; ++i) {
+        int idx_a = rank_a - max_rank + i;
+        int idx_b = rank_b - max_rank + i;
+
+        uint32_t dim_a = (idx_a >= 0) ? matmul_shape[idx_a] : 1;
+        uint32_t dim_b = (idx_b >= 0) ? bias_shape[idx_b] : 1;
+
+        TT_FATAL(dim_a == dim_b || dim_a == 1 || dim_b == 1, "Broadcast error: Invalid dimension");
+
+        result_shape[i] = std::max(dim_a, dim_b);
+    }
+
+    return ttnn::Shape(result_shape);
 }
 
 tt::tt_metal::Tile get_output_tile(

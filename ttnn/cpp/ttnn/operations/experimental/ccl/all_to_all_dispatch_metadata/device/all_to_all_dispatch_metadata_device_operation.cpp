@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -113,6 +113,11 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
         "Expert mapping tensor first dimension must equal number of devices ({}), got {}",
         expected_devices,
         mapping_shape[0]);
+
+    const auto& shared_expert_ids = operation_attributes.shared_expert_ids;
+    if (shared_expert_ids.has_value()) {
+        TT_FATAL(!shared_expert_ids->empty(), "If shared_expert_ids is provided it must not be empty");
+    }
 }
 
 void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_hit(
@@ -148,10 +153,14 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
     }
     uint32_t total_tokens = input_shape[0] * input_shape[1] * input_shape[2] * dispatch_devices;
 
-    uint32_t selected_experts_k = indices_shape[-1];
+    const uint32_t selected_experts_k = indices_shape[-1];
+
+    const auto& shared_expert_ids = operation_attributes.shared_expert_ids;
+    const uint32_t shared_and_selected_experts_k =
+        (shared_expert_ids.has_value()) ? selected_experts_k + shared_expert_ids->size() : selected_experts_k;
 
     auto output_shape = ttnn::Shape({1, total_tokens, hidden_size});
-    auto metadata_shape = ttnn::Shape({1, total_tokens, selected_experts_k});
+    auto metadata_shape = ttnn::Shape({1, total_tokens, shared_and_selected_experts_k});
 
     // Output tokens tensor - use input tensor's memory config (DRAM interleaved)
     auto dram_memory_config =
@@ -168,13 +177,13 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
     CoreRangeSet drain_core_range_set({CoreRange(drain_core, drain_core)});
 
     auto indices_shard_spec = tt::tt_metal::ShardSpec(
-        drain_core_range_set, {total_tokens, selected_experts_k}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        drain_core_range_set, {total_tokens, shared_and_selected_experts_k}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     auto indices_sharded_mem_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, indices_shard_spec};
 
     auto scores_shard_spec = tt::tt_metal::ShardSpec(
-        drain_core_range_set, {total_tokens, selected_experts_k}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        drain_core_range_set, {total_tokens, shared_and_selected_experts_k}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     auto scores_sharded_mem_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, scores_shard_spec};
@@ -206,6 +215,7 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
         auto preallocated_scores_spec = output_tensors[2].tensor_spec();
         return {preallocated_output_spec, preallocated_indices_spec, preallocated_scores_spec};
     }
+
     return {output_tokens_spec, indices_spec, scores_spec};
 }
 
@@ -232,6 +242,7 @@ all_to_all_dispatch_metadata(
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
+    const std::optional<std::vector<uint32_t>>& shared_expert_ids,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     uint32_t num_links,
@@ -245,6 +256,7 @@ all_to_all_dispatch_metadata(
     using OperationType = ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
+            .shared_expert_ids = shared_expert_ids,
             .worker_core_range_set = worker_core_range_set,
             .axis = axis,
             .num_links = num_links,

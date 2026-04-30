@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,6 +27,14 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             tt::tt_metal::NOC::RISCV_0_default);
 
     const uint32_t num_cores = dram_bank2core_coords.size();
+    constexpr uint32_t required_cores = 12;
+    TT_FATAL(
+        num_cores == required_cores,
+        "moe_gate_mm requires exactly {} DRAM-aligned cores (Wormhole); got {}. "
+        "This op's ring algorithm is hardcoded for Wormhole's 12 DRAM views and does not support other "
+        "architectures.",
+        required_cores,
+        num_cores);
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
     // CBs used in the MoE Gate MM operation
@@ -175,7 +183,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,

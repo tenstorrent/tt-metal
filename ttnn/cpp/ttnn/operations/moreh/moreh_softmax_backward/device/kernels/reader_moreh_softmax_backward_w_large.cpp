@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
@@ -12,7 +13,6 @@ void kernel_main() {
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
     uint32_t Wt = get_arg_val<uint32_t>(4);
 
-    uint32_t scaler = get_arg_val<uint32_t>(5);
     uint32_t mask_w = get_arg_val<uint32_t>(6);
 
     constexpr auto cb_y = tt::CBIndex::c_0;
@@ -24,16 +24,14 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t y_tile_bytes = get_tile_size(cb_y);
-    uint32_t dy_tile_bytes = get_tile_size(cb_dy);
 
     constexpr auto y_args = TensorAccessorArgs<0>();
     constexpr auto dy_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
-    const auto y_in = TensorAccessor(y_args, y_addr, y_tile_bytes);
-    const auto dy_in = TensorAccessor(dy_args, dy_addr, dy_tile_bytes);
+    const auto y_in = TensorAccessor(y_args, y_addr);
+    const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    // TODO(AP): cleanup, probably with named args/param pack/reflection.
-    generate_bcast_scaler(cb_scaler, scaler);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     generate_mask_w(cb_mask, mask_w);
 
     // read ublocks from src0 to CB0, then push ublocks to compute (unpacker)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -133,9 +133,15 @@ public:
 
     void wait_for_programs() { fixture_->wait_for_programs(); }
 
+    void set_show_workers(bool show_workers) { show_workers_ = show_workers; }
+
     void enable_progress_monitoring(const ProgressMonitorConfig& config);
 
     void wait_for_programs_with_progress();
+
+    bool did_last_test_hang() const { return last_test_hung_; }
+
+    void record_hung_test(const std::string& test_name) { hung_tests_.push_back(test_name); }
 
     // Accessors for progress monitor
     const std::unordered_map<MeshCoordinate, TestDevice>& get_test_devices() const { return test_devices_; }
@@ -264,12 +270,16 @@ private:
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
     bool code_profiling_enabled_ = false;
 
+    bool show_workers_ = false;
+
     // Progress monitoring
     ProgressMonitorConfig progress_config_;
     std::filesystem::path raw_telemetry_csv_path_;
 
     std::vector<std::string> all_failed_bandwidth_tests_;  // Accumulates failed bandwidth tests
-    bool has_test_failures_ = false;  // Track if any tests failed validation
+    std::vector<std::string> hung_tests_;
+    bool has_test_failures_ = false;
+    bool last_test_hung_ = false;
 
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,7 @@ Tensor moreh_clip_grad_norm(
     }
     auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
     // Loop variable
     const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(device);
@@ -109,7 +109,7 @@ Tensor moreh_clip_grad_norm(
         norm_type,
         total_norm,
         memory_config,
-        init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, MathFidelity::HiFi4));
+        init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4));
 
     if (error_if_nonfinite) {
         const auto fp32_total_norm =

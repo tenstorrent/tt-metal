@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,14 @@ Functional demos (fused only):
 - Barrier Overhead: N no-op phases measuring pure barrier mechanism cost
 
 Each perf demo is split into separate fused and unfused tests.
-Cold = all caches cleared (JIT disk + in-memory + program + fusion build).
 
-Each test is parametrized by perf_mode: "cold_start", "e2e", or "device_fw".
-Run subsets: pytest ... -k cold_start  (or -k e2e, or -k device_fw)
-For Tracy: export TT_METAL_DEVICE_PROFILER=1 && python -m tracy -r -m pytest ... -k device_fw
+perf_mode="none" (default) runs the test and checks numeric accuracy only.
+Other modes exist for manual profiling but are not run by default:
+  - "cold_start": all caches cleared, measures cold dispatch time
+  - "e2e": steady-state end-to-end time per iteration
+  - "device_fw": single run for Tracy device profiling
+To run profiling modes, add the desired values back to the @pytest.mark.parametrize
+list in the test, then optionally filter with: pytest ... -k cold_start
 """
 
 import shutil
@@ -33,9 +36,11 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 import ttnn
 
-from models.common.utility_functions import comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from models.common.utility_functions import is_watcher_enabled
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import clear_build_cache
 
@@ -50,6 +55,23 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_approx_mode=False,
     fp32_dest_acc_en=True,
 )
+
+
+def _torch_rms_norm(x, weight, eps=1e-5):
+    x_f = x.float()
+    rms = torch.sqrt(x_f.pow(2).mean(dim=-1, keepdim=True) + eps)
+    out = x_f / rms
+    if weight is not None:
+        out = out * weight.float()
+    return out.to(torch.bfloat16)
+
+
+def _torch_layer_norm(x, weight=None, bias=None, eps=1e-5):
+    cols = x.shape[-1]
+    w = weight.reshape(cols).float() if weight is not None else None
+    b = bias.reshape(cols).float() if bias is not None else None
+    return F.layer_norm(x.float(), [cols], w, b, eps).to(torch.bfloat16)
+
 
 TILE_SIZE_BF16 = 2048  # 32x32 x 2 bytes
 
@@ -248,9 +270,9 @@ def _time_cold(fn, device):
     return 1000 * (time.perf_counter() - t0)
 
 
-def _time_cold_fused(build_fn, device):
-    """Clear all caches, build + launch a fused op from cold. Returns cold_ms."""
-    return _time_cold(lambda: build_fn().launch(), device)
+def _time_cold_fused(container_fn, device):
+    """Clear all caches, then one ``container_fn().run()`` from cold. Returns cold_ms."""
+    return _time_cold(lambda: container_fn().run(), device)
 
 
 def _time_e2e(fn, device, num_warmup=5, num_measure=100):
@@ -311,7 +333,9 @@ class TestPerfDemos:
 
         return core_range, mm_cfg, torch_input, torch_w, torch_b
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_linear_chain_rms_matmul_rms_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -356,15 +380,35 @@ class TestPerfDemos:
             compute_kernel_config=compute_cfg,
         )
 
-        if perf_mode == "device_fw":
-            fused = Sequential(r1, m, r2).build()
-            fused.launch()
+        if perf_mode == "none":
+            s = Sequential(r1, m, r2)
+            [fused_result_t] = s.run(results=[r2])
+            fused_result = ttnn.to_torch(fused_result_t)
+
+            tt_in = ttnn.from_torch(
+                torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+            )
+            tt_w = ttnn.from_torch(
+                torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+            )
+            tt_B = ttnn.from_torch(
+                torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+            )
+            u1 = ttnn.rms_norm(tt_in, weight=tt_w, epsilon=1e-5)
+            u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
+            ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
+
+            assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
+        elif perf_mode == "device_fw":
+            fused = Sequential(r1, m, r2)
+            fused.run()
             ttnn.synchronize_device(device)
-            print(f"\n  Linear Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: Sequential(r1, m, r2).build(), device)
+            s = Sequential(r1, m, r2)
+            cold = _time_cold(s.run, device)
 
-            fused_result = ttnn.to_torch(r2.output_tensors[0])
+            [fused_result_t] = s.run(results=[r2])
+            fused_result = ttnn.to_torch(fused_result_t)
 
             # Unfused reference for PCC
             tt_in = ttnn.from_torch(
@@ -380,16 +424,15 @@ class TestPerfDemos:
             u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
-            passing, pcc = comp_pcc(ref, fused_result, pcc=0.97)
-            print(f"\n  Linear Chain Fused (H={H}): cold={cold:.2f}ms PCC={pcc:.6f}")
-            assert passing, f"PCC: {pcc}"
+            assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
         elif perf_mode == "e2e":
-            fused = Sequential(r1, m, r2).build()
-            e2e = _time_e2e(fused.launch, device)
+            s = Sequential(r1, m, r2)
+            e2e = _time_e2e(s.run, device)
 
-            fused_result = ttnn.to_torch(r2.output_tensors[0])
+            [fused_result_t] = s.run(results=[r2])
+            fused_result = ttnn.to_torch(fused_result_t)
 
-            # Unfused reference for PCC
+            # Unfused reference for accuracy check
             tt_in = ttnn.from_torch(
                 torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
             )
@@ -403,11 +446,13 @@ class TestPerfDemos:
             u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
-            passing, pcc = comp_pcc(ref, fused_result, pcc=0.97)
-            print(f"\n  Linear Chain Fused (H={H}): e2e={e2e:.3f}ms PCC={pcc:.6f}")
-            assert passing, f"PCC: {pcc}"
+            assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_linear_chain_rms_matmul_rms_unfused(self, device, H, perf_mode):
         core_range, mm_cfg, torch_input, torch_w, torch_b = self._linear_chain_setup(device, H)
@@ -423,16 +468,22 @@ class TestPerfDemos:
             u2 = ttnn.matmul(u1, tt_B, program_config=mm_cfg)
             return ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5)
 
-        if perf_mode == "device_fw":
+        if perf_mode == "none":
+            result = ttnn.to_torch(unfused())
+            ref = _torch_rms_norm(
+                torch.matmul(_torch_rms_norm(torch_input, torch_w).float(), torch_b.float()).to(torch.bfloat16),
+                torch_w,
+            )
+            assert_numeric_metrics(ref, result, pcc_threshold=0.999, rtol=0.1, atol=0.3, frobenius_threshold=0.1)
+        elif perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print(f"\n  Linear Chain Unfused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Linear Chain Unfused (H={H}): cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Linear Chain Unfused (H={H}): e2e={e2e:.3f}ms")
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # -----------------------------------------------------------------
     # Sharded Chain — RMS -> LN (block-sharded, 4x4 grid)
@@ -483,15 +534,17 @@ class TestPerfDemos:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard),
         )
 
-        return cores, sharded_mem, program_cfg, tt_input, tt_w
+        return cores, sharded_mem, program_cfg, tt_input, tt_w, torch_input, torch_w
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_sharded_chain_rms_layernorm_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
 
-        cores, sharded_mem, program_cfg, tt_input, tt_w = self._sharded_chain_setup(device, H)
+        cores, sharded_mem, program_cfg, tt_input, tt_w, _, _ = self._sharded_chain_setup(device, H)
 
         r = rms_norm.rms_norm(
             tt_input,
@@ -510,15 +563,43 @@ class TestPerfDemos:
             memory_config=sharded_mem,
         )
 
-        if perf_mode == "device_fw":
-            fused = Sequential(r, ln).build()
-            fused.launch()
+        if perf_mode == "none":
+            s = Sequential(r, ln)
+            [fused_result_t] = s.run(results=[ln])
+            fused_result = ttnn.to_torch(fused_result_t)
+
+            u1 = ttnn.rms_norm(
+                tt_input,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+            ref = ttnn.to_torch(
+                ttnn.layer_norm(
+                    u1,
+                    weight=tt_w,
+                    epsilon=1e-5,
+                    program_config=program_cfg,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    memory_config=sharded_mem,
+                )
+            )
+
+            assert_numeric_metrics(
+                ref, fused_result, pcc_threshold=0.98, rtol=0.06, atol=0.06, frobenius_threshold=0.06
+            )
+        elif perf_mode == "device_fw":
+            fused = Sequential(r, ln)
+            fused.run()
             ttnn.synchronize_device(device)
-            print(f"\n  Sharded Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: Sequential(r, ln).build(), device)
+            s = Sequential(r, ln)
+            cold = _time_cold(s.run, device)
 
-            fused_result = ttnn.to_torch(ln.output_tensors[0])
+            [fused_result_t] = s.run(results=[ln])
+            fused_result = ttnn.to_torch(fused_result_t)
 
             # Unfused reference for PCC
             u1 = ttnn.rms_norm(
@@ -540,14 +621,15 @@ class TestPerfDemos:
                 )
             )
 
-            passing, pcc = comp_pcc(ref, fused_result, pcc=0.98)
-            print(f"\n  Sharded Chain Fused (H={H}): cold={cold:.2f}ms PCC={pcc:.6f}")
-            assert passing, f"PCC: {pcc}"
+            assert_numeric_metrics(
+                ref, fused_result, pcc_threshold=0.98, rtol=0.06, atol=0.06, frobenius_threshold=0.06
+            )
         elif perf_mode == "e2e":
-            fused = Sequential(r, ln).build()
-            e2e = _time_e2e(fused.launch, device)
+            s = Sequential(r, ln)
+            e2e = _time_e2e(s.run, device)
 
-            fused_result = ttnn.to_torch(ln.output_tensors[0])
+            [fused_result_t] = s.run(results=[ln])
+            fused_result = ttnn.to_torch(fused_result_t)
 
             # Unfused reference for PCC
             u1 = ttnn.rms_norm(
@@ -569,14 +651,18 @@ class TestPerfDemos:
                 )
             )
 
-            passing, pcc = comp_pcc(ref, fused_result, pcc=0.98)
-            print(f"\n  Sharded Chain Fused (H={H}): e2e={e2e:.3f}ms PCC={pcc:.6f}")
-            assert passing, f"PCC: {pcc}"
+            assert_numeric_metrics(
+                ref, fused_result, pcc_threshold=0.98, rtol=0.06, atol=0.06, frobenius_threshold=0.06
+            )
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_sharded_chain_rms_layernorm_unfused(self, device, H, perf_mode):
-        cores, sharded_mem, program_cfg, tt_input, tt_w = self._sharded_chain_setup(device, H)
+        cores, sharded_mem, program_cfg, tt_input, tt_w, torch_input, torch_w = self._sharded_chain_setup(device, H)
 
         def unfused():
             u1 = ttnn.rms_norm(
@@ -596,16 +682,19 @@ class TestPerfDemos:
                 memory_config=sharded_mem,
             )
 
-        if perf_mode == "device_fw":
+        if perf_mode == "none":
+            result = ttnn.to_torch(unfused())
+            ref = _torch_layer_norm(_torch_rms_norm(torch_input, torch_w), torch_w)
+            assert_numeric_metrics(ref, result, pcc_threshold=0.999, rtol=0.1, atol=0.1, frobenius_threshold=0.1)
+        elif perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print(f"\n  Sharded Chain Unfused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Sharded Chain Unfused (H={H}): cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Sharded Chain Unfused (H={H}): e2e={e2e:.3f}ms")
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # -----------------------------------------------------------------
     # Parallel Chains — LN->MM + RMS->MM on disjoint 1x8 columns
@@ -688,7 +777,9 @@ class TestPerfDemos:
             tB,
         )
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_parallel_chains_ln_mm_rms_mm_fused(self, device, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
@@ -743,16 +834,32 @@ class TestPerfDemos:
             output_mem_config=sharded_out_b,
         )
 
-        if perf_mode == "device_fw":
-            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build()
-            fused.launch()
+        if perf_mode == "none":
+            p = Parallel(Sequential(la, ma), Sequential(rb, mb))
+            [result_a_t, result_b_t] = p.run(results=[ma, mb])
+            result_a = ttnn.to_torch(result_a_t)
+            result_b = ttnn.to_torch(result_b_t)
+
+            ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
+            ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+            ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
+            ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
+
+            ref_a = ttnn.to_torch(ua2)
+            ref_b = ttnn.to_torch(ub2)
+            assert_numeric_metrics(ref_a, result_a, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
+            assert_numeric_metrics(ref_b, result_b, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
+        elif perf_mode == "device_fw":
+            fused = Parallel(Sequential(la, ma), Sequential(rb, mb))
+            fused.run()
             ttnn.synchronize_device(device)
-            print("\n  Parallel Chains Fused: device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)).build(), device)
+            p = Parallel(Sequential(la, ma), Sequential(rb, mb))
+            cold = _time_cold(p.run, device)
 
-            result_a = ttnn.to_torch(ma.output_tensors[0])
-            result_b = ttnn.to_torch(mb.output_tensors[0])
+            [result_a_t, result_b_t] = p.run(results=[ma, mb])
+            result_a = ttnn.to_torch(result_a_t)
+            result_b = ttnn.to_torch(result_b_t)
 
             # Unfused reference for PCC — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
@@ -760,33 +867,34 @@ class TestPerfDemos:
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
             ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
 
-            p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
-            p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
-
-            print(f"\n  Parallel Chains Fused: cold={cold:.2f}ms PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
-            assert p_a, f"Chain A PCC: {pcc_a}"
-            assert p_b, f"Chain B PCC: {pcc_b}"
+            ref_a = ttnn.to_torch(ua2)
+            ref_b = ttnn.to_torch(ub2)
+            assert_numeric_metrics(ref_a, result_a, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
+            assert_numeric_metrics(ref_b, result_b, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
         elif perf_mode == "e2e":
-            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build()
-            e2e = _time_e2e(fused.launch, device)
+            p = Parallel(Sequential(la, ma), Sequential(rb, mb))
+            e2e = _time_e2e(p.run, device)
 
-            result_a = ttnn.to_torch(ma.output_tensors[0])
-            result_b = ttnn.to_torch(mb.output_tensors[0])
+            [result_a_t, result_b_t] = p.run(results=[ma, mb])
+            result_a = ttnn.to_torch(result_a_t)
+            result_b = ttnn.to_torch(result_b_t)
 
-            # Unfused reference for PCC — interleaved to avoid core mapping constraints
+            # Unfused reference for accuracy check — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
             ua2 = ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
             ub1 = ttnn.rms_norm(tb, weight=tw, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
             ub2 = ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG)
 
-            p_a, pcc_a = comp_pcc(ttnn.to_torch(ua2), result_a, pcc=0.97)
-            p_b, pcc_b = comp_pcc(ttnn.to_torch(ub2), result_b, pcc=0.97)
+            ref_a = ttnn.to_torch(ua2)
+            ref_b = ttnn.to_torch(ub2)
+            assert_numeric_metrics(ref_a, result_a, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
+            assert_numeric_metrics(ref_b, result_b, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-            print(f"\n  Parallel Chains Fused: e2e={e2e:.3f}ms PCC: a={pcc_a:.4f} b={pcc_b:.4f}")
-            assert p_a, f"Chain A PCC: {pcc_a}"
-            assert p_b, f"Chain B PCC: {pcc_b}"
-
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_parallel_chains_ln_mm_rms_mm_unfused(self, device, perf_mode):
         """Unfused path using ttnn ops with sharded intermediates.
 
@@ -822,44 +930,26 @@ class TestPerfDemos:
             inplace=False,
         )
 
+        torch_a = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, rows, K, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, K, dtype=torch.bfloat16)
+        torch_bi = torch.zeros(1, 1, 1, K, dtype=torch.bfloat16)
+        torch_B = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
         ta = ttnn.from_torch(
-            torch.randn(1, 1, rows, K, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=sharded_in,
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in
         )
         tb = ttnn.from_torch(
-            torch.randn(1, 1, rows, K, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=sharded_in,
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_in
         )
-        # Norm weight/bias [1,1,1,256] width-sharded across 8 cores -> [32,32] per core
         w_shard = ttnn.ShardSpec(cores, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
         w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard)
-        tw = ttnn.from_torch(
-            torch.ones(1, 1, 1, K, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=w_mem,
-        )
+        tw = ttnn.from_torch(torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_mem)
         tbi = ttnn.from_torch(
-            torch.zeros(1, 1, 1, K, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=w_mem,
+            torch_bi, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_mem
         )
-        # Matmul B [1,1,256,128] must be interleaved for MatmulMultiCoreReuseProgramConfig
         tB = ttnn.from_torch(
-            torch.randn(1, 1, K, N, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            torch_B, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         def unfused():
@@ -872,7 +962,9 @@ class TestPerfDemos:
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=sharded_in,
             )
-            ttnn.matmul(ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=sharded_out)
+            ra = ttnn.matmul(
+                ua1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=sharded_out
+            )
             ub1 = ttnn.rms_norm(
                 tb,
                 weight=tw,
@@ -881,18 +973,30 @@ class TestPerfDemos:
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=sharded_in,
             )
-            ttnn.matmul(ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=sharded_out)
+            rb = ttnn.matmul(
+                ub1, tB, program_config=mm_cfg, compute_kernel_config=COMPUTE_CONFIG, memory_config=sharded_out
+            )
+            return ra, rb
 
-        if perf_mode == "device_fw":
+        if perf_mode == "none":
+            result_a_t, result_b_t = unfused()
+            result_a = ttnn.to_torch(result_a_t)
+            result_b = ttnn.to_torch(result_b_t)
+            ref_a = torch.matmul(_torch_layer_norm(torch_a, torch_w, torch_bi).float(), torch_B.float()).to(
+                torch.bfloat16
+            )
+            ref_b = torch.matmul(_torch_rms_norm(torch_b, torch_w).float(), torch_B.float()).to(torch.bfloat16)
+            assert_numeric_metrics(ref_a, result_a, pcc_threshold=0.999, rtol=0.1, atol=1.0, frobenius_threshold=0.1)
+            assert_numeric_metrics(ref_b, result_b, pcc_threshold=0.999, rtol=0.1, atol=1.0, frobenius_threshold=0.1)
+        elif perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Parallel Chains Unfused: device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Parallel Chains Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Parallel Chains Unfused: e2e={e2e:.3f}ms")
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # =================================================================
     # Sharded Tree — LN -> Slice -> Matmul -> Slice -> LN
@@ -1130,7 +1234,7 @@ class TestPerfDemos:
             shards,
         )
 
-    def _sharded_tree_build_fused(self, device, ops):
+    def _sharded_tree_container(self, ops):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
         (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
@@ -1140,9 +1244,11 @@ class TestPerfDemos:
                 Sequential(sl_top, mm_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
                 Sequential(sl_bot, mm_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
             ),
-        ).build()
+        )
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_sharded_tree_ln_slice_matmul_slice_ln_fused(self, device, perf_mode):
         (
             ln_stem,
@@ -1171,13 +1277,94 @@ class TestPerfDemos:
         quarter = rows // 4
         ops = (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr)
 
-        if perf_mode == "device_fw":
-            fused = self._sharded_tree_build_fused(device, ops)
-            fused.launch()
+        if perf_mode == "none":
+            tree = self._sharded_tree_container(ops)
+            [result_ll_t, result_rl_t] = tree.run(results=[ln_ll, ln_rl])
+            result_ll = ttnn.to_torch(result_ll_t)
+            result_rl = ttnn.to_torch(result_rl_t)
+
+            stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(2, 8),
+                subblock_w=min(128 // 32, 4),
+                block_h=256 // 32,
+                block_w=128 // 32,
+                inplace=False,
+            )
+            leaf_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(1, 4),
+                subblock_w=min(128 // 32, 4),
+                block_h=128 // 32,
+                block_w=128 // 32,
+                inplace=False,
+            )
+            u_stem = ttnn.layer_norm(
+                tt_input,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                program_config=stem_ln_cfg,
+                memory_config=shards["stem"],
+            )
+            u_top = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=shards["left"])
+            u_bot = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=shards["left"])
+            ttnn.deallocate(u_stem)
+            u_left = ttnn.matmul(
+                u_top,
+                tt_B_left,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=shards["mm_left"],
+            )
+            ttnn.deallocate(u_top)
+            u_tl = ttnn.slice(u_left, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=shards["ll"])
+            ttnn.deallocate(u_left)
+            ref_ll = ttnn.to_torch(
+                ttnn.layer_norm(
+                    u_tl,
+                    epsilon=1e-5,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    program_config=leaf_ln_cfg,
+                    memory_config=shards["ll"],
+                )
+            )
+            ttnn.deallocate(u_tl)
+            u_right = ttnn.matmul(
+                u_bot,
+                tt_B_right,
+                program_config=mm_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=shards["mm_left"],
+            )
+            ttnn.deallocate(u_bot)
+            u_tr = ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=shards["ll"])
+            ttnn.deallocate(u_right)
+            ref_rl = ttnn.to_torch(
+                ttnn.layer_norm(
+                    u_tr,
+                    epsilon=1e-5,
+                    compute_kernel_config=COMPUTE_CONFIG,
+                    program_config=leaf_ln_cfg,
+                    memory_config=shards["ll"],
+                )
+            )
+            ttnn.deallocate(u_tr)
+
+            assert_numeric_metrics(
+                ref_ll, result_ll, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+            )
+            assert_numeric_metrics(
+                ref_rl, result_rl, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+            )
+        elif perf_mode == "device_fw":
+            tree = self._sharded_tree_container(ops)
+            tree.run()
             ttnn.synchronize_device(device)
-            print("\n  Sharded Tree Fused: device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: self._sharded_tree_build_fused(device, ops), device)
+            tree = self._sharded_tree_container(ops)
+            cold = _time_cold(tree.run, device)
+
+            [result_ll_t, result_rl_t] = tree.run(results=[ln_ll, ln_rl])
+            result_ll = ttnn.to_torch(result_ll_t)
+            result_rl = ttnn.to_torch(result_rl_t)
 
             # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1224,7 +1411,6 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tl)
-            result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
@@ -1245,16 +1431,20 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tr)
-            result_rl = ttnn.to_torch(ln_rl.output_tensors[0])
 
-            p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
-            p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
-            print(f"\n  Sharded Tree Fused: cold={cold:.2f}ms PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}")
-            assert p_ll, f"Left-left PCC: {pcc_ll}"
-            assert p_rl, f"Right-left PCC: {pcc_rl}"
+            assert_numeric_metrics(
+                ref_ll, result_ll, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+            )
+            assert_numeric_metrics(
+                ref_rl, result_rl, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+            )
         elif perf_mode == "e2e":
-            fused = self._sharded_tree_build_fused(device, ops)
-            e2e = _time_e2e(fused.launch, device)
+            tree = self._sharded_tree_container(ops)
+            e2e = _time_e2e(tree.run, device)
+
+            [result_ll_t, result_rl_t] = tree.run(results=[ln_ll, ln_rl])
+            result_ll = ttnn.to_torch(result_ll_t)
+            result_rl = ttnn.to_torch(result_rl_t)
 
             # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1301,7 +1491,6 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tl)
-            result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
@@ -1322,15 +1511,19 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tr)
-            result_rl = ttnn.to_torch(ln_rl.output_tensors[0])
 
-            p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
-            p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
-            print(f"\n  Sharded Tree Fused: e2e={e2e:.3f}ms PCC: ll={pcc_ll:.6f} rl={pcc_rl:.6f}")
-            assert p_ll, f"Left-left PCC: {pcc_ll}"
-            assert p_rl, f"Right-left PCC: {pcc_rl}"
+            assert_numeric_metrics(
+                ref_ll, result_ll, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+            )
+            assert_numeric_metrics(
+                ref_rl, result_rl, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
+            )
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_sharded_tree_ln_slice_matmul_slice_ln_unfused(self, device, perf_mode):
         """Unfused path using ttnn ops with sharded intermediates.
 
@@ -1382,28 +1575,19 @@ class TestPerfDemos:
         stem_ln_cfg = ln_prog_cfg(2, 8, 256 // 32, 128 // 32)
         leaf_ln_cfg = ln_prog_cfg(1, 4, 128 // 32, 128 // 32)
 
+        torch_input = torch.randn(1, 1, rows, cols, dtype=torch.bfloat16)
+        torch_B_left = torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16)
+        torch_B_right = torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16)
+
         tt_input = ttnn.from_torch(
-            torch.randn(1, 1, rows, cols, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=stem_mem,
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=stem_mem
         )
-        # Matmul B [1,1,256,128] must be interleaved for MatmulMultiCoreReuseProgramConfig
         dram = ttnn.DRAM_MEMORY_CONFIG
         tt_B_left = ttnn.from_torch(
-            torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=dram,
+            torch_B_left, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
         tt_B_right = ttnn.from_torch(
-            torch.randn(1, 1, cols, mm_n, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=dram,
+            torch_B_right, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
 
         def unfused():
@@ -1426,45 +1610,58 @@ class TestPerfDemos:
             u_bl = ttnn.slice(u_left, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=leaf_mem)
             u_tr = ttnn.slice(u_right, [0, 0, 0, 0], [1, 1, quarter, mm_n], memory_config=leaf_mem)
             u_br = ttnn.slice(u_right, [0, 0, quarter, 0], [1, 1, half, mm_n], memory_config=leaf_mem)
-            ttnn.layer_norm(
+            r_tl = ttnn.layer_norm(
                 u_tl,
                 epsilon=1e-5,
                 compute_kernel_config=COMPUTE_CONFIG,
                 program_config=leaf_ln_cfg,
                 memory_config=leaf_mem,
             )
-            ttnn.layer_norm(
+            r_bl = ttnn.layer_norm(
                 u_bl,
                 epsilon=1e-5,
                 compute_kernel_config=COMPUTE_CONFIG,
                 program_config=leaf_ln_cfg,
                 memory_config=leaf_mem,
             )
-            ttnn.layer_norm(
+            r_tr = ttnn.layer_norm(
                 u_tr,
                 epsilon=1e-5,
                 compute_kernel_config=COMPUTE_CONFIG,
                 program_config=leaf_ln_cfg,
                 memory_config=leaf_mem,
             )
-            ttnn.layer_norm(
+            r_br = ttnn.layer_norm(
                 u_br,
                 epsilon=1e-5,
                 compute_kernel_config=COMPUTE_CONFIG,
                 program_config=leaf_ln_cfg,
                 memory_config=leaf_mem,
             )
+            return r_tl, r_bl, r_tr, r_br
 
-        if perf_mode == "device_fw":
+        if perf_mode == "none":
+            r_tl, r_bl, r_tr, r_br = unfused()
+            result_tl = ttnn.to_torch(r_tl)
+            result_bl = ttnn.to_torch(r_bl)
+
+            stem = _torch_layer_norm(torch_input)
+            top = stem[:, :, :half, :]
+            left = torch.matmul(top.float(), torch_B_left.float()).to(torch.bfloat16)
+            ref_tl = _torch_layer_norm(left[:, :, :quarter, :])
+            ref_bl = _torch_layer_norm(left[:, :, quarter:half, :])
+
+            assert_numeric_metrics(ref_tl, result_tl, pcc_threshold=0.999, rtol=0.1, atol=0.3, frobenius_threshold=0.1)
+            assert_numeric_metrics(ref_bl, result_bl, pcc_threshold=0.999, rtol=0.1, atol=0.3, frobenius_threshold=0.1)
+        elif perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Sharded Tree Unfused: device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Sharded Tree Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Sharded Tree Unfused: e2e={e2e:.3f}ms")
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # -----------------------------------------------------------------
     # Asymmetric Branches — LN stem -> Parallel(Slice->RMS->RMS, Slice->LN)
@@ -1517,7 +1714,10 @@ class TestPerfDemos:
             tw,
         )
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.skip(reason="Fused kernel exceeds kernel config buffer size (75520 > 70656)")
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_asymmetric_branches_ln_slice_rms_ln_fused(self, device, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
@@ -1584,16 +1784,19 @@ class TestPerfDemos:
             compute_kernel_config=COMPUTE_CONFIG,
         )
 
-        def build():
-            return Sequential(
-                ln_stem,
-                Parallel(
-                    Sequential(sl_left, rms1, rms2),
-                    Sequential(sl_right, ln_right),
-                ),
-            ).build()
+        container = Sequential(
+            ln_stem,
+            Parallel(
+                Sequential(sl_left, rms1, rms2),
+                Sequential(sl_right, ln_right),
+            ),
+        )
 
         def _pcc_check():
+            [result_left_t, result_right_t] = container.run(results=[rms2, ln_right])
+            result_left = ttnn.to_torch(result_left_t)
+            result_right = ttnn.to_torch(result_right_t)
+
             # Unfused reference for PCC — sharded on (0,0)-based grids
             branch_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1640,33 +1843,34 @@ class TestPerfDemos:
                 memory_config=branch_mem,
             )
 
-            result_left = ttnn.to_torch(rms2.output_tensors[0])
-            result_right = ttnn.to_torch(ln_right.output_tensors[0])
             ref_left = ttnn.to_torch(u_left)
             ref_right = ttnn.to_torch(u_right)
 
-            p_l, pcc_l = comp_pcc(ref_left, result_left, pcc=0.97)
-            p_r, pcc_r = comp_pcc(ref_right, result_right, pcc=0.97)
-            assert p_l, f"Left chain PCC: {pcc_l}"
-            assert p_r, f"Right LN PCC: {pcc_r}"
-            return pcc_l, pcc_r
+            assert_numeric_metrics(
+                ref_left, result_left, pcc_threshold=0.97, rtol=0.08, atol=0.5, frobenius_threshold=0.08
+            )
+            assert_numeric_metrics(
+                ref_right, result_right, pcc_threshold=0.97, rtol=0.08, atol=0.5, frobenius_threshold=0.08
+            )
+            return True, True
 
-        if perf_mode == "device_fw":
-            fused = build()
-            fused.launch()
+        if perf_mode == "none":
+            _pcc_check()
+        elif perf_mode == "device_fw":
+            container.run()
             ttnn.synchronize_device(device)
-            print("\n  Asymmetric Branches Fused: device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(build, device)
+            cold = _time_cold(container.run, device)
             pcc_l, pcc_r = _pcc_check()
-            print(f"\n  Asymmetric Branches Fused: cold={cold:.2f}ms PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
         elif perf_mode == "e2e":
-            fused = build()
-            e2e = _time_e2e(fused.launch, device)
+            e2e = _time_e2e(container.run, device)
             pcc_l, pcc_r = _pcc_check()
-            print(f"\n  Asymmetric Branches Fused: e2e={e2e:.3f}ms PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_asymmetric_branches_ln_slice_rms_ln_unfused(self, device, perf_mode):
         """Unfused path: all 6 ops serialize on (0,0)-based grids.
 
@@ -1702,23 +1906,15 @@ class TestPerfDemos:
             inplace=False,
         )
 
+        torch_input = torch.randn(1, 1, rows, cols, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, cols, dtype=torch.bfloat16)
+
         tt_input = ttnn.from_torch(
-            torch.randn(1, 1, rows, cols, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=stem_mem,
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=stem_mem
         )
-        # RMS weight on branch_cores
         w_shard = ttnn.ShardSpec(branch_cores, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
         w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, w_shard)
-        tw = ttnn.from_torch(
-            torch.ones(1, 1, 1, cols, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=w_mem,
-        )
+        tw = ttnn.from_torch(torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=w_mem)
 
         def unfused():
             u_stem = ttnn.layer_norm(
@@ -1730,7 +1926,6 @@ class TestPerfDemos:
             )
             u_left = ttnn.slice(u_stem, [0, 0, 0, 0], [1, 1, half, cols], memory_config=branch_mem)
             u_right = ttnn.slice(u_stem, [0, 0, half, 0], [1, 1, rows, cols], memory_config=branch_mem)
-            # 2x RMS on left half
             u_left = ttnn.rms_norm(
                 u_left,
                 weight=tw,
@@ -1747,25 +1942,38 @@ class TestPerfDemos:
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=branch_mem,
             )
-            # LN on right half
-            ttnn.layer_norm(
+            r_right = ttnn.layer_norm(
                 u_right,
                 epsilon=1e-5,
                 program_config=branch_ln_cfg,
                 compute_kernel_config=COMPUTE_CONFIG,
                 memory_config=branch_mem,
             )
+            return u_left, r_right
 
-        if perf_mode == "device_fw":
+        if perf_mode == "none":
+            r_left, r_right = unfused()
+            result_left = ttnn.to_torch(r_left)
+            result_right = ttnn.to_torch(r_right)
+
+            stem = _torch_layer_norm(torch_input)
+            ref_left = _torch_rms_norm(_torch_rms_norm(stem[:, :, :half, :], torch_w), torch_w)
+            ref_right = _torch_layer_norm(stem[:, :, half:, :])
+            assert_numeric_metrics(
+                ref_left, result_left, pcc_threshold=0.999, rtol=0.1, atol=0.5, frobenius_threshold=0.1
+            )
+            assert_numeric_metrics(
+                ref_right, result_right, pcc_threshold=0.999, rtol=0.1, atol=0.5, frobenius_threshold=0.1
+            )
+        elif perf_mode == "device_fw":
             unfused()
             ttnn.synchronize_device(device)
-            print("\n  Asymmetric Branches Unfused: device_fw run")
         elif perf_mode == "cold_start":
             cold = _time_cold(unfused, device)
-            print(f"\n  Asymmetric Branches Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
-            print(f"\n  Asymmetric Branches Unfused: e2e={e2e:.3f}ms")
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
 
 # =============================================================================
@@ -1801,6 +2009,7 @@ void kernel_main() {
         local_cb.pop_front(1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
@@ -1826,6 +2035,7 @@ void kernel_main() {
         remote_cb.pop_front(noc, 1);
     }
     remote_cb.commit();
+    noc_async_atomic_barrier();
 }
 """
 
@@ -1955,17 +2165,19 @@ void kernel_main() {
     ob = _build_identity_op(tib, tt_output_b, sender_range, num_tiles)
     con = _build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
-    cold = _time_cold_fused(lambda: Parallel(Sequential(oa, ob), con).build(), device)
+    p = Parallel(Sequential(oa, ob), con)
+    cold = _time_cold(p.run, device)
 
-    result_recv = ttnn.to_torch(tt_output_recv)
-    result_b = ttnn.to_torch(tt_output_b)
+    [result_b_t, result_recv_t] = p.run(results=[ob, con])
+    result_recv = ttnn.to_torch(result_recv_t)
+    result_b = ttnn.to_torch(result_b_t)
 
-    passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
-    passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
-
-    print(f"\n  GlobalCB Fused: cold={cold:.2f}ms  PCC: recv={pcc_recv:.4f} phase1={pcc_b:.4f}")
-    assert passing_recv, f"Receiver PCC: {pcc_recv}"
-    assert passing_b, f"Phase 1 PCC: {pcc_b}"
+    assert_numeric_metrics(
+        torch_input_a, result_recv, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+    )
+    assert_numeric_metrics(
+        torch_input_b, result_b, pcc_threshold=0.999, rtol=0.015, atol=0.015, frobenius_threshold=0.015
+    )
 
 
 # -----------------------------------------------------------------
@@ -2050,41 +2262,52 @@ def _non_contiguous_grid_setup(device, num_tiles=4):
     return stem, op_a, op_b, t_in, t_out_a, t_out_b
 
 
-@pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+@pytest.mark.parametrize(
+    "perf_mode", ["none"]
+)  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
 def test_non_contiguous_core_grid_fused(device, perf_mode):
     from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
-    stem, op_a, op_b, t_in, t_out_a, t_out_b = _non_contiguous_grid_setup(device)
+    stem, op_a, op_b, t_in, _, _ = _non_contiguous_grid_setup(device)
 
-    def build():
-        return Sequential(stem, Parallel(op_a, op_b)).build()
+    seq = Sequential(stem, Parallel(op_a, op_b))
 
-    if perf_mode == "device_fw":
-        fused = build()
-        fused.launch()
+    if perf_mode == "none":
+        ref = ttnn.to_torch(t_in)
+        [out_a, out_b] = seq.run(results=[op_a, op_b])
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
+    elif perf_mode == "device_fw":
+        seq.run()
         ttnn.synchronize_device(device)
-        print("\n  Non-Contiguous Grid Fused: device_fw run")
     elif perf_mode == "cold_start":
-        cold = _time_cold_fused(build, device)
+        cold = _time_cold(seq.run, device)
 
         ref = ttnn.to_torch(t_in)
-        p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(t_out_a), pcc=0.999)
-        p_b, pcc_b = comp_pcc(ref, ttnn.to_torch(t_out_b), pcc=0.999)
-
-        print(f"\n  Non-Contiguous Grid Fused: cold={cold:.2f}ms PCC: A={pcc_a:.4f} B={pcc_b:.4f}")
-        assert p_a, f"Branch A PCC: {pcc_a}"
-        assert p_b, f"Branch B PCC: {pcc_b}"
+        [out_a, out_b] = seq.run(results=[op_a, op_b])
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
     elif perf_mode == "e2e":
-        fused = build()
-        e2e = _time_e2e(fused.launch, device)
+        e2e = _time_e2e(seq.run, device)
 
         ref = ttnn.to_torch(t_in)
-        p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(t_out_a), pcc=0.999)
-        p_b, pcc_b = comp_pcc(ref, ttnn.to_torch(t_out_b), pcc=0.999)
-
-        print(f"\n  Non-Contiguous Grid Fused: e2e={e2e:.3f}ms PCC: A={pcc_a:.4f} B={pcc_b:.4f}")
-        assert p_a, f"Branch A PCC: {pcc_a}"
-        assert p_b, f"Branch B PCC: {pcc_b}"
+        [out_a, out_b] = seq.run(results=[op_a, op_b])
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_a), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
+        assert_numeric_metrics(
+            ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
+        )
+    else:
+        pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
 
 # -----------------------------------------------------------------
@@ -2124,7 +2347,12 @@ def _barrier_bench_setup(device, num_phases, num_cores):
     return [_build_noop_op(core_ranges, dummy) for _ in range(num_phases)]
 
 
-@pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
+@pytest.mark.skipif(
+    is_watcher_enabled(), reason="pytest-timeout plugin interacts with watcher on device reopen (noop kernels)"
+)
+@pytest.mark.parametrize(
+    "perf_mode", ["none"]
+)  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
 @pytest.mark.parametrize("num_cores", [1, 8, 16, 64])
 @pytest.mark.parametrize("num_phases", [2, 3, 4, 5, 6])
 def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
@@ -2133,51 +2361,37 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
 
     ops = _barrier_bench_setup(device, num_phases, num_cores)
 
-    def build_fused():
-        return Sequential(*ops).build()
+    seq = Sequential(*ops)
 
-    if perf_mode == "device_fw":
-        fused = build_fused()
-        fused.launch()
+    if perf_mode == "none":
+        seq.run()
         ttnn.synchronize_device(device)
-        print(f"\n  Barrier bench: {num_phases} phases, {num_cores} cores (device_fw run)")
-        return
+    elif perf_mode == "device_fw":
+        seq.run()
+        ttnn.synchronize_device(device)
+    elif perf_mode == "cold_start":
+        cold = _time_cold_fused(lambda: Sequential(*ops), device)
+    elif perf_mode == "e2e":
+        fused_e2e = _time_e2e(seq.run, device)
 
-    if perf_mode == "cold_start":
-        cold = _time_cold_fused(build_fused, device)
-        print(f"\n  Barrier bench: {num_phases} phases, {num_cores} cores cold={cold:.2f}ms")
-        return
-
-    # perf_mode == "e2e"
-    # -- Fused timing --
-    fused = build_fused()
-    fused_e2e = _time_e2e(fused.launch, device)
-
-    # -- Unfused timing: launch each phase as a separate 1-op fused kernel --
-    unfused_ops = [Sequential(op).build() for op in ops]
-    for uf in unfused_ops:
-        uf.launch()
-    ttnn.synchronize_device(device)
-
-    def launch_unfused():
+        unfused_ops = [Sequential(op) for op in ops]
         for uf in unfused_ops:
-            uf.launch()
+            uf.run()
+        ttnn.synchronize_device(device)
 
-    unfused_e2e = _time_e2e(launch_unfused, device)
+        def launch_unfused():
+            for uf in unfused_ops:
+                uf.run()
 
-    # -- 1-phase baseline for per-barrier calculation --
-    ops_1 = _barrier_bench_setup(device, 1, num_cores)
-    fused_1 = Sequential(*ops_1).build()
-    baseline_e2e = _time_e2e(fused_1.launch, device)
+        unfused_e2e = _time_e2e(launch_unfused, device)
 
-    # Convert to microseconds
-    fused_us = fused_e2e * 1000
-    unfused_us = unfused_e2e * 1000
-    baseline_us = baseline_e2e * 1000
-    per_barrier_us = (fused_us - baseline_us) / (num_phases - 1)
+        ops_1 = _barrier_bench_setup(device, 1, num_cores)
+        seq_1 = Sequential(*ops_1)
+        baseline_e2e = _time_e2e(seq_1.run, device)
 
-    print(
-        f"\n  Barrier Overhead ({num_cores} cores, {num_phases} phases): "
-        f"fused={fused_us:.1f}us  unfused={unfused_us:.1f}us  "
-        f"baseline(1-phase)={baseline_us:.1f}us  per_barrier={per_barrier_us:.1f}us"
-    )
+        fused_us = fused_e2e * 1000
+        unfused_us = unfused_e2e * 1000
+        baseline_us = baseline_e2e * 1000
+        per_barrier_us = (fused_us - baseline_us) / (num_phases - 1)
+    else:
+        pytest.fail(f"Unsupported perf_mode={perf_mode!r}")

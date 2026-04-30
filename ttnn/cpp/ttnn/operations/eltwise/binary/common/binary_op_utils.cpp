@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -519,6 +519,10 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("fmod_binary_tile_init();")});
             op_name = "fmod_binary_tile";
             break;
+        case BinaryOpType::REMAINDER:
+            new_defines.insert({"BINOP_INIT", fmt::format("remainder_binary_tile_init();")});
+            op_name = "remainder_binary_tile";
+            break;
         case BinaryOpType::HYPOT:
             // Hypot: sqrt(a^2 + b^2)
             new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0", idst, input_a_dtype));
@@ -526,6 +530,10 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
             op_name = "add_binary_tile";
             new_defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst1, input_a_dtype));
+            break;
+        case BinaryOpType::ATAN2:
+            new_defines.insert({"BINOP_INIT", fmt::format("atan2_binary_tile_init();")});
+            op_name = "atan2_binary_tile";
             break;
         default:
             log_debug(tt::LogOp, "Undefined op type {}", op_type);

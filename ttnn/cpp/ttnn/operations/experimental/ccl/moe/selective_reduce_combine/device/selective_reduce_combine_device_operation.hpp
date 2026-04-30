@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,7 @@
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -54,7 +52,7 @@ ttnn::Tensor selective_reduce_combine(
     uint32_t seq_size,
     uint32_t select_experts_k,
     uint32_t experts,
-    const std::optional<uint32_t>& axis,
+    const std::optional<uint32_t>& cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
     uint32_t num_token_parallel_cores,

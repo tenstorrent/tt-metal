@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@ namespace ttnn::experimental::prim {
 
 struct MaskedBincountParams {
     const uint32_t n_routed_experts;
+    const uint32_t num_experts_per_token;
 };
 
 struct MaskedBincountInputs {

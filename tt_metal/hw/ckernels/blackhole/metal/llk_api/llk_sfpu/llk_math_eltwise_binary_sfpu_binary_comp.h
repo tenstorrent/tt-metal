@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,15 +10,14 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::lt>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::lt>,
         dst_index0,
         dst_index1,
@@ -26,15 +25,14 @@ inline void llk_math_eltwise_binary_sfpu_lt_int32(
         vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::gt>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::gt>,
         dst_index0,
         dst_index1,
@@ -42,15 +40,14 @@ inline void llk_math_eltwise_binary_sfpu_gt_int32(
         vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_ge_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::ge, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::ge>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_ge_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::ge>,
         dst_index0,
         dst_index1,
@@ -58,15 +55,14 @@ inline void llk_math_eltwise_binary_sfpu_ge_int32(
         vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_le_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::le, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::le>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_le_int32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::le>,
         dst_index0,
         dst_index1,
@@ -74,16 +70,106 @@ inline void llk_math_eltwise_binary_sfpu_le_int32(
         vector_mode);
 }
 
+inline void llk_math_eltwise_binary_sfpu_lt_uint16_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::lt>(); }
+
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_lt_uint16(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, 8, SfpuType::lt>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+inline void llk_math_eltwise_binary_sfpu_gt_uint16_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::gt>(); }
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_gt_uint16(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::calculate_binary_comp_uint16<APPROXIMATE, 8, SfpuType::gt>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
 inline void llk_math_eltwise_binary_sfpu_eq_fp32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::eq, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::eq>();
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_eq_fp32(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::eq>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+inline void llk_math_eltwise_binary_sfpu_ne_fp32_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::ne>(); }
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_ne_fp32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::ne>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+inline void llk_math_eltwise_binary_sfpu_lt_fp32_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::lt>(); }
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_lt_fp32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::lt>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+inline void llk_math_eltwise_binary_sfpu_gt_fp32_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::gt>(); }
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_gt_fp32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::gt>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+inline void llk_math_eltwise_binary_sfpu_le_fp32_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::le>(); }
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_le_fp32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::le>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+inline void llk_math_eltwise_binary_sfpu_ge_fp32_init() { llk_math_eltwise_binary_sfpu_init<SfpuType::ge>(); }
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_ge_fp32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::ge>,
         dst_index0,
         dst_index1,
         odst,

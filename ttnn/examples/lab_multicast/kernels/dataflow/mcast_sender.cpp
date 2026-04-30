@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ void kernel_main() {
     // Create address generator for the input buffer using TensorAccessorArgs.
     // TensorAccessorArgs extracts data distribution details from compile-time arguments.
     constexpr auto src_layout_args = TensorAccessorArgs<0>();
-    const auto src_addr_gen = TensorAccessor(src_layout_args, src_base_addr, tile_size_bytes);
+    const auto src_addr_gen = TensorAccessor(src_layout_args, src_base_addr);
 
     ////////// SEMAPHORE SETUP //////////
     volatile tt_l1_ptr uint32_t* receivers_ready_sem_ptr =

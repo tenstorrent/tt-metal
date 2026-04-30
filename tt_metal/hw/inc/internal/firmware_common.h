@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,9 +29,18 @@
 
 constexpr size_t round_up_to_mult_of_4(size_t value) { return ((value + 3) / 4) * 4; }
 
-extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
+// Use uint32_t entries when uint16_t array sizes would be unaligned (not a multiple of 4 bytes),
+// which would cause l1_to_local_mem_copy to read from misaligned L1 addresses.
+// With NUM_NOCS=1 for Quasar, odd bank counts produce non-4-byte-aligned table sizes.
+#if defined(ARCH_QUASAR) && (NUM_DRAM_BANKS % 2 != 0 || NUM_L1_BANKS % 2 != 0)
+typedef uint32_t bank_noc_xy_t;
+#else
+typedef uint16_t bank_noc_xy_t;
+#endif
+
+extern bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
-extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
+extern bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
 // These arrays are used to store the worker logical to virtual coordinate mapping. Only
@@ -70,10 +79,14 @@ inline void do_thread_crt1(uint32_t tt_l1_ptr* data_image) {
 }
 
 inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
-    int32_t dram_to_noc_size_bytes = sizeof(dram_bank_to_noc_xy);
+    constexpr int32_t dram_to_noc_size_bytes = sizeof(dram_bank_to_noc_xy);
+    constexpr int32_t l1_to_noc_size_bytes = sizeof(l1_bank_to_noc_xy);
+    static_assert(
+        dram_to_noc_size_bytes % 4 == 0, "dram_bank_to_noc_xy size must be 4-byte aligned for l1_to_local_mem_copy");
+    static_assert(
+        l1_to_noc_size_bytes % 4 == 0, "l1_bank_to_noc_xy size must be 4-byte aligned for l1_to_local_mem_copy");
     l1_to_local_mem_copy(
         (uint*)dram_bank_to_noc_xy, (uint tt_l1_ptr*)mem_bank_to_noc_addr, dram_to_noc_size_bytes >> 2);
-    int32_t l1_to_noc_size_bytes = sizeof(l1_bank_to_noc_xy);
     l1_to_local_mem_copy(
         (uint*)l1_bank_to_noc_xy,
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes),

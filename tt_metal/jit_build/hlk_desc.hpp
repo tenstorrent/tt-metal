@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ namespace tt {
 class tt_hlk_desc {
 private:
     // data formats spec for the I/O operands (i.e., buffers)
-    MathFidelity math_fidelity{MathFidelity::Invalid};
+    tt::tt_metal::MathFidelity math_fidelity{tt::tt_metal::MathFidelity::Invalid};
     bool approximation_mode{true};
 
     void* hlk_args{nullptr};  // void ptr to user-defined hlk_args_t struct (user writes)
@@ -89,9 +89,9 @@ public:
 
     void* get_hlk_args() const { return hlk_args; }
 
-    void set_hlk_math_fidelity(MathFidelity math_fi) { math_fidelity = math_fi; }
+    void set_hlk_math_fidelity(tt::tt_metal::MathFidelity math_fi) { math_fidelity = math_fi; }
 
-    MathFidelity get_hlk_math_fidelity() const { return math_fidelity; }
+    tt::tt_metal::MathFidelity get_hlk_math_fidelity() const { return math_fidelity; }
 
     void set_hlk_math_approx_mode(bool approx_mode) { approximation_mode = approx_mode; }
 
@@ -106,7 +106,7 @@ public:
 }  // namespace tt
 
 inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     for (size_t i = 0; i < obj.buf_dataformat_arr.size(); i++) {
         hasher.update(static_cast<uint64_t>(obj.get_buf_dataformat(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_tile_r_dim(i)));
@@ -128,7 +128,7 @@ inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
     // reinterpret_casting is well defined.
     if (hlk_args != nullptr && hlk_args_size > 0) {
         const char* raw = reinterpret_cast<const char*>(hlk_args);
-        hasher.update(raw, raw + hlk_args_size);
+        hasher.update(std::string_view{raw, hlk_args_size});
     } else if (hlk_args != nullptr || hlk_args_size != 0) {
         TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
     }

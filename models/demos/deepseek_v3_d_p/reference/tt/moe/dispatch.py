@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -97,8 +97,8 @@ class TorchDispatchModule(torch.nn.Module):
             weights: Router weights of shape (num_dispatch_groups, dispatch_group_size, seq_len, num_experts_per_tok) or
                      (dispatch_group_size, seq_len, num_experts_per_tok)
             indices: Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
-            expert_offsets: Base offset for each expert from each chip
-                Shape: (dispatch_group_size, num_routed_experts) - from get_gate_outputs()
+            expert_offsets: Base offset for each expert from each chip (sparse per group)
+                Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts) - from get_gate_outputs()
 
         Returns:
             If num_dispatch_groups == 1:
@@ -135,8 +135,8 @@ class TorchDispatchModule(torch.nn.Module):
         dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
         for group in range(self.num_dispatch_groups):
-            # Make a mutable copy of offsets for dispatch loop
-            offset_copy = expert_offsets.clone()
+            # Make a mutable copy of offsets for this group's dispatch loop
+            offset_copy = expert_offsets[group].clone()
 
             # Dispatch tokens and metadata
             for chip in range(self.dispatch_group_size):

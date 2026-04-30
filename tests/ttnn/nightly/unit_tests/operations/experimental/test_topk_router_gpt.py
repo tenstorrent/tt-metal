@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ import torch.nn.functional as F
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_for_blackhole
 
 PCC_THRESHOLD = 0.95
 
@@ -51,6 +51,7 @@ def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
     return weights, indices
 
 
+@skip_for_blackhole("topk_router_gpt requires 12 DRAM-aligned cores; Blackhole only has 8")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -95,6 +96,7 @@ def test_topk_router_gpt_deterministic(device, B, K, N, TOP_K):
     assert pcc_val >= 0.99, f"Weight PCC {pcc_val} below threshold 0.99"
 
 
+@skip_for_blackhole("topk_router_gpt requires 12 DRAM-aligned cores; Blackhole only has 8")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -150,6 +152,7 @@ def test_topk_router_gpt_random_matmul(device, B, K, N, TOP_K, seed):
     assert all_positive, "Some weights are not positive"
 
 
+@skip_for_blackhole("topk_router_gpt requires 12 DRAM-aligned cores; Blackhole only has 8")
 @pytest.mark.parametrize(
     "device_params",
     [

@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 using uint32_t = std::uint32_t;
 
@@ -40,17 +41,19 @@ void kernel_main() {
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src_args, src0_addr, tile_bytes);
+    const auto s0 = TensorAccessor(src_args, src0_addr);
 
-    uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
+    experimental::CircularBuffer cb(cb_id_in0);
+    experimental::CircularBuffer cb_scratch(1);
+
+    uint32_t intermed_l1_scratch = MISALIGNED ? cb_scratch.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
     for (uint32_t t = 0; t < num_tiles; t++) {
         auto h32 = (h & 31);
 
-        cb_reserve_back(cb_id_in0, onetile);
+        cb.reserve_back(onetile);
 
-        uint32_t dest_tr0_l1 = get_write_ptr(cb_id_in0);
+        uint32_t dest_tr0_l1 = cb.get_write_ptr();
         // uint32_t save_dest = dest_tr0_l1;
         uint32_t cSubtileOffs = 0;
         for (uint32_t sub = 0; sub < 4; sub++) {
@@ -100,7 +103,7 @@ void kernel_main() {
                     rem = (bsrc_offs & 2047);
                 }
 
-                uint64_t banked_addr = get_noc_addr(batch_itile, s0);
+                uint64_t banked_addr = s0.get_noc_addr(batch_itile);
                 banked_addr += rem;
 
                 if constexpr (MISALIGNED) {
@@ -145,7 +148,7 @@ void kernel_main() {
         noc_async_read_barrier();
 
         // notifies the unpacker that the buffer is populated
-        cb_push_back(cb_id_in0, onetile);
+        cb.push_back(onetile);
         wt++;
         if (wt == WT) {  // End of row
             wt = 0;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,9 +13,9 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -105,21 +105,14 @@ void run_softmax_backward_case(
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt) {
     using namespace ttml;
 
-    xt::xarray<float> logits_tensor = xt::empty<float>({test_case.n, test_case.c, test_case.h, test_case.w});
-    xt::xarray<float> grad_tensor = xt::empty<float>({test_case.n, test_case.c, test_case.h, test_case.w});
-
     const uint32_t logits_seed = make_case_seed(test_case, 0xA5A5A5A5U);
     const uint32_t grad_seed = make_case_seed(test_case, 0x5A5A5A5AU);
-    ttml::core::parallel_generate(
-        std::span{logits_tensor.data(), logits_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        logits_seed);
+    xt::xarray<float> logits_tensor = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, -10.0F, 10.0F, logits_seed);
     const float grad_min = test_case.grad_min;
     const float grad_max = test_case.grad_max;
-    ttml::core::parallel_generate(
-        std::span{grad_tensor.data(), grad_tensor.size()},
-        [grad_min, grad_max]() { return std::uniform_real_distribution<float>(grad_min, grad_max); },
-        grad_seed);
+    xt::xarray<float> grad_tensor = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, grad_min, grad_max, grad_seed);
 
     const int32_t rank = 4;
     const int32_t normalized_dim = test_case.dim >= 0 ? test_case.dim : rank + test_case.dim;

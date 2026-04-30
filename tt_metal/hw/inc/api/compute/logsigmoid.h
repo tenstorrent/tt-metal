@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,6 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((llk_math_eltwise_binary_sfpu_logsigmoid_init<APPROX>())); }
+ALWI void logsigmoid_tile_init() { MATH((llk_math_eltwise_binary_sfpu_logsigmoid_init())); }
 
 }  // namespace ckernel

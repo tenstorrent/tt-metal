@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data_format.hpp"
 
 #include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
-#include <base_types.hpp>     // for UnpackToDestMode
+#include <base_types.hpp>     // for tt::tt_metal::UnpackToDestMode
 #include <circular_buffer_constants.h>
 #include <functional>
 #include <iostream>       // for basic_ostream
@@ -19,7 +19,7 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::Bfp8,      DataFormat::Bfp8_b,   DataFormat::Bfp4,      DataFormat::Bfp4_b,  DataFormat::Bfp2,
     DataFormat::Bfp2_b,    DataFormat::Float16,  DataFormat::Float16_b, DataFormat::Float32, DataFormat::RawUInt32,
     DataFormat::RawUInt16, DataFormat::RawUInt8, DataFormat::Tf32,      DataFormat::Lf8,     DataFormat::Fp8_e4m3,
-    DataFormat::Int8,      DataFormat::Int32,    DataFormat::UInt8,     DataFormat::UInt32,  DataFormat::UInt16,
+    DataFormat::Int8,      DataFormat::Int16,    DataFormat::Int32,    DataFormat::UInt8,     DataFormat::UInt32,  DataFormat::UInt16,
 };
 
 static const std::unordered_map<DataFormat, DataFormat> CONVERT_EXP_WIDTH = {
@@ -145,7 +145,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool /*fp32_dest_acc_en*/,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
@@ -173,7 +173,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
             unpack_dst_format.push_back(src_format);
         } else {
             if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
-                unpack_to_dest_mode[i] != UnpackToDestMode::Default) {
+                unpack_to_dest_mode[i] != tt::tt_metal::UnpackToDestMode::Default) {
                 unpack_dst_format.push_back(
                     get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
             } else {

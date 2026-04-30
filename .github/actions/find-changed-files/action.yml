@@ -32,6 +32,22 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.models-changed }}
   build-workflows-changed:
     value: ${{ steps.find-changed-files.outputs.build-workflows-changed }}
+  llk-wormhole-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-wormhole-changed }}
+  llk-blackhole-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-blackhole-changed }}
+  llk-common-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-common-changed }}
+  llk-sfpi-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-sfpi-changed }}
+  llk-quasar-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-quasar-changed }}
+  llk-tests-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-tests-changed }}
+  llk-perf-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-perf-changed }}
+  llk-ci-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-ci-changed }}
 
 runs:
   using: "composite"

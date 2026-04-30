@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr auto grad_query_args = TensorAccessorArgs<2>();
 
     // Create TensorAccessor generator for output gradient
-    const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr, tile_bytes);
+    const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr);
 
 #ifdef BALANCED_PARALLELISM
     constexpr uint32_t pairs_per_seq = Ht / 2;

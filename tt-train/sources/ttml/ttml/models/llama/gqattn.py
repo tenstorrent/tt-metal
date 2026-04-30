@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,18 @@ from typing import Optional
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, LinearLayer, RunMode
+from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
 
 class GroupedQueryAttention(AbstractModuleBase):
+    """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
+
+    When ``use_tp=True`` the Q and KV projections use ``ColumnParallelLinear``
+    (output features sharded) with ``gather_output=False``, and the output
+    projection uses ``RowParallelLinear`` with ``input_is_parallel=True``.
+    This avoids redundant communication between the two matmuls.
+    """
+
     def __init__(
         self,
         embedding_size: int,
@@ -22,6 +30,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
+        use_tp: bool = False,
     ) -> None:
         super().__init__()
 
@@ -32,34 +41,73 @@ class GroupedQueryAttention(AbstractModuleBase):
             )
 
         self.embedding_size = embedding_size
-        self.num_heads = num_heads
-        self.num_groups = num_groups
         self.dropout_prob = dropout
         self.rope_params = rope_params
 
+        # concat_kv_dim uses GLOBAL head counts because the weight matrices are
+        # created at full size and then sharded by ColumnParallelLinear.
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
-        self.q_linear = LinearLayer(
-            embedding_size,
-            embedding_size,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
-        self.kv_linear = LinearLayer(
-            embedding_size,
-            concat_kv_dim,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
-        self.out_linear = LinearLayer(
-            embedding_size,
-            embedding_size,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
+        # Head/group counts stored here are LOCAL (per-device) so that reshaping
+        # in grouped_heads_creation matches the sharded activation width.
+        if use_tp:
+            tp_size = ttml.mesh().axis_size("tp")
+            self.num_heads = num_heads // tp_size
+            self.num_groups = num_groups // tp_size
+        else:
+            self.num_heads = num_heads
+            self.num_groups = num_groups
+
+        if use_tp:
+            self.q_linear = ColumnParallelLinear(
+                embedding_size,
+                embedding_size,
+                has_bias=bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.kv_linear = ColumnParallelLinear(
+                embedding_size,
+                concat_kv_dim,
+                has_bias=bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.out_linear = RowParallelLinear(
+                embedding_size,
+                embedding_size,
+                has_bias=bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+                input_is_parallel=True,
+                axis_name="tp",
+            )
+        else:
+            self.q_linear = LinearLayer(
+                embedding_size,
+                embedding_size,
+                bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+            )
+            self.kv_linear = LinearLayer(
+                embedding_size,
+                concat_kv_dim,
+                bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+            )
+            self.out_linear = LinearLayer(
+                embedding_size,
+                embedding_size,
+                bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+            )
 
     def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         q = self.q_linear(input)

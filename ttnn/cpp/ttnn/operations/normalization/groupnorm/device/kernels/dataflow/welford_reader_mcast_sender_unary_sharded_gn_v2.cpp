@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,9 +101,6 @@ void kernel_main() {
         noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(7 + num_mcast_cores));
     }
 
-    const uint64_t multicast_data_noc = get_noc_multicast_addr(
-        mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
-
     experimental::Noc noc;
     experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
@@ -142,7 +139,7 @@ void kernel_main() {
                 self_ep,
                 experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr_in0},
                 {});
             src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
@@ -182,15 +179,20 @@ void kernel_main() {
                 reduce_receiver_sem.wait(num_mcast_cores - 1);
                 reduce_receiver_sem.set(0);
 
+                experimental::UnicastEndpoint remote_ep;
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                    noc_async_read_one_packet(
-                        multicast_data_noc | global_means_ptr,
-                        global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
-                        NOC_L1_READ_ALIGNMENT_BYTES);
-                    noc_async_read_one_packet(
-                        multicast_data_noc | global_vars_ptr,
-                        global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
-                        NOC_L1_READ_ALIGNMENT_BYTES);
+                    noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
+                        remote_ep,
+                        experimental::CoreLocalMem<uint32_t>(global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        NOC_L1_READ_ALIGNMENT_BYTES,
+                        {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_means_ptr},
+                        {});
+                    noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_L1_READ_ALIGNMENT_BYTES>(
+                        remote_ep,
+                        experimental::CoreLocalMem<uint32_t>(global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        NOC_L1_READ_ALIGNMENT_BYTES,
+                        {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_vars_ptr},
+                        {});
                 }
                 noc.async_read_barrier();
             }
@@ -297,7 +299,7 @@ void kernel_main() {
                 self_ep,
                 experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr_in0},
                 {});
             src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;

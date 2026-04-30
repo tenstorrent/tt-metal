@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,10 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 UINT16_MAX = 65535
+TEST_PADDING_VALUE = -42
 
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
@@ -26,6 +27,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
@@ -36,6 +38,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         indices_tensor = ttnn.from_torch(
             indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
         )
+        indices_tensor = ttnn.fill_implicit_tile_padding(indices_tensor, TEST_PADDING_VALUE)
     else:
         indices_tensor = None
 
@@ -59,6 +62,15 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     assert list(ttnn_topk_values.shape) == desired_shape
     assert list(ttnn_topk_indices.shape) == desired_shape
 
+    # test for equivalance
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
     assert_equal(ttnn_torch_values, pyt_topk_values)
 
     # Assert indices correctness using gather
@@ -111,6 +123,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (5, 9, 96, 1024, 2, 32),
         (5, 9, 1024, 96, 3, 32),
         (3, 2, 160, 960, 2, 32),
+        (8, 16, 18, 20, 3, 18),
     ),
 )
 @pytest.mark.parametrize(
@@ -146,7 +159,7 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
 )
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
-    ((1, 1, 32, 16 * 1024, 3, 32),),
+    ((1, 1, 32, 16 * 1024, 3, 32), (8, 16, 18, 22, 3, 22)),
 )
 @pytest.mark.parametrize(
     "sorted",
@@ -200,6 +213,7 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     (
         (1, 1, 32, 151936, 3, 50),
         (1, 1, 32, 128256, 3, 50),
+        (1, 1, 16, 20, 3, 16),
     ),
 )
 @pytest.mark.parametrize(
@@ -249,6 +263,7 @@ def run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device):
     pyt_values, _ = torch.topk(input_torch, k, dim=dim, largest=True, sorted=True)
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat8_b, layout=ttnn.Layout.TILE, device=device)
+    ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
     ttnn_values, ttnn_indices = ttnn.topk(
         ttnn_input, k, dim=dim, largest=True, sorted=True, sub_core_grids=sub_core_grids
     )

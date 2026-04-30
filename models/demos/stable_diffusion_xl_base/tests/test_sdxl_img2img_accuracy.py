@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ from transformers import CLIPImageProcessor, CLIPTextModelWithProjection, CLIPTo
 from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_img2img import test_demo
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG, SDXL_TRACE_REGION_SIZE
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     accuracy_assert,
     get_benchmark_summary,
@@ -39,15 +39,12 @@ MAX_N_SAMPLES, MIN_N_SAMPLES = 10000, 2
     [
         (
             {
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
         ),
         (
-            {
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
-            },
+            {},
             False,
         ),
     ],
@@ -129,8 +126,8 @@ def test_accuracy_sdxl_img2img(
     timesteps,
     sigmas,
 ):
-    if vae_on_device and is_blackhole():
-        pytest.skip("Device VAE not supported on Blackhole")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 

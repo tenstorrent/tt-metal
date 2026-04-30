@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <bit>
 #include <cmath>
+#include <numeric>
 
 namespace ttnn::prim {
 
@@ -34,7 +36,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format =
+        src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
@@ -124,27 +127,67 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
 
     if (operation_attributes.negate) {
+        // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
+        // via push_back(ntiles).  The CB FIFO write pointer only wraps when it
+        // exactly reaches fifo_limit, so the CB size must be a multiple of
+        // every push size that occurs.
+        //
+        // For a core with Wt_per_core columns and row_chunk == chunk_size:
+        //   - Wt_per_core >= chunk_size: push sizes are chunk_size (full
+        //     chunks) and Wt_per_core % chunk_size (partial last chunk).
+        //   - Wt_per_core < chunk_size:  the only push size is Wt_per_core
+        //     (no full-sized chunk ever occurs).
+        //
+        // Compute the LCM of only the push sizes that actually occur across
+        // both core groups to avoid unnecessarily inflating the CB allocation.
+        uint32_t negate_cb_tiles = 1;
+        auto include_push_sizes = [&](uint32_t cols_per_core) {
+            if (cols_per_core == 0) {
+                return;
+            }
+            if (cols_per_core >= chunk_size) {
+                negate_cb_tiles = std::lcm(negate_cb_tiles, chunk_size);
+                uint32_t partial = cols_per_core % chunk_size;
+                if (partial > 0) {
+                    negate_cb_tiles = std::lcm(negate_cb_tiles, partial);
+                }
+            } else {
+                negate_cb_tiles = std::lcm(negate_cb_tiles, cols_per_core);
+            }
+        };
+        include_push_sizes(num_cols_per_core_group_1);
+        if (num_cols_per_core_group_2 > 0) {
+            include_push_sizes(num_cols_per_core_group_2);
+        }
+
         uint32_t acc_cb_index = CBIndex::c_4;
         tt_metal::CircularBufferConfig cb_acc_config =
-            tt_metal::CircularBufferConfig(chunk_size * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+            tt_metal::CircularBufferConfig(negate_cb_tiles * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
                 .set_page_size(acc_cb_index, dst_single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
 
         uint32_t ineg_cb_index = CBIndex::c_5;
         tt_metal::CircularBufferConfig cb_ineg_config =
-            tt_metal::CircularBufferConfig(chunk_size * dst_single_tile_size, {{ineg_cb_index, dst_cb_data_format}})
+            tt_metal::CircularBufferConfig(
+                negate_cb_tiles * dst_single_tile_size, {{ineg_cb_index, dst_cb_data_format}})
                 .set_page_size(ineg_cb_index, dst_single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_ineg_config);
     }
 
+    std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::H);
+
     if (use_width_sharding) {
-        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
+        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
+        // Pass DEST config so reader can compute DEST_AUTO_LIMIT
+        reader_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+        reader_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+        reader_defines.insert(reduce_defines.begin(), reduce_defines.end());
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -152,15 +195,21 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/0};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+
+        // Pass DEST config so reader can compute DEST_AUTO_LIMIT
+        std::map<std::string, std::string> reader_defines;
+        reader_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+        reader_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+        reader_defines.insert(reduce_defines.begin(), reduce_defines.end());
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();
@@ -185,18 +234,20 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
-    std::map<std::string, std::string> reduce_defines =
-        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::H);
+    // For width-sharding, num_cols_per_core_group_1 == NC * shard_Wt. Expose (shard_Wt, NC)
+    // to the compute kernel so its (nc, wt_chunk, ht, wt_in_chunk) iteration matches the
+    // reader's per-batch tile layout.
+    uint32_t compute_Wt = use_width_sharding ? (num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
+    uint32_t compute_NC = use_width_sharding ? NC : 1;
     std::vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,                         // Ht
-        num_cols_per_core_group_1,  // Wt
-        1,                          // NC
-        chunk_size,                 // Column Chunk Size
+        Ht,          // Ht
+        compute_Wt,  // Wt
+        compute_NC,  // NC
     };
 
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h") +
-        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+        (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
 
     tt_metal::CreateKernel(
         program,
@@ -205,15 +256,17 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .compile_args = compute_kernel_args_group_1,
             .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
+        uint32_t compute_Wt_group_2 = use_width_sharding ? (num_cols_per_core_group_2 / NC) : num_cols_per_core_group_2;
+        uint32_t compute_NC_group_2 = use_width_sharding ? NC : 1;
         std::vector<uint32_t> compute_kernel_args_group_2 = {
-            Ht,                         // Ht
-            num_cols_per_core_group_2,  // Wt
-            1,                          // NC
-            chunk_size,                 // Column Chunk Size
+            Ht,                  // Ht
+            compute_Wt_group_2,  // Wt
+            compute_NC_group_2,  // NC
         };
 
         tt_metal::CreateKernel(
@@ -223,6 +276,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = reduce_defines});
     }
@@ -245,7 +299,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
         std::vector<uint32_t> reader_rt_args = {
-            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
+            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size};
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};

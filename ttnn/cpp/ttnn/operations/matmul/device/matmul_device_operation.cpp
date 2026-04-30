@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -247,7 +247,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         // 2. Shape requirements: must be rank-4 tensors (to ensure dim 1 is the batch dimension)
         // 3. Batch dimension requirement: input A must have batch size 1 on dim 1
         // 4. Memory layout requirement: inputs must not be sharded
-        auto can_use_in0_reuse = [&]() {
+        auto in0_reuse = [&]() {
             if (!std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                     chosen_program_config)) {
                 return false;
@@ -271,7 +271,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
-                a_shape[i] == b_shape[i] || (i == 1 && can_use_in0_reuse()),
+                a_shape[i] == b_shape[i] || (i == 1 && in0_reuse()),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
                 "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on dim 1 "
                 "for rank-4 tensors when a[1]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig with "
@@ -319,13 +319,30 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
+        const auto& out_shape = output_tensor_spec.logical_shape();
+        const auto& bias_shape = bias.logical_shape();
+        const int rank_out = static_cast<int>(out_shape.rank());
+        const int rank_bias = static_cast<int>(bias_shape.rank());
+        const int largest_rank = std::max(rank_out, rank_bias);
+        for (int i = -1; i >= -largest_rank; --i) {
+            const uint32_t dim_out = (i >= -rank_out) ? out_shape[i] : 1;
+            const uint32_t dim_bias = (i >= -rank_bias) ? bias_shape[i] : 1;
+            TT_FATAL(
+                dim_bias == 1 || dim_bias == dim_out,
+                "Fused matmul bias is not broadcastable to matmul output at aligned dimension index {} "
+                "(output logical dim {}, bias logical dim {}). output_shape={}, bias_shape={}",
+                i,
+                dim_out,
+                dim_bias,
+                out_shape,
+                bias_shape);
+        }
         auto bias_tile_shape = bias.tensor_spec().tile().get_tile_shape();
         TT_FATAL(
             (bias_tile_shape[0] == in0_tile.get_height() && bias_tile_shape[1] == in1_tile.get_width()),
             "Input tile dims must have inner dim equal to 32 due to llk "
             "constraints");
         TT_FATAL(bias.layout() == Layout::TILE, "Unsupported input layout");
-        const auto& bias_shape = bias.logical_shape();
         const auto& bias_shape_padded = bias.padded_shape();
         uint32_t bias_batch_size = get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
@@ -391,6 +408,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         get_batch_size(b_shape_padded) == 1,
                         "Matmul with fused batch requires input tensors of shapes BCMK*11KN=BCMN "
                         "or equivalent. Please change the second input tensor or adjust the program config.");
+                    if (attributes.transpose_a) {
+                        uint32_t batch_size_a = get_batch_size(a_shape_padded);
+                        uint32_t M_per_batch = a_shape_padded[-2] / in0_tile.get_height();
+                        TT_FATAL(
+                            batch_size_a == 1 || M_per_batch == 1,
+                            "transpose_a with fuse_batch is not supported when batch dimensions "
+                            "exist and M_per_batch > 1 (batch_size={}, M_per_batch={}, a_shape_padded={})",
+                            batch_size_a,
+                            M_per_batch,
+                            a_shape_padded);
+                    }
                 }
             }
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core
@@ -1460,7 +1488,7 @@ MatmulDeviceOperation::create_op_performance_model(
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
 
     int ideal_dev_clock_cycles = std::ceil(
         ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
@@ -1486,9 +1514,12 @@ MatmulParams create_matmul_attributes(
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
          (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
-    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+    auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
-    math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    math_fidelity = are_inputs_32F ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4) : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));
@@ -1534,6 +1565,7 @@ MatmulParams create_matmul_attributes(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/is_float_32,
         /*default_l1_acc=*/!is_float_32);
+    ttnn::verify_numerical_configuration(arch, parameters.compute_kernel_config);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, parameters.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, parameters.transpose_b);
 

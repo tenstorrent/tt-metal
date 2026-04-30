@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,10 @@ FORCE_INLINE void transpose_and_pack(
         cb_push_back(dest_cb_index, 1);
         release_dst();
     }  // i loop
-    cb_pop_front(input_cb_index, 2 * total_tiles);
+    // Pop in two halves so a single pop never crosses the circular buffer
+    // wrap boundary (fifo_rd_ptr must not exceed fifo_limit in one step).
+    cb_pop_front(input_cb_index, total_tiles);
+    cb_pop_front(input_cb_index, total_tiles);
 }
 
 /**

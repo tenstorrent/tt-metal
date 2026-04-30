@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ void kernel_main() {
     uint32_t tensor_volume = get_compile_time_arg_val(args_src.next_compile_time_args_offset() + 2);
     uint32_t input_base_address = get_common_arg_val<uint32_t>(0);
 
-    auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, page_size);
+    auto tensor_accessor_src = TensorAccessor(args_src, input_base_address);
 
     // Iterate over all pages in the tensor and read them to CB
     // For interleaved tensors, we need to pass start_page_id and end_page_id to pages()

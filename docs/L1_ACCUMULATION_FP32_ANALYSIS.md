@@ -542,5 +542,5 @@ The root cause is that:
 - Issue #28800: Enable L1 accumulation when fp32_dest_acc_en = true
 - `tt-train/sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp`
 - `tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp`
-- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cpack_common.h`
+- `tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/cpack_common.h`
 - `ttnn/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_reuse_mcast_1d_program_factory.cpp`

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <string>
 #include "impl/program/program_impl.hpp"
@@ -28,7 +29,7 @@ class Inspector {
 public:
     static bool is_enabled();
 
-    static std::unique_ptr<inspector::Data> initialize();
+    static std::unique_ptr<inspector::Data> initialize(std::optional<int> rank);
     static void serialize_rpc();
 
     static void program_created(const detail::ProgramImpl* program) noexcept;

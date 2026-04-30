@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -13,6 +14,7 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_in0 = 0;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -34,7 +36,7 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = src_addr, .shard_array = mapping_table};
 #else
     constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 #endif
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
@@ -45,11 +47,11 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        uint64_t src_noc_addr = get_noc_addr(i, s);
+        cb_in0.reserve_back(onetile);
+        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        uint64_t src_noc_addr = s.get_noc_addr(i);
         noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
         noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb_in0.push_back(onetile);
     }
 }

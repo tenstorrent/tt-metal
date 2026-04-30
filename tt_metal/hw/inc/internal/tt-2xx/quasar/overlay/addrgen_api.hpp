@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
@@ -199,7 +199,6 @@ struct LoopConfig {
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_BASE_REG_OFFSET, base_start);                 \
     }                                                                                                                \
     /*                                                                                                               \
-    /*                                                                                                               \
      * @def setup_src_inner_loop_addrgen_0()                                                                         \
      * @def setup_src_inner_loop_addrgen_1()                                                                         \
      *                                                                                                               \
@@ -316,7 +315,6 @@ struct LoopConfig {
     inline __attribute__((always_inline)) void setup_dest_base_start_##buf_name(uint64_t base_start) {               \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_BASE_REG_OFFSET, base_start);                \
     }                                                                                                                \
-    /*                                                                                                               \
     /*                                                                                                               \
      * @def setup_dest_inner_loop_addrgen_0()                                                                        \
      * @def setup_dest_inner_loop_addrgen_1()                                                                        \

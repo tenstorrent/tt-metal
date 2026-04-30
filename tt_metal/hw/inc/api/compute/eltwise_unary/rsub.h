@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,7 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init<APPROX>())); }
+ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init())); }
 
 // clang-format off
 /**
@@ -60,6 +60,6 @@ ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rsub_int32_init<APPROX>())); }
+ALWI void rsub_unary_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rsub_int32_init())); }
 
 }  // namespace ckernel

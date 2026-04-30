@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -69,6 +69,7 @@ void kernel_main() {
 
     if (is_starting_worker) {
         DPRINT << "Is starting worker\n";
+        DEVICE_PRINT("Is starting worker\n");
         *connection_token_ptr += 1;
     }
 

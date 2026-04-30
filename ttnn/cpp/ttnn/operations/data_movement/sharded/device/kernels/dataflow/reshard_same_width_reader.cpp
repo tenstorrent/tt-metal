@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,9 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t write_offset = get_arg_val<uint32_t>(1);
     uint32_t num_reads = get_arg_val<uint32_t>(2);
+    if (num_reads == 0) {
+        return;
+    }
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     uint32_t args_idx = 0;
 
@@ -30,6 +33,7 @@ void kernel_main() {
             uint32_t src_offset = args[args_idx++];
             uint32_t addr = src_addr + src_offset;
             DPRINT << "addr: " << addr << ENDL();
+            DEVICE_PRINT("addr: {}\n", addr);
             uint32_t units_to_transfer = args[args_idx++];
             uint32_t read_size = units_to_transfer * remote_unit_size_padded;
             noc_async_read(

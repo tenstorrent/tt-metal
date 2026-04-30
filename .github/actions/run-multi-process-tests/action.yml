@@ -9,6 +9,7 @@ runs:
   steps:
     - name: Run Multi-Process tests
       shell: bash
+      working-directory: /work
       env:
         LD_LIBRARY_PATH: /work/build/lib
         TT_METAL_HOME: /work

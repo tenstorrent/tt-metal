@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,9 +21,7 @@ class TtUpsample2D(LightweightModule):
         debug_mode=False,
     ):
         super().__init__()
-
         self.device = device
-
         self.stride = stride
         self.padding = padding
         self.dilation = dilation

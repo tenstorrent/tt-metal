@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include <set>
 #include <vector>
 #include <cctype>
+#include <cstdio>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
@@ -22,6 +23,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
+#include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 
 namespace tt::tt_metal {
 
@@ -40,7 +42,7 @@ using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator
 inline static CoreDescriptorSet GetAllCores(
     tt::Cluster& cluster, tt::tt_fabric::ControlPlane& control_plane, ChipId device_id) {
     CoreDescriptorSet all_cores;
-    // The set of all printable cores is Tensix + Eth cores
+    // The set of all printable cores is Tensix + Eth + DRAM (when supported)
     CoreCoord logical_grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
@@ -52,6 +54,13 @@ inline static CoreDescriptorSet GetAllCores(
     }
     for (const auto& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
+    }
+    const auto& hal = MetalContext::instance().hal();
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& dram_core : soc_desc.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
+            all_cores.insert({{dram_core.x, dram_core.y}, CoreType::DRAM});
+        }
     }
 
     return all_cores;
@@ -71,13 +80,14 @@ inline static CoreDescriptorSet GetAllCores(
 }
 
 inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core, int risc_id) {
-    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+    auto core_type = llrt::get_core_type(device_id, virtual_core);
+    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
+        core_type, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
     return addr + (sizeof(DebugPrintMemLayout) * risc_id);
 }
 
 inline uint64_t GetDevicePrintBufAddr(ChipId device_id, const CoreCoord& virtual_core) {
-    return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    return tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 }
 
@@ -100,7 +110,8 @@ inline std::string_view get_core_type_name(CoreType ct) {
 // Returns the assert message portion for a given assert type
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num is used in the message
-inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, uint16_t line_num = 0) {
+inline std::string get_debug_assert_message(
+    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint64_t hw_fault_info = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped:
             return fmt::format(
@@ -121,6 +132,12 @@ inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, 
                    "transactions (missing NOC posted writes sent barrier).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
+        case dev_msgs::DebugAssertHwFault:
+            return fmt::format(
+                "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
+                line_num,
+                hw_fault_info & 0xffffffff,
+                (hw_fault_info >> 32) & 0xffffffff);
         default: return "";
     }
 }
@@ -188,6 +205,16 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
                 add_legacy_entry(std::string{name[0]}, name);
             }
         }
+    } else if (core_type == HalProgrammableCoreType::DRAM) {
+        // DRAM cores (Blackhole DRISC): single processor
+        uint32_t num = hal.get_num_risc_processors(core_type);
+        for (uint32_t i = 0; i < num; ++i) {
+            info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
+        }
+        for (uint32_t i = 0; i < num; ++i) {
+            std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+            add_legacy_entry(abbrev, info.processor_names[i]);
+        }
     } else {
         // ACTIVE_ETH/IDLE_ETH: collect names (arch-independent), then symbols (arch-specific)
         uint32_t num = hal.get_num_risc_processors(core_type);
@@ -209,5 +236,15 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
         info.enable_legend = "UPPER=enabled, lower=disabled: " + info.enable_legend;
     }
     return info;
+}
+
+// Format client name for tile counter output.
+// DM clients show paired DMs (e.g., DM0/DM4) because DM0-3 and DM4-7 share tile counter groups.
+inline void fprintClientName(FILE* f, uint32_t client_id) {
+    if (client_id < NEO_0) {
+        fprintf(f, "DM%u/DM%u", client_id, client_id + NEO_0);
+    } else {
+        fprintf(f, "NEO_%u", client_id - NEO_0);
+    }
 }
 }  // namespace tt::tt_metal

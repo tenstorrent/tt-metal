@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #include <variant>
 #include <reflect>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
 #include "ttnn/types.hpp"
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,17 +19,16 @@ void bind_moreh_norm_backward_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_norm_backward">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moreh_norm_backward,
-            nb::arg("input"),
-            nb::arg("output"),
-            nb::arg("output_grad"),
-            nb::arg("p"),
-            nb::kw_only(),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_norm_backward,
+        nb::arg("input"),
+        nb::arg("output"),
+        nb::arg("output_grad"),
+        nb::arg("p"),
+        nb::kw_only(),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_norm_backward

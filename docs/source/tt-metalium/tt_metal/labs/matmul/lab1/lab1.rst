@@ -737,14 +737,18 @@ Debug Print API
 
 Because kernel code runs on the device, it can't use standard C++ functions to print debug information,
 as the device doesn't have a terminal.
-The Debug Print (DPRINT) API is a device-side debugging feature that lets a kernel print values back
+The Device Debug Print (DEVICE_PRINT) API is a device-side debugging feature that lets a kernel print values back
 to the host while it runs. You can think of it as a constrained, lightweight alternative to ``printf`` that works inside kernels.
 It is mainly used to inspect scalar variables, addresses, and the contents of tiles stored in circular buffers, which helps when debugging
 numerical issues or hangs.
 
-The DPRINT API is controlled through environment variables on the host side.
-The host-side environment variable ``TT_METAL_DPRINT_CORES`` specifies which cores' DPRINT information will be forwarded to the host terminal.
-If this environment variable is not set, calls to DPRINT APIs produce no output and behave as no-ops at runtime.
+The DEVICE_PRINT API is controlled through environment variables on the host side.
+The host-side environment variable ``TT_METAL_DPRINT_CORES`` specifies which cores' DEVICE_PRINT information will be forwarded to the host terminal.
+If this environment variable is not set, calls to DEVICE_PRINT APIs produce no output and behave as no-ops at runtime.
+During the DPRINT deprecation period, you must also enable DEVICE_PRINT explicitly with
+``TT_METAL_DEVICE_PRINT=1``; otherwise the build may use the legacy DPRINT path and
+``DEVICE_PRINT`` calls may be compiled out. In that transition period, a typical setup is
+``export TT_METAL_DEVICE_PRINT=1`` and ``export TT_METAL_DPRINT_CORES=all``.
 When debugging, it is common to set this variable to ``all`` to print from all cores (i.e. ``export TT_METAL_DPRINT_CORES=all``).
 When not debugging, you should unset this variable to disable printing (i.e. ``unset TT_METAL_DPRINT_CORES``).
 Unsetting this variable is particularly important to do when evaluating performance.
@@ -752,31 +756,30 @@ Unsetting this variable is particularly important to do when evaluating performa
 An alternative to printing to the host terminal is to print to a log file, which can be done by setting
 the ``TT_METAL_DPRINT_FILE`` environment variable (e.g. ``export TT_METAL_DPRINT_FILE=log.txt``).
 
-To use DPRINT in a kernel, you include the debug header and use a C++ stream-like syntax:
-DPRINT supports printing integers, floats, and strings, but it does **not** directly support the C++ ``bool`` type.
-The common pattern is to cast a Boolean to an integer (for example, ``uint32_t``) before printing it.
+To use DEVICE_PRINT in a kernel, you include the debug header and use a fmtlib format-like syntax:
+DEVICE_PRINT supports printing integers, floats, ``bool`` type and enums.
 The following example shows a simple print of local kernel variables, including a Boolean flag:
 
 .. code-block:: cpp
 
-   #include "api/debug/dprint.h"
+   #include "api/debug/device_print.h"
 
    void kernel_main() {
        uint32_t iter = 5;
        bool done = false;
 
-       // DPRINT uses a streaming syntax; ENDL() flushes the print buffer.
-       DPRINT << "iter = " << iter << ENDL();
+       // DEVICE_PRINT uses a fmtlib format-like syntax; \n flushes the print buffer.
+       DEVICE_PRINT("iter = {}\n", iter);
 
-       // Booleans should be cast to an integer type before printing.
-       DPRINT << "done flag = " << static_cast<uint32_t>(done) << ENDL();
+       // Booleans are printed as true/false.
+       DEVICE_PRINT("done flag = {}\n", done);
    }
 
 Printing a Tile in a Dataflow Kernel
 ------------------------------------
 
 Data is passed between kernels using circular buffers (CBs), which often contain tiles of data.
-DPRINT can be combined with the ``TileSlice`` helper to print part or all of a tile from a CB.
+DEVICE_PRINT can be combined with the ``TileSlice`` helper to print part or all of a tile from a CB.
 
 You can only safely sample a tile from a CB **between** the appropriate CB API calls:
 
@@ -788,8 +791,7 @@ A simplified example of printing a full tile from an output CB in a writer kerne
 .. code-block:: cpp
 
    #include "api/dataflow/dataflow_api.h"
-   #include "api/debug/dprint.h"
-   #include "api/debug/dprint_tile.h"
+   #include "api/debug/device_print.h"
    #include "tt-metalium/constants.hpp"
 
    void kernel_main() {
@@ -803,7 +805,7 @@ A simplified example of printing a full tile from an output CB in a writer kerne
            // Wait until one tile is available at the front of cb_out.
            cb_wait_front(cb_out, 1);
 
-           DPRINT << "Output tile " << t << " from cb_out = " << static_cast<uint32_t>(cb_out) << ENDL();
+           DEVICE_PRINT("Output tile {} from cb_out = {}\n", t, static_cast<uint32_t>(cb_out));
 
            // Print each row of a tile.
            // TileSlice has limited capacity, so we must print one row at a time.
@@ -818,14 +820,13 @@ A simplified example of printing a full tile from an output CB in a writer kerne
                };
 
                // TileSlice(cb_id, tile_idx, slice_range, cb_type, ptr_type)
-               DPRINT << row << ": "
-                      << TileSlice(
-                         static_cast<uint8_t>(cb_out),
-                         /* tile_idx = */ 0,
-                         slice_range,
-                        /* cb_type = */ TSLICE_OUTPUT_CB,
-                        /* ptr_type = */ TSLICE_RD_PTR)
-                      << ENDL();
+               DEVICE_PRINT("{}: {}\n", row,
+                  TileSlice(
+                     static_cast<uint8_t>(cb_out),
+                     /* tile_idx = */ 0,
+                     slice_range,
+                     /* cb_type = */ TSLICE_OUTPUT_CB,
+                     /* ptr_type = */ TSLICE_RD_PTR));
            }
 
            uint32_t cb_out_addr = get_read_ptr(cb_out);
@@ -848,29 +849,28 @@ to access the data that has just been written (but not yet "pushed back") to the
 Caveats and Best Practices
 --------------------------
 
-A few important caveats to keep in mind when using DPRINT:
+A few important caveats to keep in mind when using DEVICE_PRINT:
 
 - **Flushing behavior**
 
-  DPRINT output is only guaranteed to flush when you print ``ENDL()`` or ``'\n'``, or when the device closes.
-  Always end each logical debug line with ``ENDL()`` if you want to see it promptly.
+  DEVICE_PRINT output is only guaranteed to flush when you print ``'\n'``, or when the device closes.
+  Always end each logical debug line with ``'\n'`` if you want to see it promptly.
 
 - **Kernel size and string length**
 
-  Each distinct DPRINT call embeds a format string (and often the file name and line number) into the kernel binary.
-  Long or numerous debug strings increase kernel size and may cause it to not fit into available internal SRAM.
-  To avoid this, keep DPRINT messages short, particularly if printing within a loop with many iterations.
-  You can also reduce the number of iterations by reducing the problem size while debugging.
-  Finally, remove or disable most DPRINTs once you have diagnosed the issue.
+  Each distinct DEVICE_PRINT call embeds a format string (and often the file name and line number) into separate sections of the kernel binary that won't be loaded to the device.
+  Every DEVICE_PRINT call adds instructions to the kernel to serialize data into a buffer that will be transferred to the host.
+  You can reduce kernel size by reducing the number of iterations or the problem size while debugging.
+  Finally, remove or disable most DEVICE_PRINTs once you have diagnosed the issue.
 
-Taken together, these practices let you use DPRINT as a practical, low-level debug tool in TT-Metalium kernels without
+Taken together, these practices let you use DEVICE_PRINT as a practical, low-level debug tool in TT-Metalium kernels without
 needing deep knowledge of the underlying Tenstorrent architecture, while still avoiding common pitfalls.
 
 
-Exercise 4: Using DPRINT to Debug a Kernel
-==========================================
+Exercise 4: Using DEVICE_PRINT to Debug a Kernel
+================================================
 
-Add DPRINT statements to the writer kernel in our example program to print:
+Add DEVICE_PRINT statements to the writer kernel in our example program to print:
 
 * Value of the iterator ``i`` in every iteration of the ``for`` loop
 * Contents of the resulting tile for the first three tiles processed by the kernel.
@@ -953,7 +953,7 @@ look for kernel names of interest, such as ``read_tiles`` or ``write_tiles``.
 In this case, you should see the call stack for the ``read_tiles`` kernel contains a call to ``cb_reserve_back``, even if you dump stack trace
 repeatedly, indicating a possible source of the problem.
 In general, stack traces alone may not be sufficient to uncover the reason for the hang. In such a case,
-you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
+you may need to add DEVICE_PRINT statements to kernel code to help pinpoint the problem. For example,
 printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.
 
 Note that you can terminate the hung program by pressing ``Ctrl`` + ``C`` in the terminal where it is running.
@@ -981,12 +981,12 @@ Exercise 6: Using Device Profiling to Profile Kernels
    If you previously used the ``--build-type Debug`` flag, do not forget to rebuild the programming examples
    with the ``--build-type Release`` flag before profiling performance.
 
-#. **Make sure DPRINTs are disabled**
+#. **Make sure DEVICE_PRINTs are disabled**
 
    Ensure that the ``TT_METAL_DPRINT_CORES`` environment variable is not set.
-   The device profiler and kernel DPRINT both consume the same limited on-chip SRAM,
-   so only one should be enabled at a time. Also, the time spent on DPRINT may affect performance measurements,
-   leading to misleading results when compared to another run without DPRINT.
+   The device profiler and kernel DEVICE_PRINT both consume the same limited on-chip SRAM,
+   so only one should be enabled at a time. Also, the time spent on DEVICE_PRINT may affect performance measurements,
+   leading to misleading results when compared to another run without DEVICE_PRINT.
 
 #. **Run the program with profiler enabled**
 
@@ -1194,7 +1194,7 @@ Then, adjust the code to perform matrix multiplication, by making the following 
 #. Profile the performance of the implementation, taking note of the elapsed firmware time. This will be useful to compare
    against future labs when we optimize the implementation for performance.
    If you previously used the ``--build-type Debug`` flag, **do not forget to rebuild the programming examples**
-   with the ``--build-type Release`` flag, and also to disable DPRINT before profiling performance.
+   with the ``--build-type Release`` flag, and also to disable DEVICE_PRINT before profiling performance.
 
 
 Conclusion

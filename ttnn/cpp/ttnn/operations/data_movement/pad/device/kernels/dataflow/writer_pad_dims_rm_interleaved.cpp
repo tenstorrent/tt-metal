@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -20,13 +21,13 @@ void kernel_main() {
     const uint32_t dst_stick_offset = get_arg_val<uint32_t>(25);  // == start_src_stick_wi * elem_size
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb(cb_id);
 
-    const auto s1 = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s1 = TensorAccessor(dst_args, dst_addr);
 
     uint32_t dst_stick_id = start_dst_stick_id;
     uint32_t dst_stick_wi = start_dst_stick_wi;
@@ -34,13 +35,14 @@ void kernel_main() {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
                 // DPRINT << "WR: " << w << ", " << z << ", " << y << ENDL();
-                cb_wait_front(cb_id, 1);
-                uint32_t l1_addr = get_read_ptr(cb_id);
+                // DEVICE_PRINT("WR: w={} z={} y={}\n", w, z, y);
+                cb.wait_front(1);
+                uint32_t l1_addr = cb.get_read_ptr();
                 uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1, dst_stick_offset);
                 noc_async_write(l1_addr, dst_noc_addr, padded_X_nbytes);
                 noc_async_write_barrier();
                 ++dst_stick_id;
-                cb_pop_front(cb_id, 1);
+                cb.pop_front(1);
             }
         }
     }
