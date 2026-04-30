@@ -80,6 +80,9 @@ REDUCE_KERNEL = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+L1_MEM = ttnn.L1_MEMORY_CONFIG
+ACT_MEM = L1_MEM
+
 
 # ── Main model class ───────────────────────────────────────────────────────────
 
@@ -226,13 +229,13 @@ class ZImageTransformerTTNN(LightweightModule):
     # ── Optimized norm ─────────────────────────────────────────────────────────
 
     def _rms_norm(self, x, norm_weight, scale_inv_dim, eps, hidden_dim):
-        """Fused RMS norm via ttnn.rms_norm."""
+        """Fused RMS norm via ttnn.rms_norm — output to L1."""
         x = self._ensure_tile(x)
         return ttnn.rms_norm(
             x,
             epsilon=RMS_EPS,
             weight=norm_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ACT_MEM,
             compute_kernel_config=REDUCE_KERNEL,
         )
 
@@ -253,7 +256,7 @@ class ZImageTransformerTTNN(LightweightModule):
             qk,
             epsilon=RMS_EPS,
             weight=flat_w,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ACT_MEM,
             compute_kernel_config=REDUCE_KERNEL,
         )
 
