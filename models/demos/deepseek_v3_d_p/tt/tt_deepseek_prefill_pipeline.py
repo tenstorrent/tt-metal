@@ -311,9 +311,15 @@ class TtDeepSeekPrefillPipeline:
 
         def on_layer_complete(layer_idx: int) -> None:
             ttnn.synchronize_device(mesh_device)
+            print(
+                f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from slot {slot_id} to slot {slot_id}. Start_pos={0}, End_pos={actual_isl}"
+            )
             uuid = migration_layer.migrate_layer(layer_idx, 0, actual_isl, slot_id, slot_id)
-            if layer_idx == last_layer_idx:
-                migration_layer.wait(uuid)
+            ## Wait for each one for initial bringup
+            # if layer_idx == last_layer_idx:
+            print(f"[migration][prefill] wait for migrate layer completion")
+            migration_layer.wait(uuid)
+            print(f"[migration][prefill] done migrate layer")
 
         return on_layer_complete
 
