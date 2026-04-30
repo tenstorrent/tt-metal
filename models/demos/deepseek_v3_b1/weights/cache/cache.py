@@ -221,16 +221,12 @@ class TensorCache:
         fingerprint: Fingerprint,
         fused_host: ttnn.Tensor,
         views: dict[str, "OverlappedTensor"],
-        *,
-        per_core: bool = False,
     ) -> ContentAddressedStoragePaths:
         """Persist fused host tensor and per-view metadata (OverlappedTensor, without device).
 
-        ``per_core`` is recorded so :meth:`_load_fused` can re-apply
-        :meth:`ttnn.MemoryConfig.experimental_set_per_core_allocation` on warm
-        load -- the flatbuffer schema does not currently round-trip the per-core
-        flag, so the warm path needs an external hint to restore the original
-        allocator semantics.
+        The per-core allocation flag is round-tripped through the tensor
+        flatbuffer schema itself (see ``MemoryConfig.per_core_allocation`` in
+        ``tensor_spec.fbs``), so no external hint is required here.
         """
         dest, content_hash, size_bytes = self._write_artifact_blob_and_manifest(artifact_id, fingerprint, fused_host)
         metadata_dict = {
@@ -239,7 +235,6 @@ class TensorCache:
             "content_hash": content_hash,
             "size_bytes": size_bytes,
             "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "per_core": per_core,
             "views": views_dict_from_overlapped(views),
         }
         with open(dest.object_dir / "metadata.json", "w") as f:
@@ -257,52 +252,21 @@ class TensorCache:
         if meta is None:
             with open(paths.object_dir / "metadata.json") as f:
                 meta = json.load(f)
-        # ``per_core`` is a MemoryConfig flag that the tensor flatbuffer does
-        # not currently serialize, so it would be silently dropped by a plain
-        # ``ttnn.load_tensor(device=...)`` call.  When the cached spec was
-        # ``per_core=True`` we must rebuild the device tensor from a fresh
-        # ``MemoryConfig`` (with the per-core flag re-applied) and use the
-        # explicit allocate-then-copy upload pattern: ``ttnn.to_device`` keeps
-        # the host tensor's existing spec around and the per-core flag does
-        # not survive the round-trip cleanly, whereas
-        # ``allocate_tensor_on_device(shape, dtype, layout, device, memory_config=mc)``
-        # constructs a brand-new ``TensorSpec`` straight from ``mc`` and goes
-        # through :func:`MeshBuffer::create`'s per-core allocation path.
-        # This mirrors the upload pattern used by SRAM-expert weights.
-        # Old caches without ``per_core`` in metadata default to ``False``
-        # (lockstep), preserving backward compatibility.
-        per_core = bool(meta.get("per_core", False))
-        if move_to_device and device is not None and per_core:
-            host_fused = ttnn.load_tensor(paths.data_path, device=None)
-            mc = host_fused.memory_config()
-            mc.experimental_set_per_core_allocation(True)
-            logger.info(
-                "[cache._load_fused] PER_CORE BRANCH HIT for {} (per_core_in_mc={})",
-                paths.object_dir.name[:12],
-                getattr(mc, "is_per_core_allocated", lambda: "?")(),
-            )
-            fused = ttnn.allocate_tensor_on_device(
-                host_fused.shape,
-                host_fused.dtype,
-                host_fused.layout,
-                device,
-                memory_config=mc,
-            )
-            ttnn.copy_host_to_device_tensor(host_fused, fused)
+        # The per-core allocation flag is now round-tripped through the tensor
+        # flatbuffer schema (``MemoryConfig.per_core_allocation`` in
+        # ``tensor_spec.fbs``), so a plain ``ttnn.load_tensor(device=...)``
+        # reconstructs the correct allocator semantics with no Python-side
+        # patching required.
+        # TODO: drop these debug log lines once per-core round-trip is
+        # confirmed working end-to-end (attn_max ≈ 495 KiB, SRAM experts ≥ ~25).
+        fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
+        if move_to_device and device is not None:
             got_per_core = bool(getattr(fused, "is_per_core_allocated", lambda: False)())
             logger.info(
-                "[cache._load_fused] post-allocate is_per_core_allocated={} for {}",
+                "[cache._load_fused] post-load is_per_core_allocated={} for {}",
                 got_per_core,
                 paths.object_dir.name[:12],
             )
-            if not got_per_core:
-                raise RuntimeError(
-                    f"[cache._load_fused] per_core requested but allocate_tensor_on_device "
-                    f"produced a lockstep buffer for {paths.object_dir}; "
-                    f"shape={host_fused.shape} dtype={host_fused.dtype} layout={host_fused.layout} mc={mc}"
-                )
-        else:
-            fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
         # If the loaded fused buffer ended up per-core allocated, verify that its
         # L1 base address is the same on every core it spans.  Downstream kernel
         # setup (e.g. attention_block/op.py::_fused_base_addr) queries a single
@@ -523,7 +487,7 @@ class TensorCache:
             device,
             move_to_device=False,
         )
-        paths = self._store_fused(artifact_id, fingerprint, fused_host, views, per_core=spec.per_core)
+        paths = self._store_fused(artifact_id, fingerprint, fused_host, views)
         elapsed = time.perf_counter() - t0
         logger.info(
             "Cache miss (fused) for {} resolved in {:.3f}s, stored as {}",
