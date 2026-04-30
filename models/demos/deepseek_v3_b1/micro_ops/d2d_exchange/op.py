@@ -109,7 +109,10 @@ def _build_exchange_program(
         page_size_per_link = page_size // num_fwd_links
         num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
         partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
-        packet_header_cb_num_pages = num_fwd_links + num_bwd_links
+        num_downstream_headers_per_link = 2 if partial_packet_size_per_link > 0 else 1
+        num_downstream_header_pages = num_fwd_links * num_downstream_headers_per_link if use_fabric_on_sender else 0
+        num_upstream_header_pages = num_bwd_links if use_fabric_on_receiver else 0
+        packet_header_cb_num_pages = num_downstream_header_pages + num_upstream_header_pages
         packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
         packet_header_cb_desc = ttnn.CBDescriptor(
