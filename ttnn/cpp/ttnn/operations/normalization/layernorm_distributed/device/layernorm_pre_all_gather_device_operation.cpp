@@ -45,6 +45,22 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
+    if (tensor_args.residual_input_tensor.has_value()) {
+        const auto& b = tensor_args.residual_input_tensor.value();
+        TT_FATAL(b.layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.layout());
+        TT_FATAL(
+            input.padded_shape() == b.padded_shape(),
+            "Input and residual shapes must match, got input: {} vs residual: {}",
+            input.padded_shape(),
+            b.padded_shape());
+        TT_FATAL(
+            b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Residual tensor must be interleaved.");
+        TT_FATAL(b.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+        TT_FATAL(b.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(input.device() == b.device(), "Input and residual tensors must be on same device");
+    }
+
     // Additional validation for Welford - requires recip_tensor
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
@@ -96,6 +112,7 @@ namespace ttnn::prim {
 
 Tensor layer_norm_pre_all_gather(
     const Tensor& input,
+    const std::optional<Tensor>& residual_input_tensor,
     const std::optional<Tensor>& recip_tensor,
     LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
@@ -114,6 +131,7 @@ Tensor layer_norm_pre_all_gather(
         },
         OperationType::tensor_args_t{
             .input = input_padded,
+            .residual_input_tensor = residual_input_tensor,
             .recip_tensor = recip_tensor,
         });
 }

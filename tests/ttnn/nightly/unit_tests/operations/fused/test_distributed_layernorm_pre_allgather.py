@@ -477,6 +477,78 @@ def test_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     run_layernorm_pre_all_gather_residual_pcc(device, inp_shape)
 
 
+def _create_recip_tensor(device, w):
+    grid = device.compute_with_storage_grid_size()
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
+
+
+@pytest.mark.parametrize(
+    "inp_shape",
+    [(1, 1, 32, 128), (1, 1, 32, 1024)],
+)
+def test_layernorm_pre_all_gather_welford_residual(device, inp_shape):
+    """Welford pre_all_gather with residual must match Welford on a pre-added input."""
+    torch.manual_seed(41512)
+
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    w = inp_shape[-1]
+
+    torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
+    torch_res = torch.randn(inp_shape, dtype=torch.bfloat16)
+    torch_combined = torch_inp + torch_res
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_inp = torch2tt_tensor(
+        torch_inp, tt_dtype=ttnn.bfloat16, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+    )
+    tt_res = torch2tt_tensor(
+        torch_res, tt_dtype=ttnn.bfloat16, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+    )
+    tt_combined = torch2tt_tensor(
+        torch_combined,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+    recip_tensor = _create_recip_tensor(device, w)
+
+    stats_fused = ttnn.layer_norm_pre_all_gather(
+        tt_inp,
+        residual_input_tensor=tt_res,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        program_config=program_config,
+        memory_config=dram_memcfg,
+        recip_tensor=recip_tensor,
+    )
+    stats_combined = ttnn.layer_norm_pre_all_gather(
+        tt_combined,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        program_config=program_config,
+        memory_config=dram_memcfg,
+        recip_tensor=recip_tensor,
+    )
+
+    fused_host = tt2torch_tensor(stats_fused)
+    combined_host = tt2torch_tensor(stats_combined)
+
+    passing, output_str = comp_allclose_and_pcc(combined_host, fused_host, rtol=1e-2, atol=1e-2, pcc=0.999)
+    logger.debug(f"welford fused vs combined stats = {output_str}")
+    assert passing, output_str
+
+
 @pytest.mark.parametrize(
     "inp_shape",
     [(1, 1, 37, 72)],

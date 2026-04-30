@@ -27,6 +27,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
     const auto& a = tensor_args.input;
+    const auto& b = tensor_args.residual_input_tensor;
+    const bool fuse_pre_add = b.has_value();
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
@@ -71,10 +73,13 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
 
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
+    auto b_addr = fuse_pre_add ? b->buffer()->address() : 0;
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
     const uint32_t in1_tiles = 1;  // reduce scalar
+    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
+    const uint32_t fused_tiles = Wt * double_buffer_constant;  // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -118,9 +123,19 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
         block_size,
     };
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    if (fuse_pre_add) {
+        tt::tt_metal::TensorAccessorArgs(b->buffer()).append_to(reader_compile_time_args);
+    }
 
     std::vector<uint32_t> writer_compile_time_args = {writer_block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
+    if (fuse_pre_add) {
+        reader_defines["FUSE_PRE_ADD"] = "1";
+        compute_defines["FUSE_PRE_ADD"] = "1";
+    }
 
     std::vector<uint32_t> compute_args = {Wt, block_size};
 
@@ -154,8 +169,11 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
         uint32_t in_tile_offset = curr_row * Wt;
         uint32_t out_tile_offset = curr_row * out0_tiles;
 
-        reader_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{a_addr, num_tile_rows_per_core, Wt, in_tile_offset});
+        std::vector<uint32_t> reader_args = {a_addr, num_tile_rows_per_core, Wt, in_tile_offset};
+        if (fuse_pre_add) {
+            reader_args.push_back(b_addr);
+        }
+        reader_runtime_args.emplace_back(core, std::move(reader_args));
         compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
         writer_runtime_args.emplace_back(
             core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
@@ -176,6 +194,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
@@ -198,6 +217,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -226,6 +246,25 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
             .data_format = scaler_cb_data_format,
             .page_size = scaler_tile_size}}}});
+
+    if (fuse_pre_add) {
+        // c_5 -> residual b
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = res_tiles * in_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size}}}});
+        // c_3 -> fused a + b (compute kernel writes into this and downstream consumes)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = fused_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
+    }
 
     // LN and RMS shared intermediates
     // c_intermed0 -> x^2

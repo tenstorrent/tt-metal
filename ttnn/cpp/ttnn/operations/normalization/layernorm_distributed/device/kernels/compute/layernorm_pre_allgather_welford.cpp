@@ -10,7 +10,6 @@
  */
 
 #include <cstdint>
-#include <cstring>
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
@@ -26,27 +25,28 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose_wh_dest.h"
 
-template <typename To, typename From>
-inline To _bit_cast_(const From& from) noexcept {
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-    To to;
-    std::memcpy(&to, &from, sizeof(To));
-    return to;
-}
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     namespace kutil = norm::kernel_util;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
     constexpr uint32_t cb_x2 = tt::CBIndex::c_1;           // x**2
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_2;  // recip table
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;  // residual b
+    constexpr uint32_t cb_inp = tt::CBIndex::c_3;  // fused a + b (welford consumes this)
+#else
+    constexpr uint32_t cb_inp = cb_in0;
+#endif
 
+#ifdef FUSE_PRE_ADD
+    binary_op_init_common(cb_in0, cb_res, cb_inp);
+#else
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_x2);
+#endif
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
@@ -59,6 +59,28 @@ void kernel_main() {
         constexpr uint32_t dst0 = 0;
         constexpr uint32_t dst1 = 1;
         constexpr uint32_t dst2 = 2;
+
+#ifdef FUSE_PRE_ADD
+        // Per-tile pre-add: cb_in0 + cb_res -> cb_inp (streamed, one tile at a time
+        // to keep cb_inp small; welford pops it tile-by-tile below).
+        reconfig_data_format(cb_in0, cb_res);
+        pack_reconfig_data_format(cb_inp);
+        add_tiles_init(cb_in0, cb_res);
+        for (uint32_t wt = 0; wt < Wt; wt++) {
+            cb_wait_front(cb_in0, 1);
+            cb_wait_front(cb_res, 1);
+            cb_reserve_back(cb_inp, 1);
+            tile_regs_acquire();
+            add_tiles(cb_in0, cb_res, 0, 0, dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst0, cb_inp);
+            cb_push_back(cb_inp, 1);
+            tile_regs_release();
+            cb_pop_front(cb_in0, 1);
+            cb_pop_front(cb_res, 1);
+        }
+#endif
 
         reconfig_data_format(cb_inp, cb_inp);
         pack_reconfig_data_format(cb_x2);
