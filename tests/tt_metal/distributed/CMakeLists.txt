@@ -53,6 +53,9 @@ target_sources(
         test_gap53_fixph_yaml_ethcoord_graceful_skip.cpp
         test_gap54_fixba_teardown_null_control_plane.cpp
         test_gap55_fixe2ay_probe_dead_fay_trigger.cpp
+        test_gap56_fixm2_dead_peer_erisc_reset.cpp
+        test_gap57_fixpl_barrier_guard_dead_relay.cpp
+        test_gap58_fixqc_nonmmio_reset_cores_skip.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
