@@ -23,6 +23,7 @@
 #define TX_CTRL_TX_REMOTE_UPDATE_STREAM_BASE_REG_OFFSET (0x0000000C)
 #define TX_CTRL_TX_READ_STATUS_REG_OFFSET (0x00000010)
 #define TX_CTRL_TX_WRITE_STATUS_REG_OFFSET (0x00000014)
+#define TX_CTRL_TX_INTERRUPT_CTRL_REG_OFFSET (0x00000150)
 
 // TX Stream registers
 #define TX_REG_STREAM_STATUS_REG_OFFSET (0x00000000)
@@ -184,29 +185,5 @@ typedef union {
 } DmaCtrlTransferAttrs_u;
 
 #define DmaCtrlTransferAttrs_DEFAULT (0x00031001u)
-
-// Auto-Increment Source Offset Register
-typedef struct {
-    uint32_t src_offset : 16;
-} DmaTxqAutoIncrSrcOffset_t;
-
-typedef union {
-    uint32_t val;
-    DmaTxqAutoIncrSrcOffset_t f;
-} DmaTxqAutoIncrSrcOffset_u;
-
-#define DmaTxqAutoIncrSrcOffset_DEFAULT (0x00000000u)
-
-// Auto-Increment Destination Offset Register
-typedef struct {
-    uint32_t dest_offset : 32;
-} DmaTxqAutoIncrDstOffset_t;
-
-typedef union {
-    uint32_t val;
-    DmaTxqAutoIncrDstOffset_t f;
-} DmaTxqAutoIncrDstOffset_u;
-
-#define DmaTxqAutoIncrDstOffset_DEFAULT (0x00000000u)
 
 #endif  // COMPILE_FOR_DRISC

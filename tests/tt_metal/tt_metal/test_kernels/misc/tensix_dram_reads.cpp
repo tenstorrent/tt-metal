@@ -2,20 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DRAM reads over noc into Tensix L1
+// Tensix Kernel: DRAM GDDR reads over NOC into Tensix L1
 
-#include "api/compile_time_args.h"
 #include "experimental/core_local_mem.h"
 #include "experimental/noc.h"
 #include "experimental/endpoints.h"
 
-// needs bank_id, addr to read from
-// also size and a dst L1 addr
 void kernel_main() {
-    constexpr uint32_t src_dram_bank_id = get_compile_time_arg_val(0);
-    constexpr uint32_t src_dram_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t dst_l1_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t total_bytes = get_compile_time_arg_val(3);
+    const uint32_t src_dram_bank_id = get_arg_val<uint32_t>(0);
+    const uint32_t src_dram_addr = get_arg_val<uint32_t>(1);
+    const uint32_t dst_l1_addr = get_arg_val<uint32_t>(2);
+    const uint32_t total_bytes = get_arg_val<uint32_t>(3);
 
     experimental::Noc noc;
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> bank;
