@@ -329,11 +329,11 @@
   team: models
   model-name: stable_diffusion_xl
 
-- name: gpt-oss-20b mesh_1x1 prefill_128
+- name: gpt-oss-20b 1x1 prefill_128
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/
-    pytest models/demos/gpt_oss/demo/text_demo.py -k "mesh_1x1 and prefill_128" --timeout=600
+    pytest models/demos/gpt_oss/demo/text_demo.py -k "1x1 and prefill_128" --timeout=600
   skus:
     bh_p150:
       timeout: 15
