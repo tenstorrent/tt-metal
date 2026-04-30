@@ -56,6 +56,7 @@
 #include "../../../unified_kernels/eltwise_add.hpp"
 #include "../../../unified_kernels/gated_reduce.hpp"
 #include "../../../unified_kernels/residual_add.hpp"
+#include "../../../unified_kernels/persistent_loop.hpp"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
@@ -1776,7 +1777,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_output_core_noc_x"),
                 get_named_compile_time_arg_val("reduce_output_core_noc_y"),
                 get_named_compile_time_arg_val("reduce_num_workers"),
-                get_named_compile_time_arg_val("reduce_slot_size_bytes"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core"),
                 get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
                 get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
@@ -3033,8 +3033,10 @@ void kernel_main() {
     }
 #endif
 #endif
-    uint32_t iteration = 0;
-    while (true) {
+
+    constexpr uint32_t termination_semaphore_addr = get_named_compile_time_arg_val("termination_semaphore_addr");
+    deepseek_b1_ops::PersistentLoop<persistent_mode == 1> loop(termination_semaphore_addr, num_iterations);
+    while (loop.next()) {
         {
             DeviceZoneScopedN("MLA_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
@@ -3075,12 +3077,6 @@ void kernel_main() {
         {
             DeviceZoneScopedN("MOE");
             moe_body();
-        }
-        iteration++;
-        if constexpr (!persistent_mode) {
-            if (iteration >= num_iterations) {
-                break;
-            }
         }
     }
 

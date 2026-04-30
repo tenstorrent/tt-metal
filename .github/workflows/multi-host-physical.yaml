@@ -270,6 +270,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
@@ -323,6 +324,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
