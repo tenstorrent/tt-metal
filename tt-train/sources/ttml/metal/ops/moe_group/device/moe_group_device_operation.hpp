@@ -35,6 +35,7 @@ namespace ttnn::prim {
 ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation::tensor_return_value_t ttml_moe_group(
     const ttnn::Tensor& dispatched,
     const ttnn::Tensor& metadata,
+    const ttnn::Tensor& scores,
     const ttnn::Tensor& local_expert_ids,
     uint32_t e_local,
     uint32_t k);

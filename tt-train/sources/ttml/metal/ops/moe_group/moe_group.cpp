@@ -11,10 +11,11 @@ namespace ttml::metal {
 MoeGroupResult moe_group(
     const ttnn::Tensor& dispatched,
     const ttnn::Tensor& metadata,
+    const ttnn::Tensor& scores,
     const ttnn::Tensor& local_expert_ids,
     uint32_t e_local,
     uint32_t k) {
-    return ttnn::prim::ttml_moe_group(dispatched, metadata, local_expert_ids, e_local, k);
+    return ttnn::prim::ttml_moe_group(dispatched, metadata, scores, local_expert_ids, e_local, k);
 }
 
 }  // namespace ttml::metal

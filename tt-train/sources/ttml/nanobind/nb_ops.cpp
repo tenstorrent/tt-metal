@@ -419,21 +419,29 @@ void py_module(nb::module_& m) {
             "moe_group",
             [](const ttnn::Tensor& dispatched,
                const ttnn::Tensor& metadata,
+               const ttnn::Tensor& scores,
                const ttnn::Tensor& local_expert_ids,
                uint32_t e_local,
                uint32_t k) {
-                auto [grouped, counts, offsets, plan] =
-                    ttml::metal::moe_group(dispatched, metadata, local_expert_ids, e_local, k);
-                return nb::make_tuple(grouped, counts, offsets, plan);
+                auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
+                    ttml::metal::moe_group(dispatched, metadata, scores, local_expert_ids, e_local, k);
+                return nb::make_tuple(grouped, grouped_scores, k_slot, counts, offsets, plan);
             },
             nb::arg("dispatched"),
             nb::arg("metadata"),
+            nb::arg("scores"),
             nb::arg("local_expert_ids"),
             nb::arg("e_local"),
             nb::arg("k"),
             "Group dispatched tokens by local expert.\n"
-            "Returns (grouped [1,1,T_cap,H] TILE bf16, counts [E_local] uint32,\n"
-            "         offsets [E_local+1] uint32, plan [T_cap] uint32).");
+            "Returns (grouped         [1,1,T_cap,H]   TILE bf16,\n"
+            "         grouped_scores  [1,1,1,T_cap]   ROW_MAJOR bf16,\n"
+            "         k_slot          [1,1,1,T_cap]   ROW_MAJOR uint16,\n"
+            "         counts          [1,1,1,E_local] uint32,\n"
+            "         offsets         [1,1,1,E_local+1] uint32,\n"
+            "         plan            [1,1,1,T_cap]   uint32).\n"
+            "grouped_scores[i] = scores[plan[i], k_slot[i]]; both are 0/SENTINEL\n"
+            "in pad slots.");
     }
 }
 

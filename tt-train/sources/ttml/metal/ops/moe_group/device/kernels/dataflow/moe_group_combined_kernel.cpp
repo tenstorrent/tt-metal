@@ -7,8 +7,10 @@
 // Phases:
 //   1. Local count of metadata slice [my_slice_start, my_slice_end).
 //   2. Lead core (0,0) reduces counts, computes offsets, computes per-core
-//      starts, pre-fills plan with SENTINEL, signals all cores.
-//   3. Each core scatters plan entries for its slice, using its per-core start.
+//      starts, pre-fills plan/grouped_scores/k_slot with sentinels, signals
+//      all cores.
+//   3. Each core scatters plan + grouped_scores + k_slot entries for its
+//      slice, using its per-core start.
 //   4. Lead core signals plan_ready_sem on all cores.
 //   5. Each core does worker-reader work: gather rows from `dispatched` into
 //      cb_src0 for its assigned tile-rows.
@@ -34,16 +36,17 @@
 //   19-23: mcast rectangle     (sx, sy, ex, ey, num_dests_incl_self) used for
 //                              phase2/plan_ready broadcast via
 //                              mcast_sender_signal_receivers_loopback
-//   24+: TensorAccessorArgs for plan, dispatched, metadata, counts, offsets, leids
+//   24: cb_id_ctrl
+//   25+: TensorAccessorArgs for plan, dispatched, metadata, counts, offsets,
+//        leids, scores, grouped_scores, k_slot
 //
-// Runtime args (11 total, same layout on every core — globally-constant
-// values moved to CT; no tail-flush chain any more, so next_core NOC XYs
-// are gone):
+// Runtime args (14 total):
 //   0: plan_addr             1: dispatched_addr
 //   2: my_worker_start       3: my_worker_count
 //   4: metadata_addr         5: counts_addr
 //   6: offsets_addr          7: leids_addr
 //   8: my_core_idx           9: my_slice_start      10: my_slice_end
+//   11: scores_addr         12: grouped_scores_addr 13: k_slot_addr
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
@@ -94,19 +97,33 @@ constexpr auto metadata_args = TensorAccessorArgs<dispatched_args.next_compile_t
 constexpr auto counts_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
 constexpr auto leids_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
+constexpr auto scores_args = TensorAccessorArgs<leids_args.next_compile_time_args_offset()>();
+constexpr auto gs_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
+constexpr auto ks_args = TensorAccessorArgs<gs_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t md_aligned_page = decltype(metadata_args)::AlignedPageSize;
+constexpr uint32_t sc_aligned_page = decltype(scores_args)::AlignedPageSize;
 constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t cnt_page_bytes = decltype(counts_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 
 constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
+constexpr uint16_t K_SLOT_SENTINEL = 0xFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
 constexpr uint32_t MD_ROW_STRIDE_U16 = md_aligned_page / sizeof(uint16_t);
+constexpr uint32_t SC_ROW_STRIDE_U16 = sc_aligned_page / sizeof(uint16_t);  // bf16 stride per row
 // SHARED_SLOT_U32 is defined above from CT arg 10. Each shared-table slot is
 // SHARED_SLOT_U32 uint32s (multiple of 16B) to keep adjacent cores' writes
 // from overlapping and to meet the NOC L1 write address alignment.
+
+// Cursor alignment for per-core writes: must satisfy 16 B alignment for ALL
+// three side tensors written per active row (uint32 plan, bf16 grouped_scores,
+// uint16 k_slot). uint32 needs L1_ALIGN_U32 = 4 element-units; uint16/bf16
+// need L1_ALIGN_U32 * 2 = 8. Use the larger so a single cursor advances all
+// three writes in lock-step.
+constexpr uint32_t CURSOR_ALIGN = L1_ALIGN_U32 * 2U;
+constexpr uint32_t CURSOR_ALIGN_MASK = CURSOR_ALIGN - 1U;
 
 void kernel_main() {
     // ---- Runtime args (only per-core + buffer addrs; everything globally
@@ -122,6 +139,9 @@ void kernel_main() {
     const uint32_t my_core_idx = get_arg_val<uint32_t>(8);
     const uint32_t my_slice_start = get_arg_val<uint32_t>(9);
     const uint32_t my_slice_end = get_arg_val<uint32_t>(10);
+    const uint32_t scores_addr = get_arg_val<uint32_t>(11);
+    const uint32_t gs_addr = get_arg_val<uint32_t>(12);
+    const uint32_t ks_addr = get_arg_val<uint32_t>(13);
     constexpr uint32_t worker_stride = num_total_cores;  // strided tile-row interleave
 
     // ---- Address generators ----
@@ -131,6 +151,9 @@ void kernel_main() {
     const auto cnt_addrgen = TensorAccessor(counts_args, counts_addr);
     const auto off_addrgen = TensorAccessor(offsets_args, offsets_addr);
     const auto leids_addrgen = TensorAccessor(leids_args, leids_addr);
+    const auto scores_addrgen = TensorAccessor(scores_args, scores_addr);
+    const auto gs_addrgen = TensorAccessor(gs_args, gs_addr);
+    const auto ks_addrgen = TensorAccessor(ks_args, ks_addr);
 
     // ---- L1 scratch layout in cb_scan ----
     // [stage(STAGE_U32 uint32s)] [leids_buf(32B)] [counts(e_local)] [offsets(e_local+1)] [cursors(e_local)]
@@ -165,14 +188,28 @@ void kernel_main() {
     uint32_t md_block_addr_raw = (uint32_t)(shared_per_core_start + num_total_cores * SHARED_SLOT_U32);
     uint32_t md_block_addr = round_up(md_block_addr_raw, 32U);
     volatile tt_l1_ptr uint16_t* md_block = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(md_block_addr);
-    // BLOCK_ROWS for streaming metadata. Use slice size if it fits, else 1024.
+    // BLOCK_ROWS for streaming metadata + scores. Use slice size if it fits, else 1024.
     uint32_t my_slice_size = my_slice_end - my_slice_start;
     uint32_t block_rows = my_slice_size < 1024U ? my_slice_size : 1024U;
     uint32_t md_block_bytes = block_rows * md_aligned_page;
-    uint32_t plan_stage_addr = round_up(md_block_addr + md_block_bytes, 32U);
+    // sc_block: scores in lock-step with md_block. bf16, same row stride as
+    // metadata (also K element-wide), stored as raw uint16 bits and copied
+    // through to grouped_scores DRAM.
+    uint32_t sc_block_addr = round_up(md_block_addr + md_block_bytes, 32U);
+    volatile tt_l1_ptr uint16_t* sc_block = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sc_block_addr);
+    uint32_t sc_block_bytes = block_rows * sc_aligned_page;
+    uint32_t plan_stage_addr = round_up(sc_block_addr + sc_block_bytes, 32U);
     volatile tt_l1_ptr uint32_t* plan_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_stage_addr);
     uint32_t plan_stage_bytes = e_local * PLAN_CHUNK * sizeof(uint32_t);
-    uint32_t fill_addr = round_up(plan_stage_addr + plan_stage_bytes, 32U);
+    // gs_stage: per-(expert × PLAN_CHUNK) bf16 entries paralleling plan_stage.
+    uint32_t gs_stage_addr = round_up(plan_stage_addr + plan_stage_bytes, 32U);
+    volatile tt_l1_ptr uint16_t* gs_stage = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(gs_stage_addr);
+    uint32_t gs_stage_bytes = e_local * PLAN_CHUNK * sizeof(uint16_t);
+    // ks_stage: per-(expert × PLAN_CHUNK) uint16 entries paralleling plan_stage.
+    uint32_t ks_stage_addr = round_up(gs_stage_addr + gs_stage_bytes, 32U);
+    volatile tt_l1_ptr uint16_t* ks_stage = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ks_stage_addr);
+    uint32_t ks_stage_bytes = e_local * PLAN_CHUNK * sizeof(uint16_t);
+    uint32_t fill_addr = round_up(ks_stage_addr + ks_stage_bytes, 32U);
     volatile tt_l1_ptr uint32_t* fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_addr);
 
     // ---- Load leids (uint16) into leids_buf ----
@@ -251,29 +288,44 @@ void kernel_main() {
             counts[e] = total;
         }
 
-        // per_core_start[c][e] = offsets[e] + sum_{c' < c} round_up(local_counts[c'][e], L1_ALIGN_U32)
-        // Padding local_counts up to an L1_ALIGN_U32-multiple ensures each
-        // core's cursor is aligned → byte offset (cursor*4) lands on the
-        // arch's L1 write-alignment boundary (16 B / 4 uint32s on WH/BH).
+        // per_core_start[c][e] = offsets[e] + sum_{c' < c} round_up(local_counts[c'][e], CURSOR_ALIGN)
+        // Padding local_counts up to a CURSOR_ALIGN-multiple ensures each core's
+        // cursor lands on a 16 B boundary for ALL three side tensors written
+        // per active row (uint32 plan, bf16 grouped_scores, uint16 k_slot) —
+        // CURSOR_ALIGN = L1_ALIGN_BYTES / sizeof(uint16_t) = 8 entries on WH/BH.
         // Also compute padded expert total for offsets.
         offsets[0] = 0;
         for (uint32_t e = 0; e < e_local; ++e) {
             uint32_t running = offsets[e];
             for (uint32_t c = 0; c < num_total_cores; ++c) {
                 shared_per_core_start[c * SHARED_SLOT_U32 + e] = running;
-                uint32_t padded = round_up(shared_local_counts[c * SHARED_SLOT_U32 + e], L1_ALIGN_U32_MASK + 1U);
+                uint32_t padded = round_up(shared_local_counts[c * SHARED_SLOT_U32 + e], CURSOR_ALIGN);
                 running += padded;
             }
             // offsets[e+1] rounded up to 32-row (tile alignment for grouped)
             offsets[e + 1U] = round_up(running, 32U);
         }
 
-        // Pre-fill plan DRAM with SENTINEL in 32-entry bursts.
-        for (uint32_t i = 0; i < PLAN_CHUNK; ++i) plan_stage[i] = SENTINEL;
+        // Pre-fill plan / grouped_scores / k_slot DRAM with sentinels in
+        // PLAN_CHUNK-entry bursts. plan: 0xFFFFFFFF; grouped_scores: 0;
+        // k_slot: 0xFFFF. Reuse the per-expert staging slots (the first
+        // PLAN_CHUNK entries of each — they're untouched until phase 3).
+        // Three sentinel patterns, one fused loop — staging buffer is L1 so
+        // these stores are cheap relative to the per-iter NOC-async-writes
+        // below that broadcast the same 32-entry pattern across t_cap DRAM.
+        for (uint32_t i = 0; i < PLAN_CHUNK; ++i) {
+            plan_stage[i] = SENTINEL;
+            gs_stage[i] = 0U;
+            ks_stage[i] = K_SLOT_SENTINEL;
+        }
         uint64_t plan_base_noc = get_noc_addr(0, plan_addrgen);
+        uint64_t gs_base_noc = get_noc_addr(0, gs_addrgen);
+        uint64_t ks_base_noc = get_noc_addr(0, ks_addrgen);
         for (uint32_t base = 0; base < t_cap; base += PLAN_CHUNK) {
             uint32_t n = (base + PLAN_CHUNK <= t_cap) ? PLAN_CHUNK : (t_cap - base);
             noc_async_write((uint32_t)plan_stage, plan_base_noc + base * sizeof(uint32_t), n * sizeof(uint32_t));
+            noc_async_write((uint32_t)gs_stage, gs_base_noc + base * sizeof(uint16_t), n * sizeof(uint16_t));
+            noc_async_write((uint32_t)ks_stage, ks_base_noc + base * sizeof(uint16_t), n * sizeof(uint16_t));
         }
 
         // Write counts and offsets to DRAM (use stage as staging)
@@ -319,31 +371,47 @@ void kernel_main() {
     for (uint32_t e = 0; e < e_local; ++e) fill[e] = 0;
 
     uint64_t plan_base_noc = get_noc_addr(0, plan_addrgen);
+    uint64_t gs_base_noc = get_noc_addr(0, gs_addrgen);
+    uint64_t ks_base_noc = get_noc_addr(0, ks_addrgen);
     if (my_slice_size > 0U) {
         for (uint32_t block_start = my_slice_start; block_start < my_slice_end; block_start += block_rows) {
             uint32_t block_end = block_start + block_rows;
             if (block_end > my_slice_end)
                 block_end = my_slice_end;
-            // Read metadata block
+            // Read metadata + scores blocks (parallel structure, both [block_rows × K]).
             for (uint32_t row = block_start; row < block_end; ++row) {
                 uint32_t local_row = row - block_start;
                 noc_async_read(
                     get_noc_addr(row, md_addrgen), md_block_addr + local_row * md_aligned_page, md_aligned_page);
+                noc_async_read(
+                    get_noc_addr(row, scores_addrgen), sc_block_addr + local_row * sc_aligned_page, sc_aligned_page);
             }
             noc_async_read_barrier();
-            // Scatter
+            // Scatter: on match, write plan[i]=row, gs[i]=scores[row,ki], ks[i]=ki.
             for (uint32_t row = block_start; row < block_end; ++row) {
-                uint32_t off = (row - block_start) * MD_ROW_STRIDE_U16;
+                uint32_t md_off = (row - block_start) * MD_ROW_STRIDE_U16;
+                uint32_t sc_off = (row - block_start) * SC_ROW_STRIDE_U16;
                 for (uint32_t e = 0; e < e_local; ++e) {
                     for (uint32_t ki = 0; ki < k; ++ki) {
-                        if ((uint32_t)md_block[off + ki] == (uint32_t)leids_u16[e]) {
-                            plan_stage[e * PLAN_CHUNK + fill[e]] = row;
+                        if ((uint32_t)md_block[md_off + ki] == (uint32_t)leids_u16[e]) {
+                            uint32_t slot = e * PLAN_CHUNK + fill[e];
+                            plan_stage[slot] = row;
+                            gs_stage[slot] = sc_block[sc_off + ki];  // bf16 raw bits
+                            ks_stage[slot] = static_cast<uint16_t>(ki);
                             fill[e]++;
                             if (fill[e] == PLAN_CHUNK) {
                                 noc_async_write(
                                     (uint32_t)(plan_stage + e * PLAN_CHUNK),
                                     plan_base_noc + cursors[e] * sizeof(uint32_t),
                                     PLAN_CHUNK * sizeof(uint32_t));
+                                noc_async_write(
+                                    (uint32_t)(gs_stage + e * PLAN_CHUNK),
+                                    gs_base_noc + cursors[e] * sizeof(uint16_t),
+                                    PLAN_CHUNK * sizeof(uint16_t));
+                                noc_async_write(
+                                    (uint32_t)(ks_stage + e * PLAN_CHUNK),
+                                    ks_base_noc + cursors[e] * sizeof(uint16_t),
+                                    PLAN_CHUNK * sizeof(uint16_t));
                                 noc_async_write_barrier();
                                 cursors[e] += PLAN_CHUNK;
                                 fill[e] = 0;
@@ -358,24 +426,36 @@ void kernel_main() {
     }
 
     // Tail flush — runs on every core in parallel. Each core's slice ends
-    // exactly on per_core_start[c+1][e] (tail n_aligned == round_up_align),
-    // so there's no spillover into core c+1's range and no serialisation
-    // required. After flushing, each non-lead core increments lead's
-    // phase3_sem; lead waits for (N-1) increments (fan-in barrier) before
-    // broadcasting plan_ready.
+    // exactly on per_core_start[c+1][e] (tail n_aligned == round_up to
+    // CURSOR_ALIGN), so there's no spillover into core c+1's range and no
+    // serialisation required. After flushing, each non-lead core increments
+    // lead's phase3_sem; lead waits for (N-1) increments before broadcasting
+    // plan_ready. CURSOR_ALIGN is the max element-count alignment across the
+    // three tensors (plan/grouped_scores/k_slot) — see CURSOR_ALIGN definition.
     for (uint32_t e = 0; e < e_local; ++e) {
         if (fill[e] > 0) {
             uint32_t n = fill[e];
-            // Round up to L1_ALIGN_U32 uint32s — arch-specific NOC L1 write
-            // alignment (16 B / 4 uint32s on WH/BH).
-            uint32_t n_aligned = (n + L1_ALIGN_U32_MASK) & ~L1_ALIGN_U32_MASK;
-            for (uint32_t i = n; i < n_aligned; ++i) plan_stage[e * PLAN_CHUNK + i] = SENTINEL;
+            uint32_t n_aligned = (n + CURSOR_ALIGN_MASK) & ~CURSOR_ALIGN_MASK;
+            for (uint32_t i = n; i < n_aligned; ++i) {
+                plan_stage[e * PLAN_CHUNK + i] = SENTINEL;
+                gs_stage[e * PLAN_CHUNK + i] = 0U;
+                ks_stage[e * PLAN_CHUNK + i] = K_SLOT_SENTINEL;
+            }
             noc_async_write(
                 (uint32_t)(plan_stage + e * PLAN_CHUNK),
                 plan_base_noc + cursors[e] * sizeof(uint32_t),
                 n_aligned * sizeof(uint32_t));
-            // Advance cursor by n_aligned so it stays align-aligned and matches
-            // the per-core padded layout that offsets[e+1] was computed with.
+            noc_async_write(
+                (uint32_t)(gs_stage + e * PLAN_CHUNK),
+                gs_base_noc + cursors[e] * sizeof(uint16_t),
+                n_aligned * sizeof(uint16_t));
+            noc_async_write(
+                (uint32_t)(ks_stage + e * PLAN_CHUNK),
+                ks_base_noc + cursors[e] * sizeof(uint16_t),
+                n_aligned * sizeof(uint16_t));
+            // Advance cursor by n_aligned so it stays CURSOR_ALIGN-aligned and
+            // matches the per-core padded layout that offsets[e+1] was computed
+            // with in lead's phase 2 reduce.
             cursors[e] += n_aligned;
             fill[e] = 0;
         }

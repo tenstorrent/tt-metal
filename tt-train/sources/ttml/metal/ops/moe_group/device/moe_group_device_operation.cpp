@@ -34,6 +34,7 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
 
     check(args.dispatched, "dispatched", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
     check(args.metadata, "metadata", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
+    check(args.scores, "scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
     check(args.local_expert_ids, "local_expert_ids", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
 
     const auto& ds = args.dispatched.logical_shape();
@@ -51,6 +52,20 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
         ms[1],
         ms[2],
         ms[3],
+        attrs.d,
+        attrs.b,
+        attrs.s,
+        attrs.k);
+
+    const auto& ss = args.scores.logical_shape();
+    TT_FATAL(ss.rank() == 4U, "moe_group: scores must be 4D [D,B,S,K]");
+    TT_FATAL(
+        ss[0] == attrs.d && ss[1] == attrs.b && ss[2] == attrs.s && ss[3] == attrs.k,
+        "moe_group: scores shape [{},{},{},{}] does not match metadata [D={},B={},S={},K={}]",
+        ss[0],
+        ss[1],
+        ss[2],
+        ss[3],
         attrs.d,
         attrs.b,
         attrs.s,
@@ -74,6 +89,16 @@ spec_return_value_t MoeGroupDeviceOperation::compute_output_specs(
         ttnn::Shape{1U, 1U, attrs.t_cap, attrs.h},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, dram));
 
+    // grouped_scores: [1, 1, 1, T_cap]  ROW_MAJOR  bf16
+    ttnn::TensorSpec grouped_scores_spec(
+        ttnn::Shape{1U, 1U, 1U, attrs.t_cap},
+        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::ROW_MAJOR, dram));
+
+    // k_slot: [1, 1, 1, T_cap]  ROW_MAJOR  uint16
+    ttnn::TensorSpec k_slot_spec(
+        ttnn::Shape{1U, 1U, 1U, attrs.t_cap},
+        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT16, tt::tt_metal::Layout::ROW_MAJOR, dram));
+
     // counts: [1, 1, 1, E_local]  ROW_MAJOR  uint32
     ttnn::TensorSpec counts_spec(
         ttnn::Shape{1U, 1U, 1U, attrs.e_local},
@@ -89,7 +114,7 @@ spec_return_value_t MoeGroupDeviceOperation::compute_output_specs(
         ttnn::Shape{1U, 1U, 1U, attrs.t_cap},
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, tt::tt_metal::Layout::ROW_MAJOR, dram));
 
-    return {grouped_spec, counts_spec, offsets_spec, plan_spec};
+    return {grouped_spec, grouped_scores_spec, k_slot_spec, counts_spec, offsets_spec, plan_spec};
 }
 
 tensor_return_value_t MoeGroupDeviceOperation::create_output_tensors(
@@ -101,6 +126,8 @@ tensor_return_value_t MoeGroupDeviceOperation::create_output_tensors(
         create_device_tensor(specs[1], device),
         create_device_tensor(specs[2], device),
         create_device_tensor(specs[3], device),
+        create_device_tensor(specs[4], device),
+        create_device_tensor(specs[5], device),
     };
 }
 
@@ -117,6 +144,7 @@ namespace ttnn::prim {
 ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation::tensor_return_value_t ttml_moe_group(
     const ttnn::Tensor& dispatched,
     const ttnn::Tensor& metadata,
+    const ttnn::Tensor& scores,
     const ttnn::Tensor& local_expert_ids,
     uint32_t e_local,
     uint32_t k) {
@@ -124,14 +152,17 @@ ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation::tensor_return_valu
 
     const auto& ds = dispatched.logical_shape();
     uint32_t d = ds[0], b = ds[1], s = ds[2], h = ds[3];
-    // Upper bound includes per-core padding ((align_u32-1) slots per core per
-    // expert to keep per-core plan write addresses L1-aligned — arch-specific,
-    // 16B/4-uint32 on WH and Blackhole today) plus 32-row tile padding per
-    // expert. Use grid size to compute num_total_cores.
+    // Upper bound includes per-core padding ((cursor_align-1) slots per core per
+    // expert to keep per-core write addresses L1-aligned for ALL three side
+    // tensors written per active row: plan (uint32), grouped_scores (bf16),
+    // k_slot (uint16). cursor_align = max element-count alignment across the
+    // three dtypes = L1_ALIGN_BYTES / sizeof(uint16_t) = 8 on WH/BH today.
+    // Plus 32-row tile padding per expert.
     auto grid = dispatched.device()->compute_with_storage_grid_size();
     uint32_t num_total_cores = grid.x * grid.y;
-    uint32_t l1_align_u32 = tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t);
-    uint32_t t_cap = std::min(e_local, k) * d * b * s + e_local * (32U + (l1_align_u32 - 1U) * num_total_cores);
+    uint32_t l1_align_bytes = tt::tt_metal::hal::get_l1_alignment();
+    uint32_t cursor_align = l1_align_bytes / sizeof(uint16_t);
+    uint32_t t_cap = std::min(e_local, k) * d * b * s + e_local * (32U + (cursor_align - 1U) * num_total_cores);
 
     auto attrs = Op::operation_attributes_t{
         .e_local = e_local,
@@ -145,6 +176,7 @@ ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation::tensor_return_valu
     auto tensor_args = Op::tensor_args_t{
         .dispatched = dispatched,
         .metadata = metadata,
+        .scores = scores,
         .local_expert_ids = local_expert_ids,
     };
 

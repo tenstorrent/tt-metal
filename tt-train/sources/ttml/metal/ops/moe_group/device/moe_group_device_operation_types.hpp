@@ -30,12 +30,18 @@ struct MoeGroupAttributes {
 struct MoeGroupTensorArgs {
     ttnn::Tensor dispatched;        // [D, B, S, H]  ROW_MAJOR bf16
     ttnn::Tensor metadata;          // [D, B, S, K]  ROW_MAJOR uint16
+    ttnn::Tensor scores;            // [D, B, S, K]  ROW_MAJOR bf16
     ttnn::Tensor local_expert_ids;  // [E_local]      ROW_MAJOR uint16
 };
 
-// (grouped, counts, offsets, plan)
+// (grouped, grouped_scores, k_slot, counts, offsets, plan)
+//   grouped_scores : [1, 1, 1, T_cap]  ROW_MAJOR bf16   — scores[t, k_slot] per row
+//   k_slot         : [1, 1, 1, T_cap]  ROW_MAJOR uint16 — k-slot in metadata[t,:K]
+//                                                          per active row
+// Both are 0 / 0xFFFF respectively in pad/sentinel slots.
 using MoeGroupSpecReturn = std::vector<ttnn::TensorSpec>;
-using MoeGroupTensorReturn = std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>;
+using MoeGroupTensorReturn =
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>;
 
 // Aliases required by the ttnn::device_operation framework.
 using operation_attributes_t = MoeGroupAttributes;

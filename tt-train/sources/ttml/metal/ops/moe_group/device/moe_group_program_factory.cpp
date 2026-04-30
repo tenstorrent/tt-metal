@@ -59,9 +59,11 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     const operation_attributes_t& attrs, const tensor_args_t& args, tensor_return_value_t& outputs) {
     auto* device = args.dispatched.device();
     auto& grouped = std::get<0>(outputs);
-    auto& counts = std::get<1>(outputs);
-    auto& offsets = std::get<2>(outputs);
-    auto& plan = std::get<3>(outputs);
+    auto& grouped_scores = std::get<1>(outputs);
+    auto& k_slot = std::get<2>(outputs);
+    auto& counts = std::get<3>(outputs);
+    auto& offsets = std::get<4>(outputs);
+    auto& plan = std::get<5>(outputs);
 
     tt::tt_metal::Program program{};
 
@@ -190,9 +192,17 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     uint32_t shared_table_bytes = num_total_cores * kSharedSlotBytes;
     uint32_t two_shared_tables = 2U * shared_table_bytes;
     uint32_t md_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
+    // sc_block holds scores in lock-step with md_block. scores is bf16 with the
+    // same K count per row, so the aligned page size matches md_aligned_page.
+    uint32_t sc_block_bytes = slice_block_rows * kMdAlignedPage + kMdAlignedPage;
     uint32_t plan_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint32_t), kL1_ALIGN);
+    // gs_stage / ks_stage each hold e_local * kPlanChunk uint16-sized entries
+    // (bf16 grouped_scores / uint16 k_slot).
+    uint32_t gs_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
+    uint32_t ks_stage_bytes = tt::round_up(e_local * kPlanChunk * sizeof(uint16_t), kL1_ALIGN);
     uint32_t fill_bytes = tt::round_up(e_local * sizeof(uint32_t), kL1_ALIGN);
-    uint32_t scan_scratch_bytes = overhead_bytes + two_shared_tables + md_block_bytes + plan_stage_bytes + fill_bytes;
+    uint32_t scan_scratch_bytes = overhead_bytes + two_shared_tables + md_block_bytes + sc_block_bytes +
+                                  plan_stage_bytes + gs_stage_bytes + ks_stage_bytes + fill_bytes;
     scan_scratch_bytes = tt::round_up(scan_scratch_bytes, kL1_ALIGN);
 
     tt::tt_metal::CircularBufferConfig cb_scan_cfg =
@@ -216,7 +226,10 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // Buffer pointers
     // -------------------------------------------------------------------------
     auto* metadata_buf = args.metadata.buffer();
+    auto* scores_buf = args.scores.buffer();
     auto* plan_buf = plan.buffer();
+    auto* grouped_scores_buf = grouped_scores.buffer();
+    auto* k_slot_buf = k_slot.buffer();
     auto* counts_buf = counts.buffer();
     auto* offsets_buf = offsets.buffer();
     auto* leids_buf = args.local_expert_ids.buffer();
@@ -277,6 +290,9 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(counts_buf).append_to(combined_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(combined_ct_args);
     tt::tt_metal::TensorAccessorArgs(leids_buf).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(scores_buf).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_scores_buf).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(k_slot_buf).append_to(combined_ct_args);
 
     auto combined_kernel_g1 = create_reader_kernel(program, worker_group_1, combined_ct_args, {}, kCombinedKernelPath);
     tt::tt_metal::KernelHandle combined_kernel_g2{};
@@ -366,17 +382,20 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         // lead NOC, mcast rect, shared_tables_offset, worker_stride) moved
         // to CT args in combined_ct_args above.
         std::vector<uint32_t> reader_rt = {
-            plan_buf->address(),        // 0
-            dispatched_buf->address(),  // 1
-            worker_idx,                 // 2 my_worker_start (interleaved tile_row)
-            tiles_this_core,            // 3 my_worker_count
-            metadata_buf->address(),    // 4
-            counts_buf->address(),      // 5
-            offsets_buf->address(),     // 6
-            leids_buf->address(),       // 7
-            worker_idx,                 // 8 my_core_idx
-            my_slice_start,             // 9
-            my_slice_end,               // 10
+            plan_buf->address(),            // 0
+            dispatched_buf->address(),      // 1
+            worker_idx,                     // 2 my_worker_start (interleaved tile_row)
+            tiles_this_core,                // 3 my_worker_count
+            metadata_buf->address(),        // 4
+            counts_buf->address(),          // 5
+            offsets_buf->address(),         // 6
+            leids_buf->address(),           // 7
+            worker_idx,                     // 8 my_core_idx
+            my_slice_start,                 // 9
+            my_slice_end,                   // 10
+            scores_buf->address(),          // 11
+            grouped_scores_buf->address(),  // 12
+            k_slot_buf->address(),          // 13
         };
 
         std::vector<uint32_t> writer_rt = {
@@ -416,12 +435,17 @@ void MoeGroupProgramFactory::override_runtime_arguments(
     auto& sv = cached_program.shared_variables;
 
     auto& grouped = std::get<0>(outputs);
-    auto& counts = std::get<1>(outputs);
-    auto& offsets = std::get<2>(outputs);
-    auto& plan = std::get<3>(outputs);
+    auto& grouped_scores = std::get<1>(outputs);
+    auto& k_slot = std::get<2>(outputs);
+    auto& counts = std::get<3>(outputs);
+    auto& offsets = std::get<4>(outputs);
+    auto& plan = std::get<5>(outputs);
 
     auto* metadata_buf = tensor_args.metadata.buffer();
+    auto* scores_buf = tensor_args.scores.buffer();
     auto* plan_buf = plan.buffer();
+    auto* grouped_scores_buf = grouped_scores.buffer();
+    auto* k_slot_buf = k_slot.buffer();
     auto* counts_buf = counts.buffer();
     auto* offsets_buf = offsets.buffer();
     auto* leids_buf = tensor_args.local_expert_ids.buffer();
@@ -439,6 +463,9 @@ void MoeGroupProgramFactory::override_runtime_arguments(
         reader_rt[5] = counts_buf->address();
         reader_rt[6] = offsets_buf->address();
         reader_rt[7] = leids_buf->address();
+        reader_rt[11] = scores_buf->address();
+        reader_rt[12] = grouped_scores_buf->address();
+        reader_rt[13] = k_slot_buf->address();
 
         auto& writer_rt = GetRuntimeArgs(program, is_g1 ? sv.writer_kernel_g1 : sv.writer_kernel_g2)[core.x][core.y];
         writer_rt[0] = grouped_buf->address();
