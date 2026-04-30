@@ -145,14 +145,45 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
 
         total_time += duration
 
-    # extract error summary
-    error_lines = []
-    for line in reset_lines:
-        lower = line.lower()
-        if "error" in lower or "failed" in lower:
-            error_lines.append(line.strip())
+    root_causes = []
+    final_errors = []
 
-    error_summary = "\n".join(error_lines[:5]) if error_lines else None
+    for line in reset_lines:
+        l = line.strip()
+        lower = l.lower()
+
+        # root cause signals
+        if any(x in lower for x in [
+            "error accessing board",
+            "re-initializing boards",
+            "re-initializing chips",
+            "could not open chip",
+            "ioctl",
+            "enodev"
+        ]):
+            if l not in root_causes:
+                root_causes.append(l)
+
+        # final failure signals
+        if any(x in lower for x in [
+            "unable to reset board",
+            "runner will now shutdown",
+            "operation was canceled"
+        ]):
+            if l not in final_errors:
+                final_errors.append(l)
+
+    summary_parts = []
+
+    if root_causes:
+        summary_parts.append("Root cause:")
+        summary_parts.extend(root_causes[:4])  # limit noise
+
+    if final_errors:
+        summary_parts.append("Final outcome:")
+        summary_parts.extend(final_errors[:3])
+
+    error_summary = "\n".join(summary_parts) if summary_parts else None
 
     return {
         "final_status": "FAILURE",
