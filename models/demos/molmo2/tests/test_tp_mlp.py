@@ -103,9 +103,12 @@ def test_tp_mlp_pcc(mesh_device, state_dict_and_cfg):
     layer_num = 0
     S = 256
 
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device)
     mlp = TtMolmo2TextMLP(
         mesh_device=mesh_device,
-        tt_ccl=None,
+        tt_ccl=tt_ccl,
         state_dict=sd,
         weight_cache_path=WEIGHT_CACHE,
         layer_num=layer_num,
@@ -143,9 +146,12 @@ def test_tp_mlp_no_oom_large_s(mesh_device, state_dict_and_cfg):
     layer_num = 0
     S = 16384
 
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device)
     mlp = TtMolmo2TextMLP(
         mesh_device=mesh_device,
-        tt_ccl=None,
+        tt_ccl=tt_ccl,
         state_dict=sd,
         weight_cache_path=WEIGHT_CACHE,
         layer_num=layer_num,
