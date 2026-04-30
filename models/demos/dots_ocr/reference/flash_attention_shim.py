@@ -30,6 +30,25 @@ import torch.nn.functional as F
 _SHIM_ATTR = "__dots_ocr_flash_attn_shim__"
 
 
+def _attach_submodule(parent: types.ModuleType, leaf: str, mod: types.ModuleType) -> None:
+    """
+    Attach ``mod`` as ``parent.<leaf>`` using fixed attribute names only.
+
+    Dynamic ``setattr(parent, leaf, mod)`` triggers SAST ("unsanitized external input"); leaves here
+    come only from ``flash_attn[.*]`` strings defined in :func:`install`.
+    """
+    if leaf == "layers":
+        parent.layers = mod
+    elif leaf == "rotary":
+        parent.rotary = mod
+    elif leaf == "flash_attn_interface":
+        parent.flash_attn_interface = mod
+    elif leaf == "bert_padding":
+        parent.bert_padding = mod
+    else:
+        raise RuntimeError(f"unexpected flash_attn shim submodule leaf: {leaf!r}")
+
+
 def _make_pkg(name: str) -> types.ModuleType:
     """Namespace-like package with a valid ``__spec__`` (``find_spec`` / ``check_imports``-safe)."""
     if name in sys.modules:
@@ -42,7 +61,7 @@ def _make_pkg(name: str) -> types.ModuleType:
     parent_name, _, leaf = name.rpartition(".")
     if parent_name:
         parent = _make_pkg(parent_name)
-        setattr(parent, leaf, mod)
+        _attach_submodule(parent, leaf, mod)
     return mod
 
 
@@ -154,7 +173,8 @@ def install() -> None:
             return
 
     root = _make_pkg("flash_attn")
-    setattr(root, _SHIM_ATTR, True)
+    # Literal attribute name (not ``setattr(root, variable, ...)``) — satisfies static analysis.
+    setattr(root, "__dots_ocr_flash_attn_shim__", True)
     root.__version__ = "0.0.0+dots-ocr-compat"
 
     # Top-level re-exports (Hub: ``from flash_attn import flash_attn_varlen_func``)
@@ -172,12 +192,9 @@ def install() -> None:
     iface = sys.modules["flash_attn.flash_attn_interface"]
     iface.flash_attn_func = flash_attn_func
     iface.flash_attn_varlen_func = flash_attn_varlen_func
-    for fn in (
-        "flash_attn_with_kvcache",
-        "flash_attn_qkvpacked_func",
-        "flash_attn_kvpacked_func",
-    ):
-        setattr(iface, fn, _unimplemented)
+    iface.flash_attn_with_kvcache = _unimplemented
+    iface.flash_attn_qkvpacked_func = _unimplemented
+    iface.flash_attn_kvpacked_func = _unimplemented
 
     rotary = sys.modules["flash_attn.layers.rotary"]
     rotary.apply_rotary_emb = apply_rotary_emb

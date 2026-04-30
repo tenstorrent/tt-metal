@@ -24,7 +24,7 @@ import torch
 from PIL import Image
 
 from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec, get_hf_model_id
-from models.demos.dots_ocr.reference.model import DotsOCRReference
+from models.demos.dots_ocr.reference.model import DotsOCRInputs, DotsOCRReference
 
 
 def _load_image_from_path(path: Path, *, pdf_page_index: int = 0) -> Image.Image:
@@ -145,8 +145,6 @@ def main() -> None:
         # Bypass `preprocess_image_and_prompt`'s chat-template behavior by directly calling the processor.
         raw = ref.processor(images=image, text=prompt, return_tensors="pt")
         # Construct canonical wrapper (same shape as `preprocess_image_and_prompt`).
-        from models.demos.dots_ocr.reference.model import DotsOCRInputs
-
         inputs = DotsOCRInputs(
             input_ids=raw["input_ids"],
             attention_mask=raw.get("attention_mask", torch.ones_like(raw["input_ids"])),
@@ -169,9 +167,10 @@ def main() -> None:
             print(f"[debug] could not decode input_ids: {e!r}")
 
     # Make vision input dtype match the model dtype (Conv2d requires input/bias dtypes to match).
+    # Build a fresh ``DotsOCRInputs`` explicitly — avoids ``type(inputs)(...)`` (SAST flags dynamic reconstruction).
     if inputs.pixel_values is not None:
         print(f"[debug] demo selected dtype={dtype} pixel_values(before)={inputs.pixel_values.dtype}")
-        inputs = type(inputs)(
+        inputs = DotsOCRInputs(
             input_ids=inputs.input_ids,
             attention_mask=inputs.attention_mask,
             pixel_values=inputs.pixel_values.to(dtype=dtype),

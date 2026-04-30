@@ -16,6 +16,7 @@ remote code's eager ``VisionAttention`` (``vision_config`` defaults to flash oth
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -25,6 +26,30 @@ from huggingface_hub import snapshot_download
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
+
+# Hub remote-code vision classes live under these prefixes; constrain dynamic imports (SAST / supply-chain hygiene).
+_VISION_MODULE_PREFIXES = ("transformers_modules.", "transformers.")
+
+
+def _import_module_safe(module_name: str):
+    """
+    Import a module only if ``module_name`` looks like a normal dotted Python module path.
+
+    Used instead of bare ``importlib.import_module(vt.__class__.__module__)`` so static analysis does
+    not treat the string as unconstrained external input to code loading.
+    """
+    import importlib
+
+    if not isinstance(module_name, str) or not module_name.strip():
+        raise ValueError("module_name must be a non-empty str")
+    # Hub paths may include revision-hash segments that start with a digit (e.g. ``...dots_dot_mocr.6f8b48...``).
+    if ".." in module_name or any(sep in module_name for sep in ("/", "\\", ":", ";", " ", "\n", "\t")):
+        raise ValueError(f"refused unsafe module name: {module_name!r}")
+    if not re.fullmatch(r"[A-Za-z0-9_.]+(?:\.[A-Za-z0-9_.]+)*", module_name):
+        raise ValueError(f"refused malformed module name: {module_name!r}")
+    if not any(module_name.startswith(p) for p in _VISION_MODULE_PREFIXES):
+        raise ValueError(f"module name not in allowed prefixes {_VISION_MODULE_PREFIXES}: {module_name!r}")
+    return importlib.import_module(module_name)
 
 
 @dataclass(frozen=True)
@@ -176,9 +201,12 @@ def _install_eager_vision_attention(model) -> None:
     if cfg is None:
         return
 
-    import importlib
-
-    mod = importlib.import_module(vt.__class__.__module__)
+    module_name = vt.__class__.__module__
+    try:
+        mod = _import_module_safe(module_name)
+    except ValueError as exc:
+        logger.warning("eager vision swap: refused dynamic import (%s); leaving vision attention as loaded.", exc)
+        return
     VisionAttention = getattr(mod, "VisionAttention", None)
     if VisionAttention is None:
         logger.warning(

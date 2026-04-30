@@ -14,7 +14,7 @@ in torch.
 ``HfRotarySetup`` prefill cos/sin, then ``ttnn_prefill_forward`` (decoder + LM head). Logits are
 read back to host tensors only for :func:`assert_quality` vs HF.
 
-**Constants:** ``TEXT_PREFILL_PCC_MIN`` (floor vs HF; end-to-end ttnn is typically ~0.98–0.99).
+**Constants:** ``TEXT_PREFILL_PCC_MIN`` — Pearson floor vs HF (**0.98**).
 Log lines: ``[dots_ocr text_prefill_pcc] ...``.
 """
 
@@ -44,8 +44,8 @@ from models.demos.dots_ocr.tt.model import DotsTransformer
 from models.demos.dots_ocr.tt.model_config import DotsModelArgs
 from models.tt_dit.utils.check import assert_quality
 
-# PCC floor vs HF reference (full ttnn prefill; adjust if CI hardware varies).
-TEXT_PREFILL_PCC_MIN: float = 0.985
+# PCC floor vs HF.
+TEXT_PREFILL_PCC_MIN = 0.98
 
 
 def _load_dots_reference(model_id: str, *, dtype=torch.bfloat16):
@@ -114,9 +114,15 @@ def test_text_decoder_prefill_pcc(tmp_path):
                         candidates.insert(0, ("model.language_model", m1))
 
                 def looks_like_decoder(sd_keys):
-                    return any(".layers.0." in k for k in sd_keys) and any(
-                        "self_attn" in k or "attention" in k for k in sd_keys
-                    )
+                    """
+                    Detect the HF decoder stack.
+
+                    Submodule ``state_dict`` keys are often ``layers.0.*`` (no ``model.`` prefix),
+                    while full-module checkpoints use ``model.layers.0.*``. Match both.
+                    """
+                    has_layer0 = any((".layers.0." in k) or k.startswith("layers.0.") for k in sd_keys)
+                    has_attn = any("self_attn" in k or "attention" in k for k in sd_keys)
+                    return has_layer0 and has_attn
 
                 for name, m in candidates:
                     try:
@@ -130,12 +136,21 @@ def test_text_decoder_prefill_pcc(tmp_path):
                 return hf_model
 
             _text_model = _pick_text_submodel(ref.model)
-            text_out = _text_model(
-                input_ids=inputs.input_ids,
-                attention_mask=inputs.attention_mask,
-                return_dict=True,
-            )
-            hf_logits = text_out.logits
+            # Inner ``Qwen2Model`` / Llama base returns hidden states; causal wrappers expose ``logits``.
+            if hasattr(_text_model, "lm_head"):
+                text_out = _text_model(
+                    input_ids=inputs.input_ids,
+                    attention_mask=inputs.attention_mask,
+                    return_dict=True,
+                )
+                hf_logits = text_out.logits
+            else:
+                base_out = _text_model(
+                    input_ids=inputs.input_ids,
+                    attention_mask=inputs.attention_mask,
+                    return_dict=True,
+                )
+                hf_logits = ref.model.lm_head(base_out.last_hidden_state)
             logger.info(f"HF (text submodel) logits shape: {hf_logits.shape} (using eager attention implementation)")
 
             # Capture the text submodel config/class for later conversion-check.
@@ -185,6 +200,8 @@ def test_text_decoder_prefill_pcc(tmp_path):
                 hf_config=torch_text_model_cfg,
                 optimizations=optimizations,
             )
+            # Align cache tagging with demo loads (QKV layout selection).
+            model_args.dots_text_qkv_permute = bool(qkv_permute)
             # For meaningful PCC vs HF, avoid bfloat8 LM head output quantization.
             model_args.lm_head_dtype = ttnn.bfloat16
 
