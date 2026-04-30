@@ -1,5 +1,65 @@
 # TurboQuant KV Cache Quantization
 
+## 🎯 4-Step Plan to Match Baseline BFP8 Latency (2026-04-30)
+
+**End goal:** Track B latency ≈ baseline BFP8 latency, with KV cache
+compressed (~1.9× vs BFP8, ~3.9× vs BF16).
+
+### Baseline measurements (Step 1a, 2026-04-30)
+
+| Platform | Mode | Top-1 | Top-5 | Latency |
+|---|---|---:|---:|---:|
+| **N150** | **baseline BFP8** | **97.3 %** | **100.0 %** | **37.9 ms/tok** |
+| N150 | Track A K=1 | 88.9 % | 99.0 % | ~37 ms/tok |
+| N150 | Track B W=64 (best) | 94.1 % | 99.6 % | similar |
+| **T3K** | **baseline BFP8** | **96.7 %** | **99.8 %** | **14.2 ms/tok** |
+| T3K | Track A K=1 | 86.1 % | 96.3 % | 56.8 ms/tok (**4.0×**) |
+| T3K | Track A K=14 | 0.0 % ⚠️ | 0.0 % | 28.9 ms/tok (broken) |
+| T3K | Track B W=128 (best) | 89.5 % | 97.7 % | 61.4 ms/tok (**4.3×**) |
+
+**Key takeaways:**
+1. **N150 TQ overhead is essentially zero** (37 vs 37.9 ms/tok). Track A
+   loses 8.4 pp accuracy vs baseline, Track B W=64 closes that to 3.2 pp,
+   and there's no latency penalty.
+2. **T3K TQ is 4× slower than baseline.** Per-chip total_work=4 (NQH=4)
+   uses only 4 of 64 Tensix cores in K=1 mode. K=14 would utilize 56
+   cores but the K-split kernel is broken. **Step 3 (K-split fix) is
+   not optional for T3K — it's the difference between 4× slower and
+   ~2× slower than baseline.**
+3. **Accuracy gap to baseline:** Track A loses 8-10 pp top-1 vs baseline
+   on both platforms; Track B W=64/W=128 closes that to 3-7 pp.
+
+**Step 1 — Foundation:**
+- (a) Measure baseline (no-TQ, BFP8) latency + top-1 on N150 + T3K.
+  Source of truth so every later perf claim is grounded.
+- (b) Switch prefill/needle scripts to `memory_efficient=True` so the
+  e2e flow actually compresses the cache (currently writes pre-rescaled
+  BFP8 back into `layer_past`, no compression).
+- (c) Update PLAN tables with the new numbers.
+
+**Step 2 — Easy perf wins for Track B (estimated 1-2 days):**
+- (C) Truncate TQ-far to old positions only (`[0..cur_pos-W]` instead
+  of full range). The kernel rounds chunks up to chunk boundary, fix
+  the right-edge to handle a sub-chunk boundary cleanly.
+- (D) Skip the LSE combine when one branch dominates (lse_recent >>
+  lse_far or vice versa). Saves ~3 ms/step in dominated cases.
+- (E) Run TQ-far and FP-recent SDPA in parallel on disjoint core
+  groups. Latency becomes max(TQ-far, FP-recent) instead of sum.
+
+**Step 3 — Fix K-split kernel bug:**
+- The deferred work from `pre-K-split-fix-checkpoint`. Audit
+  `mm_init`/`pack_reconfig_data_format` calls in `sdpa_tq_decode.cpp`
+  for FP32-dst correctness. Once K-split works at K>1, Track A K=14 on
+  T3K goes from 0% to ~28.9 ms/tok and **Track B + K=14** unlocks (the
+  hard-coded K=1 at `ttnn_integration.py:1065` goes away). This is a
+  double benefit: speeds up Track A AND enables hybrid+parallelism.
+
+**Step 4 — Status check:**
+- Where are we? (Recompare A/B/baseline on accuracy + latency + cache size)
+- Which track is now the best one? (Should A vs B winner change after
+  Step 3 unlocks Track A K=14?)
+- New plans (single fused hybrid kernel? Better codebook? More layers?)
+
 ## ✅ HYBRID COMBINE WORKING (2026-04-29 PM): W-sweep done
 
 The sliding-window hybrid (TQ over `[0, cur_pos]` + BFP8 ring over recent W
