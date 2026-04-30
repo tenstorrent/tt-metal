@@ -32,7 +32,7 @@ _HELPER_SCRIPT = textwrap.dedent("""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
     try:
-        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), mesh_type=ttnn.MeshType.Ring)
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
         num_devices = mesh.get_num_devices()
 
         # Activate all ERISC channels with one AllGather

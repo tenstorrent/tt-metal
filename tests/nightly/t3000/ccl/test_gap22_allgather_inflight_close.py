@@ -35,7 +35,6 @@ _HELPER_SCRIPT = textwrap.dedent("""
         try:
             mesh = ttnn.open_mesh_device(
                 ttnn.MeshShape(1, 8),
-                mesh_type=ttnn.MeshType.Ring,
             )
         except Exception as e:
             print(f"Cycle {cycle}: open_mesh_device failed: {e}", file=sys.stderr)
