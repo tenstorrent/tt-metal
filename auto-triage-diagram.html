@@ -216,35 +216,44 @@
     .step-card {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px 20px;
+      border-radius: 10px;
+      padding: 12px 16px 13px;
     }
     .step-head {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 6px;
+      margin-bottom: 3px;
     }
     .step-head h3 {
       margin: 0;
-      font-size: 16px;
+      font-size: 14.5px;
       font-weight: 600;
     }
     .step-head .tag {
-      font-size: 10px;
+      font-size: 9.5px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--muted);
       border: 1px solid var(--border);
       padding: 2px 8px;
       border-radius: 999px;
+      white-space: nowrap;
     }
     .step-card p {
       margin: 0;
       color: var(--muted);
-      font-size: 13px;
-      line-height: 1.55;
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+    .pipeline-footnote {
+      margin-top: 10px;
+      margin-left: 56px;
+      font-size: 11.5px;
+      color: var(--muted);
+      opacity: 0.75;
+      font-style: italic;
     }
     .step-card .files {
       margin-top: 10px;
@@ -544,15 +553,10 @@
         <div class="step-marker"><div class="dot"></div></div>
         <div class="step-card">
           <div class="step-head">
-            <h3>Stage scripts &amp; mirror repo</h3>
+            <h3>Setup</h3>
             <span class="tag">setup</span>
           </div>
-          <p>
-            Copies the <code>auto_triage/</code> tooling into
-            <code>.auto_triage/</code> in the runner workspace and rsyncs the
-            checked-out tt-metal tree into <code>.auto_triage/workspace/</code>
-            so the LLM can read source files.
-          </p>
+          <p>Mirror the tt-metal tree into the runner, pull the Slack directory, and install the Copilot CLI + log-search tools.</p>
         </div>
       </div>
 
@@ -563,49 +567,7 @@
             <h3>Find boundaries</h3>
             <span class="tag">discover</span>
           </div>
-          <p>
-            Pages through workflow runs to locate the
-            <strong>last successful</strong> and <strong>first failing</strong>
-            run of the target subjob, defining the suspect commit window.
-          </p>
-          <div class="files">
-            <span class="file-chip">modules/boundaries/find_boundaries.sh</span>
-            <span class="file-chip">workflow_finder.sh</span>
-            <span class="file-chip">run_processor.sh</span>
-            <span class="file-chip">job_matcher.sh</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-marker"><div class="dot"></div></div>
-        <div class="step-card">
-          <div class="step-head">
-            <h3>Download Slack directory</h3>
-            <span class="tag">setup</span>
-          </div>
-          <p>
-            Pulls the Slack user/group directory so later stages can resolve
-            commit authors, reviewers, and code-owners to ping.
-          </p>
-          <div class="files">
-            <span class="file-chip">download_slack_directory.py</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-marker"><div class="dot"></div></div>
-        <div class="step-card">
-          <div class="step-head">
-            <h3>Install ripgrep · Node 22 · Copilot CLI</h3>
-            <span class="tag">setup</span>
-          </div>
-          <p>
-            Provisions the runtime needed by the LLM stages:
-            <code>rg</code> for fast log search and
-            <code>@github/copilot</code> for the analysis passes.
-          </p>
+          <p>Locate the last successful and first failing run of the target job to define the suspect commit window.</p>
         </div>
       </div>
 
@@ -613,24 +575,10 @@
         <div class="step-marker"><div class="dot purple"></div></div>
         <div class="step-card">
           <div class="step-head">
-            <h3>Filter stage — <em>filter_triage.sh</em></h3>
-            <span class="tag">llm pass · 1</span>
+            <h3>Filter pass</h3>
+            <span class="tag">llm · 1</span>
           </div>
-          <p>
-            First Copilot pass. Determines whether the failure is deterministic
-            and downloads commit metadata + per-commit changed files for the
-            window between the boundary runs.
-          </p>
-          <div class="files">
-            <span class="file-chip">filter_triage.sh</span>
-            <span class="file-chip">instructions/filter_instructions_for_llm.txt</span>
-            <span class="file-chip">instructions/filter_hang_instructions_for_llm.txt</span>
-          </div>
-          <div class="llm-box">
-            <span class="badge">LLM</span>
-            Reads logs, annotations, and the commit list — writes
-            <code>commit_info.json</code> and <code>error_message.txt</code>.
-          </div>
+          <p>First Copilot pass: decide whether the failure is deterministic and collect commit metadata for the window.</p>
         </div>
       </div>
 
@@ -638,46 +586,10 @@
         <div class="step-marker"><div class="dot purple"></div></div>
         <div class="step-card">
           <div class="step-head">
-            <h3>Main analysis — <em>auto_triage.sh</em></h3>
-            <span class="tag">llm pass · 2</span>
+            <h3>Main analysis</h3>
+            <span class="tag">llm · 2</span>
           </div>
-          <p>
-            Second Copilot pass. Reasons over the commit window and the failure
-            evidence, picks one of five cases, scores commits by confidence,
-            and produces the human-readable explanation + structured Slack
-            payload. An optional <code>followups.manifest</code> entry adds a
-            third LLM pass when a hang is suspected.
-          </p>
-          <div class="files">
-            <span class="file-chip">auto_triage.sh</span>
-            <span class="file-chip">instructions/instructions_for_llm.txt</span>
-            <span class="file-chip">instructions/hang_stage_instructions_for_llm.txt</span>
-            <span class="file-chip">modules/analysis/llm_runner.sh</span>
-          </div>
-          <div class="llm-box">
-            <span class="badge">LLM</span>
-            Writes <code>output/explanation.md</code> +
-            <code>output/slack_message.json</code> (validated by
-            <code>sanitize_slack_message.py</code>).
-          </div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-marker"><div class="dot muted"></div></div>
-        <div class="step-card" style="opacity:.7;">
-          <div class="step-head">
-            <h3>Auto-fix PR (optional, currently disabled)</h3>
-            <span class="tag">disabled</span>
-          </div>
-          <p>
-            Would ask Copilot to draft a small PR fixing the failure when
-            <code>create_PR_boolean.json</code> is enabled. Disabled today via
-            <code>tenstorrent/tt-auto-triage#3</code>.
-          </p>
-          <div class="files">
-            <span class="file-chip">run_auto_fix.sh</span>
-          </div>
+          <p>Second Copilot pass: pick one of five cases, score commits by confidence, and write the explanation + Slack payload.</p>
         </div>
       </div>
 
@@ -685,23 +597,10 @@
         <div class="step-marker"><div class="dot warning"></div></div>
         <div class="step-card">
           <div class="step-head">
-            <h3>Retry on deterministic — <em>retry_orchestrator.sh</em></h3>
+            <h3>Retry on deterministic</h3>
             <span class="tag">verify</span>
           </div>
-          <p>
-            For Case 1 / Case 4 on supported single-card hardware
-            (N150/N300/P100A/P150/P300), re-runs the failing job to confirm the
-            failure is actually deterministic. Outcome can re-classify the
-            failure as Case 3 (non-deterministic) and overwrite the Slack
-            payload + explanation.
-          </p>
-          <div class="files">
-            <span class="file-chip">scripts/retry_on_deterministic.sh</span>
-            <span class="file-chip">modules/retry/retry_orchestrator.sh</span>
-            <span class="file-chip">hardware_checker.sh</span>
-            <span class="file-chip">run_trigger.sh</span>
-            <span class="file-chip">result_comparator.sh</span>
-          </div>
+          <p>For Case 1 / Case 4, re-run the failing job on supported hardware. If it passes, downgrade to Case 3 (non-deterministic).</p>
         </div>
       </div>
 
@@ -709,37 +608,15 @@
         <div class="step-marker"><div class="dot success"></div></div>
         <div class="step-card">
           <div class="step-head">
-            <h3>Send Slack notification</h3>
+            <h3>Report</h3>
             <span class="tag">report</span>
           </div>
-          <p>
-            Delegates to the <code>slack-report-auto-triage</code> action which
-            fetches the parent thread's job-owner, builds the formatted
-            payload, and posts it (threaded if <code>slack_ts</code> is set).
-          </p>
-          <div class="files">
-            <span class="file-chip">actions/slack-report-auto-triage</span>
-            <span class="file-chip">scripts/build_slack_payload.sh</span>
-            <span class="file-chip">scripts/fetch_job_owner.sh</span>
-            <span class="file-chip">scripts/resolve_group_pings.py</span>
-          </div>
+          <p>Post the Slack notification (threaded on the parent job), append the explanation to the run summary, and upload artifacts.</p>
         </div>
       </div>
 
-      <div class="step">
-        <div class="step-marker"><div class="dot success"></div></div>
-        <div class="step-card">
-          <div class="step-head">
-            <h3>Publish summary &amp; upload artifacts</h3>
-            <span class="tag">report</span>
-          </div>
-          <p>
-            Appends <code>explanation.md</code> to
-            <code>$GITHUB_STEP_SUMMARY</code> and uploads
-            <code>auto-triage-data</code> + <code>auto-triage-output</code>
-            artifacts for inspection.
-          </p>
-        </div>
+      <div class="pipeline-footnote">
+        An auto-fix PR stage exists but is currently disabled — it's the hook the new autonomy system will light up.
       </div>
 
     </div>

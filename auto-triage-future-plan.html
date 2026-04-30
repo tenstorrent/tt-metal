@@ -443,11 +443,14 @@ flowchart TB
           A standalone <strong>bug-escapes workflow</strong> already exists
           today on the <code>ebanerjee/bug-escapes</code> branch in both
           <code>tt-metal</code> (caller) and <code>tt-auto-triage</code>
-          (reusable logic). It runs independently of the rest of the autonomy
-          pipeline and produces its own <code>bug-escapes-output.json</code>
-          artifact. Once the scheduled pipeline above is live, this workflow
-          gets folded into step ③ as its classifier and retired as a
-          standalone job.
+          (reusable logic). It's a <strong>retrospective analyzer</strong> —
+          it walks back through <em>past</em> CI runs on a given branch,
+          identifies failures that persisted across consecutive runs, locates
+          the commit that eventually fixed each one, and classifies the
+          escape. It runs independently of the rest of the autonomy pipeline
+          and produces its own <code>bug-escapes-output.json</code> artifact.
+          Once the scheduled pipeline above is live, this workflow gets folded
+          into step ③ as its classifier and retired as a standalone job.
         </p>
         <div class="callout-mermaid">
           <pre class="mermaid">
@@ -456,12 +459,12 @@ flowchart LR
     classDef phase    fill:#2a1a10,stroke:#f0883e,color:#e6edf3,stroke-width:1.5px;
     classDef artifact fill:#1b1b1b,stroke:#8b949e,color:#e6edf3,stroke-dasharray:4 3;
 
-    C["tt-metal<br/><i>bug-escapes-ci.yaml</i>"]:::caller
-    P1["① Discover<br/>workflows per layer"]:::phase
-    P2["② Identify<br/>consistent failures"]:::phase
-    P3["③ Find<br/>fix-point commits"]:::phase
-    P4["④ Verify the fix<br/><i>re-run test on<br/>before / after branches</i>"]:::phase
-    P5["⑤ Classify<br/>horizontal / vertical"]:::phase
+    C["tt-metal<br/><i>bug-escapes-ci.yaml</i><br/>looks back over<br/>historical CI runs"]:::caller
+    P1["① Scan past CI runs<br/>per architectural layer"]:::phase
+    P2["② Identify failures that<br/>persisted across past runs"]:::phase
+    P3["③ Find the commit<br/>that eventually fixed each"]:::phase
+    P4["④ Verify the fix<br/><i>re-run test on<br/>before / after commits</i>"]:::phase
+    P5["⑤ Classify each escape<br/>horizontal / vertical"]:::phase
     O[("bug-escapes-output.json")]:::artifact
 
     C --> P1 --> P2 --> P3 --> P4 --> P5 --> O
