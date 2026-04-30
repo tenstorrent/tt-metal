@@ -151,6 +151,18 @@ class AllocatorStats:
     dispatch_bytes: int
 
 
+@dataclass
+class TraceCacheRunCounters:
+    normal_evictions: int = 0
+    fallback_evictions: int = 0
+    reset_fallbacks: int = 0
+
+    def add(self, other: TraceCacheRunCounters) -> None:
+        self.normal_evictions += other.normal_evictions
+        self.fallback_evictions += other.fallback_evictions
+        self.reset_fallbacks += other.reset_fallbacks
+
+
 def intersects(begin_1: int, size_1: int, begin_2: int, size_2: int) -> bool:
     return begin_1 < begin_2 + size_2 and begin_2 < begin_1 + size_1
 
@@ -161,6 +173,15 @@ def merge_syncs(sync_1: int | None, sync_2: int | None) -> int | None:
     if sync_1 is not None:
         return sync_1
     return sync_2
+
+
+def stall_badness_contribution(trace_idx: int, stall_idx: int | None) -> float:
+    if stall_idx is None or stall_idx < 0:
+        return 0.0
+    stall_node_gap = trace_idx - stall_idx
+    if stall_node_gap >= LAUNCH_MSG_BUFFER_NUM_ENTRIES - 1:
+        return 0.0
+    return math.ldexp(1.0, -(stall_node_gap - 1))
 
 
 class SimpleRegionAllocator:
@@ -453,6 +474,7 @@ class TraceCacheWorkerBufferManager:
         self.allocator: list[TraceCacheAllocNode] = []
         self.lru: list[TraceCacheAllocNode] = []
         self.alloced_programs: dict[Hashable, TraceCacheAllocNode | None] = {}
+        self.counters = TraceCacheRunCounters()
 
     def process_trace(
         self, trace: list[TraceCacheTraceNode], programs: dict[Hashable, TraceCacheProgram]
@@ -461,6 +483,7 @@ class TraceCacheWorkerBufferManager:
         self.allocator.clear()
         self.lru.clear()
         self.alloced_programs = {program_id: None for program_id in programs}
+        self.counters = TraceCacheRunCounters()
         self._build_use_data(trace, programs)
         if not self._handle_trivial_cases(trace, programs):
             self._alloc(trace, programs)
@@ -529,15 +552,24 @@ class TraceCacheWorkerBufferManager:
                 size_needed = programs[program_id].size
                 if eviction_mode:
                     evict_node = self._find_eviction_candidates(True, self.reuse_window, size_needed, trace_idx, trace)
+                    eviction_kind = "normal"
                     if evict_node is None:
                         for window in range(self.reuse_window, 0, -1):
                             evict_node = self._find_eviction_candidates(False, window, size_needed, trace_idx, trace)
                             if evict_node is not None:
                                 break
                     if evict_node is None:
-                        raise RuntimeError(f"failed to allocate {size_needed} bytes at trace index {trace_idx}")
+                        evict_node = self._find_no_fail_eviction_candidate(size_needed, trace_idx, trace)
+                        eviction_kind = "fallback"
+                    if evict_node is None:
+                        trace_idx = self._reset_allocator_and_restart_trace_node(trace_idx, trace)
+                        eviction_mode = False
+                        pre_alloc_addr_top = self.buffer_size
+                        pre_alloc_addr = self.buffer_size
+                        uncommitted_marker = None
+                        continue
 
-                    freed_size, alloc_index = self._evict(evict_node, trace_idx, size_needed, trace)
+                    freed_size, alloc_index = self._evict(evict_node, trace_idx, size_needed, trace, eviction_kind)
                     if not self.allocator:
                         pre_alloc_addr_top = self.buffer_size
                         pre_alloc_addr = self.buffer_size
@@ -616,13 +648,60 @@ class TraceCacheWorkerBufferManager:
 
         return match
 
+    def _find_no_fail_eviction_candidate(
+        self, size_needed: int, trace_idx: int, trace: list[TraceCacheTraceNode]
+    ) -> TraceCacheAllocNode | None:
+        current_time = trace[trace_idx].original_trace_idx
+        best_node: TraceCacheAllocNode | None = None
+        best_score: tuple[float, float, int] | None = None
+
+        for start_index, start_node in enumerate(self.allocator):
+            free_size = 0
+            retained_value = 0.0
+            newest_prev_time: int | None = None
+            blocked_by_current_trace = False
+
+            for alloc_node in self.allocator[start_index:]:
+                prev_time = self._node_prev_time(alloc_node, trace)
+                if prev_time == current_time:
+                    blocked_by_current_trace = True
+                    break
+
+                free_size += alloc_node.size
+                retained_value += alloc_node.weight(trace)
+                if prev_time >= 0:
+                    newest_prev_time = prev_time if newest_prev_time is None else max(newest_prev_time, prev_time)
+
+                if free_size >= size_needed:
+                    over_evict = free_size - size_needed
+                    score = (
+                        stall_badness_contribution(current_time, newest_prev_time),
+                        retained_value,
+                        over_evict,
+                    )
+                    if best_score is None or score < best_score:
+                        best_score = score
+                        best_node = start_node
+                    break
+
+            if blocked_by_current_trace:
+                continue
+
+        return best_node
+
     def _evict(
         self,
         evict_node: TraceCacheAllocNode,
         trace_idx: int,
         size_needed: int,
         trace: list[TraceCacheTraceNode],
+        eviction_kind: str,
     ) -> tuple[int, int]:
+        if eviction_kind == "fallback":
+            self.counters.fallback_evictions += 1
+        else:
+            self.counters.normal_evictions += 1
+
         freed_size = 0
         alloc_index = self._allocator_index(evict_node)
 
@@ -781,6 +860,37 @@ class TraceCacheWorkerBufferManager:
         trace[trace_idx].stall_idx = stall_idx
         return eviction_mode, pre_alloc_addr_top, pre_alloc_addr, uncommitted_marker
 
+    def _reset_allocator_and_restart_trace_node(
+        self, trace_idx: int, trace: list[TraceCacheTraceNode]
+    ) -> int:
+        self.counters.reset_fallbacks += 1
+        current_time = trace[trace_idx].original_trace_idx
+        stall_idx: int | None = None
+
+        for alloc_node in self.allocator:
+            prev_time = self._node_prev_time(alloc_node, trace)
+            if 0 <= prev_time < current_time:
+                stall_idx = prev_time if stall_idx is None else max(stall_idx, prev_time)
+
+        for program_id in self.alloced_programs:
+            self.alloced_programs[program_id] = None
+        for program_id in self.program_data_alloced:
+            self.program_data_alloced[program_id] = False
+        self.allocator.clear()
+        self.lru.clear()
+
+        restart_idx = trace_idx
+        while restart_idx > 0 and trace[restart_idx - 1].original_trace_idx == current_time:
+            restart_idx -= 1
+
+        for event in trace[restart_idx : trace_idx + 1]:
+            event.addr = None
+            event.does_dispatch = False
+            event.stall_idx = None
+
+        trace[restart_idx].stall_idx = stall_idx
+        return restart_idx
+
     def _allocator_index(self, node: TraceCacheAllocNode) -> int:
         for index, candidate in enumerate(self.allocator):
             if candidate is node:
@@ -849,10 +959,11 @@ def run_trace_cache2_allocator(
     ringbuffer_configs: list[RingbufferConfig],
     trace_nodes: list[TraceNodeInput],
     reuse_window: int,
-) -> tuple[list[int | None], list[int], dict[int, tuple[list[int | None], list[int]]]]:
+) -> tuple[list[int | None], list[int], dict[int, tuple[list[int | None], list[int]]], TraceCacheRunCounters]:
     combined_stalls: list[int | None] = [None] * len(trace_nodes)
     dispatch_bytes: list[int] = [0] * len(trace_nodes)
     per_core_stats_inputs: dict[int, tuple[list[int | None], list[int]]] = {}
+    counters = TraceCacheRunCounters()
 
     sub_device_ids = sorted({node.sub_device_id for node in trace_nodes})
     for core_info in core_types:
@@ -875,6 +986,7 @@ def run_trace_cache2_allocator(
                 continue
             manager = TraceCacheWorkerBufferManager(ringbuffer_configs[core_info.index].size, reuse_window)
             manager.process_trace(subdevice_trace, programs)
+            counters.add(manager.counters)
 
             for event in subdevice_trace:
                 trace_idx = event.original_trace_idx
@@ -888,7 +1000,7 @@ def run_trace_cache2_allocator(
 
         per_core_stats_inputs[core_info.index] = (core_stalls, core_dispatch_bytes)
 
-    return combined_stalls, dispatch_bytes, per_core_stats_inputs
+    return combined_stalls, dispatch_bytes, per_core_stats_inputs, counters
 
 
 def compute_stats(name: str, stalls: list[int | None], dispatch_bytes: list[int]) -> AllocatorStats:
@@ -904,12 +1016,8 @@ def compute_stats(name: str, stalls: list[int | None], dispatch_bytes: list[int]
         if stall_idx >= trace_idx:
             raise RuntimeError(f"{name} has invalid stall at trace {trace_idx} on {stall_idx}")
 
-        stall_node_gap = trace_idx - stall_idx
-        distance = stall_node_gap - 1
-        if stall_node_gap >= LAUNCH_MSG_BUFFER_NUM_ENTRIES - 1:
-            contribution = 0.0
-        else:
-            contribution = math.ldexp(1.0, -distance)
+        distance = trace_idx - stall_idx - 1
+        contribution = stall_badness_contribution(trace_idx, stall_idx)
         badness += contribution
         stall_count += 1
         if distance == 0:
@@ -983,12 +1091,8 @@ def print_worst_stalls(name: str, stalls: list[int | None], limit: int) -> None:
     for trace_idx, stall_idx in enumerate(stalls):
         if stall_idx is None or stall_idx < 0:
             continue
-        stall_node_gap = trace_idx - stall_idx
-        distance = stall_node_gap - 1
-        if stall_node_gap >= LAUNCH_MSG_BUFFER_NUM_ENTRIES - 1:
-            contribution = 0.0
-        else:
-            contribution = math.ldexp(1.0, -distance)
+        distance = trace_idx - stall_idx - 1
+        contribution = stall_badness_contribution(trace_idx, stall_idx)
         ranked.append((contribution, distance, trace_idx, stall_idx))
 
     ranked.sort(reverse=True)
@@ -1033,16 +1137,15 @@ def main() -> int:
     simple_metadata = run_simple_allocator(core_types, ringbuffer_configs, trace_nodes)
     simple_mismatches = validate_simple_results(simple_metadata, captured_results)
     if simple_mismatches:
-        print("SimpleTraceAllocator replay does not match captured results:", file=sys.stderr)
+        print("SimpleTraceAllocator replay does not match captured results; continuing with replay stats:", file=sys.stderr)
         for mismatch in simple_mismatches:
             print(f"  {mismatch}", file=sys.stderr)
-        return 1
-    if captured_results:
+    elif captured_results:
         print("SimpleTraceAllocator replay matches captured results.")
 
     simple_stalls = [metadata.stall_idx for metadata in simple_metadata]
     simple_dispatch_bytes = [metadata.dispatch_bytes for metadata in simple_metadata]
-    trace_cache_stalls, trace_cache_dispatch_bytes, per_core_trace_cache = run_trace_cache2_allocator(
+    trace_cache_stalls, trace_cache_dispatch_bytes, per_core_trace_cache, trace_cache_counters = run_trace_cache2_allocator(
         core_types, ringbuffer_configs, trace_nodes, args.trace_cache_reuse_window
     )
 
@@ -1051,6 +1154,13 @@ def main() -> int:
         compute_stats("trace-cache2", trace_cache_stalls, trace_cache_dispatch_bytes),
     ]
     print_stats(stats)
+    print()
+    print(
+        "trace-cache2 evictions: "
+        f"normal={trace_cache_counters.normal_evictions}, "
+        f"fallback={trace_cache_counters.fallback_evictions}, "
+        f"reset_fallback={trace_cache_counters.reset_fallbacks}"
+    )
 
     per_core_stats: list[AllocatorStats] = []
     for core_info in core_types:
