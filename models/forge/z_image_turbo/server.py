@@ -19,7 +19,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _zit import ZImageTurbo
+from z_image_turbo import ZImageTurbo
 
 DEFAULT_STEPS = 9
 DEFAULT_SEED = 42
