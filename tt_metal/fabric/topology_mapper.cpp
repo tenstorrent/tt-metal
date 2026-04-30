@@ -289,7 +289,18 @@ TopologyMapper::TopologyMapper(
         }
 
         auto asic_it = asic_id_to_mapping_.find(asic_id);
-        TT_FATAL(asic_it != asic_id_to_mapping_.end(), "ASIC id {} not found in chip_topology_mapping_", asic_id);
+        // FIX TB (#42429): During UMD topology re-discovery after recovery, the logical-to-physical
+        // mapping may include ASIC IDs for chips that are excluded from the fabric cluster
+        // (degraded topology scenario).  Hard-crashing here turns every cluster health blip into a
+        // non-recoverable test failure; log a warning and skip the chip instead.
+        if (asic_it == asic_id_to_mapping_.end()) {
+            log_warning(
+                tt::LogFabric,
+                "FIX TB (#42429): ASIC id {} not found in chip_topology_mapping_ "
+                "— chip may be excluded from fabric cluster (degraded topology). Skipping.",
+                asic_id);
+            continue;
+        }
         MappedChipInfo* info = asic_it->second;
 
         // Update the MappedChipInfo entry with mapping information

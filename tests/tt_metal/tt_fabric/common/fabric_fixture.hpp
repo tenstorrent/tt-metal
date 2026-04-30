@@ -400,9 +400,14 @@ class T3kCustomMeshGraphFabric2DFixture
     : public CustomMeshGraphFabric2DFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
     void SetUp() override {
+        // FIX TB (#42429): skip non-T3K systems before any fabric init to avoid teardown
+        // timeouts and topology re-discovery crashes on incompatible cluster types.
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
             GTEST_SKIP();
         }
+        // FIX TB (#42429): run the base-class guard (e.g. < 2 devices) so the fixture
+        // is correctly skipped on under-provisioned systems without entering fabric init.
+        BaseFabricFixture::SetUp();
     }
 };
 
