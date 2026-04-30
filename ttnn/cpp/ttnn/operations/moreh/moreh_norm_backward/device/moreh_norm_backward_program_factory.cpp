@@ -263,21 +263,25 @@ ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
         // writer
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{input_grad.buffer()->address(), num_tiles_per_core, tile_offset});
+        writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});
 
         // compute — runtime args go to the correct kernel descriptor
-        KernelDescriptor::CoreRuntimeArgs compute_rt{
-            num_tiles_per_core,
-            floored_p,
-            static_cast<uint32_t>(p_is_negative),
-            floored_p_minus_one,
-            static_cast<uint32_t>(p_minus_one_is_negative)};
-
         if (core_group_1.contains(core)) {
-            compute_desc_1.runtime_args.emplace_back(core, std::move(compute_rt));
+            compute_desc_1.emplace_runtime_args(
+                core,
+                {num_tiles_per_core,
+                 floored_p,
+                 static_cast<uint32_t>(p_is_negative),
+                 floored_p_minus_one,
+                 static_cast<uint32_t>(p_minus_one_is_negative)});
         } else {
-            compute_desc_2.runtime_args.emplace_back(core, std::move(compute_rt));
+            compute_desc_2.emplace_runtime_args(
+                core,
+                {num_tiles_per_core,
+                 floored_p,
+                 static_cast<uint32_t>(p_is_negative),
+                 floored_p_minus_one,
+                 static_cast<uint32_t>(p_minus_one_is_negative)});
         }
 
         tile_offset += num_tiles_per_core;
