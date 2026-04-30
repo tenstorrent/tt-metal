@@ -360,25 +360,24 @@ class SyntheticWeightProvider:
         self._fold_rmsnorm_weights = fold_rmsnorm_weights
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        emb_w = torch.zeros(
-            (LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE), dtype=torch.bfloat16
-        )
-        emb_w[
-            torch.arange(LogicalModelDimensions.VOCAB_SIZE),
-            torch.arange(LogicalModelDimensions.VOCAB_SIZE, dtype=torch.int64) % LogicalModelDimensions.HIDDEN_SIZE,
-        ] = 1
+        g = torch.Generator().manual_seed(42)
+        emb_w = torch.randn(LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16)
+        # emb_w = torch.zeros(
+        #     (LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE), dtype=torch.bfloat16
+        # )
+        # emb_w[
+        #     torch.arange(LogicalModelDimensions.VOCAB_SIZE),
+        #     torch.arange(LogicalModelDimensions.VOCAB_SIZE, dtype=torch.int64) % LogicalModelDimensions.HIDDEN_SIZE,
+        # ] = 1
         return prepare_embedding_weights({"model.embed_tokens.weight": emb_w}, device, move_to_device=True)
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         g = torch.Generator().manual_seed(42)
+        hidden = LogicalModelDimensions.HIDDEN_SIZE
         lm_w = torch.randn(
-            LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
-        )
-        lm_w_eye = torch.eye(LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.HIDDEN_SIZE, dtype=torch.bfloat16)
-        lm_w_eye = 100 * lm_w_eye
-        lm_w[:LogicalModelDimensions.HIDDEN_SIZE,:] = lm_w_eye
-
-        norm_w = torch.randn(LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16).abs() + 0.1
+            LogicalModelDimensions.VOCAB_SIZE, hidden, generator=g, dtype=torch.bfloat16
+        ) / (hidden ** 0.5)
+        norm_w = torch.ones(hidden, dtype=torch.bfloat16) / (hidden ** 0.5)
         return prepare_lm_head_weights(
             {
                 "lm_head.weight": lm_w,

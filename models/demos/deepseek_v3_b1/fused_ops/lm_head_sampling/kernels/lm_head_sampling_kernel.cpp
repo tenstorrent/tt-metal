@@ -1290,8 +1290,10 @@ void kernel_main() {
             uint32_t input_pos_id = metadata_ptr->tok0_pos + 1;
             uint32_t slot_id = metadata_ptr->slot_id;
             uint32_t k = metadata_ptr->k;
-            uint32_t temperature = metadata_ptr->temperature;
-            uint32_t probability_mass_threshold = metadata_ptr->probability_mass_threshold;
+            volatile tt_l1_ptr uint32_t* metadata_raw =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
+            uint32_t temperature = metadata_raw[10];
+            uint32_t probability_mass_threshold = metadata_raw[12];
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t sampling_socket_cb = get_named_compile_time_arg_val("sampling_socket_cb");
@@ -1362,8 +1364,10 @@ void kernel_main() {
             uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
             uint32_t input_pos_id = metadata_ptr->position_id;
             uint32_t k = metadata_ptr->k;
-            uint32_t temperature = metadata_ptr->temperature;
-            uint32_t probability_mass_threshold = metadata_ptr->probability_mass_threshold;
+            volatile tt_l1_ptr uint32_t* metadata_raw2 =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
+            uint32_t temperature = metadata_raw2[10];
+            uint32_t probability_mass_threshold = metadata_raw2[12];
             cb_pop_front(sampling_socket_cb, 1);
 
             cb_reserve_back(sampling_socket_cb, 1);

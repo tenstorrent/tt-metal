@@ -1390,10 +1390,10 @@ struct TopKSampling {
                             K = metadata_ptr->k;
                             p = metadata_ptr->probability_mass_threshold;
 
-                            // DPRINT << "Final K: " << K << ENDL();
-                            // DPRINT << "Probability mass threshold: " << p << ENDL();
-                            // DPRINT << "Temperature: " << temperature << ENDL();
-                            // DPRINT << "Inv temp BF16: " << BF16((uint16_t)(inv_temp_bf16 & 0xFFFF)) << ENDL();
+                            DPRINT << "Final K: " << K << ENDL();
+                            DPRINT << "Probability mass threshold: " << p << ENDL();
+                            DPRINT << "Temperature: " << temperature << ENDL();
+                            DPRINT << "Inv temp BF16: " << BF16((uint16_t)(inv_temp_bf16 & 0xFFFF)) << ENDL();
                         }
 
                         generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
