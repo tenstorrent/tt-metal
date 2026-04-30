@@ -50,7 +50,8 @@ inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t
  * @param operandB: The logical dataflow buffer id for source B. Used to derive L1 addresses for SrcB unpacking.
  * @param tile_index_a: Tile index within the operandA dataflow buffer to read from
  * @param tile_index_b: Tile index within the operandB dataflow buffer to read from
- * @param bcast_row_idx: Unused param; only for API compatibiliy.
+ * @param bcast_row_idx: Present for API compatibility with Blackhole binary `llk_unpack_AB` (ROW uses it there).
+ *     Unused on Quasar; row selection within the B tile is not implemented in this wrapper.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
