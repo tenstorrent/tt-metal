@@ -47,6 +47,26 @@ def _gemma3_sdpa_decode_k_chunk_tokens() -> int:
     return n
 
 
+def sdpa_decode_hifi2_na_enabled(mesh_device) -> bool:
+    """Use HiFi2 NA for Gemma3 SDPA decode when True.
+
+    Default is single-device only: avoids token drift on one chip, but on a mesh can L1-clash with traced
+    decode (static circular buffers vs tensor L1).
+
+    Override with env ``GEMMA3_SDPA_DECODE_HIFI2_NA``: ``1``/``true``/``yes`` forces on; ``0``/``false``/``no`` forces off.
+    """
+    raw = os.environ.get("GEMMA3_SDPA_DECODE_HIFI2_NA", "").strip().lower()
+    if raw in ("1", "true", "yes"):
+        return True
+    if raw in ("0", "false", "no"):
+        return False
+    if hasattr(mesh_device, "get_num_devices"):
+        num_devices = mesh_device.get_num_devices()
+    else:
+        num_devices = 1
+    return num_devices == 1
+
+
 class ModelArgs(TTModelArgs):
     OP_KEYS = (
         # Embedding
@@ -109,13 +129,12 @@ class ModelArgs(TTModelArgs):
         self.padded_vocab_size = 262400
         # Raise the per-device cap so on-device sampling is enabled for Gemma3's 131200-wide shard.
         self.device_sampling_max_per_device_vocab = 192 * 1024
-        # HiFi2 NA fixes single-device decode token drift; on multi-device it pushes SDPA decode L1
-        # into the traced circular-buffer region (TT_THROW CB vs L1 clash). Skip when num_devices > 1.
-        if self.num_devices == 1:
+        # HiFi2 NA: see sdpa_decode_hifi2_na_enabled() (default single-device only; env override).
+        if sdpa_decode_hifi2_na_enabled(mesh_device):
             self._force_sdpa_decode_hifi2_na()
 
     def _force_sdpa_decode_hifi2_na(self):
-        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness (single-device)."""
+        """Apply HiFi2 NA to SDPA decode when sdpa_decode_hifi2_na_enabled(mesh_device) is True."""
         for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
             tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
             op_fidelity = dict(conf.op_fidelity_settings)

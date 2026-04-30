@@ -91,7 +91,7 @@ def create_tt_model(
     num_layers=None,
     dummy_weights: bool = False,
 ):
-    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, sdpa_decode_hifi2_na_enabled
     from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
@@ -109,6 +109,9 @@ def create_tt_model(
         # Paged decode tuning improves text generation quality without affecting non-paged multimodal vision demos.
         tt_model_args.force_fixed_decode_k_chunk = True
         if getattr(tt_model_args.optimizations, "__name__", None) == "performance":
+            sdpa_decode = (
+                MathFidelitySetting.HIFI2_NA if sdpa_decode_hifi2_na_enabled(mesh_device) else MathFidelitySetting.HIFI4
+            )
             gemma_text_perf = ModelOptimizations(
                 {
                     "TensorPrecision": {
@@ -121,7 +124,7 @@ def create_tt_model(
                         OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
                         OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
                         OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
-                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                        OpGroup.SDPA_DECODE: sdpa_decode,
                         OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                         OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
                         OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
