@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import re
 from typing import List
 
 import torch
@@ -8,8 +9,32 @@ from loguru import logger
 
 import ttnn
 from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
+from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.generator import Generator, max_prefill_chunk_size_cutoff
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.multimodal.llama_vision_model import _stack_images
+
+try:
+    from PIL.Image import Image
+
+    from models.tt_transformers.tt.generator_vllm import (
+        Gemma3ForConditionalGeneration as TtTransformersGemma3ForConditionalGeneration,
+    )
+except ModuleNotFoundError:
+    Image = None
+    TtTransformersGemma3ForConditionalGeneration = None
+
+
+def _is_insufficient_trace_region_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    if "trace" not in msg:
+        return False
+    return "trace_region" in msg or "get_trace_buffers_size" in msg or ("allocated" in msg and "region" in msg)
+
+
+def _trace_buffer_bytes_from_fatal(exc: BaseException) -> int | None:
+    m = re.search(r"Creating trace buffers of size (\d+)B", str(exc), re.IGNORECASE)
+    return int(m.group(1)) if m else None
 
 
 def _stack_images(
@@ -105,6 +130,19 @@ class TtGemmaModel(Transformer):
         if tokens.get_dtype() != ttnn.uint32:
             return tokens, tt_page_table, tt_chunk_page_table
         return super().transform_and_embed_prefill_inputs_device(tokens, tt_page_table, tt_chunk_page_table)
+
+    def prepare_prefill_inputs_trace(
+        self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
+    ):
+        return self.prepare_inputs_prefill(
+            tokens,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            batch_size=batch_size,
+            user_id=user_id,
+            **kwargs,
+        )
 
     def prepare_inputs_prefill(
         self,
@@ -251,3 +289,389 @@ class TtGemmaModel(Transformer):
         combined_vision_output = ttnn.concat(vision_outputs, dim=1)
         logger.info(f"Vision encoder done")
         return combined_vision_output
+
+
+class Gemma3GeneratorMixin:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._decode_trace_unavailable = False
+
+    @staticmethod
+    def _has_pixel_values(kwargs):
+        pixel_values = kwargs.get("pixel_values", None)
+        if pixel_values is None:
+            return False
+        if isinstance(pixel_values, (list, tuple)):
+            return any(x is not None for x in pixel_values)
+        return True
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
+        if self.already_warmed_up_prefill:
+            return
+        self.already_warmed_up_prefill = True
+
+        warmup_use_trace = enable_trace and getattr(self.model_args[0], "warmup_prefill_capture_trace", True)
+        sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
+        warmup_batch_sizes = (1,)
+        skip_sequence_lengths = False
+        sampling_parameters_sweeped = False
+
+        for model_id in range(self.data_parallel):
+            for supported_length in sequence_lengths_to_warmup:
+                if model_id != 0 and (
+                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not warmup_use_trace
+                ):
+                    continue
+
+                for batch_size in warmup_batch_sizes:
+                    if batch_size > 1 and batch_size * supported_length >= 128 * 1024:
+                        logger.info(
+                            f"Skipping batched prefill warmup for batch_size={batch_size}, "
+                            f"seq_len={supported_length}: exceeds token limit"
+                        )
+                        continue
+
+                    warmup_args = self._mock_tokens(batch_size, supported_length, kv_cache, model_id)
+
+                    if warmup_args["page_table"] is None and max_prefill_chunk_size_cutoff(
+                        supported_length, self.model_args[0].max_prefill_chunk_size
+                    ):
+                        logger.warning(
+                            f"Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
+                        )
+                        skip_sequence_lengths = True
+                        break
+
+                    if not sampling_parameters_sweeped:
+                        sampling_params = self._create_sampling_params(
+                            can_sample_on_device=can_sample_on_device,
+                            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+                            batch_size=batch_size,
+                        )
+                    else:
+                        sampling_params = [None]
+
+                    for param in sampling_params:
+                        logger.info(
+                            f"Warming up prefill for sequence length: {supported_length} for batch size: {batch_size} with sampling params: {param}"
+                        )
+                        self.prefill_forward_text(
+                            **warmup_args,
+                            kv_cache=kv_cache,
+                            enable_trace=warmup_use_trace,
+                            model_id_warmup=model_id,
+                            sampling_params=param,
+                        )
+
+                    sampling_parameters_sweeped = True
+
+                if skip_sequence_lengths:
+                    break
+
+        if getattr(self.model_args[0], "is_multimodal", False):
+            vision_chunk_size = getattr(self.model_args[0], "vision_chunk_size", 896)
+            vision_channels = getattr(self.model_args[0], "vision_in_channels", 3)
+            model_id = 0
+            warmup_pixel_values = [torch.zeros((1, vision_channels, vision_chunk_size, vision_chunk_size))]
+            prefill_forward_args = self._mock_tokens(1, 128, kv_cache, model_id)
+
+            logger.info(f"Warming up vision encoder with image size {vision_chunk_size}x{vision_chunk_size}")
+            self.prefill_forward_text(
+                **prefill_forward_args,
+                kv_cache=kv_cache,
+                enable_trace=warmup_use_trace,
+                model_id_warmup=model_id,
+                sampling_params=None,
+                pixel_values=warmup_pixel_values,
+                image_sizes=[(vision_chunk_size, vision_chunk_size)],
+            )
+            logger.info("Vision encoder warmup completed")
+
+    def _capture_trace_prefill(
+        self,
+        prefill_ids,
+        page_table=None,
+        kv_cache=None,
+        model_id=-1,
+        global_user_id=None,
+        batch_size=1,
+        user_id=0,
+        last_token_idx=None,
+        **kwargs,
+    ):
+        if batch_size > 1:
+            prefill_kwargs = {**kwargs, "page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+            if global_user_id is not None:
+                prefill_kwargs["global_user_id"] = global_user_id
+            if last_token_idx is not None:
+                prefill_kwargs["last_token_idx"] = last_token_idx
+            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+            tt_rot_mats_prefill_global = host_inputs[1]
+            tt_rot_mats_prefill_local = host_inputs[2]
+            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+            transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+                x=transformed_inputs[0],
+                rot_mats_global=tt_rot_mats_prefill_global,
+                rot_mats_local=tt_rot_mats_prefill_local,
+                page_table=transformed_inputs[1],
+                chunk_page_table=transformed_inputs[2],
+                kv_cache=kv_cache,
+                batch_size=batch_size,
+                user_id=user_id,
+            )
+            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+            logger.info("Done Compiling Model")
+
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+            trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
+            transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+                x=transformed_inputs[0],
+                rot_mats_global=tt_rot_mats_prefill_global,
+                rot_mats_local=tt_rot_mats_prefill_local,
+                page_table=transformed_inputs[1],
+                chunk_page_table=transformed_inputs[2],
+                kv_cache=kv_cache,
+                batch_size=batch_size,
+                user_id=user_id,
+            )
+            ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+            logger.info("Done Capturing Prefill Trace")
+            return trace_id, tt_out_trace, *device_inputs
+
+        prefill_kwargs = {**kwargs, "page_table": page_table}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        if last_token_idx is not None:
+            prefill_kwargs["last_token_idx"] = last_token_idx
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+        tt_rot_mats_prefill_global = host_inputs[1]
+        tt_rot_mats_prefill_local = host_inputs[2]
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
+            kv_cache=kv_cache,
+        )
+        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+        logger.info("Done Compiling Model")
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
+            kv_cache=kv_cache,
+        )
+        ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+        logger.info("Done Capturing Prefill Trace")
+        return trace_id, tt_out_trace, *device_inputs
+
+    def _easy_trace_prefill(
+        self,
+        prefill_ids,
+        page_table=None,
+        user_id=0,
+        last_token_idx=None,
+        kv_cache=None,
+        model_id=-1,
+        prefill_seq_len=None,
+        batch_size=1,
+        **kwargs,
+    ):
+        global_user_id = kwargs.get("global_user_id", None)
+        has_vision = kwargs.get("pixel_values", None) is not None
+        vision_merged = (
+            has_vision
+            and batch_size == 1
+            and getattr(self.model[model_id], "supports_vision_prefill_host_trace", False)
+        )
+        trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}{'_vm' if vision_merged else ''}"
+        if self.trace_id_prefill[trace_key] is None:
+            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
+                prefill_ids,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                model_id=model_id,
+                global_user_id=global_user_id,
+                batch_size=batch_size,
+                user_id=user_id,
+                last_token_idx=last_token_idx,
+                **kwargs,
+            )
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out_trace
+
+        return self._prefill_forward_trace(
+            self.trace_id_prefill[trace_key],
+            self.trace_inputs_prefill[trace_key],
+            self.trace_output_prefill[trace_key],
+            prefill_ids,
+            page_table=page_table,
+            model_id=model_id,
+            global_user_id=global_user_id,
+            batch_size=batch_size,
+            user_id=user_id,
+            last_token_idx=last_token_idx,
+            **kwargs,
+        )
+
+    def _prefill_forward_trace(
+        self,
+        trace_id,
+        device_inputs,
+        tt_out_trace,
+        prefill_ids,
+        user_id=0,
+        page_table=None,
+        model_id=-1,
+        global_user_id=None,
+        batch_size=1,
+        last_token_idx=None,
+        **kwargs,
+    ):
+        prefill_kwargs = {**kwargs, "page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        if last_token_idx is not None:
+            prefill_kwargs["last_token_idx"] = last_token_idx
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+
+        copy_host_to_device(
+            host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
+        )
+        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
+        return tt_out_trace
+
+    def prefill_forward_text(self, *args, **kwargs):
+        if self._has_pixel_values(kwargs) and getattr(self.model[0], "supports_vision_prefill_host_trace", False):
+            saved_flags = [getattr(ma, "disable_batched_prefill", False) for ma in self.model_args]
+            for ma in self.model_args:
+                ma.disable_batched_prefill = True
+            try:
+                return super().prefill_forward_text(*args, **kwargs)
+            finally:
+                for ma, prev in zip(self.model_args, saved_flags):
+                    ma.disable_batched_prefill = prev
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=True,
+        read_from_device=True,
+        sampling_params=None,
+        reset_batch=False,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        **kwargs,
+    ):
+        if self._decode_trace_unavailable:
+            enable_trace = False
+        try:
+            return super().decode_forward(
+                tokens,
+                start_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                enable_trace=enable_trace,
+                read_from_device=read_from_device,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                **kwargs,
+            )
+        except RuntimeError as err:
+            if not enable_trace or not _is_insufficient_trace_region_error(err):
+                raise
+            need_b = _trace_buffer_bytes_from_fatal(err)
+            if need_b is not None:
+                round_mib = ((need_b + 1_048_575) // 1_048_576) * 1_048_576
+                min_suggest = max(64 * 1_048_576, round_mib)
+                logger.warning(
+                    f"Decode trace capture failed (mesh trace region too small): running decode without trace. "
+                    f"This run needed ~{need_b} B of trace buffer; set trace_region_size to at least {min_suggest}."
+                )
+            else:
+                logger.warning(
+                    "Decode trace capture failed (mesh trace region too small): running decode without trace."
+                )
+            self._decode_trace_unavailable = True
+            return super().decode_forward(
+                tokens,
+                start_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                enable_trace=False,
+                read_from_device=read_from_device,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                **kwargs,
+            )
+
+
+class Gemma3Generator(Gemma3GeneratorMixin, Generator):
+    pass
+
+
+if TtTransformersGemma3ForConditionalGeneration is not None:
+
+    class Gemma3ForConditionalGeneration(Gemma3GeneratorMixin, TtTransformersGemma3ForConditionalGeneration):
+        def prefill_forward(self, *args, **kwargs):
+            images = kwargs.pop("images", None)
+            pixel_values_per_user = None
+            if images is not None:
+                collected = []
+                has_any = False
+                for img in images:
+                    if img is None:
+                        collected.append(None)
+                        continue
+                    if Image is not None and isinstance(img, Image):
+                        collected.append(img)
+                        has_any = True
+                        continue
+                    if hasattr(img, "__contains__") and "pixel_values" in img:
+                        pv = img["pixel_values"]
+                        if not isinstance(pv, torch.Tensor) and hasattr(pv, "data"):
+                            pv = pv.data
+                        collected.append(pv)
+                        has_any = True
+                    else:
+                        collected.append(None)
+                if has_any:
+                    pixel_values_per_user = collected
+
+            if pixel_values_per_user is None:
+                return super().prefill_forward_text(**kwargs)
+
+            kwargs["pixel_values"] = pixel_values_per_user
+            if not getattr(self.model[0], "supports_vision_prefill_host_trace", False):
+                kwargs["enable_trace"] = False
+            return self.prefill_forward_text(**kwargs)
