@@ -114,14 +114,14 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     Generates a paired ``(mesh_device, device_params)`` parametrize. Each
     case opens a mesh of the requested shape directly (no submesh carving
     in test bodies) and configures the appropriate fabric for that shape.
-    Each parametrize case has a single id like ``1x1`` / ``1x2`` / ``1x8`` /
-    ``4x8``, so ``pytest -k 1x2`` (or ``-k 4x8``) filters cleanly without
+    Each parametrize case has a single id like ``1x1`` / ``1x4`` / ``1x8`` /
+    ``4x8``, so ``pytest -k 1x4`` (or ``-k 4x8``) filters cleanly without
     dual-id confusion from a separate inner ``mesh_shape`` parametrize.
 
     Auto-filters to the shapes that fit on the current system. Default
-    shapes: (1,1) single card, (1,2) P300 / QuietBox 2 single P300, (1,8)
-    LoudBox / T3K, (4,8) Galaxy. Pass an explicit ``mesh_shapes`` list to
-    override (useful for tests that only make sense at one TP factor).
+    shapes: (1,1) single card, (1,4) QuietBox 2 (2xP300), (1,8) LoudBox /
+    T3K, (4,8) Galaxy. Pass an explicit ``mesh_shapes`` list to override
+    (useful for tests that only make sense at one TP factor).
 
     Fabric: ``(1,1)`` disables fabric (no inter-chip topology to ring
     around). Multi-device shapes use ``FABRIC_1D_RING`` — gpt_oss's CCL
@@ -133,13 +133,13 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         @parametrize_mesh_with_fabric([(1, 8)])      # 1x8 only
 
         pytest -k 1x1   # single card
-        pytest -k 1x2   # P300 / QuietBox 2 (single P300)
+        pytest -k 1x4   # QuietBox 2 (2xP300)
         pytest -k 1x8   # LoudBox / T3K
         pytest -k 4x8   # Galaxy
     """
     num_devices = ttnn.get_num_devices()
     if mesh_shapes is None:
-        all_shapes = [(1, 1), (1, 2), (1, 8), (4, 8)]
+        all_shapes = [(1, 1), (1, 4), (1, 8), (4, 8)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
 
     if not mesh_shapes:
