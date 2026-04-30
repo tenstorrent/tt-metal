@@ -855,6 +855,10 @@ public:
         this->command_fields.unicast_seminc_fused.val = val;
     }
 
+    void set_unicast_inline_write_value(uint32_t val) volatile {
+        this->command_fields.unicast_inline_write.value = val;
+    }
+
     void set_src_ch_id(uint8_t ch_id) volatile { this->src_ch_id = ch_id; }
 };
 
