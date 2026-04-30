@@ -456,9 +456,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        # ttnn.deallocate(topk_experts_indices)
-        # ttnn.deallocate(topk_experts_weights)
-
         topk_experts_indices_rm = ttnn.permute(
             topk_experts_indices_rm, (2, 0, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -505,7 +502,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         )
 
         ttnn.deallocate(topk_experts_indices)
-        # ttnn.deallocate(topk_experts_weights)
 
         # NOTE: store in DRAM while chunking, as moe_compute requires just about all of L1
         topk_experts_indices_rm = ttnn.permute(
