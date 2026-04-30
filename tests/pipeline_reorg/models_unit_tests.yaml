@@ -250,7 +250,7 @@
     pytest --timeout 900 models/demos/gemma4/tests/unit/ -k "1x8"
   model: gemma-4-26b-a4b
   skus:
-    wh_llmbox_perf:
+    wh_llmbox:
       timeout: 10
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
@@ -263,7 +263,7 @@
     pytest --timeout 900 models/demos/gemma4/tests/unit/ -k "1x8"
   model: gemma-4-31b
   skus:
-    wh_llmbox_perf:
+    wh_llmbox:
       timeout: 10
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
