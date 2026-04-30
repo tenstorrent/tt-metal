@@ -181,7 +181,11 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
-               "#include \"experimental/kernel_args.h\"\n\n";
+               "#include \"experimental/kernel_args.h\"\n\n"
+               "template <typename T>\n"
+               "T get_arg_val(int arg_idx);\n"
+               "template <typename T>\n"
+               "T get_common_arg_val(int arg_idx);\n\n";
 
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,

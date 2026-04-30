@@ -29,21 +29,46 @@ void kernel_main() {
     const uint32_t NC_per_core = get_arg_val<uint32_t>(1);
     const uint32_t output_tile_start_id = get_arg_val<uint32_t>(2);
 
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t W = get_named_compile_time_arg_val("W");
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
+    constexpr uint32_t H = get_named_compile_time_arg_val("H");
+    constexpr bool correction = get_named_compile_time_arg_val("correction") != 0;
+    constexpr uint32_t reduce_batch_size = get_named_compile_time_arg_val("reduce_batch_size");
+    constexpr uint32_t dst_args_config = get_named_compile_time_arg_val("dst_args_config");
+    constexpr uint32_t dst_page_size = get_named_compile_time_arg_val("dst_page_size");
+#else
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
     constexpr uint32_t tile_width = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
+#endif
 
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_partial = get_named_compile_time_arg_val("cb_partial");
+#else
     constexpr auto cb_partial = tt::CBIndex::c_21;
+#endif
     // cb_combined: Float32 tile written by this kernel, read back by compute
     // for repacking into the output data format.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_combined = get_named_compile_time_arg_val("cb_combined");
+#else
     constexpr auto cb_combined = tt::CBIndex::c_22;
+#endif
     // cb_out: output tile packed by compute in the correct data format.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");
+#else
     constexpr auto cb_out = tt::CBIndex::c_16;
+#endif
 
+#ifndef REDUCE_METAL2_NAMED_ARGS
     constexpr auto dst_args = TensorAccessorArgs<6>();
+#endif
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).
@@ -60,7 +85,13 @@ void kernel_main() {
     experimental::CircularBuffer cb_combined_obj(cb_combined);
     experimental::CircularBuffer cb_out_obj(cb_out);
 
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr bool dst_is_dram = (dst_args_config & static_cast<uint32_t>(tensor_accessor::ArgConfig::IsDram)) != 0;
+    const auto tensor_out =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec<dst_is_dram>(), dst_addr, dst_page_size);
+#else
     const auto tensor_out = TensorAccessor(dst_args, dst_addr);
+#endif
 
     // NC_per_core is the total number of NC slices assigned to this core.
     // Each output element is produced by combining reduce_batch_size

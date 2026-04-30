@@ -32,6 +32,15 @@ void kernel_main() {
     uint32_t NC_per_core = get_arg_val<uint32_t>(0);
 
     // Compile-time args:
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t H = get_named_compile_time_arg_val("H");
+    constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr bool do_scale = get_named_compile_time_arg_val("do_scale") != 0;
+    constexpr uint32_t reduce_batch_size = get_named_compile_time_arg_val("reduce_batch_size");
+    constexpr bool is_std = get_named_compile_time_arg_val("is_std") != 0;
+#else
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t H = get_compile_time_arg_val(1);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
@@ -39,17 +48,38 @@ void kernel_main() {
     constexpr bool do_scale = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
     constexpr bool is_std = get_compile_time_arg_val(6) != 0;
+#endif
 
     constexpr uint32_t onetile = 1;
 
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_in = get_named_compile_time_arg_val("cb_in");
+#else
     constexpr auto cb_in = tt::CBIndex::c_0;
+#endif
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_scalar = get_named_compile_time_arg_val("cb_scalar");
+#else
     constexpr auto cb_scalar = tt::CBIndex::c_2;
+#endif
     // Final output CB (output data format), consumed by the writer for NOC write.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");
+#else
     constexpr auto cb_out = tt::CBIndex::c_16;
+#endif
     // Intermediate CB for mean+var tile pairs, consumed by writer kernel.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_partial = get_named_compile_time_arg_val("cb_partial");
+#else
     constexpr auto cb_partial = tt::CBIndex::c_21;
+#endif
     // Combined scalar result from the writer kernel (Float32).
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_combined = get_named_compile_time_arg_val("cb_combined");
+#else
     constexpr auto cb_combined = tt::CBIndex::c_22;
+#endif
 
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_scalar_obj(cb_scalar);
