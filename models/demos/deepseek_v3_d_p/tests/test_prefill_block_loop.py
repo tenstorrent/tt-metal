@@ -117,7 +117,7 @@ def test_prefill_block_loop(
     model_path,
     hf_config,
     state_dict,
-    request,
+    tokenizer,
 ):
     # --- Validate fixtures ---
     if hf_config is None:
@@ -349,12 +349,10 @@ def test_prefill_block_loop(
     # ------------------------------------------------------------------
     # 2. Tokenize & embed (shared initial input)
     # ------------------------------------------------------------------
-    tok = request.getfixturevalue("tokenizer")
-
     prompts = load_prompts_from_json(str(PROMPTS_PATH))
     prompt_text = prompts[0] if isinstance(prompts, list) else prompts
-    token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
-    attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+    token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tokenizer, max_isl=isl_total, prompt_text=prompt_text)
+    attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
 
     logger.info(f"Token IDs shape: {token_ids.shape}, first 10: {token_ids[0, :10].tolist()}")
 
@@ -378,7 +376,7 @@ def test_prefill_block_loop(
     )
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
-        block_kwargs["capacity_factor"] = 32  # default=2 causes massive overflow with pretrained weights
+        block_kwargs["dispatch_buffer_capacity_factor"] = 2
         block_kwargs["routed_expert_activations_dtype"] = ttnn.bfloat16
         block_kwargs["routed_expert_weights_dtype"] = ttnn.bfloat16
         block_kwargs["shared_expert_activations_dtype"] = ttnn.bfloat16

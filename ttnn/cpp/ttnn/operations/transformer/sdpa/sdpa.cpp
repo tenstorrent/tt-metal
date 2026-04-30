@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
@@ -34,11 +36,32 @@ ttnn::Tensor scaled_dot_product_attention(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
+    // PyTorch semantics: softmax(Q·Kᵀ * scale + mask) · V, where `scale` applies
+    // to Q·Kᵀ only and the mask is added unscaled.
+    //
+    // The compute kernel folds `scale` into the softmax exponent as a
+    // performance optimization:
+    //     exp((QK + mask - row_max) * scale)
+    //   = exp(QK*scale + mask*scale - row_max*scale)
+    // which scales the mask along with QK, diverging from PyTorch semantics.
+    //
+    // Pre-multiply the mask by 1/scale so the kernel's subsequent *scale
+    // restores the original mask magnitude inside softmax. QK remains scaled
+    // exactly once.
+    std::optional<ttnn::Tensor> effective_mask = attn_mask;
+    if (attn_mask.has_value()) {
+        const float effective_scale =
+            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        if (effective_scale != 1.0f) {
+            effective_mask = ttnn::multiply(attn_mask.value(), 1.0f / effective_scale);
+        }
+    }
+
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
-        attn_mask,
+        effective_mask,
         std::nullopt,  // page_table
         attention_sink,
         is_causal,

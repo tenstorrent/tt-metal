@@ -129,11 +129,11 @@ FORCE_INLINE bool process_upstream_sockets(
     uint32_t remaining = num_sockets_this_risc;
     uint32_t worker_idx = 0;
     uint32_t processed_mask = 0;
-    invalidate_l1_cache();
-    if (termination_semaphore[0] == 1) {
-        return true;
-    }
     while (remaining > 0) {
+        invalidate_l1_cache();
+        if (termination_semaphore[0] == 1) {
+            return true;
+        }
         if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1)) {
             uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
             uint64_t dst_addr = dst_addr_base + (socket_start_idx + worker_idx) * upstream_page_size;

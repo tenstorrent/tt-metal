@@ -114,16 +114,26 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
     constexpr uint32_t num_input_pages = 2;   // Always use double buffering
     constexpr uint32_t num_output_pages = 2;  // Always use double buffering
 
+    // Additionally align CB page sizes to the source/destination buffer alignment so that the
+    // double-buffered CB pages share the same residue (mod buffer alignment) as their DRAM pages.
+    // This is required by the NOC: DRAM->L1 reads enforce (src_addr & alignment-1) ==
+    // (dst_addr & alignment-1).  On Blackhole the DRAM alignment is 64B; without this an
+    // 8-bit input with a 32-element padded chunk yields a 32B page, leaving the second
+    // double-buffered page mis-aligned and causing ttsim NOC alignment crashes
+    // (see test_typecast_row_major_vs_tile_layout[UINT8_TO_BFLOAT16-8x2x64x32]).
+    const uint32_t input_cb_page_size_bytes = tt::align(padded_input_full_chunk_size_bytes, src_buffer->alignment());
+    const uint32_t output_cb_page_size_bytes = tt::align(padded_output_full_chunk_size_bytes, dst_buffer->alignment());
+
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_pages * padded_input_full_chunk_size_bytes, {{input_cb_index, cb_data_format_input}})
-            .set_page_size(input_cb_index, padded_input_full_chunk_size_bytes);
+            num_input_pages * input_cb_page_size_bytes, {{input_cb_index, cb_data_format_input}})
+            .set_page_size(input_cb_index, input_cb_page_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
 
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
-            num_output_pages * padded_output_full_chunk_size_bytes, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, padded_output_full_chunk_size_bytes);
+            num_output_pages * output_cb_page_size_bytes, {{output_cb_index, cb_data_format_output}})
+            .set_page_size(output_cb_index, output_cb_page_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     std::vector<uint32_t> reader_compile_time_args = {

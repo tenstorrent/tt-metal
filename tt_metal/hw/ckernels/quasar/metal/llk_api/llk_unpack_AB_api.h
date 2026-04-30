@@ -20,11 +20,11 @@
  * @tparam BType: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @param operandA: The input operand dataflow buffer for source A
  * @param operandB: The input operand dataflow buffer for source B
- * @param transpose: Unused param; only for API compatibiliy.
+ * @param transpose: Unused param; only for API compatibility.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
-    const std::uint32_t operandA, const std::uint32_t operandB, [[maybe_unused]] const std::uint32_t transpose = 0) {
+    const std::uint32_t operandA, const std::uint32_t operandB, [[maybe_unused]] const ckernel::Transpose transpose) {
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that transpose is unused
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
@@ -36,6 +36,11 @@ inline void llk_unpack_AB_init(
     } else {
         _llk_unpack_binary_broadcast_operands_init_<BType>(operandA_id, operandB_id, 1);
     }
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+    llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
 }
 
 /**

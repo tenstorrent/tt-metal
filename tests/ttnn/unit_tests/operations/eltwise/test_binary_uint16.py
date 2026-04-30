@@ -799,7 +799,6 @@ def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, 
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-# TODO: Need to add support for (tensor,scalar) in uint16
 @pytest.mark.parametrize(
     "shape",
     [
@@ -816,7 +815,7 @@ def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, 
 )
 @pytest.mark.parametrize(
     "scalar",
-    [0.0, 1.0, 500.5, 32767.5, 65535.0],
+    [0.0, 1.0, 500.5, 32767.0, 65535.0],
 )
 @pytest.mark.parametrize(
     "ttnn_op",
