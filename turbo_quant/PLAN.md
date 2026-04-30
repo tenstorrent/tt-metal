@@ -56,17 +56,38 @@ compressed (~1.9× vs BFP8, ~3.9× vs BF16).
 
   **Step 3 attempts so far (2026-04-30):**
   - Tried `.fp32_dest_acc_en = true`: K=1 broke (output 9× wrong, cos
-    0.79). Suspect: `dst_size = fp32_dest_acc_en ? 4 : 8` (vanilla SDPA
-    program factory line 356) — FP32-mode dst registers hold half as
-    many tiles. The TQ kernel's `dequant_k_chunk` pass holds 3 dst regs
-    per tile (idx in 0, result in 1, scratch in 2) and matmul subblocks
-    can hit 4 tiles. With dst_size=4, `tile_regs_acquire` may hand out
-    overlapping registers in FP32 mode.
-  - Tried HiFi4 + math_approx_mode=False alone: K=1 stable, K>1 drift
-    barely improves (5e-3 → 4.6e-3). The merge precision is BF16-bound
-    regardless of math fidelity because dst is BF16-mode.
-  - Tried HiFi4 + fp32_dest + approx=False: same 9× break as
-    fp32_dest alone.
+    0.79). **Root cause: `copy_dest_values<DataFormat::Float16_b>(0, 2)`
+    at sdpa_tq_decode.cpp:241 and 329** — explicitly tells the SFPU to
+    read 16-bit values from dst, but FP32-mode dst stores 32 bits per
+    register. Reading as BF16 in FP32 mode loads garbage bytes.
+  - Fix: change to `copy_dest_values<DataFormat::Float32>(0, 2)`.
+    Verified: with this change + `fp32_dest_acc_en = true`, K=1 stays
+    correct (output 0.237 vs 0.244 baseline — ~3 % FP32 vs BF16
+    arithmetic difference, cos ≈ 1.0). **K>1 drift unchanged at 5e-3**
+    because the merge still goes through BF16 CBs.
+  - Tried also upgrading cross-core CBs (c_18-23) to FP32: K>1 broke
+    badly (cos 0.58, max_diff 0.36). The merge ops
+    (`max_block(alias_prev_max BF16, cb_remote_max FP32, ...)`) get
+    mixed-format inputs, and the unpack engine isn't configured to
+    reinterpret one as the other.
+  - Tried global `im_df = Float32`: K>1 produces inf/nan everywhere.
+    Many pack/unpack reconfigs throughout the kernel still assume
+    BF16 and the byte interpretations cascade into garbage.
+
+  **What actually works in isolation (committed nowhere — reverted to
+  checkpoint):**
+  ```cpp
+  // In sdpa_tq_program_factory.cpp ComputeConfig:
+  .fp32_dest_acc_en = true,        // ← add
+  // In sdpa_tq_decode.cpp lines 241, 329:
+  copy_dest_values<DataFormat::Float32>(0, 2);  // ← was Float16_b
+  ```
+  This protects K=1 from the dst-size break but doesn't fix K>1.
+  Path forward: the CB upgrade has to be coordinated — every op that
+  reads/writes a merge CB (pack_reconfig_data_format,
+  reconfig_data_format, unpack_reconfig_data_format) needs FP32 awareness
+  AND the alias state CBs (c_25-30) need to be FP32 too so merges have
+  consistent format on both sides. Multi-day kernel PR.
 
   **Specific points to fix in `sdpa_tq_decode.cpp`** (audit needed):
   - `mm_init(cb_q_in, cb_k_in, cb_out)` at lines 533, 553, 635 — vanilla
