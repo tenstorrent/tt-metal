@@ -335,7 +335,7 @@ def open_mesh_device():
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape((1, 4)),
         l1_small_size=1 << 15,
-        trace_region_size=70_000_000,
+        trace_region_size=200_000_000,
     )
     device.enable_program_cache()
     return device
