@@ -78,7 +78,6 @@ def test_single_layer_pcc(device, layer_input, weights, layer_idx=0):
     num_heads = 16
     num_kv_heads = 8
     head_dim = hidden_size // num_heads
-    intermediate_size = 6144
     rms_norm_eps = 1e-6
     rope_theta = 1000000.0
 

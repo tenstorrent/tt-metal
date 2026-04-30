@@ -886,7 +886,6 @@ def codebook_lookup_rvq(
         Embeddings of shape [batch, codebook_dim, seq_len] (channels-first format!)
     """
     batch_size, num_quantizers, seq_len = token_ids.shape
-    device = token_ids.device
 
     # Helper function to normalize codebook
     def normalize_codebook(embedding_sum, cluster_usage):
@@ -1390,7 +1389,6 @@ def speech_tokenizer_decoder_forward(
         Audio waveform of shape [batch, 1, num_samples]
     """
     batch_size, num_quantizers, seq_len = token_ids.shape
-    device = token_ids.device
 
     # 1. Codebook lookup with proper RVQ processing
     # Get RVQ First (semantic codebook) - MUST normalize by cluster_usage!
@@ -1990,7 +1988,7 @@ def speech_tokenizer_encoder_forward(
     if audio.dim() == 2:
         audio = audio.unsqueeze(1)
 
-    batch_size = audio.shape[0]
+    audio.shape[0]
     hidden = audio
 
     # Conv encoder layers
@@ -2274,7 +2272,7 @@ def res2net_block(
         Output [batch, channels, seq_len]
     """
     batch, channels, seq_len = x.shape
-    width = channels // scale
+    channels // scale
 
     # Split into scales using chunk (official uses torch.chunk)
     parts = list(torch.chunk(x, scale, dim=1))
@@ -2290,7 +2288,7 @@ def res2net_block(
             conv_weight = weights.get(f"{prefix}blocks.{i-1}.conv.weight")
             conv_bias = weights.get(f"{prefix}blocks.{i-1}.conv.bias")
             if conv_weight is not None:
-                dilation = conv_weight.shape[-1] // 2 if conv_weight.shape[-1] > 1 else 1
+                conv_weight.shape[-1] // 2 if conv_weight.shape[-1] > 1 else 1
                 # Get dilation from the kernel and match official behavior
                 output_part = time_delay_net_block(hidden_part, conv_weight, conv_bias)
             else:
@@ -2414,7 +2412,7 @@ def attentive_statistics_pooling(
 
     # Create mask (all ones for full sequence)
     mask = torch.ones(batch, 1, seq_len, device=x.device, dtype=x.dtype)
-    total = mask.sum(dim=2, keepdim=True)
+    mask.sum(dim=2, keepdim=True)
 
     # Compute global statistics (mean, std over time)
     mean = (mask * x).sum(dim=2)  # [batch, channels]

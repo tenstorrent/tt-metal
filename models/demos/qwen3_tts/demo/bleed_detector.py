@@ -203,7 +203,7 @@ def print_bleed_report(results: Dict):
     print(f"Target word: '{results['target_word']}'")
     print(f"\nTranscription: {results['transcription']}")
 
-    print(f"\nWord timestamps (first 10):")
+    print("\nWord timestamps (first 10):")
     for start, end, word in results["word_timestamps"][:10]:
         marker = " <-- TARGET" if word.lower().rstrip(",.") == results["target_word"].lower() else ""
         print(f"  {start:.2f}s - {end:.2f}s: '{word}'{marker}")

@@ -270,7 +270,6 @@ def create_icl_embedding_ttnn(
 
     # Get embedding weights from model for PyTorch operations
     # (needed for combining embeddings before TTNN forward)
-    text_embed_weight = model.talker.text_embedding
     codec_embed_weight = model.talker.codec_embedding
 
     # Tokenize texts
@@ -376,7 +375,7 @@ def create_icl_embedding_ttnn(
     codec_embed_torch = ttnn.to_torch(codec_embed_weight).squeeze(0).squeeze(0).float()
 
     # Build reference code embeddings using proper codebook embeddings
-    ref_len = ref_codes.shape[0]
+    ref_codes.shape[0]
     codec_embeds_list = []
 
     for i in range(config.num_code_groups):
@@ -1200,7 +1199,6 @@ def generate_codes_ttnn(
     decode_step_times = []
     talker_times_ms = []
     cp_times_ms = []
-    t_first_decode_end = 0.0
     trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
     h2d_cq = 1 if use_2cq else 0
     cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
@@ -1424,7 +1422,7 @@ def generate_codes_ttnn(
             t_step_end = time.time()
             step_ms = (t_step_end - t_step_start) * 1000
             if step == 0:
-                t_first_decode_end = t_step_end
+                pass
             decode_step_times.append(step_ms)
 
             if (step + 1) % 20 == 0:
@@ -1494,7 +1492,7 @@ def generate_codes_ttnn(
 
     avg_decode_ms = sum(decode_step_times) / len(decode_step_times) if decode_step_times else 0.0
 
-    print(f"\n  --- Performance (Qwen3-TTS on N150, all traced) ---")
+    print("\n  --- Performance (Qwen3-TTS on N150, all traced) ---")
     print(f"  Prefill  ({real_seq_len} real / {padded_seq_len} padded tokens): {prefill_ms:.1f} ms")
     print(f"  TTFT     (prefill + 1 decode):  {ttft_ms:.1f} ms")
     print(f"  Decode throughput:              {tokens_per_sec:.2f} frames/sec")
@@ -1528,7 +1526,7 @@ def generate_codes_ttnn(
         f"  Traced: Talker decode, CP prefill, CP decode x{len(cp_decode_trace_ids[0])} (double-buffered) "
         f"(Talker prefill: non-traced)"
     )
-    print(f"  ----------------------------------------")
+    print("  ----------------------------------------")
 
     compile_timings = {
         "warmup": t_warmup_end - t_warmup_start,
@@ -2786,7 +2784,7 @@ def run_full_ttnn_tts(
                 # Also update the main output with trimmed version
                 trim_audio(output_path, output_path, trim_time)
                 audio_np = audio_np[int(trim_time * 24000) :]
-                print(f"  Main output updated with trimmed audio")
+                print("  Main output updated with trimmed audio")
 
         # Summary
         print("\n" + "=" * 80)
@@ -2828,7 +2826,7 @@ def run_full_ttnn_tts(
             "  Note: Total generation ms scales with EOS frame count when sampling; compare steady ms/sec across runs."
         )
 
-        print(f"  (TTFT and decode throughput breakdown printed above during generation)")
+        print("  (TTFT and decode throughput breakdown printed above during generation)")
 
         total_time = time.time() - demo_start
         print(f"\nOutput saved to: {output_path}")

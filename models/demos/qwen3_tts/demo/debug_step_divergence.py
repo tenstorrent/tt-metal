@@ -194,7 +194,7 @@ def main():
         print(f"  Step 0 output PCC: {pcc:.6f}")
 
         if pcc < 0.99:
-            print(f"  *** DIVERGENCE DETECTED ***")
+            print("  *** DIVERGENCE DETECTED ***")
             print(f"  Reference: mean={ref_step0_output.mean():.4f}, std={ref_step0_output.std():.4f}")
             print(f"  Official: mean={official_step0_output.mean():.4f}, std={official_step0_output.std():.4f}")
 

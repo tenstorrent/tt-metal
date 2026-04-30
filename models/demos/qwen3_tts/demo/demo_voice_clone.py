@@ -159,7 +159,7 @@ def run_voice_clone_demo(
         print(f"  {name}: {tensor.shape}")
 
     torch.save(capture, "/tmp/qwen_tts_tensors/inference_tensors.pt")
-    print(f"\nSaved to /tmp/qwen_tts_tensors/inference_tensors.pt")
+    print("\nSaved to /tmp/qwen_tts_tensors/inference_tensors.pt")
 
     print("\n" + "=" * 80)
     print("Demo Complete!")

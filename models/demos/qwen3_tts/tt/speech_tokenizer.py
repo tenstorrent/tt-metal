@@ -85,10 +85,10 @@ def convnext_block(
     """
     mc = ttnn.DRAM_MEMORY_CONFIG
     residual = x
-    b, _, l, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
+    b, _, seq_len, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
 
     # Depthwise conv: NHWC -> NLC -> NHWC
-    x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
+    x_nlc = ttnn.reshape(x, (b, seq_len, c), memory_config=mc)
     dw_conv = TTNNConv1d(
         device=device,
         in_channels=c,
@@ -99,7 +99,7 @@ def convnext_block(
         weight=dwconv_weight,
         bias_tensor=dwconv_bias,
     )
-    x_nlc, out_len = dw_conv(x_nlc, l)
+    x_nlc, out_len = dw_conv(x_nlc, seq_len)
     x = ttnn.reshape(x_nlc, (b, 1, out_len, c), memory_config=mc)
 
     # LayerNorm + pointwise linears in NHWC
@@ -179,7 +179,7 @@ def conv_decoder_block(
     Input/Output shape: [batch, 1, seq_len, channels] (NHWC)
     """
     mc = ttnn.DRAM_MEMORY_CONFIG
-    b, _, l, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
+    b, _, seq_len, c = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
 
     # Snake activation before upsampling
     if "alpha" in block_weights and "beta" in block_weights:
@@ -212,7 +212,7 @@ def conv_decoder_block(
             weight=up_w,
             bias_tensor=up_b,
         )
-        x, l = up_conv(x, l)
+        x, seq_len = up_conv(x, seq_len)
         c = int(x.shape[-1])
 
     # Residual layers
@@ -240,7 +240,7 @@ def conv_decoder_block(
         conv1_weight = block_weights.get(f"block.{i}.conv1.conv.weight")
         conv1_bias = block_weights.get(f"block.{i}.conv1.conv.bias")
         if conv1_weight is not None:
-            x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
+            x_nlc = ttnn.reshape(x, (b, seq_len, c), memory_config=mc)
             conv1 = TTNNConv1d(
                 device=device,
                 in_channels=int(conv1_weight.shape[1]),
@@ -250,9 +250,9 @@ def conv_decoder_block(
                 weight=conv1_weight,
                 bias_tensor=conv1_bias,
             )
-            x_nlc, l = conv1(x_nlc, l)
+            x_nlc, seq_len = conv1(x_nlc, seq_len)
             c = int(conv1_weight.shape[0])
-            x = ttnn.reshape(x_nlc, (b, 1, l, c), memory_config=mc)
+            x = ttnn.reshape(x_nlc, (b, 1, seq_len, c), memory_config=mc)
 
         # Second activation + conv
         act2_key = f"block.{i}.act2"
@@ -275,7 +275,7 @@ def conv_decoder_block(
         conv2_weight = block_weights.get(f"block.{i}.conv2.conv.weight")
         conv2_bias = block_weights.get(f"block.{i}.conv2.conv.bias")
         if conv2_weight is not None:
-            x_nlc = ttnn.reshape(x, (b, l, c), memory_config=mc)
+            x_nlc = ttnn.reshape(x, (b, seq_len, c), memory_config=mc)
             conv2 = TTNNConv1d(
                 device=device,
                 in_channels=int(conv2_weight.shape[1]),
@@ -285,9 +285,9 @@ def conv_decoder_block(
                 weight=conv2_weight,
                 bias_tensor=conv2_bias,
             )
-            x_nlc, l = conv2(x_nlc, l)
+            x_nlc, seq_len = conv2(x_nlc, seq_len)
             c = int(conv2_weight.shape[0])
-            x = ttnn.reshape(x_nlc, (b, 1, l, c), memory_config=mc)
+            x = ttnn.reshape(x_nlc, (b, 1, seq_len, c), memory_config=mc)
 
         x = ttnn.add(residual, x, memory_config=mc)
 
@@ -504,22 +504,10 @@ class TtPreTransformerLayer(LightweightModule):
 
         prefix = f"pre_transformer.layers.{layer_num}."
 
-        # Layer norms: shape [1, 1, hidden//TILE, TILE] in ROW_MAJOR_LAYOUT
-        # (matches the RMSNorm class convention used by the Talker)
-        # def _load_norm(key):
-        #     w = state_dict[key].view(1, 1, hidden).reshape([1, 1, hidden // self.TILE, self.TILE])
-        #     return ttnn.from_torch(
-        #         w.to(dtype.to_torch() if hasattr(dtype, "to_torch") else torch.bfloat16),
-        #         dtype=dtype,
-        #         layout=ttnn.ROW_MAJOR_LAYOUT,
-        #         device=device,
-        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     )
-
-        import torch as _torch
+        # Layer norm weights: [1, 1, hidden//TILE, TILE] ROW_MAJOR (same layout convention as Talker RMSNorm)
 
         def _load_norm_t(key):
-            w = state_dict[key].to(_torch.bfloat16).view(1, 1, hidden).reshape([1, 1, hidden // self.TILE, self.TILE])
+            w = state_dict[key].to(torch.bfloat16).view(1, 1, hidden).reshape([1, 1, hidden // self.TILE, self.TILE])
             return ttnn.as_tensor(
                 w, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
@@ -1161,7 +1149,6 @@ class TtSpeechTokenizerDecoder(LightweightModule):
 
         # Original TTNN implementation (for comparison/optimization)
         batch_size, num_quantizers, seq_len = token_ids.shape
-        device = token_ids.device
 
         token_ids_ttnn = ttnn.from_torch(
             token_ids,

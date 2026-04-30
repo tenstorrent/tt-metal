@@ -76,7 +76,6 @@ def compute_mrope_frequencies(
     sin_list = []
 
     # Compute frequencies for each section
-    section_start = 0
     for section_idx, section_size in enumerate(mrope_section):
         section_dim = section_size * 2  # Each section handles half the frequencies
 

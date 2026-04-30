@@ -3,7 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 Debug the next-step embedding construction.
-Compares what official produces vs what reference would construct.
+
+Compares the official model's decode-step input embedding against a manual
+reconstruction from codec embeddings + ``tts_pad``.
+
+The reconstruction needs the RVQ row that feeds decode step 0 (shape ``[1, 16]``).
+Populate ``captured["codec_ids_list"]`` from a forward hook before running the
+comparison block below; otherwise that step is skipped.
 """
 
 from pathlib import Path
@@ -36,7 +42,6 @@ def main():
     )
     tts_model = model.model
     talker = tts_model.talker
-    code_predictor = talker.code_predictor
 
     # Load reference weights
     print("\n[2] Loading reference weights...")
@@ -121,46 +126,53 @@ def main():
         official_step0_input = captured["inputs"][1]  # [1, 1, 2048]
         print(f"  Official step 0 input: {official_step0_input.shape}")
 
-        # Reconstruct what reference would build
-        # sum(16 codebook embeds) + tts_pad_embed
+        codec_rows = captured.get("codec_ids_list") or []
+        if not codec_rows:
+            print(
+                "  [skip] No RVQ row in captured['codec_ids_list']; "
+                "add a hook to append the prefill-tail codes [1, 16] to compare embeddings."
+            )
+        else:
+            codec_ids = codec_rows[-1]
+            if codec_ids.dim() == 1:
+                codec_ids = codec_ids.unsqueeze(0)
 
-        all_cb_embeds = []
-        for i in range(16):
-            token_id = codec_ids[0, i].item()
-            if i == 0:
-                cb_embed = F.embedding(torch.tensor([[token_id]]), codec_embed_weight)
-            else:
-                cb_embed = F.embedding(torch.tensor([[token_id]]), code_pred_embeds[i - 1])
-            all_cb_embeds.append(cb_embed)
+            # Reference path: sum(16 codebook embeds) + tts_pad_embed
+            all_cb_embeds = []
+            for i in range(16):
+                token_id = codec_ids[0, i].item()
+                if i == 0:
+                    cb_embed = F.embedding(torch.tensor([[token_id]]), codec_embed_weight)
+                else:
+                    cb_embed = F.embedding(torch.tensor([[token_id]]), code_pred_embeds[i - 1])
+                all_cb_embeds.append(cb_embed)
 
-        stacked = torch.cat(all_cb_embeds, dim=1)  # [1, 16, 2048]
-        summed = stacked.sum(dim=1, keepdim=True)  # [1, 1, 2048]
-        ref_next_embed = summed + tts_pad_embed  # [1, 1, 2048]
+            stacked = torch.cat(all_cb_embeds, dim=1)  # [1, 16, 2048]
+            summed = stacked.sum(dim=1, keepdim=True)  # [1, 1, 2048]
+            ref_next_embed = summed + tts_pad_embed  # [1, 1, 2048]
 
-        print(f"\n  Reference reconstruction:")
-        print(f"    Summed codebook embeds: mean={summed.mean():.4f}, std={summed.std():.4f}")
-        print(f"    tts_pad_embed: mean={tts_pad_embed.mean():.4f}, std={tts_pad_embed.std():.4f}")
-        print(f"    ref_next_embed: mean={ref_next_embed.mean():.4f}, std={ref_next_embed.std():.4f}")
+            print("\n  Reference reconstruction:")
+            print(f"    Summed codebook embeds: mean={summed.mean():.4f}, std={summed.std():.4f}")
+            print(f"    tts_pad_embed: mean={tts_pad_embed.mean():.4f}, std={tts_pad_embed.std():.4f}")
+            print(f"    ref_next_embed: mean={ref_next_embed.mean():.4f}, std={ref_next_embed.std():.4f}")
 
-        print(f"\n  Official step 0 input:")
-        print(f"    mean={official_step0_input.mean():.4f}, std={official_step0_input.std():.4f}")
+            print("\n  Official step 0 input:")
+            print(f"    mean={official_step0_input.mean():.4f}, std={official_step0_input.std():.4f}")
 
-        pcc = compute_pcc(ref_next_embed, official_step0_input)
-        print(f"\n  PCC: {pcc:.6f}")
+            pcc = compute_pcc(ref_next_embed, official_step0_input)
+            print(f"\n  PCC: {pcc:.6f}")
 
-        if pcc < 0.99:
-            print(f"  *** MISMATCH DETECTED ***")
-            diff = official_step0_input - ref_next_embed
-            print(f"  Difference: mean={diff.mean():.4f}, std={diff.std():.4f}")
+            if pcc < 0.99:
+                print("  *** MISMATCH DETECTED ***")
+                diff = official_step0_input - ref_next_embed
+                print(f"  Difference: mean={diff.mean():.4f}, std={diff.std():.4f}")
 
-            # Check if it might be using trailing_text_hidden[0] instead of tts_pad
-            # Find what text embedding was used
-            text_contribution = official_step0_input - summed
-            print(f"\n  Text contribution (official - summed):")
-            print(f"    mean={text_contribution.mean():.4f}, std={text_contribution.std():.4f}")
+                text_contribution = official_step0_input - summed
+                print("\n  Text contribution (official - summed):")
+                print(f"    mean={text_contribution.mean():.4f}, std={text_contribution.std():.4f}")
 
-            pcc_with_pad = compute_pcc(text_contribution, tts_pad_embed)
-            print(f"    PCC with tts_pad_embed: {pcc_with_pad:.6f}")
+                pcc_with_pad = compute_pcc(text_contribution, tts_pad_embed)
+                print(f"    PCC with tts_pad_embed: {pcc_with_pad:.6f}")
 
     # Check what official uses for trailing_text_hidden
     print("\n[5] Checking official trailing_text_hidden...")

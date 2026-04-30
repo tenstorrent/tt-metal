@@ -151,7 +151,7 @@ def run_full_pipeline():
         ref_text=ref_text,
     )
 
-    print(f"\nAudio generated!")
+    print("\nAudio generated!")
     print(f"  Shape: {wavs[0].shape}")
     print(f"  Sample rate: {sr}")
     print(f"  Duration: {len(wavs[0]) / sr:.2f} seconds")

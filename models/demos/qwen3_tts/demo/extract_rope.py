@@ -87,7 +87,7 @@ def extract_rope_tensors():
         if prefill_done[0]:
             return
 
-        x = inputs[0]
+        inputs[0]
         position_ids = inputs[1] if len(inputs) > 1 else None
 
         if position_ids is not None and position_ids.shape[-1] > 10:

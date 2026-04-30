@@ -346,7 +346,7 @@ def create_icl_embedding(
     text_lens = text_embed.shape[1]
 
     # 4. Build codec_embed: codec_bos + sum(ref_codes across 16 codebooks)
-    ref_len = ref_codes.shape[0]
+    ref_codes.shape[0]
     codec_embeds_list = []
 
     for i in range(config.num_code_groups):
@@ -844,7 +844,7 @@ def main():
             # Update main output with trimmed version
             trim_audio(args.output, args.output, trim_time)
             audio_np = audio_np[int(trim_time * 24000) :]
-            print(f"  Main output updated with trimmed audio")
+            print("  Main output updated with trimmed audio")
 
     # Summary
     print("\n" + "=" * 80)

@@ -259,7 +259,7 @@ def main():
                 print(f"  Step {step:3d}: Token0={token_0:4d}  Hidden PCC={hidden_pcc:.4f}")
 
             if hidden_pcc < 0.99:
-                print(f"           *** DIVERGENCE ***")
+                print("           *** DIVERGENCE ***")
         else:
             print(f"  Step {step:3d}: Token0={token_0:4d}  (no official comparison)")
 
@@ -359,7 +359,7 @@ def main():
     print(f"  Reference tokens generated: {len(ref_tokens)}")
 
     if len(ref_tokens) > 0:
-        print(f"\n  First 5 reference tokens (codebook 0):")
+        print("\n  First 5 reference tokens (codebook 0):")
         for i, row in enumerate(ref_tokens[:5]):
             print(f"    Step {i}: {row[0]}")
 

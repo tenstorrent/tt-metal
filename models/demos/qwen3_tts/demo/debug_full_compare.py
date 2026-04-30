@@ -231,7 +231,7 @@ def main():
             print(f"  Step {step}: Next embed PCC = {pcc_next:.6f}")
 
             if pcc_next < 0.99:
-                print(f"    *** DIVERGENCE in next embed ***")
+                print("    *** DIVERGENCE in next embed ***")
                 print(f"    Ref:  mean={next_embed.mean():.4f}, std={next_embed.std():.4f}")
                 print(f"    Off:  mean={official_next.mean():.4f}, std={official_next.std():.4f}")
                 diff = official_next - next_embed

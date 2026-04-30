@@ -52,7 +52,6 @@ class Talker(LightweightModule):
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
         _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
-        _dram = ttnn.DRAM_MEMORY_CONFIG
 
         def get_cache_name(name):
             if weight_cache_path is None:

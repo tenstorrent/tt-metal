@@ -50,7 +50,7 @@ def convert_mrope_for_ttnn(cos_mrope, sin_mrope, mrope_section=(24, 20, 20), int
         # - dims 48-87 (20*2) use cos[1]
         # - dims 88-127 (20*2) use cos[2]
 
-        modality_num = len(mrope_section)
+        len(mrope_section)
         section_sizes = [s * 2 for s in mrope_section]  # [48, 40, 40]
 
         # Reconstruct the interleaved cos/sin
@@ -100,7 +100,7 @@ def run_test(device):
         return
 
     rotary_data = torch.load(rotary_path)
-    print(f"Loaded MROPE tensors")
+    print("Loaded MROPE tensors")
     print(f"  position_ids: {rotary_data['position_ids'].shape}")
     print(f"  cos: {rotary_data['cos'].shape}")
     print(f"  sin: {rotary_data['sin'].shape}")

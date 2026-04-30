@@ -170,7 +170,7 @@ def run_test(device):
     print(f"  PCC(official, ttnn_rope): {pcc_ttnn:.6f}")
 
     # Detailed comparison
-    print(f"\n  Head 0, position 50, first 8 dims:")
+    print("\n  Head 0, position 50, first 8 dims:")
     print(f"    Official: {q_after_official[0, 0, 50, :8]}")
     print(f"    TTNN:     {q_rotated_ttnn[0, 0, 50, :8]}")
 

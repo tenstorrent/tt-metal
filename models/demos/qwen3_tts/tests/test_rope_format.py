@@ -117,7 +117,7 @@ def test_rope_formats(device):
     print(f"\nNon-interleaved cos shape: {cos_noninterleaved.shape}")
 
     # Show some values
-    print(f"\nPosition 5 (middle of sequence):")
+    print("\nPosition 5 (middle of sequence):")
     print(f"  cos_noninterleaved[0,5,0:8]: {cos_noninterleaved[0,5,0:8]}")
     print(f"  cos_noninterleaved[0,5,64:72]: {cos_noninterleaved[0,5,64:72]}")
 
@@ -171,7 +171,7 @@ def test_rope_formats(device):
     print(f"\nPCC(official_rope, ttnn_rope): {pcc:.6f}")
 
     # Detailed comparison
-    print(f"\nHead 0, position 5, first 8 dims:")
+    print("\nHead 0, position 5, first 8 dims:")
     print(f"  Official: {q_rotated_official[0, 0, 5, :8]}")
     print(f"  TTNN:     {q_rotated_ttnn[0, 0, 5, :8]}")
 
@@ -195,8 +195,8 @@ def test_rope_formats(device):
         q_rot_official = apply_rotary_pos_emb_noninterleaved(
             q_identity, cos_broadcast[:, :, 5:6, :], sin_broadcast[:, :, 5:6, :]
         )
-        print(f"\nIdentity rotation test (pos 5):")
-        print(f"  Input: [1, 0, ..., 0, 1, 0, ..., 0] (dim 0 and 64)")
+        print("\nIdentity rotation test (pos 5):")
+        print("  Input: [1, 0, ..., 0, 1, 0, ..., 0] (dim 0 and 64)")
         print(f"  Official output first 4: {q_rot_official[0, 0, 0, :4]}")
         print(f"  Official output dim 64-68: {q_rot_official[0, 0, 0, 64:68]}")
 

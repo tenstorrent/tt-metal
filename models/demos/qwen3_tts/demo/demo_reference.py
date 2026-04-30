@@ -83,7 +83,6 @@ def speech_tokenizer_decoder_forward_debug(
 ) -> torch.Tensor:
     """Debug version of speech tokenizer decoder with verbose output."""
     batch_size, num_quantizers, seq_len = token_ids.shape
-    device = token_ids.device
 
     print(f"  [DEBUG] Input token_ids: {token_ids.shape}")
 
@@ -508,8 +507,8 @@ def run_reference_demo(
     print(f"  Talker weights: {len(talker_weights)}")
     print(f"  Code Predictor weights: {len(cp_weights)}")
 
-    # Create input based on mode
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Create input based on mode (CPU-only for Tenstorrent bring-up hosts)
+    device = torch.device("cpu")
     use_text_embedding = False
 
     if text is not None:

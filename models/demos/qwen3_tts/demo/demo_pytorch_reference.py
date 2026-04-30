@@ -36,7 +36,7 @@ def main():
     print("\nLoading model...")
     start_time = time.time()
     model = Qwen3TTS.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to("cpu")
     load_time = time.time() - start_time
     print(f"  Model loaded in {load_time:.1f}s")
 
@@ -111,7 +111,7 @@ def main():
     print(f"Generation time: {gen_time:.1f}s")
     if audio is not None:
         print(f"Audio duration: {len(audio_np) / 24000:.2f}s")
-        print(f"Output: /tmp/pytorch_reference_output.wav")
+        print("Output: /tmp/pytorch_reference_output.wav")
     print("\nListen to the audio to verify it sounds correct!")
 
 

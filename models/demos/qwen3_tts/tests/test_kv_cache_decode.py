@@ -400,7 +400,7 @@ class TestPrefillDecodeEquivalence:
         prefill_output, updated_kv_cache = decoder_layer.forward(
             prefill_input_ttnn, cos_prefill, sin_prefill, trans_mat_ttnn, kv_cache=kv_cache, start_pos=0, mode="prefill"
         )
-        prefill_output_torch = ttnn.to_torch(prefill_output)
+        ttnn.to_torch(prefill_output)
 
         # Step 2: Decode [d] using cached K,V
         decode_input = full_input[:, :, prefill_len:, :]  # Last token

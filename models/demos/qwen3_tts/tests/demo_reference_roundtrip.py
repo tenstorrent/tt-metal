@@ -211,7 +211,7 @@ def main():
     # Compare durations
     original_duration = audio.shape[-1] / 24000
     reconstructed_duration = reconstructed.shape[-1] / 24000
-    print(f"\n7. Comparison:")
+    print("\n7. Comparison:")
     print(f"   Original duration: {original_duration:.2f}s")
     print(f"   Reconstructed duration: {reconstructed_duration:.2f}s")
 

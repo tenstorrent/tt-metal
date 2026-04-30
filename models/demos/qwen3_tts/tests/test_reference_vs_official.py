@@ -67,7 +67,7 @@ def test_official_decoder_works():
                 # Save audio
                 audio_np = audio.squeeze().cpu().numpy()
                 sf.write("/tmp/official_decoder_test.wav", audio_np, 24000)
-                print(f"  Saved to /tmp/official_decoder_test.wav")
+                print("  Saved to /tmp/official_decoder_test.wav")
                 print("  LISTEN to verify it's correct audio!")
 
                 return audio, codes
@@ -231,14 +231,14 @@ def test_trace_official_decoder():
         print("\n  Tracing through decoder...")
         with torch.no_grad():
             # Step 1: Quantizer decode
-            print(f"\n  Step 1: Quantizer decode_code")
+            print("\n  Step 1: Quantizer decode_code")
             z = decoder.quantizer.decode_code(codes)
             print(f"    Output shape: {z.shape}")
             print(f"    Output range: [{z.min():.4f}, {z.max():.4f}]")
 
             # Step 2: Pre-transformer (if exists)
             if hasattr(decoder, "pre_transformer") and decoder.pre_transformer is not None:
-                print(f"\n  Step 2: Pre-transformer")
+                print("\n  Step 2: Pre-transformer")
                 print(f"    Pre-transformer type: {type(decoder.pre_transformer)}")
                 # Check input shape expected
                 z_pre = decoder.pre_transformer(z)
@@ -246,34 +246,34 @@ def test_trace_official_decoder():
                 print(f"    Output range: [{z_pre.min():.4f}, {z_pre.max():.4f}]")
                 z = z_pre
             else:
-                print(f"\n  Step 2: No pre_transformer found")
+                print("\n  Step 2: No pre_transformer found")
 
             # Step 3: Pre-conv (if exists)
             if hasattr(decoder, "pre_conv") and decoder.pre_conv is not None:
-                print(f"\n  Step 3: Pre-conv")
+                print("\n  Step 3: Pre-conv")
                 z_conv = decoder.pre_conv(z)
                 print(f"    Output shape: {z_conv.shape}")
                 z = z_conv
             else:
-                print(f"\n  Step 3: No pre_conv found")
+                print("\n  Step 3: No pre_conv found")
 
             # Step 4: Upsample (if exists)
             if hasattr(decoder, "upsample") and decoder.upsample is not None:
-                print(f"\n  Step 4: Upsample")
+                print("\n  Step 4: Upsample")
                 z_up = decoder.upsample(z)
                 print(f"    Output shape: {z_up.shape}")
                 z = z_up
             else:
-                print(f"\n  Step 4: No upsample found")
+                print("\n  Step 4: No upsample found")
 
             # Step 5: Decoder (conv decoder)
             if hasattr(decoder, "decoder") and decoder.decoder is not None:
-                print(f"\n  Step 5: Conv decoder")
+                print("\n  Step 5: Conv decoder")
                 audio = decoder.decoder(z)
                 print(f"    Output shape: {audio.shape}")
                 print(f"    Output range: [{audio.min():.4f}, {audio.max():.4f}]")
             else:
-                print(f"\n  Step 5: No decoder found")
+                print("\n  Step 5: No decoder found")
 
     except Exception as e:
         print(f"  Error: {e}")
@@ -352,11 +352,11 @@ def test_reference_decoder_with_official_intermediates():
 
         sf.write("/tmp/test_official.wav", official_np, 24000)
         sf.write("/tmp/test_reference.wav", ref_np, 24000)
-        print(f"\n  Saved /tmp/test_official.wav and /tmp/test_reference.wav")
+        print("\n  Saved /tmp/test_official.wav and /tmp/test_reference.wav")
         print("  LISTEN to both to compare!")
 
         if pcc < 0.99:
-            print(f"\n  *** PCC IS LOW - REFERENCE HAS BUG ***")
+            print("\n  *** PCC IS LOW - REFERENCE HAS BUG ***")
 
     except Exception as e:
         print(f"  Error: {e}")

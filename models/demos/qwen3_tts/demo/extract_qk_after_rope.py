@@ -36,7 +36,7 @@ def extract_qk_tensors():
     talker_model = talker.model
     config = talker_model.config
 
-    print(f"\nConfig:")
+    print("\nConfig:")
     print(f"  num_heads: {config.num_attention_heads}")
     print(f"  num_kv_heads: {config.num_key_value_heads}")
     print(f"  head_dim: {getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)}")
@@ -153,7 +153,7 @@ def extract_qk_tensors():
     if "layer_0" in captured_data:
         layer0_data = captured_data["layer_0"]
         torch.save(layer0_data, output_dir / "layer0_attention_tensors.pt")
-        print(f"\nSaved layer 0 tensors:")
+        print("\nSaved layer 0 tensors:")
         for k, v in layer0_data.items():
             if isinstance(v, torch.Tensor):
                 print(f"  {k}: shape={v.shape}, dtype={v.dtype}")

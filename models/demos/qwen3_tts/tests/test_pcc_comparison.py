@@ -69,7 +69,7 @@ def load_speech_tokenizer_weights(model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base
     from huggingface_hub import snapshot_download
     from safetensors.torch import load_file
 
-    print(f"Loading speech tokenizer weights...")
+    print("Loading speech tokenizer weights...")
     model_path = snapshot_download(model_id, allow_patterns=["speech_tokenizer/*.safetensors"])
     model_path = Path(model_path)
 
@@ -125,7 +125,7 @@ def test_rms_norm_pcc(device):
 
 def test_talker_layer_pcc(device, state_dict: dict, layer_idx: int = 0):
     """Test a single Talker layer PCC between TTNN and reference."""
-    print(f"\n" + "=" * 80)
+    print("\n" + "=" * 80)
     print(f"TEST: Talker Layer {layer_idx} PCC")
     print("=" * 80)
 
@@ -180,7 +180,7 @@ def test_talker_layer_pcc(device, state_dict: dict, layer_idx: int = 0):
 
     # For now, just return the reference output stats as we haven't loaded TTNN components
     # TODO: Load and compare with TTNN implementation
-    print(f"  NOTE: Full TTNN comparison requires loading TtTalker class")
+    print("  NOTE: Full TTNN comparison requires loading TtTalker class")
 
     return None
 
@@ -191,7 +191,7 @@ def test_speech_tokenizer_decoder_pcc(device, speech_weights: dict):
     print("TEST: Speech Tokenizer Decoder (Codebook Lookup) PCC")
     print("=" * 80)
 
-    config = SpeechTokenizerDecoderConfig()
+    SpeechTokenizerDecoderConfig()
 
     # Create test token IDs
     torch.manual_seed(42)
@@ -229,7 +229,7 @@ def test_speech_tokenizer_decoder_pcc(device, speech_weights: dict):
         return None
 
     # TODO: Compare with TTNN TtSpeechTokenizerDecoder
-    print(f"  NOTE: Full TTNN comparison requires loading TtSpeechTokenizerDecoder class")
+    print("  NOTE: Full TTNN comparison requires loading TtSpeechTokenizerDecoder class")
 
     return None
 

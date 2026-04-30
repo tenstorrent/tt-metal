@@ -110,8 +110,8 @@ class HighPrecisionDecoderLayer:
 
     def forward(self, x, cos, sin, transformation_mat):
         """Forward pass with HiFi4 precision."""
-        batch_size = x.shape[0]
-        seq_len = x.shape[-2]
+        x.shape[0]
+        x.shape[-2]
 
         # Pre-attention norm
         residual = x

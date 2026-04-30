@@ -284,7 +284,7 @@ class Qwen3TTSMesh:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        print(f"  Loaded embeddings (replicated)")
+        print("  Loaded embeddings (replicated)")
 
     def _load_layers(self, state_dict: dict):
         """Load transformer layers with TP."""
@@ -310,7 +310,7 @@ class Qwen3TTSMesh:
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        print(f"  Loaded codec head (replicated)")
+        print("  Loaded codec head (replicated)")
 
 
 def test_mesh_device():
@@ -325,7 +325,7 @@ def test_mesh_device():
 
     if cluster_type != ttnn.cluster.ClusterType.N300:
         print(f"  WARNING: Not running on N300 (got {cluster_type})")
-        print(f"  This test requires N300 hardware")
+        print("  This test requires N300 hardware")
         return False
 
     # Open mesh device

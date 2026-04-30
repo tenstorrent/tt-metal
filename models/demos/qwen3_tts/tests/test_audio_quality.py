@@ -115,7 +115,7 @@ def test_speech_decoder_quality():
 
         # Save decoded audio for manual inspection
         sf.write("/tmp/decoded_roundtrip.wav", decoded_np, decoded_sr)
-        print(f"  Saved decoded audio to /tmp/decoded_roundtrip.wav")
+        print("  Saved decoded audio to /tmp/decoded_roundtrip.wav")
 
     except Exception as e:
         print(f"  Error in encode/decode test: {e}")
@@ -272,7 +272,7 @@ def test_voice_clone_audio_quality():
 
         # Save for manual inspection
         sf.write("/tmp/official_voice_clone.wav", official_np, sample_rate)
-        print(f"  Saved to /tmp/official_voice_clone.wav")
+        print("  Saved to /tmp/official_voice_clone.wav")
 
         print("\n✅ Voice clone test complete")
 

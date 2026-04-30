@@ -134,7 +134,7 @@ def main():
     print(f"    PCC: {pcc_quant:.6f}")
 
     if pcc_quant < 0.99:
-        print(f"    *** MISMATCH ***")
+        print("    *** MISMATCH ***")
         print(f"    Ref: mean={ref_quant.mean():.4f}, std={ref_quant.std():.4f}")
         print(f"    Off: mean={official_quant.mean():.4f}, std={official_quant.std():.4f}")
 
@@ -173,7 +173,7 @@ def main():
     print(f"    PCC: {pcc_pretrans:.6f}")
 
     if pcc_pretrans < 0.99:
-        print(f"    *** MISMATCH ***")
+        print("    *** MISMATCH ***")
         print(f"    Ref: mean={ref_pretrans.mean():.4f}, std={ref_pretrans.std():.4f}")
         print(f"    Off: mean={captured['pre_transformer'].mean():.4f}, std={captured['pre_transformer'].std():.4f}")
 
@@ -194,7 +194,7 @@ def main():
     print(f"    PCC (truncated): {pcc_audio:.6f}")
 
     if pcc_audio < 0.99:
-        print(f"    *** MISMATCH ***")
+        print("    *** MISMATCH ***")
         print(
             f"    Ref: mean={ref_audio.mean():.6f}, std={ref_audio.std():.4f}, range=[{ref_audio.min():.4f}, {ref_audio.max():.4f}]"
         )
@@ -209,7 +209,7 @@ def main():
     # Save both for listening comparison
     sf.write("/tmp/debug_ref.wav", ref_audio.squeeze().detach().cpu().numpy(), 24000)
     sf.write("/tmp/debug_off.wav", official_audio.squeeze().detach().cpu().numpy(), 24000)
-    print(f"\n  Saved: /tmp/debug_ref.wav and /tmp/debug_off.wav")
+    print("\n  Saved: /tmp/debug_ref.wav and /tmp/debug_off.wav")
 
     print("\n" + "=" * 80)
     print("Summary")

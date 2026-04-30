@@ -305,7 +305,7 @@ def run_reference_tts_demo(
     print(f"  Input: {audio_path} ({results['audio_duration']:.2f}s)")
     print(f"  Output: {output_path}")
     print()
-    print(f"  Timings:")
+    print("  Timings:")
     print(f"    Mel Spectrogram:  {results['mel_time']*1000:7.1f}ms")
     print(f"    Speaker Encoder:  {results['speaker_time']*1000:7.1f}ms")
     print(f"    Speech Encoder:   {results['encoder_time']*1000:7.1f}ms")

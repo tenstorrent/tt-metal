@@ -125,7 +125,7 @@ def hook_model_internals():
         if hasattr(code_pred, "model") and hasattr(code_pred.model, "layers"):
             handles.append(code_pred.model.layers[0].register_forward_hook(make_hook("code_pred_layer_0")))
             handles.append(code_pred.model.layers[-1].register_forward_hook(make_hook("code_pred_layer_last")))
-            print(f"  Hooked code_predictor layers")
+            print("  Hooked code_predictor layers")
 
     # Generate audio
     print("\n" + "=" * 80)

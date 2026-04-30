@@ -103,19 +103,6 @@ class Attention(LightweightModule):
         v_proj_weight = state_dict[f"{layer_prefix}.self_attn.v_proj.weight"]
         o_proj_weight = state_dict[f"{layer_prefix}.self_attn.o_proj.weight"]
 
-        # Torch reference (fused QKV on CPU, then as_tensor):
-        # qkv_weight = torch.cat([q_proj_weight, k_proj_weight, v_proj_weight], dim=0)
-        # qkv_weight = torch.transpose(qkv_weight, -2, -1).unsqueeze(0).unsqueeze(0)
-        # self.wqkv = ttnn.as_tensor(
-        #     qkv_weight,
-        #     device=device,
-        #     dtype=weight_dtype,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     cache_file_name=get_cache_name("wqkv"),
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        # )
-
         _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
         _dram = ttnn.DRAM_MEMORY_CONFIG
         _fused_qkv = (num_heads + 2 * num_kv_heads) * head_dim
@@ -144,17 +131,7 @@ class Attention(LightweightModule):
                 mesh_mapper=_mesh_mapper,
             )
 
-        # Torch reference (o_proj transpose on CPU, then as_tensor):
-        # o_proj_weight = torch.transpose(o_proj_weight, -2, -1).unsqueeze(0).unsqueeze(0)
-        # self.wo = ttnn.as_tensor(
-        #     o_proj_weight,
-        #     device=device,
-        #     dtype=weight_dtype,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     cache_file_name=get_cache_name("wo"),
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        # )
+        # o_proj: same host prepare + as_tensor/from_torch pattern as wqkv.
 
         _o_rows = num_heads * head_dim
         _wo_host = o_proj_weight.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()

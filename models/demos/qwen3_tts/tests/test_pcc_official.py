@@ -271,7 +271,7 @@ def test_attention_pcc(device, weights):
 
     # Note: Full TTNN attention test would require loading TtAttention class
     # For now, just verify reference runs correctly
-    print(f"  TTNN attention test requires full model loading (skipped)")
+    print("  TTNN attention test requires full model loading (skipped)")
 
     return None
 

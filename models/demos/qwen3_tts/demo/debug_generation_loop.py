@@ -187,7 +187,7 @@ def main():
         step1_embed_official = captured_step_embeds[1]  # [1, 1, 2048]
         step1_embed_ref = F.embedding(torch.tensor([[558]]), codec_embed_weight)
         embed_pcc = compute_pcc(step1_embed_official.squeeze(), step1_embed_ref.squeeze())
-        print(f"\n  Step 1 embedding comparison (token 558):")
+        print("\n  Step 1 embedding comparison (token 558):")
         print(
             f"    Official: shape={step1_embed_official.shape}, mean={step1_embed_official.mean():.4f}, std={step1_embed_official.std():.4f}"
         )
@@ -201,7 +201,7 @@ def main():
         # Check if official = ref + tts_pad
         step1_with_pad = step1_embed_ref + tts_pad_embed
         pcc_with_pad = compute_pcc(step1_embed_official.squeeze(), step1_with_pad.squeeze())
-        print(f"\n    Testing: official = codec_embed + tts_pad?")
+        print("\n    Testing: official = codec_embed + tts_pad?")
         print(f"    PCC(official, ref+tts_pad): {pcc_with_pad:.6f}")
 
         # What if tts_pad is added differently? Check stats
@@ -239,7 +239,7 @@ def main():
     # NOTE: Testing without tts_pad addition to see if that's the source of divergence
     # Add tts_pad to last position (streaming mode)
     # hidden_states[:, -1:, :] = hidden_states[:, -1:, :] + tts_pad_embed
-    print(f"  [DEBUG] NOT adding tts_pad to last position")
+    print("  [DEBUG] NOT adding tts_pad to last position")
 
     # Autoregressive loop
     ref_tokens = []
@@ -305,7 +305,7 @@ def main():
 
             if hidden_pcc < 0.99:
                 print(f"           *** DIVERGENCE DETECTED at step {step} ***")
-                print(f"           Hidden state PCC dropped below 0.99")
+                print("           Hidden state PCC dropped below 0.99")
 
                 # More detailed analysis
                 ref_h = last_hidden.squeeze()
@@ -351,7 +351,7 @@ def main():
         print(f"  This means the autoregressive loop starts to drift around step {divergence_step}")
     else:
         print(f"  No significant divergence detected in first {min(len(ref_hiddens), len(official_hiddens))} steps")
-        print(f"  Hidden states match well (PCC > 0.99)")
+        print("  Hidden states match well (PCC > 0.99)")
 
     # =========================================================================
     # Summary

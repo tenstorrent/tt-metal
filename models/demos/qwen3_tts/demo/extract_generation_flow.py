@@ -169,7 +169,7 @@ def extract_generation_flow():
 
     # Let's check the ref_code values
     ref_code = flow_data["ref_code"]
-    print(f"\n  ref_code stats:")
+    print("\n  ref_code stats:")
     print(f"    shape: {ref_code.shape}")
     print(f"    min: {ref_code.min().item()}")
     print(f"    max: {ref_code.max().item()}")

@@ -44,7 +44,7 @@ def generate_audio_qwen_tts(
         text: Input text to synthesize
         model_id: HuggingFace model ID
         output_path: Path to save the output WAV file
-        device: Device to run inference on (cpu or cuda:0)
+        device: Must be ``cpu`` (PyTorch reference path for CPU-only hosts)
         ref_audio: Optional reference audio for voice cloning
         ref_text: Transcript of the reference audio (required if ref_audio is provided)
         language: Target language (English, Chinese, etc.)
@@ -54,9 +54,9 @@ def generate_audio_qwen_tts(
     except ImportError:
         raise ImportError("Please install qwen-tts: pip install -U qwen-tts")
 
-    print(f"=" * 60)
-    print(f"Qwen3-TTS Audio Generation")
-    print(f"=" * 60)
+    print("=" * 60)
+    print("Qwen3-TTS Audio Generation")
+    print("=" * 60)
     print(f"Model: {model_id}")
     print(f"Text: {text}")
     print(f"Language: {language}")
@@ -65,13 +65,15 @@ def generate_audio_qwen_tts(
     if ref_audio:
         print(f"Reference Audio: {ref_audio}")
         print(f"Reference Text: {ref_text}")
-    print(f"=" * 60)
+    print("=" * 60)
 
     # Load the model
     print("\nLoading model...")
     start_time = time.time()
 
-    dtype = torch.float32 if device == "cpu" else torch.bfloat16
+    if device != "cpu":
+        raise ValueError(f"Only device='cpu' is supported (got {device!r}).")
+    dtype = torch.float32
     model = Qwen3TTSModel.from_pretrained(
         model_id,
         device_map=device,
@@ -153,7 +155,8 @@ def main():
         "--device",
         type=str,
         default="cpu",
-        help="Device (cpu or cuda:0)",
+        choices=["cpu"],
+        help="PyTorch device (cpu only)",
     )
     parser.add_argument(
         "--ref-audio",

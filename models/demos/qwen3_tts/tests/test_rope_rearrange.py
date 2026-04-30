@@ -61,7 +61,7 @@ def rearrange_to_noninterleaved(x):
     Input:  [..., d0, d64, d1, d65, ..., d63, d127]
     Output: [..., d0, d1, ..., d63, d64, d65, ..., d127]
     """
-    head_dim = x.shape[-1]
+    x.shape[-1]
 
     # De-interleave: take even and odd indices
     x1 = x[..., 0::2]  # dims 0, 2, 4, ... (originally d0, d1, d2, ...)
@@ -186,7 +186,7 @@ def run_test(device):
     print(f"\nPCC(official, ttnn_with_rearrange): {pcc:.6f}")
 
     # Detailed comparison
-    print(f"\nHead 0, position 50, first 8 dims:")
+    print("\nHead 0, position 50, first 8 dims:")
     print(f"  Official: {q_after_official[0, 0, 50, :8]}")
     print(f"  TTNN:     {q_rotated_final[0, 0, 50, :8]}")
 

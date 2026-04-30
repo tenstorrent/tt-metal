@@ -101,7 +101,7 @@ def test_fixed_decoder():
     audio_tensor = torch.tensor(audio_np)
     std = audio_tensor.std().item()
     mean = audio_tensor.abs().mean().item()
-    print(f"\n  Audio statistics:")
+    print("\n  Audio statistics:")
     print(f"    Std: {std:.4f}")
     print(f"    Mean absolute: {mean:.4f}")
 

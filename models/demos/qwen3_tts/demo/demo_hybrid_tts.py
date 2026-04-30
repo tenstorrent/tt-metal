@@ -185,7 +185,7 @@ def main():
     text_embed = torch.cat([combined_text_proj, tts_eos_embed], dim=1)
     text_lens = text_embed.shape[1]
 
-    ref_len = ref_codes.shape[0]
+    ref_codes.shape[0]
     codec_embeds_list = []
     for i in range(16):
         code_ids = ref_codes[:, i : i + 1]
@@ -221,7 +221,6 @@ def main():
     hidden_states = inputs_embeds.clone()
 
     all_codes = []
-    num_code_groups = 16
     head_dim = 128
     rope_theta = 1000000.0
     rms_norm_eps = 1e-6

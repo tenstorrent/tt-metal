@@ -102,7 +102,7 @@ def trace_decoder():
             pad = conv_weight.shape[-1] - ratio
             if pad > 0:
                 hidden = hidden[..., :-pad]
-            print_stats(f"    After conv_transpose", hidden)
+            print_stats("    After conv_transpose", hidden)
 
             # ConvNeXt block
             convnext_weights = {
@@ -121,7 +121,7 @@ def trace_decoder():
                     norm_bias=convnext_weights.get("norm.bias"),
                     gamma=convnext_weights.get("gamma"),
                 )
-                print_stats(f"    After ConvNeXt", hidden)
+                print_stats("    After ConvNeXt", hidden)
 
     # Step 5: Decoder initial conv
     print("\n" + "=" * 60)
@@ -145,7 +145,7 @@ def trace_decoder():
         beta_key = f"{block_prefix}block.0.beta"
         if alpha_key in state_dict and beta_key in state_dict:
             hidden = snake_activation(hidden, state_dict[alpha_key], state_dict[beta_key])
-            print_stats(f"    After snake (block.0)", hidden)
+            print_stats("    After snake (block.0)", hidden)
 
         # ConvTranspose1d upsample (block.1)
         upsample_weight = state_dict.get(f"{block_prefix}block.1.conv.weight")
@@ -153,7 +153,7 @@ def trace_decoder():
             kernel_size = upsample_weight.shape[-1]
             padding = (kernel_size - rate) // 2
             hidden = F.conv_transpose1d(hidden, upsample_weight, stride=rate, padding=padding)
-            print_stats(f"    After upsample (block.1)", hidden)
+            print_stats("    After upsample (block.1)", hidden)
 
         # Residual layers (block.2, block.3, block.4 with dilations 1, 3, 9)
         for j, dilation in enumerate([1, 3, 9]):
@@ -185,7 +185,7 @@ def trace_decoder():
 
             hidden = residual + hidden
 
-        print_stats(f"    After residuals", hidden)
+        print_stats("    After residuals", hidden)
 
     # Step 7: Final activation and conv
     print("\n" + "=" * 60)
