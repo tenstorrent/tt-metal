@@ -1,9 +1,14 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+//
+// PARTIAL MIGRATION: PREPROCESS stays raw LLK; binary SFPU + activations
+// migrated to V2 helper (num_tiles_per_cycle == 1).
 
 #include <cstdint>
 
+#include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
@@ -27,43 +32,58 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
-FORCE_INLINE void process_sfpu_tiles(
-    uint32_t n, uint32_t cb_pre_lhs, uint32_t cb_post_lhs, uint32_t cb_pre_rhs, uint32_t cb_post_rhs, uint32_t cb_out) {
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+namespace {
+struct BinarySfpuMacroOp : compute_kernel_lib::BinaryOp<
+                               BinarySfpuMacroOp,
+                               compute_kernel_lib::Dst::D0,
+                               compute_kernel_lib::Dst::D1,
+                               compute_kernel_lib::Dst::D0> {
+    static constexpr bool clobbers_sfpu_lut = true;
+    ALWI static void init() {
+#if HAS_ACTIVATIONS(POST)
+        BINARY_SFPU_INIT;
+#endif
+    }
+    ALWI static void call(uint32_t i0, uint32_t i1, uint32_t out_idx) {
+        BINARY_SFPU_OP(i0, i1, out_idx);
+        PROCESS_POST_ACTIVATIONS(out_idx);
+    }
+};
+}  // namespace
+
+template <
+    tt::CBIndex cb_pre_lhs,
+    tt::CBIndex cb_post_lhs,
+    tt::CBIndex cb_pre_rhs,
+    tt::CBIndex cb_post_rhs,
+    tt::CBIndex cb_out>
+FORCE_INLINE void process_sfpu_tiles(uint32_t n) {
     PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_wait_front(cb_post_lhs, n);
 
     PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, n);
     cb_wait_front(cb_post_rhs, n);
 
-    cb_reserve_back(cb_out, n);
-
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT;
 #endif
 
-    tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
-    for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_lhs, i, i * 2);
-    }
-    copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
-    for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_rhs, i, i * 2 + 1);
-#if HAS_ACTIVATIONS(POST)
-        BINARY_SFPU_INIT;
-#endif
-        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
-        PROCESS_POST_ACTIVATIONS(i * 2);
-    }
-    tile_regs_commit();
+    using compute_kernel_lib::CopyTile;
+    using compute_kernel_lib::CopyTilePolicy;
+    using compute_kernel_lib::Dst;
+    using compute_kernel_lib::eltwise_chain;
+    using compute_kernel_lib::eltwise_pipeline;
 
-    tile_regs_wait();
-    for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out);
-    }
-    tile_regs_release();
+    eltwise_pipeline<static_cast<uint32_t>(cb_out)>(
+        n,
+        eltwise_chain(
+            CopyTile<static_cast<uint32_t>(cb_post_lhs), Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
+            CopyTile<static_cast<uint32_t>(cb_post_rhs), Dst::D1, CopyTilePolicy::NoWaitNoPop>{},
+            BinarySfpuMacroOp{}));
 
-    cb_push_back(cb_out, n);
     cb_pop_front(cb_post_lhs, n);
     cb_pop_front(cb_post_rhs, n);
 }
@@ -72,6 +92,7 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    static_assert(num_tiles_per_cycle == 1, "binary_sfpu_no_bcast chain path runs one tile per chain invocation");
 
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
@@ -80,6 +101,7 @@ void kernel_main() {
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
+    ckernel::compute_kernel_hw_startup(cb_post_lhs, cb_out);
     unary_op_init_common(cb_post_lhs, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
@@ -89,15 +111,13 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
-    // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_sfpu_tiles(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
+        process_sfpu_tiles<cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out>(num_tiles_per_cycle);
     }
 
-    // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out);
+        process_sfpu_tiles<cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out>(remainder);
     }
 }
