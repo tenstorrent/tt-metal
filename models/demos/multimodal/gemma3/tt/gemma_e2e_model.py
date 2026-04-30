@@ -126,7 +126,10 @@ class TtGemmaModel(Transformer):
         tensors on device.
 
         For multimodal prompts, pass ``vision_embeddings`` (host tensor or list of tensors from
-        :meth:`encode_vision_embeddings_from_pixels` / ``encode_vision_for_prefill``); ``pixel_values`` is not accepted here.
+        :meth:`encode_vision_embeddings_from_pixels` / ``encode_vision_for_prefill``).
+
+        If only ``pixel_values`` is set (e.g. vLLM / ``Generator.warmup_model_prefill`` vision pass),
+        embeddings are computed here so callers need not go through ``GemmaMultimodalGenerator``.
         """
 
         S = pt_tokens.shape[-1]
@@ -145,17 +148,18 @@ class TtGemmaModel(Transformer):
         vision_embeddings = kwargs.pop("vision_embeddings", None)
         pixel_values = kwargs.pop("pixel_values", None)
         kwargs.pop("image_grid_thw", None)
+        kwargs.pop("image_sizes", None)
+
+        if vision_embeddings is None and pixel_values is not None:
+            pvs = pixel_values if isinstance(pixel_values, (list, tuple)) else [pixel_values]
+            vision_embeddings = [
+                self.encode_vision_embeddings_from_pixels(pv) if pv is not None else None for pv in pvs
+            ]
 
         if vision_embeddings is not None:
             vision_embeddings = self._vision_embeddings_to_tensor(vision_embeddings, batch_rows)
             if vision_embeddings is not None:
                 tokens_embd = self._fuse_vision_into_text_embeddings(pt_tokens, tokens_embd, vision_embeddings)
-        elif pixel_values is not None:
-            raise ValueError(
-                "prepare_inputs_prefill no longer accepts pixel_values; run vision separately via "
-                "encode_vision_embeddings_from_pixels(...) and pass vision_embeddings=... "
-                "(GemmaMultimodalGenerator does this before prefill)."
-            )
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(
             tokens_embd,
