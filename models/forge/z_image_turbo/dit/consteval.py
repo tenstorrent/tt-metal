@@ -21,6 +21,13 @@ def _permute(input, device):
     return ttnn.permute(x, [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
 
 
+def _permute_bfp8(input, device):
+    x = ttnn.to_device(input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x = ttnn.to_layout(x, ttnn.Layout.TILE, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x = ttnn.permute(x, [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+    return ttnn.typecast(x, ttnn.DataType.BFLOAT8_B, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 def _reshape_64_2(input, device):
     x = ttnn.to_device(input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.to_layout(x, ttnn.Layout.TILE, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -64,7 +71,7 @@ _BLOCK_WEIGHTS = [
 
 _ADALN_WEIGHTS = [
     ("adaLN_modulation.0.bias", _basic),
-    ("adaLN_modulation.0.weight", _permute),
+    ("adaLN_modulation.0.weight", _permute_bfp8),
 ]
 
 
@@ -133,14 +140,14 @@ def run_const_evals(weights, device):
     weights["all_final_layer.2-1.adaLN_modulation.1.bias"] = _basic(
         weights["all_final_layer.2-1.adaLN_modulation.1.bias"], device
     )
-    weights["all_final_layer.2-1.adaLN_modulation.1.weight"] = _permute(
+    weights["all_final_layer.2-1.adaLN_modulation.1.weight"] = _permute_bfp8(
         weights["all_final_layer.2-1.adaLN_modulation.1.weight"], device
     )
     weights["all_x_embedder.2-1.bias"] = _basic(weights["all_x_embedder.2-1.bias"], device)
-    weights["all_x_embedder.2-1.weight"] = _permute(weights["all_x_embedder.2-1.weight"], device)
+    weights["all_x_embedder.2-1.weight"] = _permute_bfp8(weights["all_x_embedder.2-1.weight"], device)
     weights["cap_embedder.0.weight"] = _reshape_1_2560(weights["cap_embedder.0.weight"], device)
     weights["cap_embedder.1.bias"] = _basic(weights["cap_embedder.1.bias"], device)
-    weights["cap_embedder.1.weight"] = _permute(weights["cap_embedder.1.weight"], device)
+    weights["cap_embedder.1.weight"] = _permute_bfp8(weights["cap_embedder.1.weight"], device)
 
     # ── Constant generators (computed, not from model weights) ────────────────
     weights["_t_scale"] = _sbf16(1000.0)
