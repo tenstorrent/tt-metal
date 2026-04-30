@@ -165,8 +165,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_t_chunk_size: int | None = 1,
         sdpa_t_fracture_w_only: bool = False,
-        target_height: int = 0,
-        target_width: int = 0,
+        height: int = 0,
+        width: int = 0,
+        num_frames: int = 0,
         t_chunk_size: int = 0,
         run_warmup: bool = True,
     ):
@@ -338,7 +339,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
         if run_warmup:
-            self.warmup_buffers(height=target_height, width=target_width)
+            self.warmup_buffers(height=height, width=width)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -376,6 +377,20 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         width: int = 0,
         num_frames: int = 81,
     ):
+        if "DEMO_WEIGHTS_DIR_T2V" in os.environ:
+            from pipelines.pipeline import create_pipeline as create_t2v_pipeline
+
+            return create_t2v_pipeline(
+                mesh_device=mesh_device,
+                weights_dir=os.environ["DEMO_WEIGHTS_DIR_T2V"],
+            )
+        if "DEMO_WEIGHTS_DIR_I2V" in os.environ:
+            from pipelines.pipeline_i2v import create_i2v_pipeline
+
+            return create_i2v_pipeline(
+                mesh_device=mesh_device,
+                weights_dir=os.environ["DEMO_WEIGHTS_DIR_I2V"],
+            )
         device_configs = {}
         if ttnn.device.is_blackhole():
             device_configs[(1, 4)] = {
