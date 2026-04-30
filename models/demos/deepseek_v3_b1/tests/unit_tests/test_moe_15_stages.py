@@ -24,7 +24,7 @@ import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
@@ -122,6 +122,9 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0
+    ), "embedding_size_bytes must be divisible by num_gate_proj_cores"
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
@@ -152,6 +155,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             d2h_socket_fifo_size=embedding_fifo_size,
             d2h_socket_page_size=embedding_size_bytes,
             embedding_tensor=embedding_tensor,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
     else:
         exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
@@ -165,6 +169,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
             exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=reduce_payload_per_shard,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")
@@ -500,6 +505,9 @@ def test_persistent_moe_15_stages(
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0
+    ), "embedding_size_bytes must be divisible by num_gate_proj_cores"
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
@@ -534,6 +542,7 @@ def test_persistent_moe_15_stages(
                 d2h_socket_fifo_size=embedding_fifo_size,
                 d2h_socket_page_size=embedding_size_bytes,
                 embedding_tensor=embedding_tensor,
+                loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
             )
         else:
             exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
@@ -547,6 +556,7 @@ def test_persistent_moe_15_stages(
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
                 exit_node_upstream=exit_upstream_cores,
                 exit_upstream_page_size=reduce_payload_per_shard,
+                loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
             )
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")
@@ -883,6 +893,9 @@ def test_persistent_moe_multi_token(
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0
+    ), "embedding_size_bytes must be divisible by num_gate_proj_cores"
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
@@ -917,6 +930,7 @@ def test_persistent_moe_multi_token(
                 d2h_socket_fifo_size=embedding_fifo_size,
                 d2h_socket_page_size=embedding_size_bytes,
                 embedding_tensor=embedding_tensor,
+                loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
             )
         else:
             exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
@@ -930,6 +944,7 @@ def test_persistent_moe_multi_token(
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
                 exit_node_upstream=exit_upstream_cores,
                 exit_upstream_page_size=reduce_payload_per_shard,
+                loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
             )
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")

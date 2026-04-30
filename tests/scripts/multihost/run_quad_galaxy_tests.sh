@@ -77,7 +77,7 @@ run_quad_galaxy_unit_tests() {
   # TODO: Currently failing
   #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation ; fail+=$?
 
   tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
@@ -95,8 +95,27 @@ run_quad_galaxy_unit_tests() {
 # Environment setup helpers
 ###############################################################################
 
-resolve_deepseekv3_cache() {
+# Kernel cache must be local per host (not NFS/shared home) to avoid multihost races.
+_ensure_local_tt_metal_cache() {
+    unset TT_METAL_CACHE 2>/dev/null || true
+    local rid="${GITHUB_RUN_ID:-$$}"
+    export TT_METAL_CACHE="${TMPDIR:-/tmp}/tt_metal_kernel_cache_${rid}"
+    mkdir -p "${TT_METAL_CACHE}"
+}
+
+# MLPerf weight cache is read-only in CI. Module-test jobs set MULTIHOST_DS_V3_WEIGHT_CACHE=1;
+# demos omit it so DEEPSEEK_V3_CACHE stays unset unless explicitly overridden elsewhere.
+_resolve_deepseekv3_cache() {
     local ci_cache="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
+
+    if [[ "${MULTIHOST_DS_V3_WEIGHT_CACHE:-0}" != "1" ]]; then
+        unset DEEPSEEK_V3_CACHE 2>/dev/null || true
+        unset DEEPSEEK_V3_CACHE_OVERRIDE 2>/dev/null || true
+        return 0
+    fi
+
+    unset DEEPSEEK_V3_CACHE 2>/dev/null || true
+
     if [[ -n "${DEEPSEEK_V3_CACHE_OVERRIDE:-}" ]]; then
         local resolved
         resolved=$(realpath -m "${DEEPSEEK_V3_CACHE_OVERRIDE}")
@@ -113,7 +132,7 @@ resolve_deepseekv3_cache() {
 }
 
 resolve_deepseekv3_model() {
-    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
     local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
 
     if [[ ! -d "${model_path}" ]]; then
@@ -127,6 +146,7 @@ resolve_deepseekv3_model() {
 }
 
 setup_dual_galaxy_env() {
+    _ensure_local_tt_metal_cache
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
     export HOSTS="$(extract_hosts_from_hostfile 2)"
@@ -154,13 +174,14 @@ setup_dual_galaxy_env() {
     fi
 
     resolve_deepseekv3_model
-    resolve_deepseekv3_cache
+    _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
     export USE_TORUS_MODE=0
     echo "Dual Galaxy: USE_TORUS_MODE=0 (torus/ring mode disabled)."
 }
 
 setup_quad_galaxy_env() {
+    _ensure_local_tt_metal_cache
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
     export HOSTS="$(extract_hosts_from_hostfile 4)"
@@ -188,7 +209,7 @@ setup_quad_galaxy_env() {
     echo "Using quad Galaxy rankfile: ${RANKFILE}"
 
     resolve_deepseekv3_model
-    resolve_deepseekv3_cache
+    _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
 
     # DS_QUAD_USE_TORUS_MODE defaults to 1; set 0 or --no-torus to disable torus mode.
@@ -211,7 +232,7 @@ setup_quad_galaxy_env() {
 }
 
 # Compute pytest --timeout value.
-# When DEEPSEEK_V3_CACHE_OVERRIDE is set (cache recalculation), add 6 hours.
+# When DEEPSEEK_V3_CACHE_OVERRIDE is set (custom DeepSeek cache dir), add 6 hours.
 _demo_timeout() {
     local base_timeout=$1
     local cache_extra=21600  # 6 hours
@@ -714,7 +735,7 @@ main() {
             echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
             echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
-            echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
+            echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
             exit 1
             ;;
     esac

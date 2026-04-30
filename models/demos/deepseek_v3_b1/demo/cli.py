@@ -34,16 +34,32 @@ def _fabric_config_for_num_procs(num_procs: int):
     raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
 
 
+def _needs_extended_worker_l1(num_procs: int) -> bool:
+    """True for the one host that required extra L1 (``TT_MESH_ID`` from tt-run, or legacy global rank).
+
+    For 4×16 pod layouts, tt-run sets ``TT_MESH_ID=3`` on the mesh that replaced global rank 62.
+    With only mesh id, single-mesh 16-proc cannot be identified via env (all ranks share the same id),
+    so the rank fallback is used for 16 procs.
+    """
+    mid = os.environ.get("TT_MESH_ID")
+    if num_procs == 64:
+        return int(mid) == 62
+    if num_procs == 16:
+        return int(mid) == 14
+    return False
+
+
 @contextlib.contextmanager
 def open_mesh_device():
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
+    num_procs = int(ttnn.distributed_context_get_size())
+    worker_l1_size = 1499000 if _needs_extended_worker_l1(num_procs) else 1431568
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
-    num_procs = int(ttnn.distributed_context_get_size())
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(15232),
-        "worker_l1_size": 1431568,
+        "worker_l1_size": worker_l1_size,
     }
     logger.info("Opening mesh device...")
     with bh_2d_mesh_device_context(device_params) as mesh_device:
@@ -116,6 +132,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     parser.add_argument(
+        "--num-slots",
+        type=int,
+        default=64,
+        help="Number of users/slots (KV cache batch size) for the decoder stages",
+    )
+    parser.add_argument(
         "--launch-only",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -128,7 +150,7 @@ def create_parser() -> argparse.ArgumentParser:
         help=(
             "If set, export H2D/D2H socket descriptors on mesh 0 after pipeline setup "
             "(files named <prefix>_h2d / <prefix>_d2h). When --launch-only is used and "
-            "this is omitted, defaults to deepseek_v3_b1."
+            "this is omitted, defaults to deepseek."
         ),
     )
     return parser
@@ -152,6 +174,7 @@ def run_demo(
     moe_layer_id_override: int | None = None,
     launch_only: bool = False,
     io_socket_descriptor_prefix: str | None = None,
+    num_slots: int = 64,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -169,6 +192,7 @@ def run_demo(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+            num_slots=num_slots,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -209,7 +233,9 @@ def run_demo(
                 logger.info("Shutting down launch-only pipeline after interrupt.")
 
         model_pipeline.barrier()
-        logger.info("Pod pipeline complete")
+
+        logger.info("Pod pipeline complete - terminating now...")
+        model_pipeline.terminate()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -231,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
 
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
-        io_socket_descriptor_prefix = "deepseek_v3_b1"
+        io_socket_descriptor_prefix = "deepseek"
 
     run_demo(
         prompt=args.prompt,
@@ -246,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+        num_slots=args.num_slots,
     )
     print(file=sys.stdout, flush=True)
     return 0

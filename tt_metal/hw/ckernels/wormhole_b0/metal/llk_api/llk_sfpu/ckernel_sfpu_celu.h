@@ -30,7 +30,7 @@ inline void calculate_celu(uint32_t param0, uint32_t param1) {
 
             sfpi::vFloat result = alpha * (exp_val - sfpi::vConst1);
             if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+                result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
             }
             sfpi::dst_reg[0] = result;
         }

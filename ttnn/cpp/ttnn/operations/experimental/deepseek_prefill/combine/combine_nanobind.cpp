@@ -21,46 +21,65 @@ void bind_combine(nb::module_& mod) {
     ttnn::bind_function<"combine", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        Prefill combine operation for DeepSeek MoE models.
+        Routes expert-processed tokens back to their origin devices and accumulates weighted contributions at each token's original position.
 
-        Combines expert outputs back to original token positions.
-        Uses metadata from dispatch to route expert results back to their originating tokens.
-        Accumulates contributions from multiple experts per token.
+        For each entry in dispatched_buffer, the kernel reads the corresponding metadata entry
+        to determine the origin device, original token index, top-k slot, and router weight.
+        It then writes the weighted expert output back to the origin device's output buffer:
+        locally via NOC if the origin is the same device, or remotely via fabric if the origin
+        is a different device in the dispatch group. This is the inverse of the dispatch op.
+
+        Each device accumulates a token-centric output buffer: for each token slot, up to
+        num_experts_per_tok expert contributions are written at the corresponding top-k index.
+        Only the token slots corresponding to experts in this dispatch group are populated;
+        slots for experts from other dispatch groups contain uninitialized values.
 
         Args:
-            dispatched_buffer (ttnn.Tensor): Expert outputs of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
-            dispatched_metadata (ttnn.Tensor): Metadata tensor containing token routing information
-            expert_token_counts (ttnn.Tensor): Counter tracking tokens per expert of shape (dispatch_group_size, experts_per_chip)
+            dispatched_buffer (ttnn.Tensor): Expert-processed token embeddings produced by TtRoutedExpert.
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, hidden_dim).
+                BFLOAT16 ROW_MAJOR.
+            dispatched_metadata (ttnn.Tensor): Per-token routing metadata produced by the dispatch op.
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5).
+                INT32 ROW_MAJOR. Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+            expert_token_counts (ttnn.Tensor): Number of tokens dispatched to each expert, used to bound
+                the valid range of token slots read per expert in dispatched_buffer.
+                Shape per device: (1, 1, num_routed_experts). INT32 or UINT32 ROW_MAJOR.
+            expert_region_offsets (ttnn.Tensor): Expert region offsets (shared across source
+                devices in a dispatch group) giving the start position of each expert's region
+                in the dispatched_buffer. Same shape/layout as expert_token_counts. Produced by
+                ttnn.experimental.deepseek_prefill.offset_cumsum.
+                Shape per device: (1, 1, num_routed_experts). INT32 or UINT32 ROW_MAJOR.
 
         Keyword Args:
-            dispatch_group_size (int): Number of chips in the dispatch group
-            experts_per_chip (int): Number of experts per chip
-            num_experts_per_tok (int): Number of experts each token is routed to
-            seq_len_per_chip (int): Sequence length per chip
-            memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to None.
+            dispatch_group_size (int): Number of devices in the dispatch group.
+            experts_per_chip (int): Number of experts hosted on each device.
+            num_experts_per_tok (int): Number of experts each token is routed to (top-k).
+            seq_len_per_chip (int): Number of tokens on each device (output token dimension size).
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Must be interleaved
+                (L1 or DRAM). Defaults to the memory config of dispatched_buffer.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation. Defaults to None.
-            cluster_axis (int, optional): Mesh axis to operate along (0=rows, 1=cols). Defaults to 0. Currently only 0 is tested.
-            num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
-            topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
-            init_zeros (bool, optional): Whether to zero-initialize the output buffer. Defaults to True.
+            cluster_axis (int, optional): Mesh axis along which combine communicates
+                (0 = SP/dispatch axis). Defaults to 0.
+            num_links (int, optional): Number of fabric links for remote token writes.
+                Defaults to 1.
+            topology (ttnn.Topology, optional): Fabric topology for remote writes (Linear or Ring).
+                Defaults to Linear.
+            init_zeros (bool, optional): Whether to zero-initialize the output buffer before writing.
+                Defaults to True.
 
         Returns:
-            ttnn.Tensor: Combined output tensor of shape (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-
-        Example:
-            >>> output = ttnn.experimental.deepseek_prefill.combine(
-                    dispatched_buffer,
-                    dispatched_metadata,
-                    expert_token_counts,
-                    dispatch_group_size=2,
-                    experts_per_chip=8,
-                    num_experts_per_tok=4,
-                    seq_len_per_chip=512)
+            ttnn.Tensor:
+                Combined token embeddings with weighted expert contributions accumulated at each
+                token's original top-k slot.
+                Shape per device: (1, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim).
+                BFLOAT16 ROW_MAJOR. Token slots corresponding to experts outside this dispatch
+                group contain uninitialized values.
         )doc",
         &combine,
         nb::arg("dispatched_buffer").noconvert(),
         nb::arg("dispatched_metadata").noconvert(),
         nb::arg("expert_token_counts").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
         nb::kw_only(),
         nb::arg("dispatch_group_size"),
         nb::arg("experts_per_chip"),
