@@ -56,6 +56,11 @@ std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
     return CreateBuffer(cfg);
 }
 
+std::shared_ptr<Buffer> MakeL1Buffer(IDevice* device, uint32_t size = 2048) {
+    InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::L1};
+    return CreateBuffer(cfg);
+}
+
 // ============================================================================
 // SECTION 1: Pure unit tests — no device required
 // ============================================================================
@@ -323,6 +328,42 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_RepeatedApplic
     // Apply back to buf_a.
     apply_resolved_bindings(program, resolved, {buf_a.get()});
     EXPECT_EQ(GetRuntimeArgs(program, 0, {0, 0})[0], buf_a->address());
+}
+
+// Regression: a descriptor with sharded CB buffers but no emplace_runtime_args()
+// Buffer* calls must produce empty ResolvedBindings, so the adapter falls through
+// to the slow path.  Before the fix, CB-only bindings made empty() return false,
+// causing the fast path to activate for factories that never opted in.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnlyBuffers_ReturnsEmpty) {
+    auto buf_dram = MakeDramBuffer(device());
+    auto buf_l1 = MakeL1Buffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    // Old-style: push buffer address as plain uint32_t (no Buffer* binding).
+    kd.runtime_args.emplace_back(CoreCoord{0, 0}, KernelDescriptor::CoreRuntimeArgs{buf_dram->address(), 42u});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    // Simulate a sharded CB: set .buffer on the CB descriptor (must be L1).
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .buffer = buf_l1.get(),
+    });
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, {buf_l1.get()});
+
+    // No rt_arg bindings were declared, so both rt_args and cbs must be empty.
+    EXPECT_TRUE(resolved.rt_args.empty());
+    EXPECT_TRUE(resolved.cbs.empty());
+    EXPECT_TRUE(resolved.empty());
 }
 
 // resolve_bindings fires TT_FATAL when a binding buffer is not in tensor_buffers.

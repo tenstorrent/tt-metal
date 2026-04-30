@@ -385,7 +385,7 @@ def main():
             originalArgs.remove("-r")
             osCmd = " ".join(originalArgs[1:])
 
-            testCommand = f"python3 -m tracy {osCmd}"
+            testCommand = f"{sys.executable} -m tracy {osCmd}"
 
             envVars = dict(os.environ)
             if options.device:

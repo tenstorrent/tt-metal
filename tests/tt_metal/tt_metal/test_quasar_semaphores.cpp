@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
@@ -62,7 +62,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
 }
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
@@ -133,7 +133,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
 }
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
@@ -203,7 +203,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
 }
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
