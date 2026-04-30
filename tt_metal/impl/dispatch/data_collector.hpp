@@ -5,8 +5,10 @@
 #pragma once
 
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_set>
@@ -78,6 +80,18 @@ public:
     void DumpData();
 
 private:
+    struct RealtimeCallbackState {
+        size_t in_flight_invocations = 0;
+        bool unregistering = false;
+        std::condition_variable drained_cv;
+    };
+
+    struct RealtimeCallbackRegistration {
+        tt::ProgramRealtimeProfilerCallbackHandle handle;
+        tt::ProgramRealtimeProfilerCallback callback;
+        std::shared_ptr<RealtimeCallbackState> state;
+    };
+
     struct KernelData {
         int watcher_kernel_id;
         HalProcessorClassType processor_class;
@@ -95,8 +109,7 @@ private:
     mutable std::mutex runtime_id_to_kernel_sources_mutex_;
     // Registered real-time profiler callbacks (invoked from the receiver thread).
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
-    std::vector<std::pair<tt::ProgramRealtimeProfilerCallbackHandle, tt::ProgramRealtimeProfilerCallback>>
-        program_realtime_profiler_callbacks_;
+    std::vector<RealtimeCallbackRegistration> program_realtime_profiler_callbacks_;
     tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
 
     // Chip ids whose RT profiler is currently live; shares the callback-list mutex.

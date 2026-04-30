@@ -37,7 +37,6 @@ import json
 import os
 import sys
 import threading
-import time
 
 import ttnn
 
@@ -128,7 +127,6 @@ def main():
         _run_resnet50(device)
         ttnn.synchronize_device(device)
     finally:
-        time.sleep(2.0 if rows * cols > 1 else 1.0)
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
 
         try:
