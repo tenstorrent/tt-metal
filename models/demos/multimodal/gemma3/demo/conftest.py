@@ -70,6 +70,13 @@ def pytest_addoption(parser):
         help="Run stress test (same decode iteration over a large number of iterations",
     )
     parser.addoption(
+        "--dummy_weights",
+        action="store",
+        default=False,
+        type=bool,
+        help="Use dummy/random weights instead of loading checkpoints in demos that support it.",
+    )
+    parser.addoption(
         "--disable_trace",
         action="store_false",
         dest="enable_trace",
