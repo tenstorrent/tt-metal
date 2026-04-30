@@ -651,28 +651,34 @@ class TtMolmo2Model(LightweightModule):
         """Run full vision path and return [N_valid, 4096] CPU image features."""
         B, n_crops, n_patches, px_dim = pixel_values.shape
 
-        # TP ViT: reshape to [n_crops, 1, 729, 588] on CPU first (avoids tile-volume mismatch),
-        # then replicate all crops to all T3K devices.
-        # TP weights (ShardTensorToMesh) handle per-device head parallelism;
-        # ttnn.all_reduce after each block combines partial head results.
+        # TP ViT: reshape to [chunk, 1, 729, 588] and encode in batches.
+        # Processing all crops at once OOMs for long videos (87+ crops exhaust the
+        # largest contiguous free DRAM block).  Chunks of MAX_VIT_BATCH crops keep
+        # peak allocation small and allow DRAM to be fully reclaimed between chunks.
         n_crops_flat = B * n_crops
         pv_4d = pixel_values.reshape(n_crops_flat, 1, n_patches, px_dim).to(torch.bfloat16)
 
-        pv_ttnn = ttnn.from_torch(
-            pv_4d,  # [n_crops, 1, 729, 588]
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        _MAX_VIT_BATCH = 8  # keeps each ViT forward ≤ ~50 MB peak; safe even when DRAM is fragmented
+        vit_chunks = []
+        for start in range(0, n_crops_flat, _MAX_VIT_BATCH):
+            chunk_cpu = pv_4d[start : start + _MAX_VIT_BATCH]  # [chunk, 1, 729, 588]
+            chunk_ttnn = ttnn.from_torch(
+                chunk_cpu,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            # ViT encode → [1, chunk, 729, 2304]
+            feat_ttnn = self.vit_encoder.forward(chunk_ttnn)
+            ttnn.deallocate(chunk_ttnn)
+            # Pull to CPU immediately so TTNN DRAM is freed before next chunk
+            feat_cpu = ttnn.to_torch(ttnn.get_device_tensors(feat_ttnn)[0]).float()
+            ttnn.deallocate(feat_ttnn)
+            vit_chunks.append(feat_cpu.squeeze(0))  # [chunk, 729, 2304]
 
-        # ViT encode → [1, n_crops, 729, 2304] (same on all devices after all_reduce)
-        vit_features_ttnn = self.vit_encoder.forward(pv_ttnn)
-
-        # Pull from device 0 (all devices have identical result after all_reduce)
-        vit_cpu = ttnn.to_torch(ttnn.get_device_tensors(vit_features_ttnn)[0]).float()
-        ttnn.deallocate(vit_features_ttnn)
+        vit_cpu = torch.cat(vit_chunks, dim=0)  # [n_crops_flat, 729, 2304]
         vit_cpu = vit_cpu.reshape(B, n_crops, n_patches, 2304)
 
         # Image pooling on CPU via reference PyTorch (avoids TTNN DRAM OOM for video).
