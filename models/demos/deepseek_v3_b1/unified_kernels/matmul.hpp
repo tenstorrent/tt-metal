@@ -190,9 +190,6 @@ struct Matmul {
                     //      blocks on mailbox_read until UNPACK posts.
                     if constexpr (CTArgs::has_custom_sfpu_cb) {
                         UNPACK(({ cb_wait_front(CTArgs::custom_sfpu_cb, 1); }));
-                        UNPACK((t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_OPERAND_SYNC)));
-
-                        PACK((t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::UNPACK_OPERAND_SYNC)));
                         uint32_t cb_rd_addr = get_tile_address(CTArgs::custom_sfpu_cb, 0);
                         PACK(({
                             volatile tt_l1_ptr uint16_t* l1_ptr =
@@ -205,7 +202,6 @@ struct Matmul {
                             // as two independent 4-lane groups).
                             TTI_SFPTRANSP(0, 0, 0, 0);
                         }));
-                        PACK((t6_semaphore_get<p_stall::PACK>(semaphore::UNPACK_OPERAND_SYNC)));
                     }
                     PACK((ckernel::llk_math_eltwise_unary_sfpu_apply_scaler_init<
                           CTArgs::fused_activation_approx_mode>()));
@@ -220,10 +216,10 @@ struct Matmul {
                     tile_regs_commit();
 
                     // Run activation on PACK thread
-                    TTI_SEMWAIT(
+                    PACK(TTI_SEMWAIT(
                         p_stall::STALL_TDMA | p_stall::STALL_CFG,
                         semaphore::t6_sem(semaphore::MATH_PACK),
-                        p_stall::STALL_ON_ZERO);
+                        p_stall::STALL_ON_ZERO));
                     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                     // Use 2 iterations for 1x32 tiny tiles
