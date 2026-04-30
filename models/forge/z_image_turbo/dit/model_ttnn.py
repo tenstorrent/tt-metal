@@ -282,7 +282,7 @@ class ZImageTransformerTTNN(LightweightModule):
 
     def _attention(self, x, seq_len, block_prefix, is_caption=False):
         """Attention with fused QKV (minimal_matmul_split) + nlp_create_qkv_heads for V."""
-        x_2d = ttnn.reshape(x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_2d = ttnn.reshape(x, [seq_len, HIDDEN_DIM], memory_config=ACT_MEM)
         N = HEADS_PER_DEV * HEAD_DIM  # 1024
 
         # ── Fused QKV projection ──────────────────────────────────────────────
@@ -389,7 +389,7 @@ class ZImageTransformerTTNN(LightweightModule):
     def _all_reduce(self, x, seq_len):
         """Async ring all-reduce via CCLManager (persistent ping-pong buffers)."""
         old_x = x
-        x = ttnn.reshape(old_x, [1, 1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.reshape(old_x, [1, 1, seq_len, HIDDEN_DIM], memory_config=ACT_MEM)
         ttnn.deallocate(old_x, False)
         old_x = x
         x = self._ccl.reduce_scatter(old_x, dim=3, mesh_axis=1, use_persistent_buffer=True)
@@ -768,7 +768,7 @@ class ZImageTransformerTTNN(LightweightModule):
 
     def _block_with_adaLN(self, x, adaln_input, seq_len, block_prefix):
         scale_msa, gate_msa, scale_mlp, gate_mlp = self._adaLN_modulation(adaln_input, block_prefix)
-        x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ACT_MEM)
         ttnn.deallocate(x, False)
 
         norm1_x = self._rms_norm(
@@ -842,7 +842,7 @@ class ZImageTransformerTTNN(LightweightModule):
         return x
 
     def _block_no_adaLN(self, x, seq_len, block_prefix, is_caption=False):
-        x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ACT_MEM)
         ttnn.deallocate(x, False)
 
         norm1_x = self._rms_norm(
