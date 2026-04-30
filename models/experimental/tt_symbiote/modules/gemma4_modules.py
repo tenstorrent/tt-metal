@@ -17,7 +17,8 @@ from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerSta
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.gemma4_attention import TTNNGemma4Attention
-from models.experimental.tt_symbiote.modules.gemma4_mlp import TTNNGemma4TextMLP
+from models.experimental.tt_symbiote.modules.gemma4_mlp import TTNNGemma4TextMLP, gelu_pytorch_tanh
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
@@ -103,6 +104,11 @@ class TTNNGemma4DecoderLayer(TTNNModule):
         self.self_attn = None
         self.mlp = None
         self.layer_scalar = 1.0
+        # Per-layer input (PLI) modules — active in 31B (hidden_size_per_layer_input=256)
+        self.hidden_size_per_layer_input = 0
+        self.per_layer_input_gate = None
+        self.per_layer_projection = None
+        self.post_per_layer_input_norm = None
 
     @classmethod
     def from_torch(cls, torch_layer):
@@ -116,6 +122,19 @@ class TTNNGemma4DecoderLayer(TTNNModule):
         new_layer.post_feedforward_layernorm = TTNNDistributedRMSNorm.from_torch(torch_layer.post_feedforward_layernorm)
         new_layer.self_attn = TTNNGemma4Attention.from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNGemma4TextMLP.from_torch(torch_layer.mlp)
+
+        # Per-layer input (PLI) modules — gate (5376→256), projection (256→5376), norm.
+        # Active when HF config has hidden_size_per_layer_input > 0 (Gemma4 31B: 256).
+        # Uses basic TTNNLinear (replicated weights) because the PLI dimension (256) is
+        # too small to benefit from cross-device sharding.
+        pli_size = getattr(torch_layer, "hidden_size_per_layer_input", 0) or 0
+        new_layer.hidden_size_per_layer_input = pli_size
+        if pli_size and hasattr(torch_layer, "per_layer_input_gate"):
+            new_layer.per_layer_input_gate = TTNNLinear.from_torch(torch_layer.per_layer_input_gate)
+            new_layer.per_layer_projection = TTNNLinear.from_torch(torch_layer.per_layer_projection)
+            new_layer.post_per_layer_input_norm = TTNNDistributedRMSNorm.from_torch(
+                torch_layer.post_per_layer_input_norm
+            )
 
         # layer_scalar is a learnable scalar (nn.Parameter) initialised to 1.0
         scalar = getattr(torch_layer, "layer_scalar", None)
@@ -168,10 +187,11 @@ class TTNNGemma4DecoderLayer(TTNNModule):
         is_decode = seq_len == 1
         attn_out, _ = self.self_attn(
             hidden_states=hs,
-            position_embeddings=None,
+            position_embeddings=position_embeddings,
             attention_mask=None if is_decode else attention_mask,
             past_key_values=past_key_values,
             cache_position=kwargs.get("cache_position"),
+            rope_position_idx=kwargs.get("rope_position_idx"),
         )
 
         attn_out = self.post_attention_layernorm(attn_out)
@@ -196,8 +216,22 @@ class TTNNGemma4DecoderLayer(TTNNModule):
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(residual)
 
+        # ----- Per-layer input (PLI) block -----
+        # Applies a gated projection conditioned on per_layer_input (from model-level
+        # embedding + projection).  Active in 31B (hidden_size_per_layer_input=256).
+        # HF ref: Gemma4TextDecoderLayer lines 1401-1408.
+        if self.hidden_size_per_layer_input and per_layer_input is not None:
+            pli_residual = hs
+            hs = self.per_layer_input_gate(hs)  # Linear(5376 → 256)
+            hs = gelu_pytorch_tanh(hs)  # GELU(tanh approx matching HF)
+            hs = ttnn.multiply(hs, per_layer_input)  # Element-wise * PLI
+            hs = self.per_layer_projection(hs)  # Linear(256 → 5376)
+            hs = self.post_per_layer_input_norm(hs)  # RMSNorm
+            hs = ttnn.add(pli_residual, hs)  # Residual add
+            ttnn.deallocate(pli_residual)
+
         # Layer scalar (1.0 in 31B — effectively a no-op)
-        if self.layer_scalar != 1.0:
+        if abs(self.layer_scalar - 1.0) > 1e-6:
             hs = ttnn.multiply(hs, self.layer_scalar)
 
         # HF Gemma4TextDecoderLayer returns a plain tensor (not a tuple).
@@ -217,7 +251,12 @@ class TTNNGemma4LayerStack(TTNNLayerStack):
         per_layer_inputs = kwargs.pop("per_layer_inputs", None)
 
         for i, (layer, layer_type) in enumerate(zip(self.layers, self.layer_types)):
-            per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
+            if per_layer_inputs is not None:
+                per_layer_input = (
+                    per_layer_inputs[i] if isinstance(per_layer_inputs, list) else per_layer_inputs[:, :, i, :]
+                )
+            else:
+                per_layer_input = None
             hidden_states = layer.forward(
                 hidden_states,
                 per_layer_input=per_layer_input,
@@ -237,3 +276,7 @@ class TTNNGemma4LayerStack(TTNNLayerStack):
             if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "layer_idx"):
                 layer_idx = layer.self_attn.layer_idx
                 past_key_values.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
+
+
+# Alias for test compatibility: tests import TTNNGemma4FFN from this module.
+TTNNGemma4FFN = TTNNGemma4TextMLP

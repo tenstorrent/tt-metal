@@ -211,6 +211,8 @@ class TTNNDistributedRMSNorm(TTNNModule):
             tt_stats,
             dim=-1,
             num_links=1,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Ring,
         )
         # Run distributed rmsnorm part 2

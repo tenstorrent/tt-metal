@@ -13,6 +13,10 @@ from models.experimental.tt_symbiote.modules.linear import (
 )
 
 
+def gelu_pytorch_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
+    return ttnn.gelu(x, fast_and_approximate_mode=True)
+
+
 class TTNNGemma4TextMLP(TTNNModule):
     """TTNN implementation of the Gemma 4 31B-it dense MLP.
 
@@ -39,14 +43,16 @@ class TTNNGemma4TextMLP(TTNNModule):
         up_weight = torch_mlp.up_proj.weight.data.clone()  # [21504, 5376]
         fused_weight = torch.cat([gate_weight, up_weight], dim=0)  # [43008, 5376]
 
-        fused_linear = torch.nn.Linear(
-            torch_mlp.gate_proj.in_features,  # 5376
-            2 * tt_module.intermediate_size,  # 43008
-            bias=False,
-        )
-        fused_linear.weight.data = fused_weight
+        # Use a lightweight shim instead of torch.nn.Linear to avoid
+        # kaiming_uniform_ random-init overhead on the 43008×5376 weight.
+        # TTNNLinear.from_torch only reads in_features, out_features, weight, bias.
+        class _FusedLinearShim:
+            in_features = torch_mlp.gate_proj.in_features
+            out_features = 2 * tt_module.intermediate_size
+            weight = fused_weight
+            bias = None
 
-        tt_module.fused_gate_up_proj = TTNNLinearIColShardedWAllReduced.from_torch(fused_linear)
+        tt_module.fused_gate_up_proj = TTNNLinearIColShardedWAllReduced.from_torch(_FusedLinearShim())
 
         # Keep individual proj references as None (fused into fused_gate_up_proj)
         tt_module.gate_proj = None
@@ -56,6 +62,19 @@ class TTNNGemma4TextMLP(TTNNModule):
         tt_module.down_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.down_proj)
 
         return tt_module
+
+    def move_weights_to_device_impl(self):
+        """Move weights to device and enable fp32 accumulation on projections."""
+        super().move_weights_to_device_impl()
+        linear_compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.fused_gate_up_proj.compute_kernel_config = linear_compute_config
+        self.down_proj.compute_kernel_config = linear_compute_config
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
@@ -74,8 +93,8 @@ class TTNNGemma4TextMLP(TTNNModule):
         up = ttnn.slice(gate_up, [0, 0, self.intermediate_size], [batch_size, seq_len, 2 * self.intermediate_size])
         ttnn.deallocate(gate_up)
 
-        # GeLU activation on gate path
-        gate = ttnn.gelu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # GeLU activation on gate path (tanh approximation via ttnn.gelu)
+        gate = gelu_pytorch_tanh(gate)
 
         # Element-wise multiply gate and up
         gate_up_mul = ttnn.multiply(gate, up)

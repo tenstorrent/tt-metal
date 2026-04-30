@@ -128,6 +128,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
 
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, input_dim=-1, weight_dim=-2)
+        self.compute_kernel_config = None
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -139,7 +140,10 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        linear_kwargs = dict(memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.compute_kernel_config is not None:
+            linear_kwargs["compute_kernel_config"] = self.compute_kernel_config
+        tt_output = ttnn.linear(input_tensor, self.tt_weight, **linear_kwargs)
         tt_output = ttnn.reduce_scatter(
             tt_output,
             dim=3,
@@ -176,7 +180,10 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         input_tensor = ttnn.reshape(input_tensor, input_shape)
 
         # Matmul: partial sum on each device
-        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        linear_kwargs = dict(memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.compute_kernel_config is not None:
+            linear_kwargs["compute_kernel_config"] = self.compute_kernel_config
+        tt_output = ttnn.linear(input_tensor, self.tt_weight, **linear_kwargs)
         # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
         # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
         # is incompatible with TTNN trace capture (requires stable buffer addresses).
@@ -285,6 +292,7 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
 
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, weight_dim=-1)
+        self.compute_kernel_config = None
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -296,7 +304,10 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
-        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        linear_kwargs = dict(memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.compute_kernel_config is not None:
+            linear_kwargs["compute_kernel_config"] = self.compute_kernel_config
+        tt_output = ttnn.linear(input_tensor, self.tt_weight, **linear_kwargs)
         if self.tt_bias is not None:
             tt_output += self.tt_bias
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])

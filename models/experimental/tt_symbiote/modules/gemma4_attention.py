@@ -15,6 +15,7 @@ Gemma4 attention has two variants:
 Both variants use per-head Q/K/V RMSNorm (no 1/sqrt(d) scaling) and RoPE.
 """
 
+import os
 from typing import Optional
 
 import torch
@@ -33,53 +34,12 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearIColShardedWAllReduced,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNLocalRMSNorm
-from models.experimental.tt_symbiote.modules.rope import (
-    BailingRotarySetup,
-)
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 try:
     from transformers.cache_utils import Cache
 except ImportError:
     Cache = object
-
-
-def _reverse_permute_weight(tensor: torch.Tensor, n_heads: int, head_dim: int) -> torch.Tensor:
-    """Permute Q/K weight from HF split-half to Meta interleaved layout.
-
-    Full rotary: standard permutation matching tt-transformers reverse_permute.
-    Reorders from [first_half, second_half] to interleaved [x0, x_{d/2}, x1, x_{d/2+1}, ...].
-    """
-    dim1, dim2 = tensor.shape
-    return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
-
-
-def _reverse_permute_norm_weight(weight: torch.Tensor, head_dim: int) -> torch.Tensor:
-    """Permute per-head norm weight from split-half to interleaved layout.
-
-    When Q/K projection weights are permuted via _reverse_permute_weight, the
-    per-head norm weights (q_norm, k_norm) must be permuted identically so that
-    the element-wise scaling aligns with the reordered head dimensions.
-
-    Transforms [w0, w1, ..., w_{d/2-1}, w_{d/2}, ...] to [w0, w_{d/2}, w1, w_{d/2+1}, ...].
-    """
-    return weight.view(2, head_dim // 2).T.reshape(-1)
-
-
-def _deinterleave_heads(tensor, head_dim):
-    """Convert from interleaved [a0,b0,a1,b1,...] to split-half [a0,a1,...,b0,b1,...] format.
-
-    Applied per-head on the last dimension. Used to un-permute V states that
-    inherited the k_proj weight permutation in K=V sharing layers.
-    """
-    shape = list(tensor.shape)
-    new_shape = shape[:-1] + [head_dim // 2, 2]
-    tensor = ttnn.reshape(tensor, new_shape)
-    ndim = len(new_shape)
-    perm = list(range(ndim - 2)) + [ndim - 1, ndim - 2]
-    tensor = ttnn.permute(tensor, perm)
-    tensor = ttnn.reshape(tensor, shape)
-    return tensor
 
 
 @trace_enabled
@@ -101,11 +61,6 @@ class TTNNGemma4Attention(TTNNModule):
 
     Both use scaling=1.0 (norms replace 1/sqrt(d) scaling) and full RoPE.
     """
-
-    # Class-level cache for BailingRotarySetup instances, shared across layers
-    # with the same (device_id, head_dim, rope_theta) to avoid OOM from
-    # per-layer cos/sin cache allocation (~16-32MB each × 60 layers = ~1.1GB).
-    _shared_rotary_setups = {}
 
     def __init__(self):
         super().__init__()
@@ -171,40 +126,32 @@ class TTNNGemma4Attention(TTNNModule):
         # Choose linear layer class for output projection
         LinearClsOut = TTNNLinearIReplicatedWColSharded if distributed else TTNNLinear
 
-        # Permute Q/K weights from HF split-half to Meta interleaved layout
-        # before creating TTNN linear layers. This is required for
-        # ttnn.experimental.rotary_embedding_llama which expects interleaved
-        # cos/sin pairs [c0, c0, c1, c1, ...].
-        q_weight = _reverse_permute_weight(
-            hf_attn.q_proj.weight.data.clone(), new_attn.num_attention_heads, new_attn.head_dim
-        )
-        k_weight = _reverse_permute_weight(
-            hf_attn.k_proj.weight.data.clone(), new_attn.num_key_value_heads, new_attn.head_dim
-        )
-
-        # Permute per-head Q/K norm weights to match the interleaved layout.
-        # The norm weight is [head_dim] and applied element-wise after projection,
-        # so it must follow the same split-half -> interleaved reordering.
-        if hasattr(hf_attn.q_norm, "weight") and hf_attn.q_norm.weight is not None:
-            hf_attn.q_norm.weight.data = _reverse_permute_norm_weight(hf_attn.q_norm.weight.data, new_attn.head_dim)
-        if hasattr(hf_attn.k_norm, "weight") and hf_attn.k_norm.weight is not None:
-            hf_attn.k_norm.weight.data = _reverse_permute_norm_weight(hf_attn.k_norm.weight.data, new_attn.head_dim)
+        # HF-style RoPE: use weights directly from HuggingFace, NO permutation needed.
+        # ttnn.experimental.rotary_embedding (not rotary_embedding_llama) expects HF format.
+        q_weight = hf_attn.q_proj.weight.data.clone()
+        k_weight = hf_attn.k_proj.weight.data.clone()
+        # Per-head norm weights: NO permutation needed with HF-style RoPE
 
         # Fused QKV projection: concatenate Q, K, V weights into single matmul.
-        # Sliding layers: Q + K + V; Global layers: Q + K only (K=V sharing).
+        # Sliding layers: Q + K + V; Global layers: Q + K + V (where V = K copy).
         # Uses TTNNLinearIColShardedWAllReduced: input col-sharded -> matmul -> all_reduce
         # replaces 3 separate matmuls + 4 all_gather CCL ops with 1 matmul + 2 CCL ops.
         q_size = new_attn.num_attention_heads * new_attn.head_dim
         kv_size = new_attn.num_key_value_heads * new_attn.head_dim
 
         has_v_proj = hf_attn.v_proj is not None
-        new_attn._has_v_proj = has_v_proj
+        new_attn._has_v_proj = True  # Always True now (V = K copy for global layers)
+        new_attn._is_kv_sharing = not has_v_proj  # True for global layers
 
         if has_v_proj:
             v_weight = hf_attn.v_proj.weight.data.clone()
             fused_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
         else:
-            fused_weight = torch.cat([q_weight, k_weight], dim=0)
+            # K=V sharing: duplicate K weight as V weight in the fused QKV.
+            # After nlp_create_qkv_heads split, V will be in correct HF format
+            # (no de-interleave needed since no Meta permutation was applied).
+            v_weight = k_weight.clone()
+            fused_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
 
         fused_linear = torch.nn.Linear(new_attn.hidden_size, fused_weight.shape[0], bias=False)
         fused_linear.weight.data = fused_weight
@@ -220,7 +167,7 @@ class TTNNGemma4Attention(TTNNModule):
         # O projection: row-parallel with reduce_scatter
         new_attn.o_proj = LinearClsOut.from_torch(hf_attn.o_proj)
 
-        # Per-head Q/K/V norms (Gemma4RMSNorm instances, weights already permuted above)
+        # Per-head Q/K/V norms (Gemma4RMSNorm instances, used as-is from HF)
         new_attn.q_norm = TTNNLocalRMSNorm.from_torch(hf_attn.q_norm)
         new_attn.k_norm = TTNNLocalRMSNorm.from_torch(hf_attn.k_norm)
         if hasattr(hf_attn, "v_norm") and hf_attn.v_norm is not None:
@@ -231,7 +178,8 @@ class TTNNGemma4Attention(TTNNModule):
         else:
             new_attn.v_norm = None
 
-        # RoPE is handled by BailingRotarySetup (initialized in move_weights_to_device_impl)
+        # RoPE cos/sin caches are managed at the model level (TTNNGemma4TextModel)
+        # and passed to attention as position_embeddings arguments.
 
         # SDPA for attention computation
         new_attn.sdpa = TTNNSDPAAttention()
@@ -249,16 +197,20 @@ class TTNNGemma4Attention(TTNNModule):
         grid = self.device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
 
-        if self.sdpa.program_config is None:
-            # Configure SDPA for the appropriate head_dim
-            # Use smaller chunk sizes for larger head_dim to avoid L1 pressure
-            chunk_size = 64 if self.head_dim >= 512 else 128
-            self.sdpa.program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=chunk_size,
-                k_chunk_size=chunk_size,
-                exp_approx_mode=False,
-            )
+        if not hasattr(self.sdpa, "decode_program_config"):
+            # Prefill: auto-derive (no program_config), matching reference prefill.py
+            self.sdpa.program_config = None
+
+            # Decode: layer-type-specific config matching reference decode.py
+            if self.head_dim >= 512:
+                self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(8, 4),
+                    q_chunk_size=32,
+                    k_chunk_size=64,
+                    exp_approx_mode=False,
+                )
+            else:
+                self.sdpa.decode_program_config = None
             self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -266,6 +218,20 @@ class TTNNGemma4Attention(TTNNModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
+
+        # Enable fp32 destination accumulation on linear projections.
+        # Default matmul uses HiFi2 + bf16 dest accumulation, which causes
+        # significant precision loss for global layers where o_proj has a
+        # 16384-element inner dimension (vs 8192 for sliding layers).
+        linear_compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.qkv_proj.compute_kernel_config = linear_compute_config
+        self.o_proj.compute_kernel_config = linear_compute_config
 
         # Pre-allocate replicated decode cur_pos buffer for trace safety.
         if self.device.get_num_devices() > 1:
@@ -279,32 +245,11 @@ class TTNNGemma4Attention(TTNNModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Initialize BailingRotarySetup for on-device RoPE (trace-safe).
-        # Pre-computes cos/sin caches and transformation matrices on device,
-        # avoiding frozen position_embeddings during trace replay.
-        # SHARED across layers with the same config to avoid OOM — only 2 unique
-        # configs exist (sliding head_dim=256, global head_dim=512).
-        config = self._fallback_torch_layer.config
-        layer_type = "sliding_attention" if self.is_sliding else "full_attention"
-        rope_params = config.rope_parameters[layer_type]
-        rope_theta = rope_params["rope_theta"]  # 10_000 sliding, 1_000_000 global
-        partial_rotary_factor = rope_params.get("partial_rotary_factor", 1.0)  # 1.0 sliding, 0.25 global
-        setup_key = (id(self.device), self.head_dim, rope_theta, partial_rotary_factor)
-        if setup_key not in TTNNGemma4Attention._shared_rotary_setups:
-            # Gemma4 follows the HuggingFace Gemma3 convention: inv_freq is
-            # computed over the full head_dim and only the first rotary_dim
-            # frequencies are used.  This differs from the standard Phi/Ling
-            # convention where inv_freq is computed over rotary_dim only.
-            TTNNGemma4Attention._shared_rotary_setups[setup_key] = BailingRotarySetup(
-                device=self.device,
-                head_dim=self.head_dim,
-                max_seq_len=min(getattr(config, "max_position_embeddings", 8192), 2048),
-                rope_theta=rope_theta,
-                partial_rotary_factor=partial_rotary_factor,
-                use_head_dim_for_freq=True,
-            )
-        self._rotary_setup = TTNNGemma4Attention._shared_rotary_setups[setup_key]
-        self._rotary_dim = self._rotary_setup.rotary_dim  # 256 sliding, 128 global
+        # RoPE cos/sin caches are now managed at the model level
+        # (TTNNGemma4TextModel) and passed to attention as arguments.
+        # No BailingRotarySetup needed per-layer.
+        # HF's Gemma4TextRotaryEmbedding returns full-width cos/sin with
+        # identity values for non-rotary dims, so no partial RoPE handling needed.
 
     @property
     def _is_distributed(self):
@@ -461,13 +406,8 @@ class TTNNGemma4Attention(TTNNModule):
         kv_size = self._kv_size
         query_states = ttnn.slice(qkv_states, [0, 0, 0], [batch_size, seq_length, q_size])
         key_states = ttnn.slice(qkv_states, [0, 0, q_size], [batch_size, seq_length, q_size + kv_size])
-        if self._has_v_proj:
-            value_states = ttnn.slice(
-                qkv_states, [0, 0, q_size + kv_size], [batch_size, seq_length, q_size + 2 * kv_size]
-            )
-        else:
-            # Global layers (K=V sharing): clone K output for V path
-            value_states = ttnn.clone(key_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # V is always present in fused QKV (for K=V sharing, V weight = K weight copy)
+        value_states = ttnn.slice(qkv_states, [0, 0, q_size + kv_size], [batch_size, seq_length, q_size + 2 * kv_size])
         ttnn.deallocate(qkv_states)
 
         if for_decode and seq_length == 1:
@@ -477,9 +417,6 @@ class TTNNGemma4Attention(TTNNModule):
             query_states = ttnn.reshape(query_states, (self.num_attention_heads, self.head_dim))
             key_states = ttnn.reshape(key_states, (self.num_key_value_heads, self.head_dim))
             value_states = ttnn.reshape(value_states, (self.num_key_value_heads, self.head_dim))
-
-            if not self._has_v_proj:
-                value_states = _deinterleave_heads(value_states, self.head_dim)
 
             query_states = self.q_norm(query_states)
             key_states = self.k_norm(key_states)
@@ -494,9 +431,6 @@ class TTNNGemma4Attention(TTNNModule):
             query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_attention_heads, self.head_dim))
             key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
             value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-
-            if not self._has_v_proj:
-                value_states = _deinterleave_heads(value_states, self.head_dim)
 
             query_states = self._apply_per_head_norm(
                 query_states,
@@ -531,130 +465,128 @@ class TTNNGemma4Attention(TTNNModule):
 
         return query_states, key_states, value_states
 
-    def _apply_rotary_embedding_llama(
-        self, query_states, key_states, cos, sin, trans_mat, is_decode_mode, batch_size=None
-    ):
-        """Apply rotary_embedding_llama with partial-RoPE optimization.
+    def _apply_rope(self, query_states, key_states, cos, sin, token_index=None):
+        """Apply rotary position embedding to Q and K.
 
-        The TTNN rotary_embedding_llama kernel requires head_dim <= 256.
-        Three paths:
-        1. head_dim <= 256: Direct single kernel call (sliding layers).
-        2. head_dim > 256 AND rotary_dim <= 256: Partial RoPE — slice only the
-           rotary dims (128 for Gemma 4 global), apply one kernel call, concat
-           with untouched pass-through dims. 1.57x decode speedup.
-        3. head_dim > 256 AND rotary_dim > 256: Chunked fallback — split into
-           256-dim chunks and apply RoPE to each (future-proofing).
-
-        In decode mode, the kernel requires HEIGHT_SHARDED inputs, so tensors
-        are sharded before RoPE and un-sharded after.
+        HF's Gemma4TextRotaryEmbedding returns full-width cos/sin (head_dim-wide)
+        with identity values (cos=1, sin=0) for non-rotary dimensions. This
+        naturally produces pass-through for non-rotary dims, so no split-apply-concat
+        is needed. Matches the sdjordjevic reference implementation.
         """
-        max_rope_dim = 256
+        orig_q_shape = query_states.shape
+        orig_k_shape = key_states.shape
 
-        # --- Path 1: head_dim fits kernel limit (sliding layers, head_dim=256) ---
-        if self.head_dim <= max_rope_dim:
-            query_states = ttnn.experimental.rotary_embedding_llama(
-                query_states, cos, sin, trans_mat, is_decode_mode=is_decode_mode
-            )
-            key_states = ttnn.experimental.rotary_embedding_llama(
-                key_states, cos, sin, trans_mat, is_decode_mode=is_decode_mode
-            )
-            return query_states, key_states
+        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin, token_index)
+        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin, token_index)
 
-        # --- Path 2: Partial RoPE (global layers, rotary_dim=128 <= 256) ---
-        rotary_dim = self._rotary_dim
-        if rotary_dim <= max_rope_dim:
-            # Slice rotary portion and pass-through portion
-            q_rot = query_states[:, :, :, :rotary_dim]
-            q_pass = query_states[:, :, :, rotary_dim:]
-            k_rot = key_states[:, :, :, :rotary_dim]
-            k_pass = key_states[:, :, :, rotary_dim:]
+        # Restore dim-2 if the kernel padded it to TILE_HEIGHT
+        if query_states.shape[2] != orig_q_shape[2]:
+            query_states = query_states[:, :, : orig_q_shape[2], :]
+        if key_states.shape[2] != orig_k_shape[2]:
+            key_states = key_states[:, :, : orig_k_shape[2], :]
 
-            # Slice cos/sin to actual rotary dims only
-            cos_rot = cos[:, :, :, :rotary_dim]
-            sin_rot = sin[:, :, :, :rotary_dim]
-
-            # For decode mode, shard rotary-dim tensors to L1 (kernel requirement)
-            if is_decode_mode and batch_size is not None:
-                batch_grid = ttnn.num_cores_to_corerangeset(
-                    batch_size, self.device.compute_with_storage_grid_size(), True
-                )
-                shard_mem = ttnn.create_sharded_memory_config(
-                    shape=(ttnn.TILE_SIZE, rotary_dim),
-                    core_grid=batch_grid,
-                    strategy=ttnn.ShardStrategy.HEIGHT,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                q_rot = ttnn.to_memory_config(q_rot, shard_mem)
-                k_rot = ttnn.to_memory_config(k_rot, shard_mem)
-                cos_rot = ttnn.to_memory_config(cos_rot, shard_mem)
-                sin_rot = ttnn.to_memory_config(sin_rot, shard_mem)
-
-            # Single RoPE kernel call per Q/K (128 dims fits kernel limit)
-            q_rot = ttnn.experimental.rotary_embedding_llama(
-                q_rot, cos_rot, sin_rot, trans_mat, is_decode_mode=is_decode_mode
-            )
-            k_rot = ttnn.experimental.rotary_embedding_llama(
-                k_rot, cos_rot, sin_rot, trans_mat, is_decode_mode=is_decode_mode
-            )
-
-            # Unshard back to DRAM after RoPE
-            if is_decode_mode and batch_size is not None:
-                q_rot = ttnn.to_memory_config(q_rot, ttnn.DRAM_MEMORY_CONFIG)
-                k_rot = ttnn.to_memory_config(k_rot, ttnn.DRAM_MEMORY_CONFIG)
-
-            # Concat rotated portion with untouched pass-through
-            query_states = ttnn.concat([q_rot, q_pass], dim=-1)
-            key_states = ttnn.concat([k_rot, k_pass], dim=-1)
-            return query_states, key_states
-
-        # --- Path 3: Chunked fallback for rotary_dim > 256 (future-proofing) ---
-        num_chunks = (self.head_dim + max_rope_dim - 1) // max_rope_dim
-        q_chunks = []
-        k_chunks = []
-
-        shard_mem = None
-        if is_decode_mode and batch_size is not None:
-            batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True)
-            shard_mem = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, max_rope_dim),
-                core_grid=batch_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-        for i in range(num_chunks):
-            start = i * max_rope_dim
-            end = min((i + 1) * max_rope_dim, self.head_dim)
-            q_chunk = query_states[:, :, :, start:end]
-            k_chunk = key_states[:, :, :, start:end]
-            cos_chunk = cos[:, :, :, start:end]
-            sin_chunk = sin[:, :, :, start:end]
-
-            if shard_mem is not None:
-                q_chunk = ttnn.to_memory_config(q_chunk, shard_mem)
-                k_chunk = ttnn.to_memory_config(k_chunk, shard_mem)
-                cos_chunk = ttnn.to_memory_config(cos_chunk, shard_mem)
-                sin_chunk = ttnn.to_memory_config(sin_chunk, shard_mem)
-
-            q_chunk = ttnn.experimental.rotary_embedding_llama(
-                q_chunk, cos_chunk, sin_chunk, trans_mat, is_decode_mode=is_decode_mode
-            )
-            k_chunk = ttnn.experimental.rotary_embedding_llama(
-                k_chunk, cos_chunk, sin_chunk, trans_mat, is_decode_mode=is_decode_mode
-            )
-
-            if shard_mem is not None:
-                q_chunk = ttnn.to_memory_config(q_chunk, ttnn.DRAM_MEMORY_CONFIG)
-                k_chunk = ttnn.to_memory_config(k_chunk, ttnn.DRAM_MEMORY_CONFIG)
-
-            q_chunks.append(q_chunk)
-            k_chunks.append(k_chunk)
-
-        query_states = ttnn.concat(q_chunks, dim=-1)
-        key_states = ttnn.concat(k_chunks, dim=-1)
         return query_states, key_states
+
+    def _cpu_sdpa_decode(
+        self,
+        query_states: ttnn.Tensor,
+        past_key_values,
+        layer_idx: int,
+        cur_pos_tt: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """CPU fp32 SDPA fallback for decode, bypassing the paged SDPA kernel.
+
+        Reads Q and KV cache from device, computes attention in fp32 on CPU
+        via torch.nn.functional.scaled_dot_product_attention, and sends the
+        result back to device. Activated by TT_GEMMA4_CPU_SDPA=1 for global
+        layers to work around bf16 precision loss in the paged SDPA kernel.
+        """
+        if not getattr(self, "_cpu_sdpa_logged", False):
+            print(f"[CPU-SDPA] Layer {layer_idx}: Using CPU fp32 attention (TT_GEMMA4_CPU_SDPA=1)")
+            self._cpu_sdpa_logged = True
+
+        device = query_states.device()
+        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+
+        # Q: [1, B, H, D] replicated -> read to CPU
+        if num_devices > 1:
+            q_cpu = ttnn.to_torch(query_states, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            q_cpu = q_cpu[:1]  # take first replica
+        else:
+            q_cpu = ttnn.to_torch(query_states)
+        # q_cpu: [1, B, num_q_heads, head_dim]
+
+        # Get the correct sub-cache and cache-local index
+        cache, cache_idx = past_key_values._get_cache_and_idx(layer_idx)
+
+        # K/V cache: [max_blocks, nkv, block_size, head_dim] replicated
+        k_cache_tt = cache._tt_key_cache[cache_idx]
+        v_cache_tt = cache._tt_value_cache[cache_idx]
+
+        if num_devices > 1:
+            k_cache_cpu = ttnn.to_torch(k_cache_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            k_cache_cpu = k_cache_cpu[: k_cache_tt.shape[0]]
+            v_cache_cpu = ttnn.to_torch(v_cache_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            v_cache_cpu = v_cache_cpu[: v_cache_tt.shape[0]]
+        else:
+            k_cache_cpu = ttnn.to_torch(k_cache_tt)
+            v_cache_cpu = ttnn.to_torch(v_cache_tt)
+        # k/v_cache_cpu: [max_blocks, nkv, block_size, head_dim]
+
+        # cur_pos: scalar position for batch=1 decode
+        if num_devices > 1:
+            cur_pos_cpu = ttnn.to_torch(cur_pos_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            cur_pos_cpu = cur_pos_cpu[:1]
+        else:
+            cur_pos_cpu = ttnn.to_torch(cur_pos_tt)
+        cur_pos = int(cur_pos_cpu.flatten()[0].item())
+
+        # Reshape cache from [max_blocks, nkv, block_size, hd] -> [nkv, seq, hd]
+        # permute(1,0,2,3) -> [nkv, max_blocks, block_size, hd]
+        # reshape -> [nkv, max_blocks*block_size, hd]
+        # slice to cur_pos+1 valid positions
+        nkv = k_cache_cpu.shape[1]
+        hd = k_cache_cpu.shape[3]
+        k_seq = k_cache_cpu.permute(1, 0, 2, 3).reshape(nkv, -1, hd)[:, : cur_pos + 1, :]
+        v_seq = v_cache_cpu.permute(1, 0, 2, 3).reshape(nkv, -1, hd)[:, : cur_pos + 1, :]
+
+        # GQA expansion: [nkv, seq, hd] -> [num_q_heads, seq, hd]
+        n_rep = self.num_attention_heads // self.num_key_value_heads
+        if n_rep > 1:
+            k_seq = k_seq.repeat_interleave(n_rep, dim=0)
+            v_seq = v_seq.repeat_interleave(n_rep, dim=0)
+
+        # Prepare for SDPA: Q [B, H, 1, D], K [B, H, S, D], V [B, H, S, D]
+        batch_size = q_cpu.shape[1]
+        q_sdpa = q_cpu.squeeze(0).permute(0, 1, 2).unsqueeze(2).float()  # [B, H, 1, D]
+        k_sdpa = k_seq.unsqueeze(0).expand(batch_size, -1, -1, -1).float()  # [B, H, S, D]
+        v_sdpa = v_seq.unsqueeze(0).expand(batch_size, -1, -1, -1).float()  # [B, H, S, D]
+
+        # fp32 SDPA on CPU
+        attn_out = torch.nn.functional.scaled_dot_product_attention(
+            q_sdpa,
+            k_sdpa,
+            v_sdpa,
+            scale=self.scaling,
+            is_causal=False,
+        )
+        # attn_out: [B, H, 1, D]
+
+        # Reshape back to [1, B, H, D] for downstream concat_heads
+        attn_out = attn_out.squeeze(2).unsqueeze(0).to(torch.bfloat16)  # [1, B, H, D]
+
+        # Send back to device as replicated tensor in TILE_LAYOUT
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if num_devices > 1 else None
+        attn_output = ttnn.from_torch(
+            attn_out,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return attn_output
 
     def _forward_prefill(
         self,
@@ -670,19 +602,16 @@ class TTNNGemma4Attention(TTNNModule):
         # Project Q/K/V with per-head norms (no RoPE yet)
         query_states, key_states, value_states = self._project_qkv(hidden_states, batch_size, seq_length)
 
-        # Apply on-device RoPE via BailingRotarySetup (trace-safe)
-        seq_len = query_states.shape[2]
-        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
-        trans_mat = self._rotary_setup.get_trans_mat(is_decode=False)
+        # Apply HF-style RoPE. cos/sin come from the model-level cache
+        # (passed via position_embeddings from TTNNGemma4TextModel).
+        cos, sin = position_embeddings
 
         if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
             query_states = ttnn.typecast(query_states, ttnn.bfloat16)
         if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
             key_states = ttnn.typecast(key_states, ttnn.bfloat16)
 
-        query_states, key_states = self._apply_rotary_embedding_llama(
-            query_states, key_states, cos, sin, trans_mat, is_decode_mode=False
-        )
+        query_states, key_states = self._apply_rope(query_states, key_states, cos, sin)
 
         # Expand KV to match Q heads (GQA)
         key_states = self._repeat_kv(key_states, self.num_key_value_groups)
@@ -792,6 +721,7 @@ class TTNNGemma4Attention(TTNNModule):
         attention_mask: Optional[ttnn.Tensor],
         past_key_values,
         cache_position: Optional[torch.LongTensor],
+        **kwargs,
     ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
         """Decode path using paged attention with on-device KV cache.
 
@@ -803,11 +733,6 @@ class TTNNGemma4Attention(TTNNModule):
 
         layer_idx = self.layer_idx
 
-        # Always resolve position from cache_position kwarg. This ensures
-        # _decode_cur_pos is updated during ALL phases (warmup, capture, replay).
-        # During replay, pre_trace_execute pre-copies the correct value
-        # to the trace kwarg buffer before execute_trace, so the baked-in copy
-        # (from kwarg buffer to _decode_cur_pos) uses the correct position.
         cur_pos_tt = self._get_cur_pos_device_tensor(cache_position, past_key_values, layer_idx, batch_size)
 
         # Project Q/K/V with per-head norms (no RoPE yet).
@@ -822,70 +747,30 @@ class TTNNGemma4Attention(TTNNModule):
         key_states = ttnn.reshape(key_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
         value_states = ttnn.reshape(value_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
 
-        # Typecast to bfloat16 for rotary_embedding_llama
+        # Typecast to bfloat16 for rotary_embedding
         if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
             query_states = ttnn.typecast(query_states, ttnn.bfloat16)
         if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
             key_states = ttnn.typecast(key_states, ttnn.bfloat16)
 
-        # On-device RoPE for decode (trace-safe) via BailingRotarySetup
-        cos_ttnn, sin_ttnn = self._rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
+        # On-device RoPE for decode via ttnn.embedding lookup (trace-safe).
+        # cos_cache/sin_cache are 2D [max_seq_len, head_dim] from model-level cache.
+        cos_cache, sin_cache = position_embeddings  # Passed from model via decoder layer
 
-        if self.head_dim <= 256:
-            # Standard sharded decode RoPE path (head_dim fits kernel limit)
-            batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True)
+        # rope_position_idx: [1, 32] uint32 tensor for ttnn.embedding lookup
+        rope_position_idx = kwargs.get("rope_position_idx")
 
-            rope_shard_mem = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, self.head_dim),
-                core_grid=batch_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            cos_ttnn = ttnn.to_memory_config(cos_ttnn, rope_shard_mem)
-            sin_ttnn = ttnn.to_memory_config(sin_ttnn, rope_shard_mem)
+        # Gather position-specific cos/sin via ttnn.embedding
+        cos_pos = ttnn.embedding(rope_position_idx, cos_cache, layout=ttnn.TILE_LAYOUT)
+        sin_pos = ttnn.embedding(rope_position_idx, sin_cache, layout=ttnn.TILE_LAYOUT)
+        cos_pos = ttnn.unsqueeze_to_4D(cos_pos)  # [1, 1, batch_pad, head_dim]
+        sin_pos = ttnn.unsqueeze_to_4D(sin_pos)
 
-            q_shard_mem = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, self.head_dim),
-                core_grid=batch_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            query_states = ttnn.to_memory_config(query_states, q_shard_mem)
-
-            k_shard_mem = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, key_states.shape[-1]),
-                core_grid=batch_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            key_states = ttnn.to_memory_config(key_states, k_shard_mem)
-
-            trans_mat = self._rotary_setup.get_trans_mat_decode_sharded(batch_size)
-
-            query_states = ttnn.experimental.rotary_embedding_llama(
-                query_states, cos_ttnn, sin_ttnn, trans_mat, is_decode_mode=True
-            )
-            key_states = ttnn.experimental.rotary_embedding_llama(
-                key_states, cos_ttnn, sin_ttnn, trans_mat, is_decode_mode=True
-            )
-        else:
-            # Split decode RoPE for head_dim > 256 (kernel limit workaround).
-            # Global layers (head_dim=512): split into 256-dim chunks, apply
-            # RoPE to each, concat back. Skip sharding for simplicity — only
-            # 10 out of 60 layers use this path.
-            trans_mat = self._rotary_setup.get_trans_mat_decode_sharded(batch_size)
-            query_states, key_states = self._apply_rotary_embedding_llama(
-                query_states, key_states, cos_ttnn, sin_ttnn, trans_mat, is_decode_mode=True, batch_size=batch_size
-            )
+        # Apply RoPE with token_index=0 (gathered cache already has the right position data)
+        query_states, key_states = self._apply_rope(query_states, key_states, cos_pos, sin_pos, token_index=0)
 
         # query_states/key_states are now in [1, B, H, D] — the S B H D layout
-        # that paged kernels expect. After RoPE they stay in their current
-        # memory config (HEIGHT_SHARDED L1 for head_dim<=256 path, DRAM for
-        # the split path). No copy-to-replicated needed — the all_gather in
-        # _project_qkv already produced full tensors on each device.
+        # that paged kernels expect.
         query_states_paged = query_states
         kv_key = key_states
         kv_value = value_states
@@ -903,6 +788,7 @@ class TTNNGemma4Attention(TTNNModule):
             core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
         kv_key = ttnn.to_memory_config(kv_key, shard_cfg)
         kv_value = ttnn.to_memory_config(kv_value, shard_cfg)
@@ -917,16 +803,25 @@ class TTNNGemma4Attention(TTNNModule):
         ttnn.deallocate(kv_key)
         ttnn.deallocate(kv_value)
 
-        # Paged SDPA decode
-        attn_output = past_key_values.paged_sdpa_decode(
-            query_states_paged,
-            layer_idx,
-            current_pos=cur_pos_tt,
-            scale=self.scaling,
-            program_config=self.sdpa.program_config,
-            compute_kernel_config=self.sdpa.compute_kernel_config,
-            sliding_window=self.sliding_window,
-        )
+        # Paged SDPA decode (or CPU fp32 fallback for all layers)
+        use_cpu_sdpa = os.environ.get("TT_GEMMA4_CPU_SDPA", "0").lower() in ("1", "true", "yes")
+        if use_cpu_sdpa:
+            attn_output = self._cpu_sdpa_decode(
+                query_states_paged,
+                past_key_values,
+                layer_idx,
+                cur_pos_tt,
+            )
+        else:
+            attn_output = past_key_values.paged_sdpa_decode(
+                query_states_paged,
+                layer_idx,
+                current_pos=cur_pos_tt,
+                scale=self.scaling,
+                program_config=self.sdpa.decode_program_config,
+                compute_kernel_config=self.sdpa.compute_kernel_config,
+                sliding_window=self.sliding_window,
+            )
         # attn_output: [1, B, H, head_dim]
 
         # HEIGHT_SHARDED for nlp_concat_heads_decode
@@ -991,6 +886,7 @@ class TTNNGemma4Attention(TTNNModule):
                 attention_mask,
                 past_key_values,
                 cache_position,
+                **kwargs,
             )
         else:
             ttnn_output, _ = self._forward_prefill(
@@ -1015,13 +911,19 @@ class TTNNGemma4PagedAttentionKVCache(Cache):
     operations to the correct cache based on layer_idx.
     """
 
-    def __init__(self, text_config, global_layer_indices, device=None):
+    def __init__(
+        self, text_config, global_layer_indices, device=None, sliding_max_num_blocks=32, global_max_num_blocks=64
+    ):
         """Initialize dual paged KV cache.
 
         Args:
             text_config: Gemma4TextConfig with model dimensions
             global_layer_indices: Set or list of layer indices that use global attention
             device: TTNN device or mesh device
+            sliding_max_num_blocks: Max blocks for sliding-window layers (default 32 = 2048 tokens).
+                Use 16 (1024 tokens) for memory-constrained smoke tests.
+            global_max_num_blocks: Max blocks for global-attention layers (default 64 = 4096 tokens).
+                Use 32 (2048 tokens) for memory-constrained smoke tests.
         """
         try:
             super().__init__(layers=[])
@@ -1047,11 +949,11 @@ class TTNNGemma4PagedAttentionKVCache(Cache):
         num_global = len(self.global_layer_indices)
 
         # Sliding: only needs ceil(window/block_size) blocks per sequence.
-        # window=1024, block_size=64 -> 16 blocks. Use 32 for headroom.
-        sliding_config = PagedAttentionConfig(block_size=64, max_num_blocks=32)
+        # window=1024, block_size=64 -> 16 blocks. Default 32 for headroom.
+        sliding_config = PagedAttentionConfig(block_size=64, max_num_blocks=sliding_max_num_blocks)
         # Global: needs ceil(max_seq_len/block_size) blocks. For typical
         # inference (prompt + 128-256 new tokens), 64 blocks = 4096 tokens.
-        global_config = PagedAttentionConfig(block_size=64, max_num_blocks=64)
+        global_config = PagedAttentionConfig(block_size=64, max_num_blocks=global_max_num_blocks)
 
         # Sliding cache: more KV heads, smaller head_dim
         self.sliding_cache = TTNNPagedAttentionKVCache(
@@ -1082,6 +984,7 @@ class TTNNGemma4PagedAttentionKVCache(Cache):
         )
 
         self._device = device
+        self._sliding_window = getattr(text_config, "sliding_window", 1024)
 
     def _get_cache_and_idx(self, layer_idx: int):
         """Route layer_idx to the correct sub-cache and cache-local index.

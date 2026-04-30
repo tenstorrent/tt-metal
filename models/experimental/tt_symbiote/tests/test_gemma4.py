@@ -14,6 +14,7 @@ Gemma4 31B is a dense multimodal model with:
 """
 
 import os
+import time
 
 import pytest
 import torch
@@ -26,9 +27,7 @@ from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 import transformers
 from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIColShardedWRowSharded,
-)
+from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
 
 assert transformers.__version__.startswith(
     "5."
@@ -59,7 +58,7 @@ MESH_DEVICE_MAP = {
     [MESH_DEVICE_MAP.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
-@pytest.mark.parametrize("max_new_tokens", [128], ids=["128tok"])
+@pytest.mark.parametrize("max_new_tokens", [1024], ids=["1024tok"])
 def test_gemma4(mesh_device, max_new_tokens):
     """Test Gemma4 31B model with TTNN acceleration.
 
@@ -70,6 +69,7 @@ def test_gemma4(mesh_device, max_new_tokens):
     - Layer pattern: 5 sliding then 1 global, repeated 10 times
     """
 
+    torch.set_grad_enabled(False)
     model_name = "google/gemma-4-31B"
     print(f"Loading model {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -90,7 +90,7 @@ def test_gemma4(mesh_device, max_new_tokens):
         TTNNGemma4DecoderLayer,
     )
     from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-    from models.experimental.tt_symbiote.models.gemma4_text import TTNNGemma4TextModel
+    from models.experimental.tt_symbiote.models.gemma4_text import TTNNGemma4TextModel, TTNNGemma4ForCausalLM
 
     # Get HF classes from the loaded model
     # Gemma4 is multimodal: model.model is Gemma4Model (wrapper), text model is at language_model
@@ -107,7 +107,9 @@ def test_gemma4(mesh_device, max_new_tokens):
     # Gemma4 tokenizer does not have a chat_template set, so we manually
     # construct the prompt using Gemma4's turn tokens: <|turn> and <turn|>
     # The tokenizer auto-prepends <bos>, so we don't include it in the string.
-    prompt = "<|turn>user\nWhat is your favorite condiment?<turn|>\n<|turn>model\n"
+    prompt_128 = "<|turn>user\nWhat is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?<turn|>\n<|turn>model\n"
+    prompt_1024 = "<|turn>user\nCan you provide a detailed analysis of the impact of climate change on global agriculture, including specific examples of how changing weather patterns, increased frequency of extreme events, and shifting growing seasons are affecting crop yields and food security in different regions around the world? Additionally, please discuss potential adaptation strategies that farmers and policymakers can implement to mitigate these impacts and ensure sustainable food production in the face of ongoing climate change.<turn|>\n<|turn>model\n"
+    prompt = prompt_128 if max_new_tokens == 128 else prompt_1024
     # Use first parameter's device (model.device may not exist for multi-modal models)
     model_device = next(model.parameters()).device
     inputs = tokenizer(prompt, return_tensors="pt").to(model_device)
@@ -130,6 +132,14 @@ def test_gemma4(mesh_device, max_new_tokens):
     }
     modules = register_module_replacement_dict(model, nn_to_ttnn, model_config=None, exclude_replacement=exclude_vision)
 
+    # Exclude lm_head from the generic linear replacement; handle it separately.
+    # lm_head uses TTNNLinearIColShardedWRowSharded:
+    #   - col-sharded input (device i has hidden[:, :, 672*i:672*(i+1)])
+    #   - col-sharded weight (device i has weight rows for its input slice)
+    #   - reduce_scatter → each device holds [1, 1, 32768] (vocab/8)
+    # ConcatMesh2dToTensor assembles 8 × [1,1,32768] → [1,1,262144] correctly.
+    # (AllReduced would leave each device with full [1,1,262144]; concatenation
+    #  would then produce [1,1,2097152] → wrong argmax → garbage tokens.)
     nn_to_ttnn2 = {
         torch.nn.Linear: TTNNLinearIColShardedWRowSharded,
     }
@@ -143,15 +153,48 @@ def test_gemma4(mesh_device, max_new_tokens):
     }
     modules.update(register_module_replacement_dict(model, nn_to_ttnn_model, model_config=None))
 
-    # Pass 3: lm_head — replace the CPU nn.Linear (5120 -> 262144) with TTNN.
-    # Done as a direct replacement since nn.Linear is too broad for the dict pattern.
+    # Pass 4: CausalLM wrapper — handles lm_head + logit soft-capping on CPU.
+    # HF's TorchTTNNTensor dispatch is broken for softcapping ops (div/tanh/mul).
+    causal_lm_wrapper = TTNNGemma4ForCausalLM.from_torch(model)
+    causal_lm_wrapper._unique_name = "TTNNGemma4ForCausalLM"
+    modules[causal_lm_wrapper.module_name] = causal_lm_wrapper
 
     set_device(model, mesh_device)
 
-    print(f"Preprocessing {len(modules)} TTNN modules weights...")
-    for k, v in tqdm(modules.items()):
-        v.preprocess_weights()
-        v.move_weights_to_device()
+    causal_lm_wrapper.to_device(mesh_device)
+
+    # Enable fp32 accumulation on all linear layers to match CPU's float32
+    # internal accumulation for bfloat16 matmuls. Walk ALL sub-modules
+    # recursively since the modules dict only contains top-level replacements,
+    # not linear layers nested inside decoder layers (QKV, O, gate_up, down).
+    fp32_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    from models.experimental.tt_symbiote.core.module import TTNNModule
+
+    fp32_count = 0
+    visited = set()
+
+    def _set_fp32_recursive(obj):
+        nonlocal fp32_count
+        if id(obj) in visited:
+            return
+        visited.add(id(obj))
+        if hasattr(obj, "compute_kernel_config") and not callable(getattr(obj, "compute_kernel_config")):
+            obj.compute_kernel_config = fp32_kernel_config
+            fp32_count += 1
+        for attr_name in vars(obj):
+            attr = getattr(obj, attr_name, None)
+            if isinstance(attr, TTNNModule):
+                _set_fp32_recursive(attr)
+
+    for v in modules.values():
+        _set_fp32_recursive(v)
+    print(f"Set fp32 accumulation on {fp32_count} linear modules")
 
     # Create paged KV cache for Gemma4 (dual cache: sliding + global)
     text_config = model.config.text_config
@@ -160,38 +203,97 @@ def test_gemma4(mesh_device, max_new_tokens):
         text_config=text_config,
         global_layer_indices=global_indices,
         device=mesh_device,
+        sliding_max_num_blocks=16,
+        global_max_num_blocks=128,
     )
     kv_cache.to_device(mesh_device)
 
+    print(f"Preprocessing {len(modules)} TTNN modules weights...")
+    for k, v in tqdm(modules.items()):
+        v.preprocess_weights()
+        v.move_weights_to_device()
+
     print("Running inference...")
-    model.eval()
-    torch.set_grad_enabled(False)
 
-    # HF generate() accesses self.device (a read-only property from ModuleUtilsMixin).
-    # After TTNN replacement, the property may fail if no torch parameters remain reachable
-    # in the default iteration order. Override with a concrete property.
-    try:
-        _ = model.device
-    except (AttributeError, StopIteration):
-        pass
-    # Force-set device via class override to ensure HF generate() can resolve it.
-    type(model).device = property(lambda self: model_device)
+    eos_token_id = tokenizer.eos_token_id
 
-    # Warmup run
-    outputs = model.generate(**inputs, max_new_tokens=2, past_key_values=kv_cache, use_cache=True)
+    # --- Warmup Phase 1: JIT priming (prefill + 2 decode steps) ---
+    cur_token, _, _ = causal_lm_wrapper.decode_one_step(
+        input_ids=inputs["input_ids"],
+        past_key_values=kv_cache,
+        use_cache=True,
+        logits_to_keep=1,
+    )
+    for _ in range(1):
+        token_input = torch.tensor([[cur_token]], dtype=torch.long)
+        cur_token, _, _ = causal_lm_wrapper.decode_one_step(
+            input_ids=token_input,
+            past_key_values=kv_cache,
+            use_cache=True,
+        )
+    kv_cache.reset()
+    TracedRun.release_all()
+
+    # --- Warmup Phase 2: trace capture (prefill + 4 decode steps) ---
+    cur_token, _, _ = causal_lm_wrapper.decode_one_step(
+        input_ids=inputs["input_ids"],
+        past_key_values=kv_cache,
+        use_cache=True,
+        logits_to_keep=1,
+    )
+    for _ in range(3):
+        token_input = torch.tensor([[cur_token]], dtype=torch.long)
+        cur_token, _, _ = causal_lm_wrapper.decode_one_step(
+            input_ids=token_input,
+            past_key_values=kv_cache,
+            use_cache=True,
+        )
     kv_cache.reset()
 
-    # Warmup run with traceing enabled
-    outputs = model.generate(**inputs, max_new_tokens=4, past_key_values=kv_cache, use_cache=True)
-    kv_cache.reset()
-
-    # Actual traced run
+    # --- Actual generation (on-device argmax, 4-byte D2H per step) ---
     DispatchManager.clear_timings()
-    outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, past_key_values=kv_cache, use_cache=True)
-    ttnn.synchronize_device(mesh_device)
+    prefill_len = inputs["input_ids"].shape[1]
 
-    generated_text = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :])
+    prefill_start = time.perf_counter()
+    cur_token, _, _ = causal_lm_wrapper.decode_one_step(
+        input_ids=inputs["input_ids"],
+        past_key_values=kv_cache,
+        use_cache=True,
+        logits_to_keep=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+    prefill_end = time.perf_counter()
+
+    generated_ids = [cur_token]
+
+    decode_start = time.perf_counter()
+    for step in range(max_new_tokens - 1):
+        print(f"Decoding step {step+1} (token_id={cur_token})...")
+        token_input = torch.tensor([[cur_token]], dtype=torch.long)
+        cur_token, _, _ = causal_lm_wrapper.decode_one_step(
+            input_ids=token_input,
+            past_key_values=kv_cache,
+            use_cache=True,
+        )
+        generated_ids.append(cur_token)
+        if cur_token == eos_token_id:
+            break
+
+    ttnn.synchronize_device(mesh_device)
+    decode_end = time.perf_counter()
+
+    prefill_time = prefill_end - prefill_start
+    decode_time = decode_end - decode_start
+    total_time = prefill_time + decode_time
+    num_decode_tokens = len(generated_ids)
+    decode_tps = num_decode_tokens / decode_time if decode_time > 0 else 0
+    prefill_tps = prefill_len / prefill_time if prefill_time > 0 else 0
+
+    generated_text = tokenizer.decode(generated_ids)
     print(f"Gemma4 OUTPUT: {generated_text}")
+    print(f"Prefill: {prefill_len} tokens in {prefill_time:.2f}s ({prefill_tps:.2f} t/s)")
+    print(f"Decode:  {num_decode_tokens} tokens in {decode_time:.2f}s ({decode_tps:.2f} t/s)")
+    print(f"Total:   {prefill_len + num_decode_tokens} tokens in {total_time:.2f}s")
 
     assert len(generated_text.strip()) > 0, "Generated output should not be empty"
 

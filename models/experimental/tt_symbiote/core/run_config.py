@@ -1041,8 +1041,10 @@ class TracedRun(LightweightRun):
     def _copy_kwargs_to_trace_buffer(new_kwargs, trace_kwargs) -> None:
         """Copy new kwargs to trace kwarg buffers.
 
-        Handles both scalar tensors and list/tuple of tensors (e.g.
-        position_embeddings = [cos, sin]).
+        Handles scalar tensors, list/tuple of tensors (e.g.
+        position_embeddings = [cos, sin]), and dict of tensors/tuples
+        (e.g., attention_mask = {layer_type: ttnn.Tensor},
+         position_embeddings = {layer_type: (cos, sin)}).
         """
         for key, trace_buf in trace_kwargs.items():
             if trace_buf is None:
@@ -1050,7 +1052,22 @@ class TracedRun(LightweightRun):
             new_val = new_kwargs.get(key)
             if new_val is None:
                 continue
-            if isinstance(trace_buf, (list, tuple)):
+            if isinstance(trace_buf, dict):
+                # Dict of trace buffers -- copy per dict key
+                for dk, dtb in trace_buf.items():
+                    if dtb is None:
+                        continue
+                    dnv = new_val.get(dk) if isinstance(new_val, dict) else None
+                    if dnv is None:
+                        continue
+                    if isinstance(dtb, (list, tuple)):
+                        # Dict value is a list/tuple of trace buffers
+                        for tb, nv in zip(dtb, dnv):
+                            if tb is not None:
+                                TracedRun._copy_one_to_trace_buffer(nv, tb)
+                    else:
+                        TracedRun._copy_one_to_trace_buffer(dnv, dtb)
+            elif isinstance(trace_buf, (list, tuple)):
                 # List/tuple of trace buffers — copy element-wise
                 for tb, nv in zip(trace_buf, new_val):
                     if tb is not None:
@@ -1139,16 +1156,72 @@ class TracedRun(LightweightRun):
                     trace_func_kwargs[key] = type(val)(func_vals)
                 else:
                     trace_func_kwargs[key] = val
+            elif isinstance(val, dict):
+                # Handle dict-of-tensor kwargs (e.g., attention_mask = {layer_type: ttnn.Tensor},
+                # position_embeddings = {layer_type: (cos, sin)}).
+                # Without this, dict-nested tensors are passed through as-is during capture,
+                # their device addresses get baked into the trace, but the TraceEntry does not
+                # store them.  After capture, Python GC can free the capture-time tensors,
+                # causing trace replay to read from stale/reused DRAM addresses.
+                dict_bufs = {}
+                dict_func_vals = {}
+                has_tensors = False
+                for dk, dv in val.items():
+                    if isinstance(dv, ttnn.Tensor):
+                        tb = _alloc_kwarg_tensor(dv)
+                        dict_bufs[dk] = tb
+                        dict_func_vals[dk] = tb
+                        has_tensors = True
+                    elif hasattr(dv, "ttnn_tensor") and dv.ttnn_tensor is not None:
+                        tb = _alloc_kwarg_tensor(dv.ttnn_tensor)
+                        dict_bufs[dk] = tb
+                        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                        dict_func_vals[dk] = TorchTTNNTensor(tb)
+                        has_tensors = True
+                    elif isinstance(dv, (list, tuple)):
+                        # Handle dict values that are tuples of tensors,
+                        # e.g., position_embeddings = {layer_type: (cos, sin)}
+                        inner_bufs = []
+                        inner_vals = []
+                        for elem in dv:
+                            if isinstance(elem, ttnn.Tensor):
+                                tb = _alloc_kwarg_tensor(elem)
+                                inner_bufs.append(tb)
+                                inner_vals.append(tb)
+                                has_tensors = True
+                            elif hasattr(elem, "ttnn_tensor") and elem.ttnn_tensor is not None:
+                                tb = _alloc_kwarg_tensor(elem.ttnn_tensor)
+                                inner_bufs.append(tb)
+                                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                                inner_vals.append(TorchTTNNTensor(tb))
+                                has_tensors = True
+                            else:
+                                inner_bufs.append(None)
+                                inner_vals.append(elem)
+                        dict_bufs[dk] = inner_bufs
+                        dict_func_vals[dk] = type(dv)(inner_vals)
+                    elif dv is None:
+                        dict_bufs[dk] = None
+                        dict_func_vals[dk] = None
+                    else:
+                        dict_func_vals[dk] = dv
+                if has_tensors:
+                    trace_kwargs_map[key] = dict_bufs
+                    trace_func_kwargs[key] = dict_func_vals
+                else:
+                    trace_func_kwargs[key] = val
             else:
                 trace_func_kwargs[key] = val
 
-        # Warm-up — run forward once to populate caches and prime ops.
-        # The warm-up output is discarded; we only keep the trace-capture output.
-        module.forward(*func_args, **func_kwargs)
-        # Synchronize device to ensure all warm-up ops (including CCL) complete
-        # before starting trace capture. Without this, in-flight CCL ops can
-        # cause "Writes/Reads are not supported during trace capture" errors.
-        ttnn.synchronize_device(device)
+        # # Warm-up — run forward once to populate caches and prime ops.
+        # # The warm-up output is discarded; we only keep the trace-capture output.
+        # module.forward(*func_args, **func_kwargs)
+        # # Synchronize device to ensure all warm-up ops (including CCL) complete
+        # # before starting trace capture. Without this, in-flight CCL ops can
+        # # cause "Writes/Reads are not supported during trace capture" errors.
+        # ttnn.synchronize_device(device)
 
         # Capture — the output from THIS forward is the trace_output whose
         # device buffer will be rewritten by every subsequent execute_trace.

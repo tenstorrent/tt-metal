@@ -308,7 +308,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
-    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, InputClamping::None>();
+    if constexpr (EXP_APPROX_MODE) {
+        exp_tile_init<true, true, scale_fp32, InputClamping::None>();
+    } else {
+        exp_tile_init<false, false>();
+    }
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     cb_wait_front(in0_cb, rows * cols);
@@ -332,13 +336,24 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
                 constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                exp_tile<
-                    true /* approx */,
-                    true /* fast+approx */,
-                    false /* scale_en */,
-                    false /* skip +ve check */,
-                    InputClamping::None,
-                    iterations>(j, vector_mode_exp);
+                if constexpr (EXP_APPROX_MODE) {
+                    exp_tile<
+                        true,
+                        true,
+                        false /* scale_en -- scale baked into init */,
+                        false /* skip +ve check */,
+                        InputClamping::None,
+                        iterations>(j, vector_mode_exp);
+                } else {
+                    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+                    exp_tile<
+                        false,
+                        false,
+                        true /* scale_en -- must apply scale per-element */,
+                        false,
+                        InputClamping::ClampToNegative,
+                        iterations>(j, vector_mode_exp, scale_bf16);
+                }
             }
             tile_regs_commit();
 
@@ -923,12 +938,20 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-                diff_worker, scale_bf16);
+        sfpi::vFloat exp_prev, exp_worker;
+        if constexpr (SDPA_EXP_APPROX_MODE) {
+            exp_prev =
+                ckernel::sfpu::_calculate_exponential_piecewise_<true, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                    diff_prev, scale_bf16);
+            exp_worker =
+                ckernel::sfpu::_calculate_exponential_piecewise_<true, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                    diff_worker, scale_bf16);
+        } else {
+            sfpi::vFloat scaled_prev = diff_prev * sfpi::s2vFloat16b(scale_bf16);
+            sfpi::vFloat scaled_worker = diff_worker * sfpi::s2vFloat16b(scale_bf16);
+            exp_prev = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(scaled_prev);
+            exp_worker = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(scaled_worker);
+        }
 
         // Store exponentials for optional debug/pack-out
         sfpi::dst_reg[prev_max_base_idx] = exp_prev;
