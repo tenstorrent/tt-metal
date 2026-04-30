@@ -207,9 +207,14 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             user_id=0,
         )
 
-        # Capture decode trace after first prefill (if enabled)
-        if enable_trace and not self._decode_trace_captured:
-            logger.info("Capturing decode trace...")
+        # Always capture decode trace after the FIRST real prefill, regardless of enable_trace.
+        # Root cause: WarmupForwardMixin calls decode_forward(pos=0, enable_trace=True) with an
+        # empty KV cache. Capturing the trace at pos=0 (1 KV entry) may use a different
+        # SDPA code path than pos=S (thousands of KV entries), causing wrong decode outputs.
+        # Solution: capture here, at a real pos=S with a properly-filled KV cache — exactly
+        # matching the demo (model.generate()) behavior.
+        if not self._decode_trace_captured:
+            logger.info(f"Capturing decode trace at pos={seq_len} (first real prefill)...")
             self._capture_decode_trace(seq_len)
 
         # Return [1, 1, vocab_size] — vLLM expects logits for last token
@@ -244,11 +249,9 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         token_id = int(tokens[0, 0].item())
         position = int(start_pos[0].item()) if hasattr(start_pos[0], "item") else int(start_pos[0])
 
-        # Capture trace on first decode with enable_trace=True (warm-up phase)
-        if enable_trace and not self._decode_trace_captured:
-            logger.info("Capturing decode trace during warm-up...")
-            self._capture_decode_trace(position)
-
+        # Trace is always captured in prefill_forward after the first real prefill.
+        # During WarmupForwardMixin warmup calls (enable_trace=True, pos=0), the trace
+        # is not yet captured — use non-traced decode. This matches demo behavior.
         if self._decode_trace_captured:
             logits = self.model._execute_decode_trace(token_id, position)
         else:
