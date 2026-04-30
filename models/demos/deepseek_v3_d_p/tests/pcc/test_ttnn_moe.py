@@ -142,6 +142,7 @@ def test_ttnn_moe(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
     n_sp_devices, n_tp_devices = mesh_device.shape
+    layer_idx = 0
 
     logger.debug(f"\n{'='*60}")
     logger.debug("TtMoe PCC Test")
@@ -181,7 +182,9 @@ def test_ttnn_moe(
     moe_cache_dir.mkdir(parents=True, exist_ok=True)
 
     init_checker(moe_cache_dir)
-    ttnn_cache_complete = TtMoe.check_cache_complete(moe_cache_dir, layer_idx=0, experts_per_chip=experts_per_chip)
+    ttnn_cache_complete = TtMoe.check_cache_complete(
+        moe_cache_dir, layer_idx=layer_idx, experts_per_chip=experts_per_chip
+    )
     need_torch_weights = not ttnn_cache_complete or run_pcc_check
     logger.info(f"Cache status: TTNN={ttnn_cache_complete}, need_torch_weights={need_torch_weights}")
 
@@ -228,7 +231,7 @@ def test_ttnn_moe(
                 routed_expert_weights_dtype=ttnn.bfloat4_b,
                 shared_expert_weights_dtype=ttnn.bfloat8_b,
                 cache_path=moe_cache_dir,
-                layer_idx=0,
+                layer_idx=layer_idx,
             )
             profiler.end("ttnn_cache_build")
 
@@ -328,6 +331,7 @@ def test_ttnn_moe(
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=moe_cache_dir,
+        layer_idx=layer_idx,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
