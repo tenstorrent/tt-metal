@@ -268,7 +268,7 @@ def run_eval(
         from models.demos.molmo2.tt.vision_backbone import MAX_VIT_FRAMES_FOR_POOL
 
         first = runnable[0]
-        warm_prompt = f"{VIDEO_PROMPT}\n{first['prompt_text']}"
+        warm_prompt = f"{VIDEO_PROMPT} {first['prompt_text']}"
         warm_inputs = preprocess_video(
             first["local_path"],
             warm_prompt,
@@ -336,7 +336,7 @@ def run_eval(
 
             try:
                 # HF processor: same as demo / verification_jsonl (newline after <|video|>)
-                hf_prompt = f"{VIDEO_PROMPT}\n{question_text}"
+                hf_prompt = f"{VIDEO_PROMPT} {question_text}"
                 t0 = time.perf_counter()
                 video_inputs = preprocess_video(
                     video_path,
@@ -518,7 +518,7 @@ def main():
     parser.add_argument(
         "--max-video-frames",
         type=int,
-        default=40,
+        default=384,
         help="Maximum frames to extract per video",
     )
     parser.add_argument(

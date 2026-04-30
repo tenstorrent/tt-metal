@@ -322,6 +322,11 @@ class Molmo2Generator:
 
         from models.demos.molmo2.tt.vision_attention import VisionAttention
 
+        # Drain the previous request's device work first so DP vision collectives (all_gather)
+        # do not start while fabric/CQs still hold decode or prefill state — avoids rare hangs
+        # on the 2nd+ eval.jsonl row when decode trace is enabled.
+        ttnn.synchronize_device(self.mesh_device)
+
         # Reset KV cache position
         self.reset_kv_cache(0)
 
@@ -379,10 +384,41 @@ class Molmo2Generator:
         # Synchronize device to ensure all pending operations complete
         ttnn.synchronize_device(self.mesh_device)
 
+        self._molmo2_reset_tt_ccl_sem_indices_if_present()
+        logger.debug("Molmo2Generator: TT_CCL semaphore index reset (molmo2) after request reset")
+
         # Force garbage collection to free Python objects
         gc.collect()
 
         logger.debug("State reset complete")
+
+    def _molmo2_reset_tt_ccl_sem_indices_if_present(self) -> None:
+        """Reset ``TT_CCL`` semaphore slot counters without modifying tt_transformers (DeepSeek-style hygiene).
+
+        When ``use_async_ccl=True``, ``Molmo2Model.tt_ccl`` cycles ``barrier_semaphore_idx``,
+        ``ag_semaphores_idx``, and ``rs_semaphores_idx``; resetting them avoids cross-phase
+        cross-talk around trace capture / multi-request runs.
+        """
+        tt_ccl = getattr(self.model, "tt_ccl", None)
+        if tt_ccl is None:
+            return
+        if hasattr(tt_ccl, "barrier_semaphore_idx"):
+            tt_ccl.barrier_semaphore_idx = [0, 0, 0]
+        if hasattr(tt_ccl, "ag_semaphores_idx"):
+            tt_ccl.ag_semaphores_idx = [0, 0, 0]
+        if hasattr(tt_ccl, "rs_semaphores_idx"):
+            tt_ccl.rs_semaphores_idx = [0, 0, 0]
+
+    def _reset_ccl_state_before_trace_capture(self) -> None:
+        """Flush mesh queues and reset ``TT_CCL`` semaphore indices before ``begin_trace_capture``."""
+        ttnn.synchronize_device(self.mesh_device)
+        self._molmo2_reset_tt_ccl_sem_indices_if_present()
+        logger.debug("Molmo2Generator: TT_CCL semaphore index reset (molmo2) before trace capture")
+
+    def _begin_mesh_trace_capture(self, cq_id: int = 0):
+        """``begin_trace_capture`` after CCL hygiene (see :meth:`_reset_ccl_state_before_trace_capture`)."""
+        self._reset_ccl_state_before_trace_capture()
+        return ttnn.begin_trace_capture(self.mesh_device, cq_id=cq_id)
 
     def _prepare_text_inputs(
         self,
@@ -665,7 +701,7 @@ class Molmo2Generator:
         # --- capture trace ---
         tok = trace_capture_run_begin()
         try:
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_id = self._begin_mesh_trace_capture(cq_id=0)
             trace_output = self.model._vit_pass_forward_ttnn(trace_input, pos_tiled, trace_capture=True)
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         finally:
@@ -737,12 +773,14 @@ class Molmo2Generator:
         # All-gather to replicate sharded output across all devices
         # Input: [num_devices shards of 1, 1, fpd*729, pool_dim]
         # Output: [1, 1, num_devices*fpd*729, pool_dim] replicated
+        # Default all_gather (no cluster_axis) matches ShardTensorToMesh 1D distribution; see molmo2_model DP path.
         gathered = ttnn.all_gather(
             self.dp_vit_trace_output,
             dim=2,
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.synchronize_device(self.mesh_device)
         return gathered
 
     # =========================================================================
@@ -857,7 +895,7 @@ class Molmo2Generator:
         # --- capture trace ---
         tok = trace_capture_run_begin()
         try:
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_id = self._begin_mesh_trace_capture(cq_id=0)
             trace_output = self.model.vision_backbone.pool_chunk_from_features_ttnn(
                 feat_2d_buf, idx_buf, valid_mask_buf, chunk_frames, n_out, k_pool
             )
@@ -974,11 +1012,13 @@ class Molmo2Generator:
             actual_patches = actual_frames_this_pass * num_patches_per_frame
             total_patches_this_pass = frames_per_pass * num_patches_per_frame
             if actual_patches < total_patches_this_pass:
+                vit_features_full = vit_features_ttnn
                 vit_features_ttnn = ttnn.slice(
-                    vit_features_ttnn,
+                    vit_features_full,
                     [0, 0, 0, 0],
                     [1, 1, actual_patches, pool_dim],
                 )
+                ttnn.deallocate(vit_features_full)
             all_vit_features.append(vit_features_ttnn)
 
         # Concatenate on device (no CPU round-trip!)
@@ -1331,7 +1371,7 @@ class Molmo2Generator:
 
         tok = trace_capture_run_begin()
         try:
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_id = self._begin_mesh_trace_capture(cq_id=0)
 
             visual_embeddings = self.model.vision_backbone.forward_ttnn(
                 images_embedded=trace_tensors["embedded"],
@@ -1579,7 +1619,7 @@ class Molmo2Generator:
 
         tok = trace_capture_run_begin()
         try:
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_id = self._begin_mesh_trace_capture(cq_id=0)
 
             logits_trace, _ = self.model.text_model.forward(
                 hidden_states=trace_tensors["hidden_states"],
@@ -1783,7 +1823,7 @@ class Molmo2Generator:
 
         tok = trace_capture_run_begin()
         try:
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_id = self._begin_mesh_trace_capture(cq_id=0)
 
             # Step 1: Vision backbone (ViT + pooling + projection)
             visual_embeddings = self.model.vision_backbone.forward_ttnn(
@@ -2267,7 +2307,7 @@ class Molmo2Generator:
 
         tok = trace_capture_run_begin()
         try:
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_id = self._begin_mesh_trace_capture(cq_id=0)
 
             # RoPE embedding lookup INSIDE trace capture so it uses updated rot_mat_idxs
             # on each trace replay. This is critical for correct position encoding.
@@ -2511,6 +2551,26 @@ class Molmo2Generator:
 
             ttnn.deallocate(decode_hidden)
             logger.info("Decode trace captured")
+
+            # One blocking replay immediately after capture: leaves the mesh trace out of the
+            # post-capture "active" allocator state (Metal warns until first execute_trace) and
+            # drains decode-side fabric/CCL work before later DP vision all_gather on eval rows.
+            try:
+                prime_hidden = ttnn.from_torch(
+                    torch.zeros(1, self.batch_size, hidden_dim, dtype=torch.bfloat16).unsqueeze(0),
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_mapper,
+                )
+                self._copy_decode_trace_inputs(self.decode_trace_tensors, prime_hidden, page_table=pt)
+                ttnn.deallocate(prime_hidden)
+                ttnn.execute_trace(self.mesh_device, self.decode_trace_id, cq_id=0, blocking=True)
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info("Decode trace: post-capture prime execute_trace complete")
+            except Exception as e:
+                logger.warning(f"Decode trace post-capture prime skipped: {e}")
 
         # Cleanup warmup page table (must be after decode warmup which uses it for paged attention)
         ttnn.deallocate(warmup_page_table)

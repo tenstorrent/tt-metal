@@ -671,9 +671,14 @@ class Molmo2Model(LightweightModule):
             vit_output = self.vision_backbone.encode_image(embedded)
             ttnn.deallocate(embedded)
 
-            # Gather on device: all_gather concatenates shards along dim 2
-            # Input per device: [1, 1, frames_per_device * num_patches, pool_dim]
-            # Output per device: [1, 1, num_devices * frames_per_device * num_patches, pool_dim]
+            # Flush ViT work on all devices before the collective.
+            ttnn.synchronize_device(self.mesh_device)
+
+            # Gather on device: all_gather concatenates shards along dim 2.
+            # Do NOT pass ``cluster_axis`` / ``topology`` here: ``ShardTensorToMesh(mesh, dim)``
+            # uses ``shard_tensor_to_mesh_mapper`` with a **1D** ``MeshShape(num_devices)``
+            # distribution override, not the physical 2D mesh axes. Forcing ``cluster_axis=1``
+            # on ``MeshShape(1, 8)`` mismatches that layout and can deadlock on later requests.
             gathered = ttnn.all_gather(
                 vit_output,
                 dim=2,
@@ -681,16 +686,20 @@ class Molmo2Model(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(vit_output)
+            ttnn.synchronize_device(self.mesh_device)
 
             # Trim padding if we padded earlier (device-side slice)
             actual_patches = actual_frames_this_pass * num_patches_per_frame
             total_patches_gathered = frames_per_pass * num_patches_per_frame
             if actual_patches < total_patches_gathered:
+                gathered_full = gathered
                 gathered = ttnn.slice(
-                    gathered,
+                    gathered_full,
                     [0, 0, 0, 0],  # slice_start
                     [1, 1, actual_patches, pool_dim],  # slice_end
                 )
+                # Slice allocates a new tensor; free the full gather output or DRAM leaks (~100MB+/pass).
+                ttnn.deallocate(gathered_full)
 
             all_vit_features.append(gathered)
 
@@ -701,6 +710,11 @@ class Molmo2Model(LightweightModule):
             combined_features_ttnn = ttnn.concat(all_vit_features, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             for t in all_vit_features:
                 ttnn.deallocate(t)
+
+        # Drain fabric/CCL from ViT passes before pooling (collectives + embedding/projector).
+        if is_mesh_device:
+            ttnn.synchronize_device(self.mesh_device)
+
         logger.info(f"  Combined ViT features (on device): {combined_features_ttnn.shape}")
 
         # ============================================================
