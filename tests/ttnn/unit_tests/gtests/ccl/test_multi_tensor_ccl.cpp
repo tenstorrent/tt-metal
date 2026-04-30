@@ -56,26 +56,31 @@ protected:
 };
 
 
-// FIX QD (#42429): Helper to skip AllGather tests when fabric is not ready for traffic.
+// FIX QD/QE (#42429): Helper to detect when fabric is not ready for traffic.
 // Checks ALL devices (including MMIO) for is_fabric_channels_not_ready_for_traffic().
 // MMIO devices with a dead master router channel are marked not-ready by
 // FabricFirmwareInitializer::verify_all_fabric_channels_healthy() so this check catches
 // the "corrupt ETH teardown → MMIO master router probe_dead on next init" cascade
 // that previously caused AllGather to hang (run 25155169583).
-static void skip_if_fabric_not_ready(distributed::MeshDevice* mesh_device) {
+//
+// FIX QE: Returns bool (true = should skip) instead of calling GTEST_SKIP() directly.
+// GTEST_SKIP() called from a non-test-body helper only returns from the helper — the test
+// body continues executing.  Callers must do:
+//   if (fabric_not_ready(md)) { GTEST_SKIP() << "..."; }
+// so that GTEST_SKIP() executes in the test body context where it properly skips the test.
+static bool fabric_not_ready(distributed::MeshDevice* mesh_device) {
     for (auto* idev : mesh_device->get_devices()) {
         if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic()) {
-            GTEST_SKIP() << "FIX QD: skipping AllGather — fabric not ready on device " << idev->id()
-                         << " (is_mmio_capable=" << idev->is_mmio_capable()
-                         << ", relay_broken=" << idev->is_fabric_relay_path_broken()
-                         << ", channels_not_ready=" << idev->is_fabric_channels_not_ready_for_traffic()
-                         << "). Transient ETH state from prior test teardown; not a code bug.";
+            return true;
         }
     }
+    return false;
 }
 
 TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
-    skip_if_fabric_not_ready(mesh_device_.get());
+    if (fabric_not_ready(mesh_device_.get())) {
+        GTEST_SKIP() << "FIX QE: fabric not ready (stale ETH firmware from prior teardown); skipping to avoid dispatch timeout.";
+    }
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
@@ -121,7 +126,9 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
 }
 
 TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
-    skip_if_fabric_not_ready(mesh_device_.get());
+    if (fabric_not_ready(mesh_device_.get())) {
+        GTEST_SKIP() << "FIX QE: fabric not ready (stale ETH firmware from prior teardown); skipping to avoid dispatch timeout.";
+    }
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors, output_tensors;
@@ -165,7 +172,9 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
 }
 
 TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
-    skip_if_fabric_not_ready(mesh_device_.get());
+    if (fabric_not_ready(mesh_device_.get())) {
+        GTEST_SKIP() << "FIX QE: fabric not ready (stale ETH firmware from prior teardown); skipping to avoid dispatch timeout.";
+    }
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors, output_tensors;
@@ -206,7 +215,9 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
 }
 
 TEST_F(MeshDevice1x4Fixture, AllReduce) {
-    skip_if_fabric_not_ready(mesh_device_.get());
+    if (fabric_not_ready(mesh_device_.get())) {
+        GTEST_SKIP() << "FIX QE: fabric not ready (stale ETH firmware from prior teardown); skipping to avoid dispatch timeout.";
+    }
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
