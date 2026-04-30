@@ -730,13 +730,10 @@ def run_ttnn_backend(
                             continue
 
                         # Otherwise rebuild just the text stack and re-run prefill; keep vision/fusion as-is.
-                        try:
-                            if generator is not None:
-                                del generator
-                            if tt_model is not None:
-                                del tt_model
-                        except Exception:
-                            pass
+                        if generator is not None:
+                            del generator
+                        if tt_model is not None:
+                            del tt_model
                         _build_text_stack(qkv_permute=perm)
                         logits_try = generator.prefill_forward_text(
                             input_prefill, rot_mats=rot_mats, prompt_lens=torch.tensor(decoding_pos)
