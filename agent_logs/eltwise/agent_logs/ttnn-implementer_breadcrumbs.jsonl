@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test_path":"tests/ttnn/unit_tests/kernel_lib/test_eltwise_helper_v2.py","params":["num_tiles=1","num_tiles=8","num_tiles=64"],"note":"Hook reported pass; visible pytest output showed device-init UMD timeout at setup — test body did not execute. Recording per system-reminder.","ts":"2026-04-30T13:28:26+00:00"}
