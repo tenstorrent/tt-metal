@@ -94,12 +94,15 @@ def _sdpa_program_config_for_seq_len(
     batch_size: int | None = None,
 ) -> ttnn.SDPAProgramConfig:
     q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
-    return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(seq_len, mesh_device),
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
-        exp_approx_mode=_sdpa_exp_approx_for_seq_len(seq_len, mesh_device),
-    )
+    kwargs = {
+        "compute_with_storage_grid_size": _sdpa_compute_grid_for_seq_len(seq_len, mesh_device),
+        "q_chunk_size": q_chunk,
+        "k_chunk_size": k_chunk,
+        "exp_approx_mode": _sdpa_exp_approx_for_seq_len(seq_len, mesh_device),
+    }
+    if seq_len == 512 and batch_size == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        kwargs["max_cores_per_head_batch"] = 8
+    return ttnn.SDPAProgramConfig(**kwargs)
 
 
 def _attention_output_memory_config(
@@ -122,6 +125,84 @@ def _create_heads_output_memory_config(
     if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return bge_m3_linear_activation_memory_config(max_seq_len, max_batch)
+
+
+def _qkv_program_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    hidden_size: int,
+    qkv_out_dim: int,
+    mesh_device: ttnn.MeshDevice | None,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
+    """QKV program config from the B32/S512 subblock sweep."""
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if (
+        max_seq_len != 512
+        or max_batch != 32
+        or hidden_size != 1024
+        or qkv_out_dim != 3072
+        or mesh_device is None
+        or not ttnn_is_blackhole(mesh_device)
+    ):
+        return None
+
+    try:
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        if device_grid.x < 11 or device_grid.y < 10:
+            return None
+    except Exception:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(11, 10),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        out_block_h=13,
+        out_block_w=9,
+        per_core_M=52,
+        per_core_N=9,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+
+def _attention_output_program_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    hidden_size: int,
+    mesh_device: ttnn.MeshDevice | None,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
+    """Attention output projection config from the B32/S512 sweep."""
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if (
+        max_seq_len != 512
+        or max_batch != 32
+        or hidden_size != 1024
+        or mesh_device is None
+        or not ttnn_is_blackhole(mesh_device)
+    ):
+        return None
+
+    try:
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        if device_grid.x < 11 or device_grid.y < 10:
+            return None
+    except Exception:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(11, 10),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=5,
+        per_core_N=32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
 
 
 @dataclass
@@ -275,6 +356,8 @@ class BgeM3Attention(LightweightModule):
 
         cfg = self.config
         core_grid = bge_m3_matmul_core_grid(cfg.mesh_device, seq_len, batch_size)
+        qkv_core_grid = None if cfg.qkv_prg_config is not None else core_grid
+        output_core_grid = None if cfg.output_prg_config is not None else core_grid
         qkv_compute_kernel_cfg = bge_m3_attention_qkv_compute_kernel_config(
             cfg.mesh_device,
             max_seq_len=int(seq_len),
@@ -309,7 +392,7 @@ class BgeM3Attention(LightweightModule):
             bias=self.bqkv,
             program_config=cfg.qkv_prg_config,
             compute_kernel_config=qkv_compute_kernel_cfg,
-            core_grid=core_grid,
+            core_grid=qkv_core_grid,
         )
         if seq_len > max_qkv:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
@@ -395,7 +478,7 @@ class BgeM3Attention(LightweightModule):
             bias=self.wo_bias,
             program_config=cfg.output_prg_config,
             compute_kernel_config=output_compute_kernel_cfg,
-            core_grid=core_grid,
+            core_grid=output_core_grid,
         )
         ttnn.deallocate(context)
 
@@ -466,6 +549,15 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         to_set["score_memcfg"] = act_mem
     if config.output_memcfg is None:
         to_set["output_memcfg"] = _attention_output_memory_config(max_seq, max_batch, mesh_device)
+
+    if config.qkv_prg_config is None:
+        qkv_prg_config = _qkv_program_config(max_seq, max_batch, config.hidden_size, config.qkv_out_dim, mesh_device)
+        if qkv_prg_config is not None:
+            to_set["qkv_prg_config"] = qkv_prg_config
+    if config.output_prg_config is None:
+        output_prg_config = _attention_output_program_config(max_seq, max_batch, config.hidden_size, mesh_device)
+        if output_prg_config is not None:
+            to_set["output_prg_config"] = output_prg_config
 
     if config.score_prg_config is None:
         q0, k0 = _sdpa_chunks_for_seq_len(128)
