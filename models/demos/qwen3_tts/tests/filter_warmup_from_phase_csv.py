@@ -118,7 +118,8 @@ def summarize(rows: list[dict], label: str) -> None:
         try:
             total_ns += float(r.get("DEVICE KERNEL DURATION [ns]", 0) or 0)
         except ValueError:
-            pass
+            # Some rows may contain non-numeric duration values; ignore them in summary totals.
+            continue
     print(f"  {label}: {len(rows)} ops, total DEVICE KERNEL DURATION = {total_ns/1000:.2f} us")
 
 
