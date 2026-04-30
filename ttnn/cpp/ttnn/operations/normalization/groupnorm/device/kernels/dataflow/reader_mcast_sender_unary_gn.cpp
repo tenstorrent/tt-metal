@@ -301,8 +301,14 @@ void kernel_main() {
                                 cb_ex2_partial.wait_front(1);
                             }
 
-                            // read self Ex partial - on the first iteration, read a full tile for overwriting
-                            // garbage in L1, on subsequent just treat it as another core
+                            // Read self Ex partial. Whenever the next stride write would land at the
+                            // start of a tile in cb_ex_external, first overwrite that tile with a
+                            // full-tile copy of cb_ex_partial. Otherwise the 14 bytes between every
+                            // 16-byte stride write would retain stale L1 data from earlier programs,
+                            // which the downstream REDUCE_SCALAR over the entire CB would then sum in
+                            // (issue #42991: the heuristic out_blocks * (num_mcast_cores * 16) often
+                            // does not divide single_tile_size_bytes, so without this only tile 0 is
+                            // ever cleared by the original first-iteration big read).
                             uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? cb_ex_partial.get_read_ptr() : cb_ex2_partial.get_read_ptr();
                             experimental::UnicastEndpoint remote_ep;
@@ -321,6 +327,15 @@ void kernel_main() {
 
                                 // read data from other cores
                                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
+                                    if (cb_ex_external_bytes_written % single_tile_size_bytes == 0) {
+                                        // About to write the first stride of a fresh tile in
+                                        // cb_ex_external -- clear the whole tile first by reading
+                                        // the local cb_ex_partial tile into it, mirroring the
+                                        // self-read big-read above.
+                                        experimental::UnicastEndpoint clear_ep;
+                                        noc.async_read(clear_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), single_tile_size_bytes, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
+                                        noc.async_read_barrier();
+                                    }
                                     experimental::UnicastEndpoint remote_ep;
                                     noc.async_read(remote_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par}, {});
                                     l1_write_addr_external += 16;
