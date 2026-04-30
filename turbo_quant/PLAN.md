@@ -54,6 +54,44 @@ compressed (~1.9× vs BFP8, ~3.9× vs BF16).
   hard-coded K=1 at `ttnn_integration.py:1065` goes away). This is a
   double benefit: speeds up Track A AND enables hybrid+parallelism.
 
+  **Step 3 attempts so far (2026-04-30):**
+  - Tried `.fp32_dest_acc_en = true`: K=1 broke (output 9× wrong, cos
+    0.79). Suspect: `dst_size = fp32_dest_acc_en ? 4 : 8` (vanilla SDPA
+    program factory line 356) — FP32-mode dst registers hold half as
+    many tiles. The TQ kernel's `dequant_k_chunk` pass holds 3 dst regs
+    per tile (idx in 0, result in 1, scratch in 2) and matmul subblocks
+    can hit 4 tiles. With dst_size=4, `tile_regs_acquire` may hand out
+    overlapping registers in FP32 mode.
+  - Tried HiFi4 + math_approx_mode=False alone: K=1 stable, K>1 drift
+    barely improves (5e-3 → 4.6e-3). The merge precision is BF16-bound
+    regardless of math fidelity because dst is BF16-mode.
+  - Tried HiFi4 + fp32_dest + approx=False: same 9× break as
+    fp32_dest alone.
+
+  **Specific points to fix in `sdpa_tq_decode.cpp`** (audit needed):
+  - `mm_init(cb_q_in, cb_k_in, cb_out)` at lines 533, 553, 635 — vanilla
+    uses `cb_qk_im` as the third arg; mismatch between init's hint and
+    the actual matmul output may matter under FP32 dst.
+  - `copy_dest_values<DataFormat::Float16_b>(0, 2)` in `dequant_k_chunk`
+    at line 241 — explicit BF16 format spec; with FP32 dst, this reads
+    different bytes.
+  - Subblock sizes (`qk_subblock_w=4`, `out_subblock_w=4`) and dst
+    register usage in dequant cascade (3 regs per tile) — total can
+    exceed `dst_size=4` under FP32.
+  - `level_bits` / `delta_bits` are FP32 bit patterns; need to confirm
+    they're consumed correctly in both dst modes.
+
+  **Alternative paths:**
+  - Separate compute kernel for the merge step (FP32-dst), keep the
+    chunk loop BF16-dst. More plumbing but isolates the precision-
+    critical work.
+  - Restructure model sharding: 4 chips × NQH=8 instead of 8 × NQH=4
+    so K-split engages less aggressively. Halves KV cache per chip;
+    long context may not fit.
+  - Accept current K=1 cost; focus optimization on the dual-SDPA
+    overhead in hybrid (Step 2 wins) and the centroid-gather +
+    norm-multiply hot path inside `dequant_k_chunk`.
+
 **Step 4 — Status check:**
 - Where are we? (Recompare A/B/baseline on accuracy + latency + cache size)
 - Which track is now the best one? (Should A vs B winner change after
