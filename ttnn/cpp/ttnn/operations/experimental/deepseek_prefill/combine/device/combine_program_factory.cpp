@@ -173,7 +173,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
     // Cluster/UMD device id — what DPRINT uses as line prefix.
-    uint32_t cluster_device_id = (uint32_t)mesh_device->get_device(mesh_coordinate)->id();
+    // Only resolvable for coords on the local rank; on multi-host runs the same
+    // create_mesh_workload loop fires for non-local coords too, and get_device()
+    // TT_FATALs on remote coords. cluster_device_id is diagnostic-only (used in
+    // the log_info below), so substitute a sentinel when the coord isn't local.
+    uint32_t cluster_device_id = std::numeric_limits<uint32_t>::max();
+    if (mesh_device->is_local(mesh_coordinate)) {
+        cluster_device_id = (uint32_t)mesh_device->get_device(mesh_coordinate)->id();
+    }
 
     // Subgroup-local view: kernel sees only chips inside `subgroup_range`.
     const auto subgroup_shape = subgroup_range.shape();
