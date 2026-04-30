@@ -319,6 +319,7 @@ def test_ttnn_dispatch(
         buffer_result = validate_dispatch_buffer_pcc(
             torch_dispatched,
             tt_out_dispatched,
+            expert_region_offsets,
             expert_token_counts,
             expert_dispatch_table,
             num_dispatch_groups,
