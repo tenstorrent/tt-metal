@@ -211,6 +211,8 @@ class PipelineBlock:
         stages_metadata=None,
         pipeline_config=None,
         forward_metadata=False,
+        entry_device_coords=None,
+        exit_device_coords=None,
     ):
         if loopback is None:
             # Middle stages don't need a loopback config; fall back to a no-loopback placeholder.
@@ -301,6 +303,8 @@ class PipelineBlock:
                 embedding_tensor,
                 forward_metadata,
                 host_io_placement=loopback.host_io_placement,
+                entry_device_coords=entry_device_coords,
+                exit_device_coords=exit_device_coords,
             )
         elif self.is_last_stage and not self.initialize_loopback:
             self._init_last_stage_with_d2h(
@@ -690,6 +694,8 @@ class PipelineBlock:
         entry_downstream_core=None,
         exit_upstream_cores=None,
         exit_upstream_page_size=None,
+        entry_device_coords=None,
+        exit_device_coords=None,
     ):
         """Per-device parallel forwarding stage.
 
@@ -718,6 +724,9 @@ class PipelineBlock:
         next_stage = self.my_stage_idx + 1 if not self.is_last_stage else 0
         ns = self._stages[next_stage]
 
+        actual_entry_coords = entry_device_coords if entry_device_coords is not None else pipeline_device_coords
+        actual_exit_coords = exit_device_coords if exit_device_coords is not None else pipeline_device_coords
+
         self.entry_socket_interface = []
         self.exit_socket_interface = []
 
@@ -732,6 +741,7 @@ class PipelineBlock:
         effective_downstream_core = entry_downstream_core if entry_downstream_core else core_exit
 
         for dc in pipeline_device_coords:
+            entry_use_reader = (core_entry == core_exit) and not use_multi_upstream
             entry_si = SocketInterface(
                 upstream_d2d_socket_page_size,
                 upstream_d2d_socket_fifo_size,
@@ -741,6 +751,7 @@ class PipelineBlock:
                 downstream_core_coord=ttnn.MeshCoreCoord(dc, effective_downstream_core),
                 sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
+                receiver_use_reader_config=entry_use_reader,
             )
             self.entry_socket_interface.append(entry_si)
 
@@ -787,11 +798,16 @@ class PipelineBlock:
 
     def _dispatch_parallel_device_programs(self):
         """Collect programs from all per-device socket interfaces and dispatch in a single generic_op."""
-        all_entries = []
+        entry_entries = []
         for si in self.entry_socket_interface:
-            all_entries.extend(si.build_programs())
+            entry_entries.extend(si.build_programs())
+        exit_entries = []
         for si in self.exit_socket_interface:
-            all_entries.extend(si.build_programs())
+            exit_entries.extend(si.build_programs(base_programs=entry_entries))
+
+        exit_device_set = {str(dc) for dc, _ in exit_entries}
+        all_entries = [(dc, prog) for dc, prog in entry_entries if str(dc) not in exit_device_set]
+        all_entries.extend(exit_entries)
 
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
@@ -799,7 +815,10 @@ class PipelineBlock:
         groups = _group_by_device(all_entries)
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for device_coord, progs in groups:
-            merged = ttnn.merge_program_descriptors(progs) if len(progs) > 1 else progs[0]
+            if len(progs) > 1:
+                merged = ttnn.merge_program_descriptors(progs)
+            else:
+                merged = progs[0]
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 

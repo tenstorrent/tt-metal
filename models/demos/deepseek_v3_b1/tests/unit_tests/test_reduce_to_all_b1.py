@@ -71,6 +71,15 @@ def setup_reduce_to_all_test(mesh_device):
         mesh_mapper=mesh_mapper,
     )
 
+    # Output tensor: single-core sharded on a dedicated core (matching MoE test pattern)
+    compute_grid = submesh_device.compute_with_storage_grid_size()
+    output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+    output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(output_core, output_core)})
+    output_shard_spec = ttnn.ShardSpec(output_shard_grid, tensor_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, output_shard_spec
+    )
+
     output_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
     output_tensor = ttnn.from_torch(
         output_data,
@@ -78,7 +87,7 @@ def setup_reduce_to_all_test(mesh_device):
         layout=layout,
         tile=tile,
         dtype=dtype,
-        memory_config=mem_config,
+        memory_config=output_mem_config,
         mesh_mapper=mesh_mapper,
     )
 

@@ -74,6 +74,8 @@ def _build_exchange_program(
     my_upstream_socket,
     my_downstream_socket,
     packet_header_cb_index,
+    use_reader_config=False,
+    base_program=None,
 ):
     """Build a d2d_exchange program for a single upstream->downstream path on one core."""
     assert my_upstream_socket.get_active_cores()[0] == my_core_coord
@@ -142,13 +144,32 @@ def _build_exchange_program(
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
         compile_time_args=kernel_ct_args,
-        config=ttnn.WriterConfigDescriptor(),
+        config=ReaderConfigDescriptor() if use_reader_config else ttnn.WriterConfigDescriptor(),
     )
-    program = ttnn.ProgramDescriptor(
-        kernels=[exchange_kernel],
-        semaphores=[],
-        cbs=[packet_header_cb_desc] if packet_header_cb_desc is not None else [],
-    )
+    if base_program is not None:
+        existing_cb_ids = {fd.buffer_index for cb in base_program.cbs for fd in cb.format_descriptors}
+        new_cbs = list(base_program.cbs)
+        if packet_header_cb_desc is not None and packet_header_cb_index not in existing_cb_ids:
+            new_cbs.append(packet_header_cb_desc)
+        base_kernel_count = len(base_program.kernels)
+        program = ttnn.ProgramDescriptor(
+            kernels=list(base_program.kernels) + [exchange_kernel],
+            semaphores=list(base_program.semaphores),
+            cbs=new_cbs,
+        )
+        for ki, k in enumerate(base_program.kernels):
+            program.kernels[ki].runtime_args = k.runtime_args
+        kernel_idx = base_kernel_count
+    else:
+        program = ttnn.ProgramDescriptor(
+            kernels=[exchange_kernel],
+            semaphores=[],
+            cbs=[packet_header_cb_desc] if packet_header_cb_desc is not None else [],
+        )
+        kernel_idx = 0
+
+    program.kernels[kernel_idx].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
+    rt_args_ref = program.kernels[kernel_idx].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
 
     program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
     rt_args_ref = program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
@@ -198,6 +219,7 @@ class SocketInterface:
         upstream_core_coords=None,
         upstream_page_size=None,
         forward_metadata_size_bytes=0,
+        receiver_use_reader_config=False,
     ):
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
@@ -345,6 +367,8 @@ class SocketInterface:
         my_upstream_socket,
         my_downstream_socket,
         packet_header_cb_index,
+        use_reader_config=False,
+        base_program=None,
     ):
         return _build_exchange_program(
             self.page_size,
@@ -354,6 +378,8 @@ class SocketInterface:
             my_upstream_socket,
             my_downstream_socket,
             packet_header_cb_index,
+            use_reader_config=use_reader_config,
+            base_program=base_program,
         )
 
     def _create_multi_upstream_program(
@@ -369,12 +395,7 @@ class SocketInterface:
         assert my_downstream_socket.get_active_cores()[0] == my_core_coord
 
         num_upstream = len(my_upstream_sockets)
-        brisc_count = (num_upstream + 1) // 2
-        brisc_sockets = my_upstream_sockets[:brisc_count]
-        ncrisc_sockets = my_upstream_sockets[brisc_count:]
-        num_sockets_per_risc = brisc_count
-        brisc_socket_addrs = [s.get_config_buffer_address() for s in brisc_sockets]
-        ncrisc_socket_addrs = [s.get_config_buffer_address() for s in ncrisc_sockets]
+        upstream_socket_config_addrs = [s.get_config_buffer_address() for s in my_upstream_sockets]
 
         downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
 
@@ -405,16 +426,15 @@ class SocketInterface:
         num_whole_fabric_packets_per_link = 0
         partial_packet_size = 0
 
-        # 2 forward headers (one per RISC) + 2 backward headers (one per RISC, if fabric on receiver)
-        num_fwd_headers = 2
-        num_bwd_headers = 2 if use_fabric_on_receiver else 0
+        num_fwd_links = 2
+        num_bwd_links = 1
 
         packet_header_cb_desc = None
         if use_fabric_on_receiver or use_fabric_on_sender:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
             num_whole_fabric_packets_per_link = self.upstream_page_size // fabric_max_payload_size
             partial_packet_size = self.upstream_page_size % fabric_max_payload_size
-            packet_header_cb_num_pages = num_fwd_headers + num_bwd_headers
+            packet_header_cb_num_pages = num_fwd_links + num_bwd_links
             packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
             packet_header_cb_desc = ttnn.CBDescriptor(
@@ -432,125 +452,84 @@ class SocketInterface:
         page_ready_sem_id = 0
         ncrisc_done_sem_id = 1
 
-        def _build_ct_args(socket_addrs, socket_start_idx, pkt_hdr_slot_start):
-            ct_args = [
-                downstream_socket_config_addr,  # 0: sender_socket_config_addr
-                len(socket_addrs),  # 1: num_sockets_this_risc
-                self.upstream_page_size,  # 2: upstream_page_size
-                ttnn.get_global_semaphore_address(self.termination_semaphore),  # 3
-                self.page_size,  # 4: page_size (total sender page)
-                num_whole_fabric_packets_per_link,  # 5
-                fabric_max_payload_size,  # 6: whole_packet_size
-                partial_packet_size,  # 7
-                packet_header_cb_index,  # 8
-                use_fabric_on_receiver,  # 9
-                use_fabric_on_sender,  # 10
-                self.forward_metadata_size_bytes,  # 11: forward_metadata_size_bytes
-                page_ready_sem_id,  # 12
-                ncrisc_done_sem_id,  # 13
-                socket_start_idx,  # 14
-                pkt_hdr_slot_start,  # 15
-            ]
-            ct_args.extend(socket_addrs)  # 16..16+len(socket_addrs)-1
-            return ct_args
+        kernel_ct_args = [
+            downstream_socket_config_addr,  # 0: sender_socket_config_addr
+            num_upstream,  # 1: num_upstream_sockets
+            self.upstream_page_size,  # 2: upstream_page_size
+            ttnn.get_global_semaphore_address(self.termination_semaphore),  # 3
+            self.page_size,  # 4: page_size (total sender page)
+            num_whole_fabric_packets_per_link,  # 5
+            fabric_max_payload_size,  # 6: whole_packet_size
+            partial_packet_size,  # 7
+            packet_header_cb_index,  # 8
+            use_fabric_on_receiver,  # 9
+            use_fabric_on_sender,  # 10
+        ]
+        kernel_ct_args.extend(upstream_socket_config_addrs)
 
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])
         kernel_source = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_upstreams.cpp"
 
-        # BRISC (Writer/NOC0) gets ceil(N/2) sockets; NCRISC (Reader/NOC1) gets floor(N/2).
-        # Giving the odd-one-out to BRISC ensures local NOC writes use NOC0 addresses.
-        # BRISC kernel: handles sockets 0..brisc_count-1, packet header slots 0-1, fabric link 0
-        brisc_kernel = ttnn.KernelDescriptor(
+        exchange_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_ranges,
-            compile_time_args=_build_ct_args(brisc_socket_addrs, 0, 0),
-            config=ttnn.WriterConfigDescriptor(),
-        )
-
-        # NCRISC kernel: handles sockets brisc_count..N-1, packet header slots 2-3, fabric link 1
-        if use_fabric_on_sender and not use_fabric_on_receiver:
-            ncrisc_pkt_hdr_slot_start = 1
-        else:
-            ncrisc_pkt_hdr_slot_start = 2
-        ncrisc_kernel = ttnn.KernelDescriptor(
-            kernel_source=kernel_source,
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=core_ranges,
-            compile_time_args=_build_ct_args(ncrisc_socket_addrs, num_sockets_per_risc, ncrisc_pkt_hdr_slot_start),
+            compile_time_args=kernel_ct_args,
             config=ttnn.ReaderConfigDescriptor(),
         )
 
-        page_ready_sem_desc = ttnn.SemaphoreDescriptor(
-            id=page_ready_sem_id,
-            core_ranges=core_ranges,
-            initial_value=0,
-        )
-        ncrisc_done_sem_desc = ttnn.SemaphoreDescriptor(
-            id=ncrisc_done_sem_id,
-            core_ranges=core_ranges,
-            initial_value=0,
-        )
+        if base_program is not None:
+            existing_cb_ids = {fd.buffer_index for cb in base_program.cbs for fd in cb.format_descriptors}
+            new_cbs = list(base_program.cbs)
+            if packet_header_cb_desc is not None and packet_header_cb_index not in existing_cb_ids:
+                new_cbs.append(packet_header_cb_desc)
 
-        program = ttnn.ProgramDescriptor(
-            kernels=[brisc_kernel, ncrisc_kernel],
-            semaphores=[page_ready_sem_desc, ncrisc_done_sem_desc],
-            cbs=[packet_header_cb_desc] if packet_header_cb_desc is not None else [],
-        )
-
-        cx, cy = my_core_coord.core_coord.x, my_core_coord.core_coord.y
-
-        # BRISC runtime args: 1 forward fabric link (idx 0) + 1 backward link (idx 0)
-        program.kernels[0].runtime_args[cx][cy] = []
-        brisc_rt = program.kernels[0].runtime_args[cx][cy]
+            base_kernel_count = len(base_program.kernels)
+            program = ttnn.ProgramDescriptor(
+                kernels=list(base_program.kernels) + [exchange_kernel],
+                semaphores=list(base_program.semaphores),
+                cbs=new_cbs,
+            )
+            for ki, k in enumerate(base_program.kernels):
+                program.kernels[ki].runtime_args = k.runtime_args
+            kernel_idx = base_kernel_count
+        else:
+            program = ttnn.ProgramDescriptor(
+                kernels=[exchange_kernel],
+                semaphores=[],
+                cbs=[packet_header_cb_desc] if packet_header_cb_desc is not None else [],
+            )
+            kernel_idx = 0
+        program.kernels[kernel_idx].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
+        rt_args_ref = program.kernels[kernel_idx].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
 
         if use_fabric_on_sender:
-            fwd_args = ttnn.setup_fabric_connection(
-                my_fabric_node_id,
-                my_downstream_fabric_node_id,
-                0,
-                program,
-                my_core_coord.core_coord,
-            )
-            brisc_rt.extend(fwd_args)
+            for idx in range(num_fwd_links):
+                fwd_fabric_args = ttnn.setup_fabric_connection(
+                    my_fabric_node_id,
+                    my_downstream_fabric_node_id,
+                    idx,
+                    program,
+                    my_core_coord.core_coord,
+                )
+                rt_args_ref.extend(fwd_fabric_args)
 
         if use_fabric_on_receiver:
-            bwd_args = ttnn.setup_fabric_connection(
-                my_fabric_node_id,
-                my_upstream_fabric_node_id,
-                0,
-                program,
-                my_core_coord.core_coord,
-            )
-            brisc_rt.extend(bwd_args)
-
-        # NCRISC runtime args: 1 forward fabric link (idx 1) + 1 backward link (idx 1)
-        program.kernels[1].runtime_args[cx][cy] = []
-        ncrisc_rt = program.kernels[1].runtime_args[cx][cy]
-
-        if use_fabric_on_sender:
-            fwd_args = ttnn.setup_fabric_connection(
-                my_fabric_node_id,
-                my_downstream_fabric_node_id,
-                1,
-                program,
-                my_core_coord.core_coord,
-            )
-            ncrisc_rt.extend(fwd_args)
-
-        if use_fabric_on_receiver:
-            bwd_args = ttnn.setup_fabric_connection(
-                my_fabric_node_id,
-                my_upstream_fabric_node_id,
-                1,
-                program,
-                my_core_coord.core_coord,
-            )
-            ncrisc_rt.extend(bwd_args)
+            for idx in range(num_bwd_links):
+                bwd_fabric_args = ttnn.setup_fabric_connection(
+                    my_fabric_node_id,
+                    my_upstream_fabric_node_id,
+                    idx,
+                    program,
+                    my_core_coord.core_coord,
+                )
+                rt_args_ref.extend(bwd_fabric_args)
 
         return program
 
-    def _create_sender_program(self, my_mesh_device, my_core_coord, my_downstream_socket, packet_header_cb_index):
+    def _create_sender_program(
+        self, my_mesh_device, my_core_coord, my_downstream_socket, packet_header_cb_index, base_program=None
+    ):
         if self.multi_upstream:
             return self._create_multi_upstream_program(
                 my_mesh_device,
@@ -558,6 +537,7 @@ class SocketInterface:
                 self.upstream_sockets_list,
                 my_downstream_socket,
                 packet_header_cb_index,
+                base_program=base_program,
             )
         else:
             return self._create_single_upstream_program(
@@ -566,14 +546,24 @@ class SocketInterface:
                 self.upstream_socket,
                 my_downstream_socket,
                 packet_header_cb_index,
+                base_program=base_program,
             )
 
-    def build_programs(self):
+    def build_programs(self, base_programs=None):
         """Build exchange programs and return (device_coord, program) pairs without dispatching.
 
         This enables multiple SocketInterface instances to have their programs
         merged and dispatched together in a single generic_op call.
         """
+
+        def _lookup_base(dc):
+            if not base_programs:
+                return None
+            for bdc, bp in base_programs:
+                if bdc == dc:
+                    return bp
+            return None
+
         entries = []
         if self.local_socket:
             sender_program = self._create_sender_program(
@@ -588,6 +578,7 @@ class SocketInterface:
                 self.internal_socket_pair[1],
                 self.downstream_socket,
                 self.receiver_packet_header_cb_index,
+                use_reader_config=self.receiver_use_reader_config,
             )
 
             same_device = self.send_core_coord.device_coord == self.recv_core_coord.device_coord
@@ -613,23 +604,28 @@ class SocketInterface:
                 entries.append((self.recv_core_coord.device_coord, receiver_program))
         else:
             if self.upstream_socket or self.upstream_sockets_list:
+                dc = self.send_core_coord.device_coord
                 program = self._create_sender_program(
                     self.mesh_device,
                     self.send_core_coord,
                     self.internal_socket,
                     self.sender_packet_header_cb_index,
+                    base_program=_lookup_base(dc),
                 )
-                entries.append((self.send_core_coord.device_coord, program))
+                entries.append((dc, program))
             else:
                 assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
+                dc = self.recv_core_coord.device_coord
                 program = self._create_single_upstream_program(
                     self.mesh_device,
                     self.recv_core_coord,
                     self.internal_socket,
                     self.downstream_socket,
                     self.receiver_packet_header_cb_index,
+                    use_reader_config=self.receiver_use_reader_config,
+                    base_program=_lookup_base(dc),
                 )
-                entries.append((self.recv_core_coord.device_coord, program))
+                entries.append((dc, program))
         return entries
 
     def run(self):
@@ -678,6 +674,70 @@ def _group_by_device(entries):
     return groups
 
 
+def _core_set_from_program(prog):
+    """Extract a set of (x, y) core coordinates from all kernels in a ProgramDescriptor."""
+    cores = set()
+    for k in prog.kernels:
+        for c in ttnn.corerange_to_cores(k.core_ranges):
+            cores.add((c.x, c.y))
+    return cores
+
+
+def _combine_overlapping_programs(progs):
+    """Combine ProgramDescriptors whose kernel core ranges overlap into single descriptors.
+    merge_program_descriptors requires non-overlapping core ranges across descriptors.
+    When multiple descriptors share a core (e.g. BRISC sender + NCRISC receiver on the
+    same core), their kernels and CBs must be folded into one descriptor first.
+    """
+    combined = []
+    used = [False] * len(progs)
+
+    for i in range(len(progs)):
+        if used[i]:
+            continue
+        current = progs[i]
+        current_core_set = _core_set_from_program(current)
+
+        partners = []
+        for j in range(i + 1, len(progs)):
+            if used[j]:
+                continue
+            if current_core_set & _core_set_from_program(progs[j]):
+                partners.append(j)
+
+        if not partners:
+            combined.append(current)
+        else:
+            all_kernels = list(current.kernels)
+            all_sems = list(current.semaphores)
+            current_cb_ids = {fd.buffer_index for cb in current.cbs for fd in cb.format_descriptors}
+            all_cbs = list(current.cbs)
+            for j in partners:
+                used[j] = True
+                other = progs[j]
+                all_kernels.extend(other.kernels)
+                all_sems.extend(other.semaphores)
+                for cb in other.cbs:
+                    if not any(fd.buffer_index in current_cb_ids for fd in cb.format_descriptors):
+                        all_cbs.append(cb)
+                    for fd in cb.format_descriptors:
+                        current_cb_ids.add(fd.buffer_index)
+
+            merged_prog = ttnn.ProgramDescriptor(
+                kernels=all_kernels,
+                semaphores=all_sems,
+                cbs=all_cbs,
+            )
+            offset = 0
+            for src_prog in [current] + [progs[j] for j in partners]:
+                for ki, k in enumerate(src_prog.kernels):
+                    merged_prog.kernels[offset + ki].runtime_args = k.runtime_args
+                offset += len(src_prog.kernels)
+            combined.append(merged_prog)
+
+    return combined
+
+
 class ParallelSocketInterface:
     """Manages N parallel 1-1 D2D socket connections between two pipeline stages.
 
@@ -700,7 +760,9 @@ class ParallelSocketInterface:
         receiver_mesh=None,
         sender_packet_header_cb_index=None,
         receiver_packet_header_cb_index=None,
+        receiver_use_reader_config=False,
     ):
+        self.receiver_use_reader_config = receiver_use_reader_config
         num_channels = len(send_core_coords)
         assert len(recv_core_coords) == num_channels, "send/recv core coord lists must have equal length"
         assert num_channels > 0, "Must have at least one channel"
@@ -796,13 +858,22 @@ class ParallelSocketInterface:
             1 if receiver_packet_header_cb_index is None else receiver_packet_header_cb_index
         )
 
-    def build_programs(self):
+    def build_programs(self, base_programs=None):
         """Build exchange programs and return (device_coord, program) pairs without dispatching.
 
         This enables multiple ParallelSocketInterface instances to have their programs
         merged and dispatched together in a single generic_op call, which is required
         when entry and exit d2d_exchange kernels share the same device.
         """
+
+        def _lookup_base(dc):
+            if not base_programs:
+                return None
+            for bdc, bp in base_programs:
+                if bdc == dc:
+                    return bp
+            return None
+
         device_program_entries = []
 
         if self.local_socket:
@@ -824,12 +895,14 @@ class ParallelSocketInterface:
                     self._internal_pairs[i][1],
                     self._downstream_sockets[i],
                     self.receiver_packet_header_cb_index,
+                    use_reader_config=self.receiver_use_reader_config,
                 )
                 device_program_entries.append((self.send_core_coords[i].device_coord, sender_prog))
                 device_program_entries.append((self.recv_core_coords[i].device_coord, receiver_prog))
         else:
             for i in range(self.num_channels):
                 if self._upstream_sockets[i] is not None:
+                    dc = self.send_core_coords[i].device_coord
                     prog = _build_exchange_program(
                         self.page_size,
                         self.termination_semaphore,
@@ -838,6 +911,7 @@ class ParallelSocketInterface:
                         self._upstream_sockets[i],
                         self._internal_sockets[i],
                         self.sender_packet_header_cb_index,
+                        base_program=_lookup_base(dc),
                     )
                     device_program_entries.append((self.send_core_coords[i].device_coord, prog))
                 else:
@@ -850,6 +924,8 @@ class ParallelSocketInterface:
                         self._internal_sockets[i],
                         self._downstream_sockets[i],
                         self.receiver_packet_header_cb_index,
+                        use_reader_config=self.receiver_use_reader_config,
+                        base_program=_lookup_base(dc),
                     )
                     device_program_entries.append((self.recv_core_coords[i].device_coord, prog))
 

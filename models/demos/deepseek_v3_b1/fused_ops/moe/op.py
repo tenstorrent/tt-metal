@@ -31,8 +31,6 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     record_cb_metadata,
 )
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
-from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
-from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -65,7 +63,14 @@ class MoeSem:
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
-    NUM_SEMAPHORES = 19
+    REDUCE_FC_FWD_R1 = 19
+    REDUCE_FC_FWD_R2 = 20
+    REDUCE_FC_BWD_R1 = 21
+    REDUCE_FC_BWD_R2 = 22
+    REDUCE_FC_R3_FWD = 23
+    REDUCE_FC_BARRIER_GATHER = 24
+    FORWARD_CROSS_COL_SYNC = 25
+    NUM_SEMAPHORES = 26
 
 
 @dataclass
@@ -83,7 +88,7 @@ class MoeContext:
 
     # Flags
     enable_routing: bool
-    enable_reduce_to_one: bool
+    enable_reduce_to_all: bool
     enable_bcast: bool
 
     # IO tensors (stored for _build_io_tensors)
@@ -103,6 +108,7 @@ class MoeContext:
     sdpa_kv_cache_buffer: Any
     sdpa_out_interm_buffer: Any
 
+    enable_forward: bool = False
     # Reduce params (None when reduce disabled)
     reduce_params: dict = None
     reduce_intermediate_tensors: Any = None
@@ -119,6 +125,8 @@ class MoeContext:
     bcast_semaphores: Any = None
     bcast_sender_coord: Any = None
     socket: Any = None
+
+    forward_sockets: Any = None
 
     # CB reconfig
     reconfig_moe_cbs: bool = False
@@ -249,24 +257,30 @@ class _MoeRoutedExpertContext:
     # Testing flag (routing only)
     use_hardcoded_expert_index: bool = False
 
-    # ReduceToOne
-    enable_reduce_to_one: bool = False
+    # ReduceToAll
+    enable_reduce_to_all: bool = False
     reduce_local_cb: int = 0
     reduce_received_cb: int = 0
     reduce_output_cb: int = 0
     reduce_scratch_cb: int = 0
     reduce_packet_cb: int = 0
+    reduce_reload_cb: int = 0
     reduce_params: dict = None
     # Pre-built CB descriptors for reduce (set by _overlap_cbs_with_sdpa_buffer)
     reduce_received_cb_descriptors: list = None  # CB for received (3-page) + output
     reduce_scratch_cb_descriptor: Any = None
     reduce_packet_cb_descriptor: Any = None
+    reduce_reload_cb_descriptor: Any = None
 
     # Broadcast
     enable_bcast: bool = False
     bcast_pkt_cb: int = 0
     bcast_pkt_cb_descriptor: Any = None
     bcast_params: dict = None
+
+    enable_forward: bool = False
+    forward_params: dict = None
+    forward_staging_tensor: Any = None
 
 
 @dataclass
@@ -781,6 +795,7 @@ class MoeRoutedExpertOp:
         bcast_intermediate_tensor=None,
         bcast_semaphores=None,
         bcast_sender_coord=None,
+        forward_sockets=None,
         # Global semaphores (created by MoeOp.create_semaphores)
         semaphores=None,
         cb_id_context=None,
@@ -803,6 +818,8 @@ class MoeRoutedExpertOp:
             and bcast_semaphores is not None
             and bcast_sender_coord is not None
         )
+        enable_forward = forward_sockets is not None and len(forward_sockets) > 0
+        assert not (enable_bcast and enable_forward), "Cannot enable both bcast and forward"
         assert semaphores is not None, "semaphores must be provided (use MoeOp.create_semaphores())"
         sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         mcast_data_sender_semaphore_addr = sem_addrs[MoeSem.MCAST_SENDER]
@@ -925,7 +942,8 @@ class MoeRoutedExpertOp:
         reduce_output_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_scratch_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_packet_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
-        if enable_bcast:
+        reduce_reload_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
+        if enable_bcast or enable_forward:
             bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         else:
             bcast_pkt_cb = None
@@ -1210,9 +1228,9 @@ class MoeRoutedExpertOp:
         )
 
         # ==================================================================
-        # ReduceToOne Setup
+        # ReduceToAll Setup
         # ==================================================================
-        enable_reduce_to_one = (
+        enable_reduce_to_all = (
             reduce_intermediate_tensors is not None
             and reduce_output_tensor is not None
             and reduce_semaphores is not None
@@ -1222,12 +1240,11 @@ class MoeRoutedExpertOp:
         )
 
         reduce_params = {}
-        if enable_reduce_to_one:
+        if enable_reduce_to_all:
             # Get semaphore addresses
             reduce_sem_round1_addr = ttnn.get_global_semaphore_address(reduce_semaphores[0])
             reduce_sem_round2_addr = ttnn.get_global_semaphore_address(reduce_semaphores[1])
             reduce_sem_round3_addr = ttnn.get_global_semaphore_address(reduce_semaphores[2])
-            reduce_sem_exit_addr = ttnn.get_global_semaphore_address(reduce_semaphores[3])
 
             # Get per-device tensors for reduce
             reduce_intermediate_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors)
@@ -1277,6 +1294,16 @@ class MoeRoutedExpertOp:
 
             # Fabric cores: one per column, placed to the right of bottom core
             # Avoid sender_core to prevent NOC conflicts with bcast fabric
+
+            reduce_slots_per_direction = reduce_num_workers_per_column // 2
+
+            # FC buffer layout offsets
+            reduce_r2_buf_offset = reduce_slots_per_direction * reduce_slot_size_bytes
+            reduce_brisc_buf_size = 2 * reduce_slots_per_direction * reduce_slot_size_bytes
+            reduce_ncrisc_buf_offset = reduce_brisc_buf_size
+            reduce_r3_buf_offset = 4 * reduce_slots_per_direction * reduce_slot_size_bytes
+            reduce_packet_cb_slots = 4 * reduce_slots_per_direction + reduce_num_workers_per_column
+
             reserved_cores = {(sender_core.x, sender_core.y)}
             reduce_fabric_cores = []
             reduce_column_to_fabric_core = {}
@@ -1299,22 +1326,19 @@ class MoeRoutedExpertOp:
             for shard_idx, core in enumerate(reduce_worker_cores_list):
                 reduce_core_to_shard_idx[(core.x, core.y)] = shard_idx
 
-            # Get output core from reduce_output_tensor
-            reduce_output_sample = reduce_output_per_device[0]
-            reduce_output_shard_spec = reduce_output_sample.memory_config().shard_spec
-            reduce_output_core = reduce_output_shard_spec.grid.ranges()[0].start
+            reduce_downstream_socket_page_size = down_proj_width_per_core * reduce_element_size
 
             reduce_params = {
                 "sem_round1_addr": reduce_sem_round1_addr,
                 "sem_round2_addr": reduce_sem_round2_addr,
                 "sem_round3_addr": reduce_sem_round3_addr,
-                "sem_exit_addr": reduce_sem_exit_addr,
                 "intermediate_per_device": reduce_intermediate_per_device,
                 "output_per_device": reduce_output_per_device,
                 "num_tiles": reduce_num_tiles,
                 "payload_size_bytes": reduce_payload_size_bytes,
                 "slot_size_bytes": reduce_slot_size_bytes,
                 "compute_tile_size": reduce_compute_tile_size,
+                "downstream_socket_page_size": reduce_downstream_socket_page_size,
                 "worker_cores_list": reduce_worker_cores_list,
                 "num_workers": reduce_num_workers,
                 "num_workers_per_column": reduce_num_workers_per_column,
@@ -1323,7 +1347,11 @@ class MoeRoutedExpertOp:
                 "column_to_fabric_core": reduce_column_to_fabric_core,
                 "core_to_slot_idx": reduce_core_to_slot_idx,
                 "core_to_shard_idx": reduce_core_to_shard_idx,
-                "output_core": reduce_output_core,
+                "slots_per_direction": reduce_slots_per_direction,
+                "r2_buf_offset": reduce_r2_buf_offset,
+                "ncrisc_buf_offset": reduce_ncrisc_buf_offset,
+                "r3_buf_offset": reduce_r3_buf_offset,
+                "packet_cb_slots": reduce_packet_cb_slots,
             }
 
         # ==================================================================
@@ -1354,6 +1382,32 @@ class MoeRoutedExpertOp:
                 "input_num_pages": bcast_input_num_pages,
             }
             bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, bcast_input_tensor)
+            bcast_pkt_cb_descriptor.format_descriptors[0].tile = rmsnorm_output_cb_descriptor.format_descriptors[0].tile
+            bcast_pkt_cb_descriptor.format_descriptors[0].page_size = rmsnorm_output_cb_descriptor.format_descriptors[
+                0
+            ].page_size
+
+        # ==================================================================
+        # Forward (per-device socket read, replaces bcast)
+        # ==================================================================
+        forward_params = None
+        if enable_forward:
+            from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+
+            fwd_element_size = dtype_size(data_format)
+            fwd_payload_size_bytes = 1 * K * fwd_element_size
+            fwd_page_size_bytes = 32 * 32 * fwd_element_size
+            assert fwd_payload_size_bytes % fwd_page_size_bytes == 0
+            fwd_input_num_pages = fwd_payload_size_bytes // fwd_page_size_bytes
+
+            forward_params = {
+                "page_size_bytes": fwd_page_size_bytes,
+                "input_num_pages": fwd_input_num_pages,
+                "payload_size_bytes": fwd_payload_size_bytes,
+            }
+            bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                bcast_pkt_cb, shared_residual_mcast_src_tensor
+            )
             bcast_pkt_cb_descriptor.format_descriptors[0].tile = rmsnorm_output_cb_descriptor.format_descriptors[0].tile
             bcast_pkt_cb_descriptor.format_descriptors[0].page_size = rmsnorm_output_cb_descriptor.format_descriptors[
                 0
@@ -1490,19 +1544,23 @@ class MoeRoutedExpertOp:
             gate_proj_cb_index_descriptor=gate_proj_cb_index_descriptor,
             # Testing flag (routing only)
             use_hardcoded_expert_index=use_hardcoded_expert_index,
-            # ReduceToOne
-            enable_reduce_to_one=enable_reduce_to_one,
+            # ReduceToAll
+            enable_reduce_to_all=enable_reduce_to_all,
             reduce_local_cb=reduce_local_cb,
             reduce_received_cb=reduce_received_cb,
             reduce_output_cb=reduce_output_cb,
             reduce_scratch_cb=reduce_scratch_cb,
             reduce_packet_cb=reduce_packet_cb,
-            reduce_params=reduce_params if enable_reduce_to_one else None,
+            reduce_reload_cb=reduce_reload_cb,
+            reduce_params=reduce_params if enable_reduce_to_all else None,
             # Broadcast
             enable_bcast=enable_bcast,
-            bcast_pkt_cb=bcast_pkt_cb if enable_bcast else None,
-            bcast_pkt_cb_descriptor=bcast_pkt_cb_descriptor if enable_bcast else None,
+            bcast_pkt_cb=bcast_pkt_cb if (enable_bcast or enable_forward) else None,
+            bcast_pkt_cb_descriptor=bcast_pkt_cb_descriptor if (enable_bcast or enable_forward) else None,
             bcast_params=bcast_params,
+            # Forward
+            enable_forward=enable_forward,
+            forward_params=forward_params,
         )
 
     @staticmethod
@@ -1613,13 +1671,30 @@ class MoeRoutedExpertOp:
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
             ("enable_routing", 1 if ctx.enable_routing else 0),
-            # ReduceToOne reader args (CB indices + common RT arg base)
+            # ReduceToAll reader args (CB indices + common RT arg base)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_received_cb", ctx.reduce_received_cb),
             ("reduce_ncrisc_common_rt_arg_base", 0),
             # Broadcast (base CT args, always present)
-            ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
+            ("reduce_slots_per_direction", ctx.reduce_params["slots_per_direction"] if ctx.reduce_params else 0),
+            ("reduce_slot_size_bytes", ctx.reduce_params["slot_size_bytes"] if ctx.reduce_params else 0),
+            ("reduce_packet_cb", ctx.reduce_packet_cb),
+            ("reduce_payload_size_bytes", ctx.reduce_params["payload_size_bytes"] if ctx.reduce_params else 0),
+            ("reduce_r2_buffer_offset", ctx.reduce_params["r2_buf_offset"] if ctx.reduce_params else 0),
+            ("reduce_ncrisc_buffer_offset", ctx.reduce_params["ncrisc_buf_offset"] if ctx.reduce_params else 0),
+            ("reduce_is_exit_column", 0),
+            ("reduce_is_residual_device", 0),
+            # Broadcast / Forward (base CT args, always present)
+            ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
             ("bcast_ncrisc_common_rt_arg_base", 0),
+            # Forward NCRISC CT args
+            ("forward_num_pages", ctx.forward_params["input_num_pages"] if ctx.enable_forward else 0),
+            ("forward_page_size", ctx.forward_params["page_size_bytes"] if ctx.enable_forward else 0),
+            ("forward_ncrisc_common_rt_arg_base", 0),
+            ("forward_is_entry_column", 1),
+            ("forward_fabric_max_payload", 0),
+            ("forward_num_fabric_packets", 0),
+            ("forward_cross_column_payload", 0),
         ]
 
         brisc_named_compile_time_args = [
@@ -1714,14 +1789,32 @@ class MoeRoutedExpertOp:
             ("add_cb_in1", ctx.add_cb_in1),
             # Routing flag
             ("enable_routing", 1 if ctx.enable_routing else 0),
-            # ReduceToOne writer args (CB indices + RT arg bases)
+            # ReduceToAll writer args (CB indices + RT arg bases)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
             ("reduce_brisc_rt_arg_base", 0),
-            ("reduce_brisc_fabric_rt_arg_base", 0),
-            ("reduce_persistent_fabric_rt_arg_base", 18),
-            # Broadcast (base CT args, always present)
-            ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
+            ("reduce_payload_size_bytes", ctx.reduce_params["payload_size_bytes"] if ctx.reduce_params else 0),
+            ("reduce_packet_cb", ctx.reduce_packet_cb),
+            ("reduce_slot_size_bytes", ctx.reduce_params["slot_size_bytes"] if ctx.reduce_params else 0),
+            ("reduce_reload_cb", ctx.reduce_reload_cb),
+            ("reduce_compute_tile_size", ctx.reduce_params["compute_tile_size"] if ctx.reduce_params else 0),
+            ("reduce_slots_per_direction", ctx.reduce_params["slots_per_direction"] if ctx.reduce_params else 0),
+            ("reduce_r2_buffer_offset", ctx.reduce_params["r2_buf_offset"] if ctx.reduce_params else 0),
+            ("reduce_ncrisc_buffer_offset", ctx.reduce_params["ncrisc_buf_offset"] if ctx.reduce_params else 0),
+            ("reduce_r3_buffer_offset", ctx.reduce_params["r3_buf_offset"] if ctx.reduce_params else 0),
+            ("reduce_socket_page_size", 0),
+            ("reduce_total_num_workers", ctx.reduce_params["num_workers"] if ctx.reduce_params else 0),
+            ("reduce_is_exit_column", 0),
+            ("reduce_is_residual_device", 0),
+            ("reduce_output_core_noc_x", 0),
+            ("reduce_output_core_noc_y", 0),
+            ("reduce_mesh_rows", 0),
+            ("reduce_my_row", 0),
+            # Broadcast / Forward (base CT args, always present)
+            ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
+            # Forward BRISC CT args
+            ("forward_num_pages", ctx.forward_params["input_num_pages"] if ctx.enable_forward else 0),
+            ("forward_is_entry_column", 1),
         ]
 
         trisc_named_compile_time_args = [
@@ -1809,11 +1902,13 @@ class MoeRoutedExpertOp:
             # CB reset addresses for DRAM matmul working buffers
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
-            # ReduceToOne compute args (CB indices)
+            # ReduceToAll compute args (CB indices)
             ("reduce_local_cb", ctx.reduce_local_cb),
             ("reduce_received_cb", ctx.reduce_received_cb),
-            ("reduce_output_cb", ctx.reduce_output_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
+            ("reduce_reload_cb", ctx.reduce_reload_cb),
+            ("reduce_is_exit_column", 0),
+            ("reduce_is_residual_device", 0),
         ]
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
@@ -1872,13 +1967,15 @@ class MoeRoutedExpertOp:
         ]
 
         # Reduce CBs (39-45)
-        if ctx.enable_reduce_to_one and ctx.reduce_received_cb_descriptors:
+        if ctx.enable_reduce_to_all and ctx.reduce_received_cb_descriptors:
             descriptors += ctx.reduce_received_cb_descriptors
             descriptors.append(ctx.reduce_scratch_cb_descriptor)
             descriptors.append(ctx.reduce_packet_cb_descriptor)
+            if ctx.reduce_reload_cb_descriptor is not None:
+                descriptors.append(ctx.reduce_reload_cb_descriptor)
 
-        # Bcast CB (46)
-        if ctx.enable_bcast and ctx.bcast_pkt_cb_descriptor is not None:
+        # Bcast/Forward CB (46)
+        if (ctx.enable_bcast or ctx.enable_forward) and ctx.bcast_pkt_cb_descriptor is not None:
             descriptors.append(ctx.bcast_pkt_cb_descriptor)
 
         return descriptors
@@ -1911,10 +2008,10 @@ class MoeRoutedExpertOp:
                 value=1,
                 other_value=0,
             ),
-            # ReduceToOne core descriptors — will be updated per-device if enabled
+            # ReduceToAll core descriptors — will be updated per-device if enabled
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_reduce_worker_core",
-                core_range=ctx.gate_proj_core_ranges if ctx.enable_reduce_to_one else ttnn.CoreRangeSet([]),
+                core_range=ctx.gate_proj_core_ranges if ctx.enable_reduce_to_all else ttnn.CoreRangeSet([]),
                 value=1,
                 other_value=0,
             ),
@@ -1926,7 +2023,7 @@ class MoeRoutedExpertOp:
             ),
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="reduce_persistent_fabric_signal_enable",
-                core_range=ttnn.CoreRangeSet([]),  # Set per-device on ROOT1
+                core_range=ttnn.CoreRangeSet([]),  # Set per-device on designated device
                 value=1,
                 other_value=0,
             ),
@@ -2800,6 +2897,47 @@ class MoeOp:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
         return [ttnn.create_global_semaphore(device, available_cores, 0) for _ in range(MoeSem.NUM_SEMAPHORES)]
+
+    @staticmethod
+    def create_forward_staging_tensor(mesh_device, sender_core, K, dtype=ttnn.bfloat16):
+        """Allocate the dedicated persistent L1 buffer that backs cb46 (forward staging).
+        MUST be called BEFORE any persistent pipeline kernel is launched so that
+        the host-to-device upload performed by ttnn.from_torch doesn't deadlock
+        against an already-busy dispatch queue.
+        Args:
+            mesh_device: ttnn.MeshDevice the MoE op will run on.
+            sender_core: ttnn.CoreCoord of the MoE sender core (e.g. (12, 9)).
+            K: Hidden size (number of elements along the activation row).
+            dtype: Element dtype of the staging buffer (default bfloat16).
+        Returns:
+            ttnn.Tensor: a height-sharded L1 tensor on `sender_core` with shape
+            (1, K) per device, suitable to pass as `forward_staging_tensor` to
+            MoeOp.op().
+        """
+        import torch
+
+        sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+        # Round up to a tile-multiple width (32 elements) so layout=TILE works.
+        shard_width = ((K + 31) // 32) * 32
+        shard_spec = ttnn.ShardSpec(
+            sender_grid,
+            (1, shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        )
+        torch_zeros = torch.zeros((1, shard_width), dtype=torch.bfloat16)
+        return ttnn.from_torch(
+            torch_zeros,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=mem_cfg,
+            tile=ttnn.Tile([1, 32]),
+        )
 
     # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
@@ -3855,6 +3993,56 @@ class MoeOp:
         shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
         out_offset += cb38_total_size
 
+        if routed_ctx.enable_forward and routed_ctx.bcast_pkt_cb is not None:
+            cb46_cb_id = routed_ctx.bcast_pkt_cb
+            cb46_total_size = routed_ctx.forward_params["payload_size_bytes"]
+            rmsnorm_fmt = routed_ctx.rmsnorm_output_cb_descriptor.format_descriptors[0]
+            cb46_page_size = rmsnorm_fmt.page_size
+            cb46_tile = rmsnorm_fmt.tile
+
+            if routed_ctx.forward_staging_tensor is not None:
+                print(
+                    f"[overlap] bcast_pkt_cb (forward staging) -> dedicated PB: cb_id={cb46_cb_id} "
+                    f"size={cb46_total_size} page_size={cb46_page_size}",
+                    flush=True,
+                )
+                cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                    cb46_cb_id,
+                    routed_ctx.forward_staging_tensor,
+                )
+                cb46_fmt = ttnn.CBFormatDescriptor(
+                    buffer_index=cb46_cb_id,
+                    data_format=routed_ctx.data_format,
+                    page_size=cb46_page_size,
+                    tile=cb46_tile,
+                )
+                cb46_desc.format_descriptors = [cb46_fmt]
+                routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
+                # NOTE: out_offset is intentionally NOT incremented — cb46 no
+                # longer consumes space in sdpa_out_interm_buffer.
+            else:
+                cb46_offset = out_offset
+                print(
+                    f"[overlap] bcast_pkt_cb (forward staging, LEGACY overlap): cb_id={cb46_cb_id} "
+                    f"offset={cb46_offset} size={cb46_total_size} page_size={cb46_page_size}",
+                    flush=True,
+                )
+                cb46_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                    cb46_cb_id,
+                    out_buf,
+                    address_offset=cb46_offset,
+                    total_size=cb46_total_size,
+                )
+                cb46_fmt = ttnn.CBFormatDescriptor(
+                    buffer_index=cb46_cb_id,
+                    data_format=routed_ctx.data_format,
+                    page_size=cb46_page_size,
+                    tile=cb46_tile,
+                )
+                cb46_desc.format_descriptors = [cb46_fmt]
+                routed_ctx.bcast_pkt_cb_descriptor = cb46_desc
+                out_offset += cb46_total_size
+
         # ── Reduce: CB 24 (add_cb_out / reduce_local_cb) → sdpa_out_interm_buffer ──
         # When reduce is enabled, CB 24 is a working buffer (not final output).
         # Placed after CB 38 on DRAM bank cores; CB 30/31/38 are on sender core (disjoint).
@@ -3885,7 +4073,9 @@ class MoeOp:
             reduce_tile_desc = ttnn.TileDescriptor(32, 32)
 
             # CB 43: reduce_scratch_cb (compute_tile_size * num_tiles)
-            reduce_scratch_size = routed_ctx.reduce_params["compute_tile_size"] * routed_ctx.reduce_params["num_tiles"]
+            reduce_scratch_size = (
+                4 * routed_ctx.reduce_params["compute_tile_size"] * routed_ctx.reduce_params["num_tiles"]
+            )
             reduce_cb_scratch_desc = ttnn.cb_descriptor_from_sharded_tensor(
                 routed_ctx.reduce_scratch_cb,
                 out_buf,
@@ -3924,6 +4114,27 @@ class MoeOp:
             ]
             routed_ctx.reduce_packet_cb_descriptor = reduce_cb_packet_desc
             reduce_offset += reduce_packet_size
+
+            # reduce_reload_cb: num_tiles * compute_tile_size
+            reduce_reload_size = rp["compute_tile_size"] * rp["num_tiles"]
+            reduce_cb_reload_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                routed_ctx.reduce_reload_cb,
+                out_buf,
+                address_offset=reduce_offset,
+                total_size=reduce_reload_size,
+            )
+            reduce_cb_reload_desc.core_ranges = reduce_all_cores_set
+            reduce_cb_reload_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=routed_ctx.reduce_reload_cb,
+                    data_format=ttnn.bfloat16,
+                    page_size=rp["compute_tile_size"],
+                    tile=reduce_tile_desc,
+                )
+            ]
+            routed_ctx.reduce_reload_cb_descriptor = reduce_cb_reload_desc
+            reduce_offset += reduce_reload_size
+
             # reduce received CB: single 3-page CB backed by intermediate tensor
             reduce_payload = routed_ctx.reduce_params["payload_size_bytes"]
             routed_ctx.reduce_received_cb_descriptors = []
@@ -3960,74 +4171,115 @@ class MoeOp:
             routed_ctx.reduce_received_cb_descriptors.append(output_desc)
 
     def _build_reduce_per_device(self, reduce_root_coord, coord, row, col, chip_id):
-        """Apply reduce-to-one modifications to per-device state (self.device_*). No-op when reduce disabled."""
+        """Apply reduce-to-all modifications to per-device state (self.device_*). No-op when reduce disabled."""
         ctx = self.ctx
-        if not ctx.enable_reduce_to_one:
+        if not ctx.enable_reduce_to_all:
             return
 
         routed_ctx = ctx.routed_ctx
         reduce_params = ctx.reduce_params
         mesh_device = ctx.mesh_device
-        use_torus = self.is_torus and reduce_root_coord[0] in [0, 3]
-        device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
+        mesh_rows = routed_ctx.mesh_rows
 
-        # Determine destination coordinate based on role
-        if device_role == MESH_LEAF:
-            if use_torus:
-                dest_coord = ttnn.MeshCoordinate(row - 1, col) if row == 1 else ttnn.MeshCoordinate(row + 1, col)
-            else:
-                dest_coord = ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
-        elif device_role == MESH_ROOT3:
-            dest_coord = ttnn.MeshCoordinate(reduce_root_coord[0], col)
-        else:
-            dest_coord = reduce_root_coord
-
-        dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
-
-        # Per-device tensors
         intermediate_tensor = reduce_params["intermediate_per_device"][chip_id]
         out_tensor = reduce_params["output_per_device"][chip_id]
         payload_size_bytes = reduce_params["payload_size_bytes"]
-
-        # Destination L1 address: offset within the single intermediate tensor
-        # Page 0 = round 1 (LEAF data), page 1 = round 2 (ROOT3), page 2 = round 3 (ROOT2)
         intermediate_base = intermediate_tensor.buffer_address()
-        if device_role == MESH_LEAF:
-            dst_l1_addr = intermediate_base  # page 0
-            dst_sem_addr = reduce_params["sem_round1_addr"]
-        elif device_role == MESH_ROOT3:
-            dst_l1_addr = intermediate_base + payload_size_bytes  # page 1
-            dst_sem_addr = reduce_params["sem_round2_addr"]
-        elif device_role == MESH_ROOT2:
-            dst_l1_addr = intermediate_base + 2 * payload_size_bytes  # page 2
-            dst_sem_addr = reduce_params["sem_round3_addr"]
-        else:
-            dst_l1_addr = 0
-            dst_sem_addr = reduce_params["sem_exit_addr"]
+        r1_recv_l1 = intermediate_base
+        r2_recv_l1 = intermediate_base + payload_size_bytes
+        r3_recv_l1 = intermediate_base + 2 * payload_size_bytes
 
-        output_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["output_core"])
+        # Ring neighbors (all 1-hop)
+        fwd_row = (row + 1) % mesh_rows
+        bwd_row = (row - 1 + mesh_rows) % mesh_rows
+        r3_col = col ^ 1
 
-        # Compile-time args
-        self.ncrisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
+        fwd_coord = ttnn.MeshCoordinate(fwd_row, col)
+        bwd_coord = ttnn.MeshCoordinate(bwd_row, col)
+        r3_coord = ttnn.MeshCoordinate(row, r3_col)
+
+        fwd_fabric_node_id = mesh_device.get_fabric_node_id(fwd_coord)
+        bwd_fabric_node_id = mesh_device.get_fabric_node_id(bwd_coord)
+        r3_fabric_node_id = mesh_device.get_fabric_node_id(r3_coord)
+
         self.brisc_args.extend(
             [
-                ("reduce_device_role", device_role),
                 ("reduce_num_tiles", reduce_params["num_tiles"]),
-                ("reduce_payload_size_bytes", reduce_params["payload_size_bytes"]),
-                ("reduce_num_hops", 1),
-                ("reduce_dst_fabric_node_chip_id", dest_fabric_node_id.chip_id),
-                ("reduce_dst_fabric_node_mesh_id", int(dest_fabric_node_id.mesh_id)),
-                ("reduce_output_core_noc_x", output_core_phys.x),
-                ("reduce_output_core_noc_y", output_core_phys.y),
-                ("reduce_num_workers", reduce_params["num_workers_per_column"]),
-                ("reduce_total_num_workers", reduce_params["num_workers"]),
-                ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
-                ("reduce_forward_metadata_size_bytes", self._forward_metadata_size_bytes),
-                ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
-                ("reduce_enable_downstream_socket", 1 if self.downstream_sockets else 0),
+                ("reduce_fwd_dst_chip_id", fwd_fabric_node_id.chip_id),
+                ("reduce_fwd_dst_mesh_id", int(fwd_fabric_node_id.mesh_id)),
+                ("reduce_bwd_dst_chip_id", bwd_fabric_node_id.chip_id),
+                ("reduce_bwd_dst_mesh_id", int(bwd_fabric_node_id.mesh_id)),
+                ("reduce_r3_dst_chip_id", r3_fabric_node_id.chip_id),
+                ("reduce_r3_dst_mesh_id", int(r3_fabric_node_id.mesh_id)),
             ]
         )
-        self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
+        self.ncrisc_args.extend([("reduce_num_tiles", reduce_params["num_tiles"])])
+        self.trisc_args.extend([("reduce_num_tiles", reduce_params["num_tiles"])])
+
+        is_exit_col = 1 if (self.reduce_exit_column is not None and col == self.reduce_exit_column) else 0
+
+        # Output core physical NOC coordinates (workers write to this core)
+        output_shard_spec = out_tensor.memory_config().shard_spec
+        output_core_logical = output_shard_spec.grid.ranges()[0].start
+        output_core_phys = routed_ctx.device.worker_core_from_logical_core(output_core_logical)
+
+        # Socket page size for downstream sending (only exit column sends downstream).
+        # Use the unpadded per-shard size so that N_workers * socket_page_size == K * element_size.
+        socket_page_size = rp["downstream_socket_page_size"] if (self.downstream_sockets and is_exit_col) else 0
+        if is_exit_col and self.downstream_sockets:
+            print(
+                f"[MoE DIAG] chip_id={chip_id} row={row} col={col} "
+                f"reduce_socket_page_size={socket_page_size} "
+                f"reduce_payload_size_bytes(padded)={rp['payload_size_bytes']} "
+                f"downstream_socket_page_size(unpadded)={rp['downstream_socket_page_size']} "
+                f"num_workers={rp['num_workers']} "
+                f"total_socket_bytes={rp['num_workers']}*{socket_page_size}={rp['num_workers']*socket_page_size}",
+                flush=True,
+            )
+
+        def _update_brisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.brisc_args):
+                if n == name:
+                    self.brisc_args[i] = (name, value)
+                    return
+
+        def _update_ncrisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.ncrisc_args):
+                if n == name:
+                    self.ncrisc_args[i] = (name, value)
+                    return
+
+        def _update_trisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.trisc_args):
+                if n == name:
+                    self.trisc_args[i] = (name, value)
+                    return
+
+        _update_brisc_ct("reduce_is_exit_column", is_exit_col)
+        _update_ncrisc_ct("reduce_is_exit_column", is_exit_col)
+        _update_trisc_ct("reduce_is_exit_column", is_exit_col)
+        _update_brisc_ct("reduce_output_core_noc_x", output_core_phys.x)
+        _update_brisc_ct("reduce_output_core_noc_y", output_core_phys.y)
+        _update_brisc_ct("reduce_socket_page_size", socket_page_size)
+        _update_brisc_ct("reduce_mesh_rows", mesh_rows)
+        _update_brisc_ct("reduce_my_row", row)
+
+        # Only ONE device adds the residual before the reduce so it is counted
+        # exactly once in the cross-device sum (same semantics as main's ROOT1).
+        is_residual_device = 1 if chip_id == 0 else 0
+        _update_brisc_ct("reduce_is_residual_device", is_residual_device)
+        _update_ncrisc_ct("reduce_is_residual_device", is_residual_device)
+        _update_trisc_ct("reduce_is_residual_device", is_residual_device)
+
+        # Local sender core physical NOC coords (needed for both reduce-to-sender sync
+        # and the per-chip persistent signal in forward mode).
+        sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
+
+        persistent_signal_eligible = self.persistent_next_iter_sem_addr != 0 and self.downstream_sockets is not None
+        if ctx.enable_forward:
+            is_persistent_device = persistent_signal_eligible and is_exit_col
+        else:
+            is_persistent_device = persistent_signal_eligible and chip_id == 0
 
         # Update fabric core descriptor
         fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
@@ -4068,37 +4320,21 @@ class MoeOp:
             ]
         )
 
-        # Shared worker→fabric ready semaphore consumed by the ready-mask drain loop.
-        reduce_worker_fabric_ready_sem_addr = self.sem_addrs[MoeSem.REDUCE_WORKER_FABRIC_BASE]
-
-        # Per-core runtime args for reduce worker and fabric cores
-        # Persistent-signal sync: first worker (shard_idx==0) coordinates persistent signaling
-        agg_sem_addr = self.sem_addrs[MoeSem.REDUCE_AGG_SYNC]
-        persistent_core_noc_x = 0
-        persistent_core_noc_y = 0
-        if device_role == MESH_ROOT1:
-            persistent_core_phys = routed_ctx.device.worker_core_from_logical_core(
-                reduce_params["worker_cores_list"][0]
-            )
-            persistent_core_noc_x = persistent_core_phys.x
-            persistent_core_noc_y = persistent_core_phys.y
-
-        # Persistent signal: on ROOT1, aggregator worker signals a fabric core via local NOC,
-        # then the fabric core sends a fabric atomic inc to the bcast sender on the entry device.
-        persistent_enable_root1 = device_role == MESH_ROOT1 and self.persistent_next_iter_sem_addr != 0
-        persistent_dst_noc_x = 0
-        persistent_dst_noc_y = 0
-        persistent_dst_sem_addr = 0
         self._persistent_fabric_core = None
         self._persistent_target_node = None
-        persistent_fabric_signal_sem_addr = 0
-        if persistent_enable_root1:
+        self._persistent_local_dst_noc_x = 0
+        self._persistent_local_dst_noc_y = 0
+        self._persistent_local_dst_sem_addr = 0
+        persistent_fc_wait_sem_noc_x = 0
+        persistent_fc_wait_sem_noc_y = 0
+        persistent_fc_wait_sem_addr = 0
+        if is_persistent_device and ctx.enable_bcast:
             persistent_fabric_core = reduce_params["fabric_cores"][0]
             persistent_fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(persistent_fabric_core)
             persistent_fabric_signal_sem_addr = self.sem_addrs[MoeSem.REDUCE_PERSISTENT_FABRIC_SIGNAL]
-            persistent_dst_noc_x = persistent_fabric_core_phys.x
-            persistent_dst_noc_y = persistent_fabric_core_phys.y
-            persistent_dst_sem_addr = persistent_fabric_signal_sem_addr
+            persistent_fc_wait_sem_noc_x = persistent_fabric_core_phys.x
+            persistent_fc_wait_sem_noc_y = persistent_fabric_core_phys.y
+            persistent_fc_wait_sem_addr = persistent_fabric_signal_sem_addr
             self._persistent_fabric_core = persistent_fabric_core
             bcast_sender_coord = ctx.bcast_sender_coord
             self._persistent_target_node = mesh_device.get_fabric_node_id(bcast_sender_coord)
@@ -4118,75 +4354,202 @@ class MoeOp:
                         other_value=0,
                     )
                     break
+        elif is_persistent_device and ctx.enable_forward:
+            persistent_fabric_core = reduce_params["fabric_cores"][0]
+            persistent_fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(persistent_fabric_core)
+            persistent_fabric_signal_sem_addr = self.sem_addrs[MoeSem.REDUCE_PERSISTENT_FABRIC_SIGNAL]
+            # Workers will bump this FC's wait_sem directly
+            persistent_fc_wait_sem_noc_x = persistent_fabric_core_phys.x
+            persistent_fc_wait_sem_noc_y = persistent_fabric_core_phys.y
+            persistent_fc_wait_sem_addr = persistent_fabric_signal_sem_addr
+            self._persistent_fabric_core = persistent_fabric_core
+
+        # Determine entry partner for the cross-chip (or local) signal.
+        # Entry devices are those at exit_column (they have forward sockets).
+        entry_partner_col = self.exit_column
+        entry_partner_coord = ttnn.MeshCoordinate(row, entry_partner_col)
+        self._persistent_target_node = mesh_device.get_fabric_node_id(entry_partner_coord)
+
+        is_same_chip = entry_partner_col == col
+        if not is_same_chip:
+            # Cross-chip mode: fabric atomic_inc to entry device's sender,
+            # plus local release for this chip's own sender.
+            self._persistent_bcast_dst_noc_x = sender_core_physical.x
+            self._persistent_bcast_dst_noc_y = sender_core_physical.y
+            self._persistent_bcast_dst_mesh_id = int(self._persistent_target_node.mesh_id)
+            self._persistent_bcast_dst_chip_id = int(self._persistent_target_node.chip_id)
+            self._persistent_bcast_dst_sem_addr = self.persistent_next_iter_sem_addr
+            self._persistent_local_dst_noc_x = sender_core_physical.x
+            self._persistent_local_dst_noc_y = sender_core_physical.y
+            self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
+        else:
+            # Local-only mode: entry == exit on same chip. Set dst_sem_addr=0
+            # so the kernel skips the fabric path and uses local_dst instead.
+            self._persistent_bcast_dst_noc_x = 0
+            self._persistent_bcast_dst_noc_y = 0
+            self._persistent_bcast_dst_mesh_id = 0
+            self._persistent_bcast_dst_chip_id = 0
+            self._persistent_bcast_dst_sem_addr = 0
+            self._persistent_local_dst_noc_x = sender_core_physical.x
+            self._persistent_local_dst_noc_y = sender_core_physical.y
+            self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
+        for i, desc in enumerate(self.device_unified_core_descs):
+            if desc.named_compile_time_arg == "reduce_persistent_fabric_signal_enable":
+                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="reduce_persistent_fabric_signal_enable",
+                    core_range=ttnn.CoreRangeSet([ttnn.CoreRange(persistent_fabric_core, persistent_fabric_core)]),
+                    value=1,
+                    other_value=0,
+                )
+                break
+        fwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R1]
+        fwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R2]
+        bwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R1]
+        bwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R2]
+        r3_fwd_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_R3_FWD]
+
+        slots_per_direction = reduce_params["slots_per_direction"]
+        ncrisc_buf_offset = reduce_params["ncrisc_buf_offset"]
+        r2_buf_offset = reduce_params["r2_buf_offset"]
+        r3_buf_offset = reduce_params["r3_buf_offset"]
+        slot_size_bytes = reduce_params["slot_size_bytes"]
+
+        # Build per-link info: group cores by column → link
+        sorted_columns = sorted(rp["column_to_fabric_core"].keys())
 
         reduce_brisc_per_core_args = []
-        for core_idx, core in enumerate(reduce_params["worker_cores_list"]):
-            fabric_core = reduce_params["column_to_fabric_core"][core.x]
-            fabric_core_phys = routed_ctx.device.worker_core_from_logical_core(fabric_core)
-            slot_idx = reduce_params["core_to_slot_idx"][(core.x, core.y)]
-            shard_idx = reduce_params["core_to_shard_idx"][(core.x, core.y)]
+        reduce_ncrisc_per_core_args = []
 
-            socket_config_addr = 0
-            worker_agg_sem_addr = 0
-            worker_agg_noc_x = 0
-            worker_agg_noc_y = 0
-            worker_metadata_addr = 0
+        for link_idx, x in enumerate(sorted_columns):
+            col_cores = []
+            for core in rp["worker_cores_list"]:
+                if core.x == x:
+                    col_cores.append(core)
+            col_cores.sort(key=lambda c: c.y)
 
-            if device_role == MESH_ROOT1:
-                worker_agg_sem_addr = agg_sem_addr
-                worker_agg_noc_x = persistent_core_noc_x
-                worker_agg_noc_y = persistent_core_noc_y
-                if self.downstream_sockets is not None:
-                    socket_config_addr = self.downstream_sockets[shard_idx].get_config_buffer_address()
-                if self._metadata_l1_addr != 0:
-                    worker_metadata_addr = self._metadata_l1_addr
+            fc = rp["column_to_fabric_core"][x]
+            fc_phys = routed_ctx.device.worker_core_from_logical_core(fc)
 
-            is_persistent_agg = persistent_enable_root1 and shard_idx == 0
+            # Direction configs for A/B split
+            class DirCfg:
+                def __init__(self, r1_sem, r2_sem, buf_base_offset):
+                    self.r1_sem = r1_sem
+                    self.r2_sem = r2_sem
+                    self.buf_base_offset = buf_base_offset
+                    self.r1_count = 0
+                    self.r2_count = 0
 
-            reduce_brisc_per_core_args.append(
-                (
-                    core,
-                    [
-                        fabric_core_phys.x,
-                        fabric_core_phys.y,
-                        slot_idx,
-                        reduce_worker_fabric_ready_sem_addr,
-                        dst_l1_addr,
-                        dst_sem_addr,
-                        out_tensor.buffer_address(),
-                        shard_idx,
-                        socket_config_addr,
-                        worker_metadata_addr,
-                        worker_agg_sem_addr,
-                        worker_agg_noc_x,
-                        worker_agg_noc_y,
-                        int(is_persistent_agg),
-                        persistent_dst_noc_x if is_persistent_agg else 0,
-                        persistent_dst_noc_y if is_persistent_agg else 0,
-                        0,  # persistent_dst_mesh_id (unused, local signal)
-                        0,  # persistent_dst_chip_id (unused, local signal)
-                        persistent_dst_sem_addr if is_persistent_agg else 0,
-                    ],
-                )
+            fwd_cfg = DirCfg(fwd_r1_sem_addr, fwd_r2_sem_addr, 0)
+            bwd_cfg = DirCfg(bwd_r1_sem_addr, bwd_r2_sem_addr, ncrisc_buf_offset)
+
+            for worker_idx, core in enumerate(col_cores):
+                is_type_a = ((row + worker_idx) % 2) == 0
+                r1_cfg = fwd_cfg if is_type_a else bwd_cfg
+                r2_cfg = bwd_cfg if is_type_a else fwd_cfg
+
+                r1_slot_idx = r1_cfg.r1_count
+                r1_cfg.r1_count += 1
+                r2_slot_idx = r2_cfg.r2_count
+                r2_cfg.r2_count += 1
+
+                r1_slot_offset = r1_cfg.buf_base_offset + r1_slot_idx * slot_size_bytes
+                r1_slot_bit = 1 << r1_slot_idx
+                r1_sem = r1_cfg.r1_sem
+
+                r2_slot_offset = r2_cfg.buf_base_offset + r2_buf_offset + r2_slot_idx * slot_size_bytes
+                r2_slot_bit = 1 << r2_slot_idx
+                r2_sem = r2_cfg.r2_sem
+
+                r3_slot_off = r3_buf_offset + worker_idx * slot_size_bytes
+                r3_slot_b = 1 << worker_idx
+
+                shard_idx = rp["core_to_shard_idx"][(core.x, core.y)]
+                socket_config_addr = 0
+                if self.downstream_sockets is not None and is_exit_col:
+                    device_sockets = self.downstream_sockets[chip_id]
+                    if isinstance(device_sockets, list):
+                        socket_config_addr = device_sockets[shard_idx].get_config_buffer_address()
+                        print(
+                            f"[MoE DIAG] chip_id={chip_id} worker_idx={worker_idx} "
+                            f"shard_idx={shard_idx} core=({core.x},{core.y}) "
+                            f"socket_config_addr=0x{socket_config_addr:x} "
+                            f"num_downstream_sockets={len(device_sockets)}",
+                            flush=True,
+                        )
+                    else:
+                        socket_config_addr = device_sockets.get_config_buffer_address()
+                        print(
+                            f"[MoE DIAG] chip_id={chip_id} worker_idx={worker_idx} "
+                            f"shard_idx={shard_idx} core=({core.x},{core.y}) "
+                            f"socket_config_addr=0x{socket_config_addr:x} (single socket)",
+                            flush=True,
+                        )
+                worker_args = [
+                    fc_phys.x,  # 0
+                    fc_phys.y,  # 1
+                    1 if is_type_a else 0,  # 2
+                    r1_slot_offset,  # 3
+                    r1_slot_bit,  # 4
+                    r1_sem,  # 5 (L1 addr)
+                    r2_slot_offset,  # 6
+                    r2_slot_bit,  # 7
+                    r2_sem,  # 8 (L1 addr)
+                    r1_recv_l1,  # 9
+                    rp["sem_round1_addr"],  # 10
+                    r2_recv_l1,  # 11
+                    rp["sem_round2_addr"],  # 12
+                    r3_recv_l1,  # 13
+                    rp["sem_round3_addr"],  # 14
+                    out_tensor.buffer_address(),  # 15
+                    r3_slot_off,  # 16
+                    r3_slot_b,  # 17
+                    r3_fwd_sem_addr,  # 18 (L1 addr)
+                    socket_config_addr,  # 19
+                    0,  # 20 agg_sem_l1_addr (unused, workers bump FC directly)
+                    0,  # 21 agg_core_noc_x (unused)
+                    0,  # 22 agg_core_noc_y (unused)
+                    int(is_persistent_device),  # 23 persistent_enable: all workers on exit device
+                    persistent_fc_wait_sem_noc_x if is_persistent_device else 0,  # 24
+                    persistent_fc_wait_sem_noc_y if is_persistent_device else 0,  # 25
+                    0,  # 26 persistent_dst_mesh_id (unused by workers)
+                    0,  # 27 persistent_dst_chip_id (unused by workers)
+                    persistent_fc_wait_sem_addr if is_persistent_device else 0,  # 28
+                    shard_idx,  # 29
+                ]
+                reduce_brisc_per_core_args.append((core, worker_args))
+
+            reduce_brisc_per_core_args.append((fc, [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]))
+
+            # NOTE: ttnn.CoreCoord.__eq__ raises TypeError when compared to
+            # None, so guard with `is not None` before the equality check.
+            is_this_persistent_fc = (
+                is_persistent_device and self._persistent_fabric_core is not None and fc == self._persistent_fabric_core
             )
+            if is_this_persistent_fc:
+                # Stash the per-core persistent payload; it's appended AFTER
+                # fwd_conn + r3_conn in _setup_fabric_connections to keep the
+                # arg_idx order matching the kernel's read order.
+                self._persistent_fc_payload = [
+                    persistent_fabric_signal_sem_addr,
+                    self._persistent_bcast_dst_noc_x,
+                    self._persistent_bcast_dst_noc_y,
+                    self._persistent_bcast_dst_mesh_id,
+                    self._persistent_bcast_dst_chip_id,
+                    self._persistent_bcast_dst_sem_addr,
+                    # Local secondary dst: release this chip's own sender
+                    # after the cross-chip send. Zero in bcast mode (sender
+                    # == cross-chip target).
+                    self._persistent_local_dst_noc_x,
+                    self._persistent_local_dst_noc_y,
+                    self._persistent_local_dst_sem_addr,
+                ]
+            # FC NCRISC: BWD forwarding (R1+R2)
+            reduce_ncrisc_per_core_args.append((fc, [bwd_r1_sem_addr, bwd_r2_sem_addr]))
 
-        # Fabric core per-core args start with the shared ready semaphore address.
-        for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
-            fc_args = [reduce_worker_fabric_ready_sem_addr]
-            if persistent_enable_root1 and fc_idx == 0:
-                fc_args.extend(
-                    [
-                        persistent_fabric_signal_sem_addr,
-                        self._persistent_bcast_dst_noc_x,
-                        self._persistent_bcast_dst_noc_y,
-                        self._persistent_bcast_dst_mesh_id,
-                        self._persistent_bcast_dst_chip_id,
-                        self._persistent_bcast_dst_sem_addr,
-                    ]
-                )
-            reduce_brisc_per_core_args.append((fc, fc_args))
-
-        self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(brisc_args=reduce_brisc_per_core_args)
+        self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(
+            brisc_args=reduce_brisc_per_core_args,
+            ncrisc_args=reduce_ncrisc_per_core_args,
+        )
 
     def _build_bcast_per_device(self, coord, row, col, chip_id):
         """Apply broadcast per-device modifications. No-op when bcast disabled."""
@@ -4307,53 +4670,190 @@ class MoeOp:
                     ncrisc_args=bcast_ncrisc_per_core,
                 )
 
+    def _build_forward_per_device(self, coord, row, col, chip_id):
+        """Apply forward per-device modifications. No-op when forward disabled."""
+        ctx = self.ctx
+        if not ctx.enable_forward:
+            return
+
+        routed_ctx = ctx.routed_ctx
+        fp = routed_ctx.forward_params
+        mesh_device = ctx.mesh_device
+
+        is_entry_col = (self.exit_column is None) or (col == self.exit_column)
+
+        sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
+
+        residual_per_device = ttnn.get_device_tensors(ctx.shared_residual_mcast_src_tensor)
+        residual_device = residual_per_device[chip_id]
+        tensor_address = int(residual_device.buffer_address())
+
+        cross_col_sem_addr = self.sem_addrs[MoeSem.FORWARD_CROSS_COL_SYNC]
+        socket_page_size = fp["payload_size_bytes"]
+
+        def _update_ncrisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.ncrisc_args):
+                if n == name:
+                    self.ncrisc_args[i] = (name, value)
+                    return
+
+        def _update_brisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.brisc_args):
+                if n == name:
+                    self.brisc_args[i] = (name, value)
+                    return
+
+        if is_entry_col:
+            forward_socket = ctx.forward_sockets[chip_id]
+            self.brisc_common_rt_args = [
+                int(forward_socket.get_config_buffer_address()),
+                int(socket_page_size),
+                1,
+            ]
+            _update_brisc_ct("forward_is_entry_column", 1)
+            _update_ncrisc_ct("forward_is_entry_column", 1)
+
+            partner_col = 1 - col
+            partner_chip_id = row * ctx.mesh_cols + partner_col
+            partner_residual = residual_per_device[partner_chip_id]
+            partner_tensor_addr = int(partner_residual.buffer_address())
+            partner_coord = ttnn.MeshCoordinate(row, partner_col)
+            partner_sender_core_phys = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
+
+            partner_fabric_node = mesh_device.get_fabric_node_id(partner_coord)
+
+            fabric_max_payload = 0
+            num_fabric_packets = 0
+            cross_col_payload = 0
+            if self.exit_column is not None:
+                fabric_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+                print("fabric max payload: ", fabric_max_payload)
+                cross_col_payload = int(socket_page_size)
+                num_fabric_packets = (cross_col_payload + fabric_max_payload - 1) // fabric_max_payload
+
+            _update_ncrisc_ct("forward_fabric_max_payload", fabric_max_payload)
+            _update_ncrisc_ct("forward_num_fabric_packets", num_fabric_packets)
+            _update_ncrisc_ct("forward_cross_column_payload", cross_col_payload)
+
+            forward_ncrisc_common_rt_args = [
+                tensor_address,
+                sender_core_physical.x,
+                sender_core_physical.y,
+                cross_col_sem_addr,
+                partner_tensor_addr,
+                partner_sender_core_phys.x,
+                partner_sender_core_phys.y,
+                int(partner_fabric_node.chip_id),
+                int(partner_fabric_node.mesh_id),
+            ]
+        else:
+            self.brisc_common_rt_args = [0, 0, 0]
+            _update_brisc_ct("forward_is_entry_column", 0)
+            _update_ncrisc_ct("forward_is_entry_column", 0)
+
+            fabric_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes()) if self.exit_column is not None else 0
+            cross_col_payload = int(socket_page_size) if self.exit_column is not None else 0
+            num_fabric_packets = (
+                (cross_col_payload + fabric_max_payload - 1) // fabric_max_payload if fabric_max_payload > 0 else 0
+            )
+
+            _update_ncrisc_ct("forward_fabric_max_payload", fabric_max_payload)
+            _update_ncrisc_ct("forward_num_fabric_packets", num_fabric_packets)
+            _update_ncrisc_ct("forward_cross_column_payload", cross_col_payload)
+
+            forward_ncrisc_common_rt_args = [
+                tensor_address,
+                sender_core_physical.x,
+                sender_core_physical.y,
+                cross_col_sem_addr,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ]
+
+        forward_ncrisc_base = len(self.ncrisc_common_rt_args)
+        for i, (name, _val) in enumerate(self.ncrisc_args):
+            if name == "forward_ncrisc_common_rt_arg_base":
+                self.ncrisc_args[i] = ("forward_ncrisc_common_rt_arg_base", forward_ncrisc_base)
+                break
+        self.ncrisc_common_rt_args.extend(forward_ncrisc_common_rt_args)
+
     def _setup_fabric_connections(self, coord, row, col, reduce_root_coord, kernel_result, program):
         """Setup fabric connections for reduce, broadcast, and D2D0 fabric cores."""
         ctx = self.ctx
 
-        # Reduce fabric connections
-        if ctx.enable_reduce_to_one:
-            use_torus = self.is_torus and reduce_root_coord[0] in [0, 3]
-            device_role = get_reduce_device_role(coord, reduce_root_coord, use_torus)
-            if device_role != MESH_ROOT1:
-                reduce_params = ctx.reduce_params
-                mesh_device = ctx.mesh_device
-                if device_role == MESH_LEAF:
-                    if use_torus:
-                        dest_coord = (
-                            ttnn.MeshCoordinate(row - 1, col) if row == 1 else ttnn.MeshCoordinate(row + 1, col)
-                        )
-                    else:
-                        dest_coord = (
-                            ttnn.MeshCoordinate(row + 1, col) if row == 0 else ttnn.MeshCoordinate(row - 1, col)
-                        )
-                elif device_role == MESH_ROOT3:
-                    dest_coord = ttnn.MeshCoordinate(reduce_root_coord[0], col)
-                else:
-                    dest_coord = reduce_root_coord
+        # Reduce fabric connections: FWD + R3 on BRISC, BWD on NCRISC per FC core
+        if ctx.enable_reduce_to_all:
+            rp = ctx.reduce_params
+            mesh_device = ctx.mesh_device
+            mesh_rows = ctx.routed_ctx.mesh_rows
 
-                fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
-                num_columns = reduce_params["num_columns"]
+            fwd_row = (row + 1) % mesh_rows
+            bwd_row = (row - 1 + mesh_rows) % mesh_rows
+            r3_col = col ^ 1
 
-                for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
-                    link_idx = 0 if fc_idx < num_columns // 2 else 1
-                    fc_kernel_idx = None
-                    for group in kernel_result.groups:
-                        if group.compile_time_arg_values.get(
-                            "is_reduce_fabric_core"
-                        ) == 1 and group.core_range_set.contains(fc):
-                            fc_kernel_idx = group.brisc_kernel_index
-                            break
-                    fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
-                    fabric_conn_args = ttnn.setup_fabric_connection(
-                        fabric_node_id, dest_fabric_node_id, link_idx, program, fc
+            fabric_node_id = mesh_device.get_fabric_node_id(coord)
+            fwd_fabric_node_id = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(fwd_row, col))
+            bwd_fabric_node_id = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(bwd_row, col))
+            r3_fabric_node_id = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, r3_col))
+
+            sorted_columns = sorted(rp["column_to_fabric_core"].keys())
+            num_columns = len(sorted_columns)
+            for col_idx, x in enumerate(sorted_columns):
+                fc = rp["column_to_fabric_core"][x]
+
+                fc_group = None
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get(
+                        "is_reduce_fabric_core"
+                    ) == 1 and group.core_range_set.contains(fc):
+                        fc_group = group
+                        break
+                assert fc_group is not None, f"No kernel group with is_reduce_fabric_core=1 contains {fc}"
+                brisc_idx = fc_group.brisc_kernel_index
+                ncrisc_idx = fc_group.ncrisc_kernel_index
+
+                link_idx = 0 if col_idx < num_columns // 2 else 1
+
+                print(f"[MoE fabric] row={row} col={col} fc=({fc.x},{fc.y}) link={link_idx}", flush=True)
+                print(
+                    f"  src_node={fabric_node_id} fwd_node={fwd_fabric_node_id} r3_node={r3_fabric_node_id} bwd_node={bwd_fabric_node_id}",
+                    flush=True,
+                )
+
+                fwd_conn = ttnn.setup_fabric_connection(fabric_node_id, fwd_fabric_node_id, link_idx, program, fc)
+                print(
+                    f"  fwd_conn (BRISC): eth_ch={list(fwd_conn)[0] if fwd_conn else '?'} args={list(fwd_conn)}",
+                    flush=True,
+                )
+                program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(fwd_conn)
+
+                # barrier_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BARRIER_GATHER]
+                # program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(
+                #    [barrier_sem_addr]
+                # )
+
+                is_exit_col = self.reduce_exit_column is not None and col == self.reduce_exit_column
+                if not is_exit_col:
+                    r3_conn = ttnn.setup_fabric_connection(fabric_node_id, r3_fabric_node_id, link_idx, program, fc)
+                    print(
+                        f"  r3_conn  (BRISC): eth_ch={list(r3_conn)[0] if r3_conn else '?'} args={list(r3_conn)} link={link_idx}",
+                        flush=True,
                     )
-                    fabric_rt_args_ref.extend(fabric_conn_args)
+                    program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(r3_conn)
+                else:
+                    print(f"  r3_conn  (BRISC): SKIPPED (exit column)", flush=True)
 
-        # Persistent next-iteration signal: a fabric core on ROOT1 sends fabric atomic inc
-        # to bcast sender on entry device (aggregator signals the fabric core via local NOC)
-        if ctx.enable_reduce_to_one and self._persistent_fabric_core is not None:
+                bwd_conn = ttnn.setup_fabric_connection(fabric_node_id, bwd_fabric_node_id, link_idx, program, fc)
+                print(
+                    f"  bwd_conn (NCRISC): eth_ch={list(bwd_conn)[0] if bwd_conn else '?'} args={list(bwd_conn)}",
+                    flush=True,
+                )
+                program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend(bwd_conn)
+
+        if ctx.enable_reduce_to_all and self._persistent_fabric_core is not None:
             mesh_device = ctx.mesh_device
             fc_core = self._persistent_fabric_core
             src_fabric_node_id = mesh_device.get_fabric_node_id(coord)
@@ -4367,10 +4867,21 @@ class MoeOp:
                     fc_kernel_idx = group.brisc_kernel_index
                     break
             if fc_kernel_idx is not None:
-                persistent_fabric_rt_args = ttnn.setup_fabric_connection(
-                    src_fabric_node_id, dst_fabric_node_id, 0, program, fc_core
+                payload = getattr(self, "_persistent_fc_payload", None)
+                assert payload is not None, "persistent FC payload missing — _build_reduce_per_device must set it"
+                program.kernels[fc_kernel_idx].runtime_args[fc_core.x][fc_core.y].extend(payload)
+                # Only set up fabric connection when src != dst (cross-chip).
+                # When local-only (entry == exit on same chip), the kernel
+                # uses the local NoC path and no fabric sender args are needed.
+                is_cross_chip = (
+                    src_fabric_node_id.chip_id != dst_fabric_node_id.chip_id
+                    or src_fabric_node_id.mesh_id != dst_fabric_node_id.mesh_id
                 )
-                program.kernels[fc_kernel_idx].runtime_args[fc_core.x][fc_core.y].extend(persistent_fabric_rt_args)
+                if is_cross_chip:
+                    persistent_fabric_rt_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id, dst_fabric_node_id, 0, program, fc_core
+                    )
+                    program.kernels[fc_kernel_idx].runtime_args[fc_core.x][fc_core.y].extend(persistent_fabric_rt_args)
 
         # Broadcast fabric connections
         if ctx.enable_bcast and len(self.bcast_dst_nodes) > 0:
@@ -4396,6 +4907,32 @@ class MoeOp:
                         payload.append(int(dst_node.chip_id))
                     bcast_writer_rt_args_ref.extend([len(payload)] + payload)
                     break
+        # Forward cross-column fabric connection (entry column → non-entry column)
+        if ctx.enable_forward and self.exit_column is not None and col == self.exit_column:
+            routed_ctx = ctx.routed_ctx
+            mesh_device = ctx.mesh_device
+            sender_core = routed_ctx.sender_core
+            my_fabric_node = mesh_device.get_fabric_node_id(coord)
+            partner_col = 1 - col
+            partner_coord = ttnn.MeshCoordinate(row, partner_col)
+            partner_fabric_node = mesh_device.get_fabric_node_id(partner_coord)
+
+            ncrisc_kernel_idx = None
+            for group in kernel_result.groups:
+                if group.core_range_set.contains(sender_core):
+                    ncrisc_kernel_idx = group.ncrisc_kernel_index
+                    break
+            assert ncrisc_kernel_idx is not None, f"No kernel group contains sender core {sender_core}"
+
+            fwd_cross_col_conn = ttnn.setup_fabric_connection(
+                my_fabric_node, partner_fabric_node, 0, program, sender_core
+            )
+            print(
+                f"[MoE forward fabric] row={row} col={col} sender=({sender_core.x},{sender_core.y}) "
+                f"partner=({partner_coord}) args={list(fwd_cross_col_conn)}",
+                flush=True,
+            )
+            program.kernels[ncrisc_kernel_idx].runtime_args[sender_core.x][sender_core.y].extend(fwd_cross_col_conn)
 
     # ==================================================================
     # Unified MoeOp helpers — hide routed/shared split from op()
@@ -4433,6 +4970,8 @@ class MoeOp:
         bcast_semaphores=None,
         bcast_sender_coord=None,
         socket=None,
+        forward_sockets=None,
+        forward_staging_tensor=None,
         reconfig_moe_cbs=False,
         semaphores=None,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
@@ -4445,11 +4984,16 @@ class MoeOp:
         termination_semaphore=None,
         forward_metadata_size_bytes=0,
         metadata_l1_addr=0,
+        exit_column=None,
+        reduce_exit_column=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
         self.downstream_sockets = downstream_sockets
+        self.forward_sockets = forward_sockets
+        self.exit_column = exit_column
+        self.reduce_exit_column = reduce_exit_column if reduce_exit_column is not None else exit_column
         self._forward_metadata_size_bytes = forward_metadata_size_bytes
         self._metadata_l1_addr = metadata_l1_addr
         if semaphores is None:
@@ -4495,6 +5039,7 @@ class MoeOp:
             bcast_intermediate_tensor=bcast_intermediate_tensor,
             bcast_semaphores=bcast_semaphores,
             bcast_sender_coord=bcast_sender_coord,
+            forward_sockets=forward_sockets,
             semaphores=semaphores,
             cb_id_context=cb_id_context,
             worker_core_grid=worker_core_grid,
@@ -4537,8 +5082,16 @@ class MoeOp:
             sdpa_kv_cache_buffer_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)[0]
             sdpa_out_interm_buffer_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)[0]
 
+            if routed_ctx.enable_forward and forward_staging_tensor is not None:
+                routed_ctx.forward_staging_tensor = forward_staging_tensor
+                print(
+                    f"[MoeOp] using caller-provided forward_staging_tensor (cb46 backing): "
+                    f"shape={forward_staging_tensor.shape}",
+                    flush=True,
+                )
+
             reduce_all_cores_set = None
-            if routed_ctx.enable_reduce_to_one and routed_ctx.reduce_params:
+            if routed_ctx.enable_reduce_to_all and routed_ctx.reduce_params:
                 reduce_all_cores_set = ttnn.CoreRangeSet(
                     [ttnn.CoreRange(c, c) for c in routed_ctx.reduce_params["worker_cores_list"]]
                     + [ttnn.CoreRange(c, c) for c in routed_ctx.reduce_params["fabric_cores"]]
@@ -4558,7 +5111,7 @@ class MoeOp:
             mesh_rows=routed_ctx.mesh_rows,
             mesh_cols=routed_ctx.mesh_cols,
             enable_routing=routed_ctx.enable_routing,
-            enable_reduce_to_one=routed_ctx.enable_reduce_to_one,
+            enable_reduce_to_all=routed_ctx.enable_reduce_to_all,
             enable_bcast=routed_ctx.enable_bcast,
             reconfig_moe_cbs=reconfig_moe_cbs,
             # IO tensors
@@ -4591,6 +5144,9 @@ class MoeOp:
             bcast_semaphores=bcast_semaphores,
             bcast_sender_coord=bcast_sender_coord,
             socket=socket,
+            # Forward
+            enable_forward=routed_ctx.enable_forward,
+            forward_sockets=forward_sockets,
         )
 
         # Shared descriptors (populated by _build_descriptors)
@@ -4724,7 +5280,7 @@ class MoeOp:
             io_tensors += [ctx.sdpa_out_interm_buffer]
         if ctx.reconfig_moe_cbs:
             io_tensors += [self.reconfig_tensor]
-        if ctx.enable_reduce_to_one:
+        if ctx.enable_reduce_to_all:
             io_tensors += [
                 ctx.reduce_intermediate_tensors,
                 ctx.reduce_output_tensor,
@@ -4733,6 +5289,8 @@ class MoeOp:
             io_tensors += [ctx.bcast_input_tensor]
         if ctx.bcast_intermediate_tensor is not None:
             io_tensors += [ctx.bcast_intermediate_tensor]
+        if ctx.routed_ctx.forward_staging_tensor is not None:
+            io_tensors += [ctx.routed_ctx.forward_staging_tensor]
         return io_tensors
 
     def _build_kernel_defines(self):
@@ -4744,12 +5302,14 @@ class MoeOp:
         defines = []
         if self.ctx.enable_routing:
             defines += [("ENABLE_ROUTING", "1")]
-        if self.ctx.enable_reduce_to_one:
-            defines += [("ENABLE_REDUCE_TO_ONE", "1")]
+        if self.ctx.enable_reduce_to_all:
+            defines += [("ENABLE_REDUCE_TO_ALL", "1")]
         if self.ctx.enable_bcast:
             defines += [("ENABLE_BCAST", "1")]
         if self.ctx.reconfig_moe_cbs:
             defines += [("RECONFIG_MOE_CBS", "1")]
+        if self.ctx.enable_forward:
+            defines += [("ENABLE_FORWARD", "1"), ("ENABLE_SOCKET_READER", "1")]
         return defines
 
     def _build_descriptors(self):
@@ -4775,6 +5335,10 @@ class MoeOp:
         """Build all per-device state: compile-time args, descriptor copies, and reduce modifications."""
         self._persistent_fabric_core = None
         self._persistent_target_node = None
+        self._persistent_local_dst_noc_x = 0
+        self._persistent_local_dst_noc_y = 0
+        self._persistent_local_dst_sem_addr = 0
+        self._persistent_fc_payload = None
         # Start from shared descriptors
         self.ncrisc_args = []
         self.brisc_args = []
@@ -4804,11 +5368,14 @@ class MoeOp:
         self.bcast_dst_nodes = []
         self.device_kernel_defines = list(self.kernel_defines)
 
-        # Apply reduce-to-one modifications (no-op when reduce disabled)
+        # Apply reduce-to-all modifications (no-op when reduce disabled)
         self._build_reduce_per_device(reduce_root_coord, coord, row, col, chip_id)
 
         # Apply broadcast modifications (no-op when bcast disabled)
         self._build_bcast_per_device(coord, row, col, chip_id)
+
+        # Apply forward modifications (no-op when forward disabled)
+        self._build_forward_per_device(coord, row, col, chip_id)
 
     @staticmethod
     def op(
@@ -4854,6 +5421,8 @@ class MoeOp:
         # Socket: when provided, sender device BRISC receives the bcast payload over socket
         # instead of reading from a pre-loaded bcast_input_tensor.
         socket=None,
+        forward_sockets=None,
+        forward_staging_tensor=None,
         # CB reconfig for fusion with preceding op
         reconfig_moe_cbs=False,
         # Global semaphores (created by MoeOp.create_semaphores)
@@ -4866,6 +5435,9 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        # Forward entry column: devices on this column receive input from sockets.
+        exit_column=None,
+        reduce_exit_column=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4931,6 +5503,8 @@ class MoeOp:
             bcast_semaphores=bcast_semaphores,
             bcast_sender_coord=bcast_sender_coord,
             socket=socket,
+            forward_sockets=forward_sockets,
+            forward_staging_tensor=forward_staging_tensor,
             reconfig_moe_cbs=reconfig_moe_cbs,
             semaphores=semaphores,
             noc_mode=noc_mode,
@@ -4941,6 +5515,8 @@ class MoeOp:
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
             termination_semaphore=termination_semaphore,
+            exit_column=exit_column,
+            reduce_exit_column=reduce_exit_column,
         )
 
         # ==================================================================
@@ -5007,7 +5583,7 @@ class MoeOp:
         ttnn.generic_op(moe.io_tensors, mesh_program_descriptor)
 
         # Return appropriate output based on reduce mode
-        if ctx.enable_reduce_to_one:
+        if ctx.enable_reduce_to_all:
             if ctx.enable_routing:
                 return ctx.gate_output_scores_tensor, ctx.gate_output_indices_tensor, ctx.reduce_output_tensor
             return ctx.reduce_output_tensor
