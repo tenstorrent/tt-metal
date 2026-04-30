@@ -791,6 +791,36 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
 }
 
+TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
+    // The hard upper limit on DFBs is hal::get_arch_num_circular_buffers()
+    // (64 on Quasar). Exceeding it should fail validation with a clear error,
+    // rather than blowing up downstream during JIT.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    constexpr uint32_t kTooMany = 65;
+    for (uint32_t i = 0; i < kTooMany; ++i) {
+        std::string name = "dfb_" + std::to_string(i);
+        auto dfb = MakeMinimalDFB(name);
+        dfb.data_format_metadata = tt::DataFormat::Float16_b;
+        spec.dataflow_buffers.push_back(dfb);
+        BindDFBToKernel(producer, name, "p_" + std::to_string(i), KernelSpec::DFBEndpointType::PRODUCER);
+        BindDFBToKernel(consumer, name, "c_" + std::to_string(i), KernelSpec::DFBEndpointType::CONSUMER);
+    }
+
+    spec.kernels = {producer, consumer};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("too many DataflowBufferSpecs (65)")));
+}
+
 // ============================================================================
 // SECTION 3: WorkUnitSpec Validation Tests
 // ============================================================================
@@ -1233,6 +1263,37 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
             config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
         }
     }
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeOnNonZeroDfbIdSucceeds) {
+    // Companion to ValidUnpackToDestModeSucceeds: targets a DFB with a non-zero
+    // dfb_id, exercising the dfb_id != 0 path through BuildUnpackToDestModeVector.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb0 = MakeMinimalDFB("dfb_0");
+    dfb0.data_format_metadata = tt::DataFormat::Float16_b;
+    auto dfb1 = MakeMinimalDFB("dfb_1");
+    dfb1.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer, "dfb_0", "out0", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer, "dfb_1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_0", "in0", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer, "dfb_1", "in1", KernelSpec::DFBEndpointType::CONSUMER);
+
+    auto& compute_config = std::get<ComputeConfiguration>(consumer.config_spec);
+    compute_config.unpack_to_dest_mode = {{"dfb_1", UnpackToDestMode::UnpackToDestFp32}};
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb0, dfb1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
