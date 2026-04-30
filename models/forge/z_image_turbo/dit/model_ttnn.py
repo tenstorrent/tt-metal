@@ -295,20 +295,35 @@ class ZImageTransformerTTNN(LightweightModule):
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # each [seq, N] BF16
+        ttnn.deallocate(x_2d, False)
 
         # Q: reshape → QK norm → RoPE
         q = ttnn.reshape(q_2d, [1, seq_len, HEADS_PER_DEV, HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = self._qk_norm(q, self.weights[f"{block_prefix}.attention.norm_q.weight"], seq_len, HEADS_PER_DEV)
-        q = self._apply_rope(q, seq_len, HEADS_PER_DEV, is_caption=is_caption)
+        ttnn.deallocate(q_2d, False)
+        old_q = q
+        q = self._qk_norm(old_q, self.weights[f"{block_prefix}.attention.norm_q.weight"], seq_len, HEADS_PER_DEV)
+        ttnn.deallocate(old_q, False)
+        old_q = q
+        q = self._apply_rope(old_q, seq_len, HEADS_PER_DEV, is_caption=is_caption)
+        ttnn.deallocate(old_q, False)
 
         # K: same
         k = ttnn.reshape(k_2d, [1, seq_len, HEADS_PER_DEV, HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k = self._qk_norm(k, self.weights[f"{block_prefix}.attention.norm_k.weight"], seq_len, HEADS_PER_DEV)
-        k = self._apply_rope(k, seq_len, HEADS_PER_DEV, is_caption=is_caption)
+        ttnn.deallocate(k_2d, False)
+        old_k = k
+        k = self._qk_norm(old_k, self.weights[f"{block_prefix}.attention.norm_k.weight"], seq_len, HEADS_PER_DEV)
+        ttnn.deallocate(old_k, False)
+        old_k = k
+        k = self._apply_rope(old_k, seq_len, HEADS_PER_DEV, is_caption=is_caption)
+        ttnn.deallocate(old_k, False)
 
         # V: nlp_create_qkv_heads handles head-reshape in one fused op
         v_4d = ttnn.reshape(v_2d, [1, 1, seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_4d = self._ensure_tile(v_4d)
+        ttnn.deallocate(v_2d, False)
+        old_v_4d = v_4d
+        v_4d = self._ensure_tile(old_v_4d)
+        if v_4d is not old_v_4d:
+            ttnn.deallocate(old_v_4d, False)
         v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             v_4d,
             num_heads=HEADS_PER_DEV,
@@ -316,6 +331,7 @@ class ZImageTransformerTTNN(LightweightModule):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, HEADS_PER_DEV, seq, HEAD_DIM] BF16
+        ttnn.deallocate(v_4d, False)
 
         # ── SDPA ─────────────────────────────────────────────────────────────
         attn_out = ttnn.transformer.scaled_dot_product_attention(
@@ -328,12 +344,21 @@ class ZImageTransformerTTNN(LightweightModule):
             sliding_window_size=None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        attn_out = ttnn.transformer.concatenate_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_out = ttnn.reshape(attn_out, [seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q, False)
+        ttnn.deallocate(k, False)
+        ttnn.deallocate(v, False)
+        old_attn = attn_out
+        attn_out = ttnn.transformer.concatenate_heads(old_attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_attn, False)
+        old_attn = attn_out
+        attn_out = ttnn.reshape(old_attn, [seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_attn, False)
 
         # ── to_out projection (row_par) ───────────────────────────────────────
         out_wT = self.weights[f"{block_prefix}.attention.to_out.0.weight_mmT"]
-        attn_out = self._mm(attn_out, out_wT, seq_len, N, HIDDEN_DIM)
+        old_attn = attn_out
+        attn_out = self._mm(old_attn, out_wT, seq_len, N, HIDDEN_DIM)
+        ttnn.deallocate(old_attn, False)
         return self._all_reduce(attn_out, seq_len)
 
     # ── Optimized MLP ──────────────────────────────────────────────────────────
@@ -345,20 +370,33 @@ class ZImageTransformerTTNN(LightweightModule):
         w2T = self.weights[f"{block_prefix}.feed_forward.w2.weight_mmT"]
 
         gate = self._mm(x, w1T, seq_len, HIDDEN_DIM, MLP_PER_DEV)
-        gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_gate = gate
+        gate = ttnn.silu(old_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_gate, False)
         up = self._mm(x, w3T, seq_len, HIDDEN_DIM, MLP_PER_DEV)
         h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate, False)
+        ttnn.deallocate(up, False)
         out = self._mm(h, w2T, seq_len, MLP_PER_DEV, HIDDEN_DIM)
+        ttnn.deallocate(h, False)
         return self._all_reduce(out, seq_len)
 
     # ── Async all-reduce ───────────────────────────────────────────────────────
 
     def _all_reduce(self, x, seq_len):
         """Async ring all-reduce via CCLManager (persistent ping-pong buffers)."""
-        x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = self._ccl.reduce_scatter(x, dim=3, mesh_axis=1, use_persistent_buffer=True)
-        x = self._ccl.all_gather(x, dim=3, mesh_axis=1, use_hyperparams=True, use_persistent_buffer=True)
-        x = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, 1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = self._ccl.reduce_scatter(old_x, dim=3, mesh_axis=1, use_persistent_buffer=True)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = self._ccl.all_gather(old_x, dim=3, mesh_axis=1, use_hyperparams=True, use_persistent_buffer=True)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
         return x
 
     # ── Optimized final layer ──────────────────────────────────────────────────
@@ -376,19 +414,29 @@ class ZImageTransformerTTNN(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )
+        ttnn.deallocate(cond, False)
+        old_scale = scale
         scale = ttnn.add(
-            scale,
+            old_scale,
             self.weights[f"{final_prefix}.adaLN_modulation.1.bias"],
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(old_scale, False)
+        old_scale = scale
         scale = ttnn.add(
-            self.weights["_one"], scale, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            self.weights["_one"], old_scale, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        scale = ttnn.reshape(scale, [1, 1, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_scale, False)
+        old_scale = scale
+        scale = ttnn.reshape(old_scale, [1, 1, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_scale, False)
 
         x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x_3d = self._ensure_tile(x_3d)
+        old_x_3d = x_3d
+        x_3d = self._ensure_tile(old_x_3d)
+        if x_3d is not old_x_3d:
+            ttnn.deallocate(old_x_3d, False)
 
         x_norm = ttnn.layer_norm(
             x_3d,
@@ -396,9 +444,13 @@ class ZImageTransformerTTNN(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=REDUCE_KERNEL,
         )
+        ttnn.deallocate(x_3d, False)
 
         x_scaled = ttnn.multiply(x_norm, scale, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_norm, False)
+        ttnn.deallocate(scale, False)
         x_2d = ttnn.reshape(x_scaled, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_scaled, False)
 
         out = ttnn.matmul(
             x_2d,
@@ -409,108 +461,162 @@ class ZImageTransformerTTNN(LightweightModule):
             dtype=ttnn.DataType.BFLOAT16,
             compute_kernel_config=REDUCE_KERNEL,
         )
+        ttnn.deallocate(x_2d, False)
+        old_out = out
         out = ttnn.add(
-            out,
+            old_out,
             self.weights[f"{final_prefix}.linear.bias"],
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(out, [1, seq_len, PATCH_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_out, False)
+        old_out = out
+        out = ttnn.reshape(old_out, [1, seq_len, PATCH_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_out, False)
+        return out
 
     # ── Unchanged infrastructure (patchify, embed, RoPE, blocks, unpatchify) ──
 
     def _patchify_and_embed(self, latent):
         x = ttnn.reshape(latent, [16, 1, 1, 32, 2, 32, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.permute(x, [1, 3, 5, 2, 4, 6, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
-        x = ttnn.reshape(x, [IMG_PATCHES, PATCH_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, ttnn.Layout.TILE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.permute(old_x, [1, 3, 5, 2, 4, 6, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.reshape(old_x, [IMG_PATCHES, PATCH_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.to_layout(old_x, ttnn.Layout.TILE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
         x = ttnn.matmul(
-            x,
+            old_x,
             self.weights["all_x_embedder.2-1.weight"],
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )
+        ttnn.deallocate(old_x, False)
+        old_x = x
         x = ttnn.add(
-            x,
+            old_x,
             self.weights["all_x_embedder.2-1.bias"],
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(x, [1, IMG_PATCHES, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, IMG_PATCHES, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        return x
 
     def _cap_embed(self, cap_feats):
         if len(cap_feats.shape) == 3:
-            cap_feats = ttnn.reshape(cap_feats, [CAP_TOKENS, 2560], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            cap_feats_2d = ttnn.reshape(cap_feats, [CAP_TOKENS, 2560], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            cap_feats_2d = cap_feats
         x = self._rms_norm(
-            cap_feats,
+            cap_feats_2d,
             norm_weight=self.weights["cap_embedder.0.weight"],
             scale_inv_dim=self.weights["_scale_cap"],
             eps=self.weights["_eps_cap"],
             hidden_dim=2560,
         )
+        ttnn.deallocate(cap_feats_2d, False)
+        old_x = x
         x = ttnn.matmul(
-            x,
+            old_x,
             self.weights["cap_embedder.1.weight"],
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )
+        ttnn.deallocate(old_x, False)
+        old_x = x
         x = ttnn.add(
-            x, self.weights["cap_embedder.1.bias"], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            old_x,
+            self.weights["cap_embedder.1.bias"],
+            dtype=ttnn.DataType.BFLOAT16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(x, [1, CAP_TOKENS, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, CAP_TOKENS, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        return x
 
     def _timestep_embed(self, timestep):
         t = ttnn.multiply(
             timestep, self.weights["_t_scale"], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        t = ttnn.typecast(t, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        t = ttnn.reshape(t, [1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_t = t
+        t = ttnn.typecast(old_t, ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_t, False)
+        old_t = t
+        t = ttnn.reshape(old_t, [1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_t, False)
         freqs = ttnn.multiply(
             t, self.weights["_t_freqs"], dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        ttnn.deallocate(t, False)
+        cos_freqs = ttnn.cos(freqs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin_freqs = ttnn.sin(freqs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(freqs, False)
         t_emb = ttnn.concat(
-            [
-                ttnn.cos(freqs, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                ttnn.sin(freqs, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            ],
+            [cos_freqs, sin_freqs],
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        t_emb = ttnn.typecast(t_emb, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(cos_freqs, False)
+        ttnn.deallocate(sin_freqs, False)
+        old_t_emb = t_emb
+        t_emb = ttnn.typecast(old_t_emb, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_t_emb, False)
+        old_t_emb = t_emb
         t_emb = ttnn.matmul(
-            t_emb,
+            old_t_emb,
             self.weights["t_embedder.mlp.0.weight"],
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )
+        ttnn.deallocate(old_t_emb, False)
+        old_t_emb = t_emb
         t_emb = ttnn.add(
-            t_emb,
+            old_t_emb,
             self.weights["t_embedder.mlp.0.bias"],
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        t_emb = ttnn.silu(t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_t_emb, False)
+        old_t_emb = t_emb
+        t_emb = ttnn.silu(old_t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_t_emb, False)
+        old_t_emb = t_emb
         t_emb = ttnn.matmul(
-            t_emb,
+            old_t_emb,
             self.weights["t_embedder.mlp.2.weight"],
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )
+        ttnn.deallocate(old_t_emb, False)
+        old_t_emb = t_emb
         t_emb = ttnn.add(
-            t_emb,
+            old_t_emb,
             self.weights["t_embedder.mlp.2.bias"],
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(t_emb, [1, ADALN_EMBED_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_t_emb, False)
+        old_t_emb = t_emb
+        t_emb = ttnn.reshape(old_t_emb, [1, ADALN_EMBED_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_t_emb, False)
+        return t_emb
 
     def _adaLN_modulation(self, adaln_input, block_prefix):
         if block_prefix.startswith("all_final_layer"):
@@ -527,8 +633,14 @@ class ZImageTransformerTTNN(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )
-        mod = ttnn.add(mod, self.weights[b_key], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        mod = ttnn.reshape(mod, [1, 1, 4 * HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_mod = mod
+        mod = ttnn.add(
+            old_mod, self.weights[b_key], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(old_mod, False)
+        old_mod = mod
+        mod = ttnn.reshape(old_mod, [1, 1, 4 * HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_mod, False)
         H = HIDDEN_DIM
         s = lambda a, b: ttnn.slice(mod, [0, 0, a], [1, 1, b], [1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         scale_msa = ttnn.add(
@@ -539,11 +651,14 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_one"], s(2 * H, 3 * H), dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         gate_mlp = ttnn.tanh(s(3 * H, 4 * H), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mod, False)
         return scale_msa, gate_msa, scale_mlp, gate_mlp
 
     def _apply_rope(self, q_f32, seq_len, num_heads, is_caption=False):
         freqs_cis = self._build_freqs_cis(seq_len, is_caption)
-        freqs_cis = ttnn.to_layout(freqs_cis, ttnn.Layout.TILE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_freqs = freqs_cis
+        freqs_cis = ttnn.to_layout(old_freqs, ttnn.Layout.TILE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_freqs, False)
         q = ttnn.reshape(q_f32, [1, seq_len, num_heads, HEAD_DIM // 2, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q_real = ttnn.slice(
             q,
@@ -559,6 +674,7 @@ class ZImageTransformerTTNN(LightweightModule):
             [1, 1, 1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(q, False)
         f_real = ttnn.slice(
             freqs_cis,
             [0, 0, 0, 0, 0],
@@ -573,22 +689,46 @@ class ZImageTransformerTTNN(LightweightModule):
             [1, 1, 1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(freqs_cis, False)
+        # out_real = q_real * f_real - q_imag * f_imag
+        qr_fr = ttnn.multiply(q_real, f_real, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qi_fi = ttnn.multiply(q_imag, f_imag, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out_real = ttnn.subtract(
-            ttnn.multiply(q_real, f_real, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.multiply(q_imag, f_imag, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            qr_fr,
+            qi_fi,
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(qr_fr, False)
+        ttnn.deallocate(qi_fi, False)
+        # out_imag = q_real * f_imag + q_imag * f_real
+        qr_fi = ttnn.multiply(q_real, f_imag, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_real, False)
+        ttnn.deallocate(f_imag, False)
+        qi_fr = ttnn.multiply(q_imag, f_real, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_imag, False)
+        ttnn.deallocate(f_real, False)
         out_imag = ttnn.add(
-            ttnn.multiply(q_real, f_imag, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.multiply(q_imag, f_real, dtype=ttnn.DataType.FLOAT32, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            qr_fi,
+            qi_fr,
             dtype=ttnn.DataType.FLOAT32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(qr_fi, False)
+        ttnn.deallocate(qi_fr, False)
         q_rot = ttnn.concat([out_real, out_imag], dim=4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q_rot = ttnn.reshape(q_rot, [1, seq_len, num_heads, HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q_rot = ttnn.permute(q_rot, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
-        return ttnn.typecast(q_rot, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out_real, False)
+        ttnn.deallocate(out_imag, False)
+        old_q_rot = q_rot
+        q_rot = ttnn.reshape(old_q_rot, [1, seq_len, num_heads, HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_q_rot, False)
+        old_q_rot = q_rot
+        q_rot = ttnn.permute(old_q_rot, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        ttnn.deallocate(old_q_rot, False)
+        old_q_rot = q_rot
+        q_rot = ttnn.typecast(old_q_rot, ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_q_rot, False)
+        return q_rot
 
     def _build_freqs_cis(self, seq_len, is_caption=False):
         if seq_len == IMG_PATCHES:
@@ -626,6 +766,7 @@ class ZImageTransformerTTNN(LightweightModule):
     def _block_with_adaLN(self, x, adaln_input, seq_len, block_prefix):
         scale_msa, gate_msa, scale_mlp, gate_mlp = self._adaLN_modulation(adaln_input, block_prefix)
         x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x, False)
 
         norm1_x = self._rms_norm(
             x_3d,
@@ -634,8 +775,14 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
-        norm1_x = ttnn.multiply(norm1_x, scale_msa, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_norm1 = norm1_x
+        norm1_x = ttnn.multiply(
+            old_norm1, scale_msa, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(old_norm1, False)
+        ttnn.deallocate(scale_msa, False)
         attn_out = self._attention(norm1_x, seq_len, block_prefix)
+        ttnn.deallocate(norm1_x, False)
         norm2_out = self._rms_norm(
             attn_out,
             self.weights[f"{block_prefix}.attention_norm2.weight"],
@@ -643,12 +790,20 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
+        ttnn.deallocate(attn_out, False)
+        gated_attn = ttnn.multiply(
+            gate_msa, norm2_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(gate_msa, False)
+        ttnn.deallocate(norm2_out, False)
         x = ttnn.add(
             x_3d,
-            ttnn.multiply(gate_msa, norm2_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            gated_attn,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(x_3d, False)
+        ttnn.deallocate(gated_attn, False)
 
         norm3_x = self._rms_norm(
             x,
@@ -657,10 +812,16 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
-        norm3_x = ttnn.multiply(norm3_x, scale_mlp, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        mlp_out = self._mlp(
-            ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG), seq_len, block_prefix
+        old_norm3 = norm3_x
+        norm3_x = ttnn.multiply(
+            old_norm3, scale_mlp, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        ttnn.deallocate(old_norm3, False)
+        ttnn.deallocate(scale_mlp, False)
+        norm3_2d = ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(norm3_x, False)
+        mlp_out = self._mlp(norm3_2d, seq_len, block_prefix)
+        ttnn.deallocate(norm3_2d, False)
         norm4_out = self._rms_norm(
             mlp_out,
             self.weights[f"{block_prefix}.ffn_norm2.weight"],
@@ -668,16 +829,26 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
+        ttnn.deallocate(mlp_out, False)
+        gated_mlp = ttnn.multiply(
+            gate_mlp, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(gate_mlp, False)
+        ttnn.deallocate(norm4_out, False)
+        old_x = x
         x = ttnn.add(
-            x,
-            ttnn.multiply(gate_mlp, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            old_x,
+            gated_mlp,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(old_x, False)
+        ttnn.deallocate(gated_mlp, False)
         return x
 
     def _block_no_adaLN(self, x, seq_len, block_prefix, is_caption=False):
         x_3d = ttnn.reshape(x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x, False)
 
         norm1_x = self._rms_norm(
             x_3d,
@@ -687,6 +858,7 @@ class ZImageTransformerTTNN(LightweightModule):
             HIDDEN_DIM,
         )
         attn_out = self._attention(norm1_x, seq_len, block_prefix, is_caption=is_caption)
+        ttnn.deallocate(norm1_x, False)
         norm2_out = self._rms_norm(
             attn_out,
             self.weights[f"{block_prefix}.attention_norm2.weight"],
@@ -694,12 +866,15 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
+        ttnn.deallocate(attn_out, False)
         x = ttnn.add(
             x_3d,
             norm2_out,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(x_3d, False)
+        ttnn.deallocate(norm2_out, False)
 
         norm3_x = self._rms_norm(
             x,
@@ -708,9 +883,10 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
-        mlp_out = self._mlp(
-            ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG), seq_len, block_prefix
-        )
+        norm3_2d = ttnn.reshape(norm3_x, [seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(norm3_x, False)
+        mlp_out = self._mlp(norm3_2d, seq_len, block_prefix)
+        ttnn.deallocate(norm3_2d, False)
         norm4_out = self._rms_norm(
             mlp_out,
             self.weights[f"{block_prefix}.ffn_norm2.weight"],
@@ -718,14 +894,27 @@ class ZImageTransformerTTNN(LightweightModule):
             self.weights["_eps_hidden"],
             HIDDEN_DIM,
         )
-        x = ttnn.add(x, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mlp_out, False)
+        old_x = x
+        x = ttnn.add(old_x, norm4_out, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        ttnn.deallocate(norm4_out, False)
         return x
 
     def _unpatchify(self, x):
-        x = ttnn.reshape(x, [IMG_PATCHES, PATCH_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.reshape(x, [1, 32, 32, 1, 2, 2, 16], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.permute(x, [6, 0, 3, 1, 4, 2, 5], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
-        return ttnn.reshape(x, [16, 1, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.reshape(old_x, [IMG_PATCHES, PATCH_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, 32, 32, 1, 2, 2, 16], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.permute(old_x, [6, 0, 3, 1, 4, 2, 5], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.reshape(old_x, [16, 1, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        return x
 
     # ── Forward ────────────────────────────────────────────────────────────────
 
@@ -758,24 +947,36 @@ class ZImageTransformerTTNN(LightweightModule):
         adaln_input = self._timestep_embed(timestep)
         cap = self._cap_embed(cap_feats)
 
-        x = ttnn.reshape(x, [1, IMG_PATCHES, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        cap = ttnn.reshape(cap, [1, CAP_TOKENS, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, IMG_PATCHES, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_cap = cap
+        cap = ttnn.reshape(old_cap, [1, CAP_TOKENS, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_cap, False)
 
         for i in range(2):
             x = self._block_with_adaLN(x, adaln_input, IMG_PATCHES, f"noise_refiner.{i}")
         for i in range(2):
             cap = self._block_no_adaLN(cap, CAP_TOKENS, f"context_refiner.{i}", is_caption=True)
 
+        concat_xc = ttnn.concat([x, cap], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x, False)
+        ttnn.deallocate(cap, False)
         joint = ttnn.reshape(
-            ttnn.concat([x, cap], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            concat_xc,
             [1, IMG_PATCHES + CAP_TOKENS, HIDDEN_DIM],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(concat_xc, False)
         for i in range(30):
             joint = self._block_with_adaLN(joint, adaln_input, IMG_PATCHES + CAP_TOKENS, f"layers.{i}")
 
         x = ttnn.slice(joint, [0, 0, 0], [1, IMG_PATCHES, HIDDEN_DIM], [1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = self._final_layer(x, adaln_input, IMG_PATCHES)
+        ttnn.deallocate(joint, False)
+        old_x = x
+        x = self._final_layer(old_x, adaln_input, IMG_PATCHES)
+        ttnn.deallocate(old_x, False)
+        ttnn.deallocate(adaln_input, False)
         return [self._unpatchify(x)]
 
     def forward(self, latents, timestep):
