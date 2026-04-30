@@ -476,7 +476,16 @@ void MetalEnvImpl::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    this->get_control_plane().clear_fabric_context();
+    // FIX BA: Guard against lazy ControlPlane re-initialization during teardown.
+    // When set_default_fabric_topology() resets control_plane_ to null before calling
+    // set_fabric_config() → teardown_fabric_config(), get_control_plane() would trigger
+    // lazy re-init which runs topology discovery.  On degraded hardware (dead ETH channels),
+    // TopologyMapper throws because the physical mesh can't satisfy the MGD, causing
+    // unordered_map::at exceptions that cascade through assert_cores for all devices.
+    // Skip clear_fabric_context() when control_plane_ is already null — there's nothing to clear.
+    if (control_plane_) {
+        control_plane_->clear_fabric_context();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_config() {
