@@ -239,7 +239,7 @@ def main() -> int:
         print()
         cmd_start = time.time()
         ret_code = run_and_save_log(cmd, log_path)
-        print(f"{model_filename} elapsed time: {time.time() - cmd_start}")
+        print(f"{model_filename} elapsed time: {time.time() - cmd_start:,.2f} s")
 
         # Record failing model run but continue to run remaining models
         if ret_code != 0:
