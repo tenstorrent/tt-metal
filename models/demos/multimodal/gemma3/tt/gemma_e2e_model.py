@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 import torch
 from loguru import logger
 
@@ -8,6 +10,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
+from models.tt_transformers.tt.common import sample_top_p
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
 
@@ -76,6 +79,41 @@ class TtGemmaModel(Transformer):
             )[: vision_output.shape[0], :]
         return comp_vision_output.squeeze(0)
 
+    def _vision_embeddings_to_tensor(self, vision_embeddings, batch_rows: int) -> torch.Tensor | None:
+        """
+        ``encode_vision_for_prefill`` returns a list (one tensor per batch row / pixel_values slot).
+        ``GemmaMultimodalGenerator`` in ``gemma_multimodal_generator.py`` slices to one tensor per user
+        before ``prepare_inputs_prefill``; the ``GemmaMultimodalGenerator`` defined in this file
+        delegates straight to ``Generator.prefill_forward_text`` and may pass the full list — coalesce
+        here so fusion always sees a single tensor.
+        """
+        if vision_embeddings is None:
+            return None
+        if isinstance(vision_embeddings, torch.Tensor):
+            return vision_embeddings
+        if isinstance(vision_embeddings, (list, tuple)):
+            parts = [v for v in vision_embeddings if v is not None]
+            if not parts:
+                return None
+            if len(parts) == 1:
+                return parts[0]
+            if batch_rows == 1:
+                first = parts[0]
+                if first.dim() == 3 and first.shape[0] == 1:
+                    return torch.cat(parts, dim=1)
+                if first.dim() == 2:
+                    return torch.cat(parts, dim=0)
+                return torch.cat(parts, dim=0)
+            if len(parts) == batch_rows:
+                stacked = torch.stack(parts, dim=0)
+                if stacked.dim() == 4 and stacked.shape[1] == 1:
+                    stacked = stacked.squeeze(1)
+                return stacked
+            raise ValueError(
+                f"vision_embeddings list length {len(parts)} does not match prompt batch rows {batch_rows}"
+            )
+        raise TypeError(f"vision_embeddings must be Tensor or sequence of Tensors, got {type(vision_embeddings)}")
+
     def _fuse_vision_into_text_embeddings(self, pt_tokens, tokens_embd, image_features: torch.Tensor):
         special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
         special_image_mask = special_image_mask.expand_as(tokens_embd)
@@ -87,11 +125,12 @@ class TtGemmaModel(Transformer):
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
 
-        For multimodal prompts, pass ``vision_embeddings`` (host tensor from
-        :meth:`encode_vision_embeddings_from_pixels`); ``pixel_values`` is not accepted here.
+        For multimodal prompts, pass ``vision_embeddings`` (host tensor or list of tensors from
+        :meth:`encode_vision_embeddings_from_pixels` / ``encode_vision_for_prefill``); ``pixel_values`` is not accepted here.
         """
 
         S = pt_tokens.shape[-1]
+        batch_rows = pt_tokens.shape[0]
         tokens = ttnn.from_torch(
             pt_tokens.reshape(1, 1, 1, -1),
             device=self.mesh_device,
@@ -108,7 +147,9 @@ class TtGemmaModel(Transformer):
         kwargs.pop("image_grid_thw", None)
 
         if vision_embeddings is not None:
-            tokens_embd = self._fuse_vision_into_text_embeddings(pt_tokens, tokens_embd, vision_embeddings)
+            vision_embeddings = self._vision_embeddings_to_tensor(vision_embeddings, batch_rows)
+            if vision_embeddings is not None:
+                tokens_embd = self._fuse_vision_into_text_embeddings(pt_tokens, tokens_embd, vision_embeddings)
         elif pixel_values is not None:
             raise ValueError(
                 "prepare_inputs_prefill no longer accepts pixel_values; run vision separately via "
@@ -203,6 +244,27 @@ class TtGemmaModel(Transformer):
         combined_vision_output = ttnn.concat(vision_outputs, dim=1)
         logger.info(f"Vision encoder done")
         return combined_vision_output
+
+    def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
+        vocab_size = tt_input.shape[-1]
+        pt_input = tt_input[..., :vocab_size]
+        # [B, 1, V] -> [B, V] so softmax / top-p / argmax are batch-correct (avoid blind squeeze())
+        if pt_input.dim() == 3 and pt_input.shape[1] == 1:
+            pt_input = pt_input.squeeze(1)
+
+        if temperature > 0:
+            probs = torch.softmax(pt_input / temperature, dim=-1)
+            pt_out = sample_top_p(probs, top_p)
+        else:
+            pt_out = torch.argmax(pt_input, dim=-1)
+
+        if pt_out.dim() == 0:
+            pt_out = pt_out.unsqueeze(0)
+        elif pt_out.dim() == 1 and pt_input.dim() >= 2 and pt_input.shape[0] > 1:
+            pass  # [B] next tokens
+        elif pt_out.dim() == 1:  # single sequence: re-add batch dim
+            pt_out = pt_out.unsqueeze(0)
+        return None, pt_out
 
 
 class GemmaMultimodalGenerator(Generator):
