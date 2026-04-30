@@ -116,7 +116,7 @@ def _apply_fast_activations_patch():
     import dit.model_ttnn as dit_mod
 
     dit_mod.REDUCE_KERNEL = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
