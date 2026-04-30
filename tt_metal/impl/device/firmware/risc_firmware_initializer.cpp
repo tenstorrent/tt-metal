@@ -1475,8 +1475,22 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                             virtual_core.str(),
                             id_and_cores.first,
                             reset_err.what());
+                        // FIX QB (#42429): For non-MMIO devices the assert_risc_reset_at_core
+                        // command routes through the UMD legacy ERISC relay. When that relay is
+                        // dead, every core in the loop times out at ~5 seconds. Break after the
+                        // first failure to avoid an N×5s serial hang (4 ETH cores × 3 non-MMIO
+                        // devices = 60s wasted before any real work starts on the next test).
+                        // MMIO devices use the PCIe path so each core is fast — no early exit.
+                        if (cluster_.get_associated_mmio_device(id_and_cores.first) !=
+                            id_and_cores.first) {
+                            break;
+                        }
                     } catch (...) {
                         // UMD throws std::runtime_error (caught above); catch(...) is a safety net only.
+                        if (cluster_.get_associated_mmio_device(id_and_cores.first) !=
+                            id_and_cores.first) {
+                            break;
+                        }
                     }
                 }
             }
