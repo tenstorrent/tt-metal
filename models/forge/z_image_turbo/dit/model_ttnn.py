@@ -141,7 +141,7 @@ class ZImageTransformerTTNN(LightweightModule):
         self._prep_parallel_weights()
 
         # ── Async CCL (reduce_scatter_minimal_async + all_gather_async) ────────
-        self._ccl = CCLManager(mesh_device, num_links=3, topology=ttnn.Topology.Ring)
+        self._ccl = CCLManager(mesh_device, num_links=4, topology=ttnn.Topology.Ring)
         print("  Async CCL initialized.")
 
         # ── cap_feats persistent buffer (updated per-prompt) ───────────────────
