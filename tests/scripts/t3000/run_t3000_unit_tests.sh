@@ -109,14 +109,19 @@ run_t3000_ttnn_tests() {
   # CI then appears green even though every T3K-specific test was skipped.
   # This pre-check catches the degraded state before any test runs so CI reports a
   # real failure and the on-call engineer knows hardware needs attention.
-  local n_chips
-  # Use 2>/dev/null to discard UMD log messages (including FIX AE "Marking relay broken"
-  # destructor logs that always fire for remote chips during clean shutdown). With 2>&1,
-  # those stderr lines pollute n_chips and break the ^[0-9]+$ regex on healthy hardware.
-  # Python crashes still produce non-zero exit → "ERROR" via || echo "ERROR".
-  n_chips=$(python3 -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null || echo "ERROR")
+  local n_chips raw_output
+  # Use 2>/dev/null to discard UMD C++ stderr log messages.
+  # On some runners, ttnn Python bindings also emit UMD log lines to STDOUT (via
+  # loguru Python→C++ bridge). Filter those out with grep to get only the numeric
+  # device count printed by the Python script itself.
+  # Python crashes produce non-zero exit → raw_output stays empty → n_chips="ERROR".
+  raw_output=$(python3 -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null)
+  n_chips=$(echo "$raw_output" | grep -E '^[0-9]+$' | tail -1)
+  if [[ -z "$n_chips" ]]; then
+    n_chips="ERROR"
+  fi
   if ! [[ "$n_chips" =~ ^[0-9]+$ ]]; then
-    echo "LOG_METAL: ERROR — T3K topology check failed to query device count (python output: ${n_chips})" >&2
+    echo "LOG_METAL: ERROR — T3K topology check failed to query device count (python output: ${raw_output})" >&2
     exit 1
   fi
   if [[ "$n_chips" -lt 8 ]]; then
