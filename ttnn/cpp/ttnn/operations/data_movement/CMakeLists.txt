@@ -53,6 +53,7 @@ target_sources(
         FILES
             bcast/bcast.hpp
             bcast/bcast_types.hpp
+            bcast_new/bcast_new.hpp
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
@@ -110,6 +111,12 @@ target_sources(
             bcast/device/bcast_multi_core_w_program_factory.hpp
             bcast/device/bcast_sharded_h_optimised_program_factory.hpp
             bcast/device/bcast_sharded_h_program_factory.hpp
+            bcast_new/bcast_new_device_operation.hpp
+            bcast_new/device/bcast_new_multi_core_h_program_factory.hpp
+            bcast_new/device/bcast_new_multi_core_hw_program_factory.hpp
+            bcast_new/device/bcast_new_multi_core_w_program_factory.hpp
+            bcast_new/device/bcast_new_sharded_h_optimised_program_factory.hpp
+            bcast_new/device/bcast_new_sharded_h_program_factory.hpp
             # chunk/
             chunk/chunk.hpp
             chunk/chunk_nanobind.hpp
@@ -356,6 +363,13 @@ target_sources(
         bcast/device/bcast_sharded_h_optimised_program_factory.cpp
         bcast/device/bcast_multi_core_w_program_factory.cpp
         bcast/device/bcast_multi_core_hw_program_factory.cpp
+        bcast_new/bcast_new.cpp
+        bcast_new/bcast_new_device_operation.cpp
+        bcast_new/device/bcast_new_multi_core_h_program_factory.cpp
+        bcast_new/device/bcast_new_multi_core_hw_program_factory.cpp
+        bcast_new/device/bcast_new_multi_core_w_program_factory.cpp
+        bcast_new/device/bcast_new_sharded_h_optimised_program_factory.cpp
+        bcast_new/device/bcast_new_sharded_h_program_factory.cpp
         chunk/chunk.cpp
         clone/clone.cpp
         clone/device/clone_device_operation.cpp

@@ -21,6 +21,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include "common/tt_backend_api_types.hpp"
 
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
+
 using namespace tt::tt_metal;  // For test
 
 namespace ttnn {
@@ -84,8 +86,11 @@ protected:
 
 public:
     static void SetUpTestSuite() {
+        py_log_here();
         device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
+        py_log_here();
         device_ = device_holder_.get();
+        py_log_here();
     }
 
     static void TearDownTestSuite() {
