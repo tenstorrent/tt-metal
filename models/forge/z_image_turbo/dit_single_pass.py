@@ -287,57 +287,6 @@ def _apply_cached_freqs_patch():
     dit_mod.ZImageTransformerTTNN._apply_rope = _apply_rope_cached
 
 
-def _apply_fast_adaln_patch():
-    """Use FAST_MATMUL_KERNEL for adaLN matmuls (currently using default config)."""
-    import dit.model_ttnn as dit_mod
-
-    FAST_KERNEL = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
-    def _fast_adaLN(self, adaln_input, block_prefix):
-        if block_prefix.startswith("all_final_layer"):
-            w_key = f"{block_prefix}.adaLN_modulation.1.weight"
-            b_key = f"{block_prefix}.adaLN_modulation.1.bias"
-        else:
-            w_key = f"{block_prefix}.adaLN_modulation.0.weight"
-            b_key = f"{block_prefix}.adaLN_modulation.0.bias"
-        mod = ttnn.matmul(
-            adaln_input,
-            self.weights[w_key],
-            transpose_a=False,
-            transpose_b=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.DataType.BFLOAT16,
-            compute_kernel_config=FAST_KERNEL,
-        )
-        old_mod = mod
-        mod = ttnn.add(
-            old_mod, self.weights[b_key], dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(old_mod, False)
-        old_mod = mod
-        mod = ttnn.reshape(old_mod, [1, 1, 4 * dit_mod.HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(old_mod, False)
-        H = dit_mod.HIDDEN_DIM
-        s = lambda a, b: ttnn.slice(mod, [0, 0, a], [1, 1, b], [1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        scale_msa = ttnn.add(
-            self.weights["_one"], s(0, H), dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gate_msa = ttnn.tanh(s(H, 2 * H), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        scale_mlp = ttnn.add(
-            self.weights["_one"], s(2 * H, 3 * H), dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gate_mlp = ttnn.tanh(s(3 * H, 4 * H), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(mod, False)
-        return scale_msa, gate_msa, scale_mlp, gate_mlp
-
-    dit_mod.ZImageTransformerTTNN._adaLN_modulation = _fast_adaLN
-
-
 def _convert_mlp_weights_to_bfp8(dit):
     """Convert MLP matmul weights from BF16 to BFLOAT8_B to halve DRAM bandwidth."""
     converted = 0
@@ -459,7 +408,6 @@ def main():
     _apply_compute_config_patch()
     _apply_fast_activations_patch()
     _apply_cached_freqs_patch()
-    _apply_fast_adaln_patch()
 
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
