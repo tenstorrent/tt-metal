@@ -133,7 +133,7 @@ void kernel_main() {
 
     // execute pre op barrier send phase
     uint64_t pre_op_barrier_semaphore_noc_address = safe_get_noc_addr(
-        pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 1);
+        pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
     fabric_unicast_noc_unicast_atomic_inc(
         fabric_connection,
         unicast_sem_inc_route_id,
@@ -141,7 +141,7 @@ void kernel_main() {
         unicast_num_hops);
 
     // set state for scatter write and op semaphore
-    uint64_t op_semaphore_noc_address = safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 1);
+    uint64_t op_semaphore_noc_address = safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 0);
     fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<UnicastFusedScatterWriteAtomicIncUpdateMask::All>(
         fabric_connection,
         unicast_scatter_write_route_id,
