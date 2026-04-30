@@ -46,7 +46,21 @@ _spec = importlib.util.spec_from_file_location("tt_dit_matmul", _matmul_path)
 _mm_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mm_mod)
 _get_matmul_config = _mm_mod.get_matmul_config
-del _spec, _mm_mod
+_get_fused_mmrs_config = _mm_mod.get_fused_mmrs_config
+_FusedMMRSConfig = _mm_mod.FusedMMRSConfig
+_mm_mod.register_fused_mmrs_configs(
+    {
+        ttnn.CoreCoord(13, 10): {
+            (1152, 1024, 3840): _FusedMMRSConfig(ttnn.CoreCoord(13, 8), 4, 4, 8, 2, 2, None, 1),
+            (1152, 2560, 3840): _FusedMMRSConfig(ttnn.CoreCoord(13, 8), 4, 8, 4, 2, 2, None, 1),
+            (1024, 1024, 3840): _FusedMMRSConfig(ttnn.CoreCoord(13, 8), 4, 4, 8, 2, 2, None, 1),
+            (1024, 2560, 3840): _FusedMMRSConfig(ttnn.CoreCoord(13, 8), 4, 8, 4, 2, 2, None, 1),
+            (128, 1024, 3840): _FusedMMRSConfig(ttnn.CoreCoord(13, 8), 2, 4, 4, 2, 2, None, 1),
+            (128, 2560, 3840): _FusedMMRSConfig(ttnn.CoreCoord(13, 8), 2, 8, 4, 2, 2, None, 1),
+        }
+    }
+)
+del _spec
 
 # ── Architecture constants ─────────────────────────────────────────────────────
 
@@ -354,12 +368,9 @@ class ZImageTransformerTTNN(LightweightModule):
         attn_out = ttnn.reshape(old_attn, [seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(old_attn, False)
 
-        # ── to_out projection (row_par) ───────────────────────────────────────
+        # ── to_out projection (row_par) + fused reduce ──────────────────────
         out_wT = self.weights[f"{block_prefix}.attention.to_out.0.weight_mmT"]
-        old_attn = attn_out
-        attn_out = self._mm(old_attn, out_wT, seq_len, N, HIDDEN_DIM)
-        ttnn.deallocate(old_attn, False)
-        return self._all_reduce(attn_out, seq_len)
+        return self._mm_reduce(attn_out, out_wT, seq_len, N, HIDDEN_DIM)
 
     # ── Optimized MLP ──────────────────────────────────────────────────────────
 
@@ -377,9 +388,36 @@ class ZImageTransformerTTNN(LightweightModule):
         h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate, False)
         ttnn.deallocate(up, False)
-        out = self._mm(h, w2T, seq_len, MLP_PER_DEV, HIDDEN_DIM)
-        ttnn.deallocate(h, False)
-        return self._all_reduce(out, seq_len)
+        return self._mm_reduce(h, w2T, seq_len, MLP_PER_DEV, HIDDEN_DIM)
+
+    def _mm_reduce(self, x, weight, seq_len, K, N):
+        """Fused matmul + reduce_scatter + all_gather."""
+        x_4d = ttnn.reshape(x, [1, 1, seq_len, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x, False)
+        rs_sems = self._ccl.get_rs_ping_pong_semaphore_fused(1)
+        barrier_sem = self._ccl.get_barrier_semaphore(1)
+        fused_cfg = _get_fused_mmrs_config(seq_len, K, N, self._core_grid, self._ccl.num_links)
+        mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+            x_4d,
+            weight,
+            3,
+            rs_sems,
+            fused_cfg["reduce_scatter_core_grid_offset"],
+            num_links=self._ccl.num_links,
+            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+            rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            config=fused_cfg["config"],
+            compute_kernel_config=REDUCE_KERNEL,
+            barrier_semaphore=barrier_sem,
+            chunk_width_in_mm_blocks=fused_cfg["chunk_width_in_mm_blocks"],
+        )
+        ttnn.deallocate(x_4d, False)
+        ttnn.deallocate(mm_out, False)
+        ag_out = self._ccl.all_gather(rs_out, dim=3, mesh_axis=1, use_hyperparams=True, use_persistent_buffer=True)
+        ttnn.deallocate(rs_out, False)
+        return ttnn.reshape(ag_out, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ── Async all-reduce ───────────────────────────────────────────────────────
 
