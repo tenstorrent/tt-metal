@@ -7,69 +7,83 @@
 - Resolution: 512x512 (64x64 latent, 1024 image patches, 128 caption tokens)
 - Architecture: 2 noise refiners + 2 context refiners + 30 joint transformer blocks
 
-## Baseline
-- **Avg latency: 1176.6 ms**
-
-## Current Best: 1029.1 ms (-147.5 ms, -12.5%)
-- PCC: 0.999282 (well above 0.98 threshold)
-
-## Experiment Log (18 experiments)
-
-| # | Experiment | Avg (ms) | Delta | PCC | Status |
-|---|-----------|----------|-------|-----|--------|
-| 0 | Baseline | 1176.6 | - | 1.0000 | baseline |
-| 1 | Custom (4,K,4) matmul blocking 13x10 | 1175.2 | -1.4 | 0.9998 | keep (later removed) |
-| 2 | HiFi2 + packer_l1_acc matmul | 1170.1 | -6.5 | 0.9997 | keep |
-| 3 | HiFi2 + math_approx REDUCE_KERNEL | 1168.9 | -7.7 | 0.9992 | keep |
-| 4 | Metal trace capture/replay | 1165.6 | -11.0 | 0.9992 | keep |
-| 5 | Disable fp32_dest_acc_en | 1165.4 | -11.2 | 0.9991 | discard |
-| 6 | LoFi math fidelity | 1165.6 | -11.0 | 0.9989 | discard |
-| 7 | BFP8 MLP weights | 1162.7 | -13.9 | 0.9992 | keep |
-| 8 | BFP8 all matmul weights | 1164.1 | -12.5 | 0.9991 | discard |
-| 9 | BFP8 MLP + to_out | 1164.6 | -12.0 | 0.9993 | discard |
-| 10 | BFP8 MLP + adaLN + embedder | 1162.5 | -14.1 | 0.9991 | discard |
-| 11 | l1_small_size 32K→64K | 1162.7 | -13.9 | 0.9992 | discard |
-| 12 | SDPA compute kernel config | 1162.6 | -14.0 | 0.9992 | discard |
-| 13 | Remove custom matmul blocking | 1160.2 | -16.4 | 0.9992 | keep |
-| 14 | **BF16 RoPE (was F32)** | **1077.1** | **-99.5** | 0.9993 | **keep** |
-| 15 | **Cache RoPE freqs** | **1029.1** | **-147.5** | 0.9993 | **keep** |
-| 16 | Precompute f_real/f_imag slices | - | - | - | crash |
-| 17 | trace_region_size 70M→200M | 1029.2 | -147.4 | 0.9993 | discard |
-| 18 | HiFi2 adaLN matmuls | 1029.2 | -147.4 | 0.9993 | discard |
+## Results Summary
+- **Baseline: 1176.6 ms**
+- **Current best: 1005.0 ms (-171.6 ms, -14.6%)**
+- **PCC: 0.998256** (threshold: 0.98)
 
 ## Active Optimizations (in order of impact)
-1. **Cached RoPE frequency tables** — eliminates 204 embeddings + 136 concats/pass (-48 ms)
-2. **BF16 RoPE operations** — was F32 + typecast, saves 408 type conversions/pass (-83 ms)
-3. **HiFi2 + packer_l1_acc for matmuls** — faster compute config (-6.5 ms)
-4. **HiFi2 + math_approx for norms** — faster norm + activation kernels (-1.2 ms)
-5. **Metal trace** — eliminates kernel dispatch overhead (-3.3 ms)
-6. **BFP8 MLP weights** — halves DRAM bandwidth for MLP (-2.9 ms)
-7. **Default matmul blocking** — custom blocking was counterproductive with trace (-2.5 ms)
+1. **BF16 RoPE** (was F32 + typecast) — eliminates 408 type conversions/pass (**-83 ms**)
+2. **Cached RoPE freqs** — eliminates 204 embeddings + 136 concats/pass (**-48 ms**)
+3. **CCL num_links=4** (was 1) — 4x more ethernet links for all-reduce (**-15 ms**)
+4. **HiFi2 + packer_l1_acc matmuls** — faster matmul compute config (**-7 ms**)
+5. **fp32_dest_acc disabled for norms** — faster norm kernels (**-3 ms**)
+6. **Metal trace** — eliminates kernel dispatch overhead (**-3 ms**)
+7. **BFP8 MLP weights** — halves DRAM BW for MLP w1/w2/w3 (**-3 ms**)
+8. **nlp_create_qkv_heads for RoPE** — faster seq/heads transpose (**-3 ms**)
+9. **BFP8 adaLN + embedder** — BFP8 for conditioning weights (**-1 ms**)
+10. **Default matmul blocking** (custom was counterproductive) (**-3 ms**)
+11. **Fused w1+w3 MLP** via matmul_split (**-0.3 ms**)
+
+## Full Experiment Log (29 experiments)
+
+| # | Avg (ms) | Delta | PCC | Status | Description |
+|---|----------|-------|-----|--------|-------------|
+| 0 | 1176.6 | - | 1.0000 | baseline | |
+| 1 | 1175.2 | -1.4 | 0.9998 | keep→removed | Custom matmul blocking 13x10 |
+| 2 | 1170.1 | -6.5 | 0.9997 | **keep** | HiFi2 + packer_l1_acc matmul |
+| 3 | 1168.9 | -7.7 | 0.9992 | **keep** | HiFi2 + math_approx REDUCE_KERNEL |
+| 4 | 1165.6 | -11.0 | 0.9992 | **keep** | Metal trace capture/replay |
+| 5 | 1165.4 | -11.2 | 0.9991 | discard | Disable fp32_dest_acc matmul |
+| 6 | 1165.6 | -11.0 | 0.9989 | discard | LoFi math fidelity |
+| 7 | 1162.7 | -13.9 | 0.9992 | **keep** | BFP8 MLP weights |
+| 8 | 1164.1 | -12.5 | 0.9991 | discard | BFP8 all matmul weights |
+| 9 | 1164.6 | -12.0 | 0.9993 | discard | BFP8 MLP + to_out |
+| 10 | 1162.5 | -14.1 | 0.9991 | discard | BFP8 MLP + adaLN + embedder |
+| 11 | 1162.7 | -13.9 | 0.9992 | discard | l1_small_size 64K |
+| 12 | 1162.6 | -14.0 | 0.9992 | discard | SDPA compute kernel |
+| 13 | 1160.2 | -16.4 | 0.9992 | **keep** | Remove custom matmul blocking |
+| 14 | 1077.1 | -99.5 | 0.9993 | **keep** | **BF16 RoPE** |
+| 15 | 1029.1 | -147.5 | 0.9993 | **keep** | **Cache RoPE freqs** |
+| 16 | - | - | - | crash | Precompute f_real/f_imag slices |
+| 17 | 1029.2 | -147.4 | 0.9993 | discard | trace_region 200MB |
+| 18 | 1029.2 | -147.4 | 0.9993 | discard | HiFi2 adaLN matmuls |
+| 19 | 1028.8 | -147.8 | 0.9993 | **keep** | Fused w1+w3 MLP |
+| 20 | 1028.8 | -147.8 | 0.9992 | discard | BFP8 all matmul natively |
+| 21 | 1028.6 | -148.0 | 0.9993 | discard | ttnn.matmul vs minimal_matmul |
+| 22 | 1026.0 | -150.6 | 0.9993 | **keep** | nlp_create_qkv_heads for RoPE |
+| 23 | 1022.7 | -153.9 | 0.9984 | **keep** | fp32_dest_acc off for norms |
+| 24 | 1022.1 | -154.5 | 0.9982 | **keep** | BFP8 adaLN + embedder |
+| 25 | 1009.8 | -166.8 | 0.9983 | keep→upgraded | CCL num_links=2 |
+| 26 | 1006.9 | -169.7 | 0.9983 | keep→upgraded | CCL num_links=3 |
+| 27 | 1005.0 | -171.6 | 0.9983 | **keep** | **CCL num_links=4** |
+| 28 | 1005.2 | -171.4 | 0.9633 | discard | BFP4 MLP — PCC below threshold |
+| 29 | 1005.6 | -171.0 | 0.9981 | discard | Native MLP BFP8 (no fusion) |
 
 ## Key Insights
-- Model is DRAM-bandwidth-bound: HiFi4→LoFi gives same latency
-- **RoPE was the hidden bottleneck** — F32 ops + recomputed freqs = 131 ms (11% of baseline)
-- BFP8 helps MLP weights but NOT attention weights (regression)
-- Custom matmul blocking was counterproductive when combined with trace
-- Compute config changes give diminishing returns (<1% total)
-
-## Remaining Bottleneck Analysis
-At 1029 ms, runtime is dominated by:
-- Matmul weight reads: ~2.7 GB × 4 devices ÷ ~10 GB/s/device ≈ 1080 ms theoretical
-- The remaining ~50 ms headroom comes from CCL, element-wise ops, and SDPA
-- Further gains require L1 sharding or deeper architectural changes
+- **DRAM-bandwidth-bound**: HiFi4→LoFi gives same latency (no compute bottleneck)
+- **RoPE was the #1 hidden bottleneck**: F32 + recomputed freqs = 131 ms (11% of baseline)
+- **CCL links were under-provisioned**: 1→4 links saved 15 ms
+- BFP8 helps MLP weights but NOT attention weights (minimal_matmul doesn't optimize BFP8 reads)
+- BFP4 destroys accuracy (PCC 0.963)
+- Custom matmul blocking counterproductive with trace
 
 ## Plot Data
 
 ```csv
 experiment,time_ms
 0,1176.6
-1,1175.2
 2,1170.1
-3,1168.9
 4,1165.6
 7,1162.7
 13,1160.2
 14,1077.1
 15,1029.1
+19,1028.8
+22,1026.0
+23,1022.7
+24,1022.1
+25,1009.8
+26,1006.9
+27,1005.0
 ```
