@@ -12,6 +12,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <algorithm>
+#include <cmath>
 using namespace tt::tt_metal;
 
 namespace {
@@ -1096,7 +1097,30 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             } else {
                 const auto scalar = *operation_attributes.scalar;
-                const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
+                // For integer dtypes (UINT16, UINT32, INT32) with LT/GE ops, a fractional float
+                // scalar must be rounded up (ceil) to preserve integer comparison semantics.
+                // E.g. "a < 32767.5" for integers is "a < 32768", but truncation yields "a < 32767",
+                // incorrectly excluding the value 32767 from the True set.
+                const auto adjusted_scalar = [&]() -> unary::ScalarVariant {
+                    const auto dtype = a.dtype();
+                    const auto op = operation_attributes.binary_op_type;
+                    if ((dtype == DataType::UINT16 || dtype == DataType::UINT32 ||
+                         dtype == DataType::INT32) &&
+                        (op == BinaryOpType::LT || op == BinaryOpType::GE)) {
+                        return std::visit(
+                            [](auto v) -> unary::ScalarVariant {
+                                // Only floating-point variants can have fractional parts;
+                                // integral variants are already integers so ceil is a no-op.
+                                if constexpr (std::is_floating_point_v<decltype(v)>) {
+                                    return std::ceil(v);
+                                }
+                                return v;
+                            },
+                            scalar);
+                    }
+                    return scalar;
+                }();
+                const auto packed_scalar = pack_scalar_runtime_arg(adjusted_scalar, a.dtype(), rt_is_quant_op);
                 packed_scalar_for_reader = packed_scalar;
                 std::vector<uint32_t> writer_runtime_args;
                 if (row_major_inputs) {
