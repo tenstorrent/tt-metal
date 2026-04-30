@@ -209,10 +209,6 @@ struct GptRingConfig {
 
     static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(
         W2_TILES_PER_CORE);  // Cumulative offsets: [0, 8, 16, 23, 30, 38, 46, 53, 60, 68, 76, 83]
-
-    // Additional GPT-specific constants
-    static constexpr uint32_t COMBINE_SHARD_WIDTH_TILES = 90 / OUTPUT_WIDTH_SHARD_DIM;          // = 90 / 3 = 30
-    static constexpr uint32_t RING_CORES_PER_COMBINE_COL = NUM_CORES / OUTPUT_WIDTH_SHARD_DIM;  // = 12 / 3 = 4
 };
 
 // Template trait for config type selection

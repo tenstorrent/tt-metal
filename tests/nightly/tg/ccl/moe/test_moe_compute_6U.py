@@ -286,6 +286,7 @@ def prepare_output_tensor_from_combine_writer(
     output_shard_tensor = torch.stack(combine_output_shards)
 
     # Consistent with token_offset logic in program factories
+    assert output_shard_tensor.numel() % (experts_per_device * hidden) == 0
     buffer_size_total_tokens = output_shard_tensor.numel() // (experts_per_device * hidden)
 
     output_shape = (
@@ -502,9 +503,9 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
         if pcc_val < pcc_threshold or not allclose_passed:
             combine_all_passed = False
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
-        #             if not allclose_passed:
-        #                 mask = (vals - refs).abs() > ATOL_THRESHOLD
-        #                 logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
+            if not allclose_passed:
+                mask = (vals - refs).abs() > ATOL_THRESHOLD
+                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -1292,10 +1293,6 @@ def run_moe_compute_test(
         torch_b2 = (torch.randn(num_layers, experts_per_device, hidden_size, dtype=torch.float32) * _bias_std).to(
             torch.bfloat16
         )
-
-    #         torch_b0 = torch.zeros_like(torch_b0)
-    #         torch_b1 = torch.zeros_like(torch_b1)
-    #         torch_b2 = torch.zeros_like(torch_b2)
 
     # now we can create our golden reference
     # (L, D, E/D, T, H) (block sparse)
