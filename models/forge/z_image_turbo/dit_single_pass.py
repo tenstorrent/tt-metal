@@ -195,6 +195,98 @@ def _apply_bf16_rope_patch():
     dit_mod.ZImageTransformerTTNN._apply_rope = _apply_rope_bf16
 
 
+def _apply_cached_freqs_patch():
+    """Cache precomputed RoPE freqs instead of rebuilding every call."""
+    import dit.model_ttnn as dit_mod
+
+    def _init_freqs_cache(self):
+        if hasattr(self, "_freqs_cache"):
+            return
+        self._freqs_cache = {}
+        for seq_len in (dit_mod.IMG_PATCHES, dit_mod.CAP_TOKENS, dit_mod.IMG_PATCHES + dit_mod.CAP_TOKENS):
+            fc = self._build_freqs_cis_orig(seq_len)
+            fc_tile = ttnn.to_layout(fc, ttnn.Layout.TILE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(fc, False)
+            self._freqs_cache[seq_len] = fc_tile
+
+    _orig_build = dit_mod.ZImageTransformerTTNN._build_freqs_cis
+    dit_mod.ZImageTransformerTTNN._build_freqs_cis_orig = _orig_build
+
+    def _cached_build(self, seq_len, is_caption=False):
+        if not hasattr(self, "_freqs_cache"):
+            _init_freqs_cache(self)
+        return self._freqs_cache[seq_len]
+
+    dit_mod.ZImageTransformerTTNN._build_freqs_cis = _cached_build
+
+    _orig_rope = dit_mod.ZImageTransformerTTNN._apply_rope
+
+    def _apply_rope_cached(self, q_f32, seq_len, num_heads, is_caption=False):
+        if not hasattr(self, "_freqs_cache"):
+            _init_freqs_cache(self)
+        freqs_cis = self._freqs_cache[seq_len]
+        q = ttnn.reshape(
+            q_f32, [1, seq_len, num_heads, dit_mod.HEAD_DIM // 2, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        q_real = ttnn.slice(
+            q,
+            [0, 0, 0, 0, 0],
+            [1, seq_len, num_heads, dit_mod.HEAD_DIM // 2, 1],
+            [1, 1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        q_imag = ttnn.slice(
+            q,
+            [0, 0, 0, 0, 1],
+            [1, seq_len, num_heads, dit_mod.HEAD_DIM // 2, 2],
+            [1, 1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q, False)
+        f_real = ttnn.slice(
+            freqs_cis,
+            [0, 0, 0, 0, 0],
+            [1, seq_len, 1, dit_mod.HEAD_DIM // 2, 1],
+            [1, 1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        f_imag = ttnn.slice(
+            freqs_cis,
+            [0, 0, 0, 0, 1],
+            [1, seq_len, 1, dit_mod.HEAD_DIM // 2, 2],
+            [1, 1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        qr_fr = ttnn.multiply(q_real, f_real, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qi_fi = ttnn.multiply(q_imag, f_imag, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out_real = ttnn.subtract(qr_fr, qi_fi, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(qr_fr, False)
+        ttnn.deallocate(qi_fi, False)
+        qr_fi = ttnn.multiply(q_real, f_imag, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_real, False)
+        ttnn.deallocate(f_imag, False)
+        qi_fr = ttnn.multiply(q_imag, f_real, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_imag, False)
+        ttnn.deallocate(f_real, False)
+        out_imag = ttnn.add(qr_fi, qi_fr, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(qr_fi, False)
+        ttnn.deallocate(qi_fr, False)
+        q_rot = ttnn.concat([out_real, out_imag], dim=4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out_real, False)
+        ttnn.deallocate(out_imag, False)
+        old_q_rot = q_rot
+        q_rot = ttnn.reshape(
+            old_q_rot, [1, seq_len, num_heads, dit_mod.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(old_q_rot, False)
+        old_q_rot = q_rot
+        q_rot = ttnn.permute(old_q_rot, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        ttnn.deallocate(old_q_rot, False)
+        return q_rot
+
+    dit_mod.ZImageTransformerTTNN._apply_rope = _apply_rope_cached
+
+
 def _convert_mlp_weights_to_bfp8(dit):
     """Convert MLP matmul weights from BF16 to BFLOAT8_B to halve DRAM bandwidth."""
     converted = 0
@@ -315,7 +407,7 @@ def main():
     # _apply_matmul_config_patch()  # disabled: default 8x8x8 faster with trace
     _apply_compute_config_patch()
     _apply_fast_activations_patch()
-    _apply_bf16_rope_patch()
+    _apply_cached_freqs_patch()
 
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
