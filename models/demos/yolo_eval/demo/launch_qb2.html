@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Yolo Live Camera Demo - BH QB2</title>
+<style>
+  :root {
+    --bg-0: #0a0612;
+    --bg-1: #16101f;
+    --card: #161126;
+    --card-border: #2a1f48;
+    --text: #f0eaff;
+    --text-dim: #cbb8ff;
+    --accent: #7c5cff;
+    --accent-hover: #9279ff;
+    --pill-inactive: #0a0517;
+    --good: #5af2a3;
+    --warn: #ffb05a;
+    --bad: #ff6b6b;
+    --v8s-rgb: 90, 242, 163;
+    --v11s-rgb: 92, 184, 255;
+    --v8l-rgb: 124, 92, 255;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(80% 60% at 70% 0%, #1a1230 0%, transparent 60%),
+      radial-gradient(60% 50% at 0% 100%, #150f24 0%, transparent 70%),
+      var(--bg-0);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header.topbar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(8px);
+    background: rgba(10, 6, 18, 0.78);
+    border-bottom: 1px solid rgba(124, 92, 255, 0.18);
+  }
+  .logo-card {
+    justify-self: start;
+    display: inline-flex; align-items: center; gap: 14px;
+    padding: 10px 18px;
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .logo-card img { height: 56px; display: block; }
+  .center-stack { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .title {
+    font-size: 32px; line-height: 1.15; font-weight: 700;
+    letter-spacing: 0.3px;
+    border-bottom: 2px solid rgba(124, 92, 255, 0.5);
+    padding-bottom: 8px;
+  }
+  .toggle-pill {
+    position: relative; display: inline-flex;
+    background: var(--pill-inactive);
+    border: 1px solid var(--card-border);
+    border-radius: 999px; padding: 5px;
+    box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.06);
+    user-select: none;
+  }
+  .toggle-pill .seg {
+    position: relative; z-index: 1;
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 10px 22px;
+    border-radius: 999px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-weight: 700; font-size: 16px;
+    transition: color 160ms ease;
+    min-width: 160px; justify-content: center;
+    background: transparent; border: 0; outline: 0;
+    font-family: inherit; -webkit-appearance: none; appearance: none;
+  }
+  .toggle-pill .seg.active { color: var(--text); font-weight: 700; }
+  .toggle-pill .indicator {
+    position: absolute; top: 5px; bottom: 5px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #1a0d4a, #0a0626);
+    box-shadow: 0 4px 14px rgba(20, 10, 50, 0.6);
+    transition: transform 200ms ease, width 200ms ease;
+    z-index: 0;
+  }
+  main {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 12px;
+    padding: 10px 12px;
+  }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; }
+    .right-col { order: -1; }
+  }
+  /* Video grid: two cards in side-by-side mode, one card in large-model.
+     Body class drives layout. */
+  .video-grid {
+    display: grid;
+    gap: 12px;
+    align-items: start;
+  }
+  body.mode-side-by-side .video-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  body.mode-large-model .video-grid {
+    grid-template-columns: 1fr;
+  }
+  body.mode-side-by-side #card_v8l { display: none; }
+  body.mode-large-model  #card_v8s, body.mode-large-model #card_v11s { display: none; }
+
+  .video-card {
+    position: relative;
+    background: #050308;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 240px;
+    max-height: calc(100vh - 130px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .video-card.v8s  { border-color: rgba(var(--v8s-rgb),  0.55); box-shadow: 0 0 0 1px rgba(var(--v8s-rgb),  0.25), 0 8px 24px rgba(0,0,0,0.35); }
+  .video-card.v11s { border-color: rgba(var(--v11s-rgb), 0.55); box-shadow: 0 0 0 1px rgba(var(--v11s-rgb), 0.25), 0 8px 24px rgba(0,0,0,0.35); }
+  .video-card.v8l  { border-color: rgba(var(--v8l-rgb),  0.55); box-shadow: 0 0 0 1px rgba(var(--v8l-rgb),  0.25), 0 8px 24px rgba(0,0,0,0.35); }
+  .card-label {
+    position: absolute; top: 10px; left: 10px; z-index: 3;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.4px;
+    color: #0a0612;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+    pointer-events: none;
+  }
+  .card-label.v8s  { background: rgb(var(--v8s-rgb)); }
+  .card-label.v11s { background: rgb(var(--v11s-rgb)); color: #f0eaff; text-shadow: 0 1px 1px rgba(0,0,0,0.5); }
+  .card-label.v8l  { background: rgb(var(--v8l-rgb));  color: #f0eaff; text-shadow: 0 1px 1px rgba(0,0,0,0.5); }
+  .video-card video {
+    display: block; width: 100%; height: auto;
+    max-height: calc(100vh - 130px);
+    background: #000;
+    object-fit: contain;
+  }
+  .video-card canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .card-fps {
+    position: absolute; top: 10px; right: 10px; z-index: 3;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(10, 6, 18, 0.7);
+    border: 1px solid rgba(124, 92, 255, 0.2);
+    font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+    pointer-events: none;
+  }
+  .right-col { display: flex; flex-direction: column; gap: 14px; }
+  .galaxy-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .galaxy-title {
+    margin: 0 0 8px 0;
+    font-size: 24px;
+    letter-spacing: 0.6px;
+    color: var(--text);
+    font-weight: 800;
+    text-align: center;
+  }
+  .galaxy-desc {
+    display: flex; flex-direction: column; align-items: center;
+    color: var(--text);
+    font: 600 16px -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    line-height: 1.25;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+  .galaxy-desc .arrow { color: var(--accent-hover); margin: 2px 0; }
+  .galaxy-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 6px;
+    aspect-ratio: 1 / 1;
+    padding: 10px;
+    background: #050308;
+    border-radius: 8px;
+    border: 1px solid rgba(124, 92, 255, 0.18);
+  }
+  .chip {
+    background: rgba(124, 92, 255, 0.04);
+    border: 1px solid rgba(124, 92, 255, 0.18);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: rgba(232, 228, 240, 0.30);
+    transition: background 200ms ease, border-color 200ms ease,
+                color 200ms ease, box-shadow 200ms ease;
+  }
+  .chip.active {
+    background: linear-gradient(135deg, rgba(124, 92, 255, 0.55), rgba(91, 61, 214, 0.45));
+    border-color: var(--accent);
+    color: #f0eaff;
+    box-shadow: 0 0 12px rgba(124, 92, 255, 0.35);
+  }
+  /* Side-by-side: chip 0 → v8s green, chip 1 → v11s blue, so the right
+     panel mirrors the per-card border colors. Large-model leaves all four
+     chips on the default lilac (matches v8l badge + slice overlay). */
+  body.mode-side-by-side .chip[data-id="0"].active {
+    background: linear-gradient(135deg, rgba(var(--v8s-rgb), 0.55), rgba(var(--v8s-rgb), 0.30));
+    border-color: rgb(var(--v8s-rgb));
+    box-shadow: 0 0 12px rgba(var(--v8s-rgb), 0.35);
+  }
+  body.mode-side-by-side .chip[data-id="1"].active {
+    background: linear-gradient(135deg, rgba(var(--v11s-rgb), 0.55), rgba(var(--v11s-rgb), 0.30));
+    border-color: rgb(var(--v11s-rgb));
+    box-shadow: 0 0 12px rgba(var(--v11s-rgb), 0.35);
+  }
+  .galaxy-tiles {
+    margin-top: 10px;
+    text-align: center;
+    font: 13px ui-monospace, monospace;
+    color: var(--text-dim);
+  }
+  /* E2E + Aggregate FPS rows — bigger so they read across the room. Matches
+     the launch.html convention. 2-col grid keeps the colons aligned. */
+  .fps-row {
+    display: grid; grid-template-columns: 1fr 1fr;
+    column-gap: 8px; align-items: baseline;
+  }
+  .fps-row .fps-lbl { text-align: right; color: var(--text-dim); font-weight: 600; }
+  .fps-row .fps-val { text-align: left; }
+  #fpsCap, #aggFpsCap, #fpsCap_v8s, #fpsCap_v11s {
+    margin-top: 6px;
+    font: 600 20px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.3px;
+    color: var(--good);
+  }
+  /* Mode-driven visibility for the FPS rows.
+     side-by-side → per-model E2E rows only (aggregate is meaningless when
+                    the two chips run independent streams of the same frame).
+     large-model  → generic E2E + Aggr rows. */
+  body.mode-side-by-side #fpsCap,
+  body.mode-side-by-side #aggFpsCap { display: none; }
+  body.mode-large-model #fpsCap_v8s,
+  body.mode-large-model #fpsCap_v11s { display: none; }
+  #fpsCap_v8s  .fps-val { color: rgb(var(--v8s-rgb)); }
+  #fpsCap_v11s .fps-val { color: rgb(var(--v11s-rgb)); }
+  #fpsCap_v8s  .fps-lbl, #fpsCap_v11s .fps-lbl { font-size: 16px; }
+  .switch-overlay {
+    position: fixed; inset: 0;
+    background: rgba(10, 6, 18, 0.78);
+    display: none;
+    align-items: center; justify-content: center;
+    flex-direction: column; gap: 16px;
+    z-index: 50;
+    backdrop-filter: blur(6px);
+  }
+  .switch-overlay.show { display: flex; }
+  .spinner {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    border: 4px solid rgba(124, 92, 255, 0.18);
+    border-top-color: var(--accent);
+    animation: spin 900ms linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .switch-overlay .msg { font-size: 16px; color: var(--text); }
+  .err-toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(255, 107, 107, 0.16); border: 1px solid rgba(255, 107, 107, 0.5);
+    color: #ffd5d5; padding: 8px 14px; border-radius: 8px;
+    font: 13px ui-monospace, monospace;
+    display: none;
+  }
+  .err-toast.show { display: block; }
+
+  /* Slice overlay — only meaningful in large-model mode (the 2×2 SAHI grid).
+     Each box covers one tile-quadrant of the visible camera area; chip label
+     centered. The 4 boxes form an exact 2×2 because the 1280×1280 model
+     square + center letterbox puts the tile seam at 50/50 of the visible
+     camera regardless of source aspect, when source is wider than tall. */
+  .slice-overlay {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    z-index: 4;
+  }
+  .slice-overlay.hidden { display: none; }
+  .slice-box {
+    position: absolute;
+    border: 2px solid var(--accent);
+    background: rgba(124, 92, 255, 0.10);
+    box-shadow: 0 0 8px rgba(124, 92, 255, 0.35),
+                inset 0 0 8px rgba(124, 92, 255, 0.12);
+    display: flex;
+    align-items: center; justify-content: center;
+    color: #f0eaff;
+    font: 700 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.4px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+    overflow: hidden;
+  }
+  .slice-corner {
+    position: absolute;
+    bottom: 3px; right: 5px;
+    font: 600 9px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #f0eaff; opacity: 0.85;
+  }
+  .galaxy-btn {
+    margin-top: 12px;
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(124, 92, 255, 0.04);
+    border: 1px solid rgba(124, 92, 255, 0.18);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: background 200ms ease, border-color 200ms ease,
+                color 200ms ease, box-shadow 200ms ease;
+  }
+  .galaxy-btn:hover {
+    border-color: rgba(124, 92, 255, 0.4);
+    color: var(--text);
+  }
+  .galaxy-btn.active {
+    background: linear-gradient(135deg, rgba(124, 92, 255, 0.55), rgba(91, 61, 214, 0.45));
+    border-color: var(--accent);
+    color: #f0eaff;
+    box-shadow: 0 0 12px rgba(124, 92, 255, 0.45),
+                inset 0 0 14px rgba(124, 92, 255, 0.18);
+  }
+  /* Slice overlay + button only show in large-model mode. */
+  body:not(.mode-large-model) #sliceOverlayBtn,
+  body:not(.mode-large-model) #sliceOverlay { display: none; }
+</style>
+</head>
+<body class="mode-side-by-side">
+  <header class="topbar">
+    <div class="logo-card">
+      <img src="assets/tt_logo.png" alt="Tenstorrent" />
+    </div>
+    <div class="center-stack">
+      <div class="title">Yolo Live Camera Demo - BH QB2</div>
+      <div class="toggle-pill" id="toggle" role="tablist" aria-label="Mode">
+        <span class="indicator" id="ind"></span>
+        <button class="seg active" data-id="side-by-side" role="tab" aria-selected="true">
+          <span aria-hidden="true">⚏</span><span>Side-by-Side</span>
+        </button>
+        <button class="seg" data-id="large-model" role="tab" aria-selected="false">
+          <span aria-hidden="true">▦</span><span>Large Model</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="video-grid" id="videoGrid">
+      <div class="video-card v8s" id="card_v8s">
+        <div class="card-label v8s">YOLOv8s · chip 0</div>
+        <div class="card-fps" id="fps_v8s_card">—.— FPS</div>
+        <video id="cam_v8s" autoplay muted playsinline></video>
+        <canvas id="overlay_v8s"></canvas>
+      </div>
+      <div class="video-card v11s" id="card_v11s">
+        <div class="card-label v11s">YOLOv11s · chip 1</div>
+        <div class="card-fps" id="fps_v11s_card">—.— FPS</div>
+        <video id="cam_v11s" autoplay muted playsinline></video>
+        <canvas id="overlay_v11s"></canvas>
+      </div>
+      <div class="video-card v8l" id="card_v8l">
+        <div class="card-label v8l">YOLOv8L SAHI · chips 0–3</div>
+        <div class="card-fps" id="fps_v8l_card">—.— FPS</div>
+        <video id="cam_v8l" autoplay muted playsinline></video>
+        <canvas id="overlay_v8l"></canvas>
+        <div class="slice-overlay hidden" id="sliceOverlay"></div>
+      </div>
+    </section>
+    <aside class="right-col">
+      <div class="galaxy-card">
+        <h3 class="galaxy-title">BH QB2</h3>
+        <div class="galaxy-desc" id="galaxyDesc">
+          <span id="g_input">FHD Live Camera (Resolution 1920×1080)</span>
+          <span class="arrow">↓</span>
+          <span id="g_model">running YOLOv8s (640×640) and YOLOv11s (640×640) on 2 Chips</span>
+        </div>
+        <div class="galaxy-grid" id="galaxyGrid">
+          <div class="chip" data-id="0">CHIP 0</div>
+          <div class="chip" data-id="1">CHIP 1</div>
+          <div class="chip" data-id="2">CHIP 2</div>
+          <div class="chip" data-id="3">CHIP 3</div>
+        </div>
+        <div class="galaxy-tiles" id="galaxyTiles">2 of 4 chips active</div>
+        <div class="fps-row" id="fpsCap_v8s">
+          <span class="fps-lbl">YOLOv8s E2E:</span><span class="fps-val">—.—</span>
+        </div>
+        <div class="fps-row" id="fpsCap_v11s">
+          <span class="fps-lbl">YOLOv11s E2E:</span><span class="fps-val">—.—</span>
+        </div>
+        <div class="fps-row" id="fpsCap">
+          <span class="fps-lbl">E2E FPS:</span><span class="fps-val">—.—</span>
+        </div>
+        <div class="fps-row" id="aggFpsCap">
+          <span class="fps-lbl">Aggr FPS:</span><span class="fps-val">—.—</span>
+        </div>
+        <button class="galaxy-btn" id="sliceOverlayBtn" type="button">Enable Slice Overlay</button>
+      </div>
+    </aside>
+  </main>
+
+  <div class="switch-overlay" id="switching">
+    <div class="spinner"></div>
+    <div class="msg" id="switchMsg">Initialising…</div>
+  </div>
+  <div class="err-toast" id="err"></div>
+
+<script>
+"use strict";
+
+const SRC_W = 1920, SRC_H = 1080;
+const COCO_NAMES = [
+  "person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat","traffic light",
+  "fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow",
+  "elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee",
+  "skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket","bottle",
+  "wine glass","cup","fork","knife","spoon","bowl","banana","apple","sandwich","orange",
+  "broccoli","carrot","hot dog","pizza","donut","cake","chair","sofa","pottedplant","bed",
+  "diningtable","toilet","tvmonitor","laptop","mouse","remote","keyboard","cell phone","microwave","oven",
+  "toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
+];
+
+/* DOM */
+const cams = {
+  v8s:  document.getElementById("cam_v8s"),
+  v11s: document.getElementById("cam_v11s"),
+  v8l:  document.getElementById("cam_v8l"),
+};
+const overlays = {
+  v8s:  document.getElementById("overlay_v8s"),
+  v11s: document.getElementById("overlay_v11s"),
+  v8l:  document.getElementById("overlay_v8l"),
+};
+const ctxs = Object.fromEntries(Object.entries(overlays).map(([k, c]) => [k, c.getContext("2d")]));
+const fpsCards = {
+  v8s:  document.getElementById("fps_v8s_card"),
+  v11s: document.getElementById("fps_v11s_card"),
+  v8l:  document.getElementById("fps_v8l_card"),
+};
+const switchEl  = document.getElementById("switching");
+const switchMsg = document.getElementById("switchMsg");
+const errToast  = document.getElementById("err");
+const segs      = [...document.querySelectorAll(".toggle-pill .seg")];
+const ind       = document.getElementById("ind");
+const g_model   = document.getElementById("g_model");
+const galaxyTiles = document.getElementById("galaxyTiles");
+const chips = [...document.querySelectorAll(".chip")];
+
+/* State */
+let pc = null, dch = null, camStream = null;
+let currentMode = "side-by-side";
+let inputResByMode = { "side-by-side": 640, "large-model": 1280 };
+const COLOR = { v8s: "90,242,163", v11s: "92,184,255", v8l: "124,92,255" };
+let latest = { v8s: null, v11s: null, v8l: null };
+let sliceOverlayOn = false;
+/* FPS bookkeeping — server-reported per-model FPS arrives in every dets
+   payload; we just stash the latest and recompute E2E + Aggr each tick.
+   Stale-detection: if dets stop flowing for >2 s, blank the readout. */
+let _detsLastT = 0;
+const _e2eFpsEl     = document.querySelector("#fpsCap .fps-val");
+const _aggFpsEl     = document.querySelector("#aggFpsCap .fps-val");
+const _e2eV8sEl     = document.querySelector("#fpsCap_v8s .fps-val");
+const _e2eV11sEl    = document.querySelector("#fpsCap_v11s .fps-val");
+
+/* UI helpers */
+function showSwitch(msg) { switchMsg.textContent = msg; switchEl.classList.add("show"); }
+function hideSwitch() { switchEl.classList.remove("show"); }
+function toast(msg) {
+  errToast.textContent = msg;
+  errToast.classList.add("show");
+  setTimeout(() => errToast.classList.remove("show"), 4000);
+}
+function setActiveSeg(id) {
+  segs.forEach(s => {
+    const on = s.dataset.id === id;
+    s.classList.toggle("active", on);
+    s.setAttribute("aria-selected", String(on));
+  });
+  const active = segs.find(s => s.dataset.id === id);
+  if (active) {
+    const r = active.getBoundingClientRect();
+    const p = active.parentElement.getBoundingClientRect();
+    ind.style.transform = `translateX(${r.left - p.left - 5}px)`;
+    ind.style.width = `${r.width}px`;
+  }
+}
+function updateChips(activeIds) {
+  const active = new Set(activeIds.map(String));
+  chips.forEach(c => c.classList.toggle("active", active.has(c.dataset.id)));
+  galaxyTiles.textContent = `${active.size} of 4 chips active`;
+}
+function setBodyMode(mode) {
+  document.body.classList.toggle("mode-side-by-side", mode === "side-by-side");
+  document.body.classList.toggle("mode-large-model",  mode === "large-model");
+}
+function updateModeUI(mode) {
+  setBodyMode(mode);
+  if (mode === "side-by-side") {
+    g_model.textContent = "running YOLOv8s (640×640) and YOLOv11s (640×640) on 2 Chips";
+    updateChips([0, 1]);
+  } else if (mode === "large-model") {
+    g_model.textContent = "running YOLOv8L (Resolution 640×640) on 4 Chips";
+    updateChips([0, 1, 2, 3]);
+    if (sliceOverlayOn) rebuildSliceOverlay();
+  }
+}
+
+/* Letterbox math: model coords → source coords */
+function unletterbox(x, y, modelRes) {
+  const gain = modelRes / Math.max(SRC_W, SRC_H);
+  const padX = (modelRes - SRC_W * gain) / 2;
+  const padY = (modelRes - SRC_H * gain) / 2;
+  return [(x - padX) / gain, (y - padY) / gain];
+}
+
+/* Resize one canvas to its sibling video's CSS rect */
+function resizeCanvas(which) {
+  const v = cams[which], c = overlays[which];
+  if (!v.videoWidth) return false;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = v.clientWidth, cssH = v.clientHeight;
+  c.style.width = cssW + "px";
+  c.style.height = cssH + "px";
+  c.width = Math.round(cssW * dpr);
+  c.height = Math.round(cssH * dpr);
+  ctxs[which].setTransform(dpr, 0, 0, dpr, 0, 0);
+  return true;
+}
+function resizeAllCanvases() {
+  ["v8s", "v11s", "v8l"].forEach(resizeCanvas);
+}
+window.addEventListener("resize", () => { resizeAllCanvases(); setActiveSeg(currentMode); });
+
+/* Draw one model's dets onto its dedicated canvas */
+function paintOne(which, dets, modelRes) {
+  const c = overlays[which], ctx = ctxs[which];
+  const cssW = parseFloat(c.style.width) || 0;
+  const cssH = parseFloat(c.style.height) || 0;
+  ctx.clearRect(0, 0, cssW, cssH);
+  if (!cssW || !cssH || !dets || !dets.length) return;
+  const sx = cssW / SRC_W, sy = cssH / SRC_H;
+  const rgb = COLOR[which];
+  ctx.strokeStyle = `rgb(${rgb})`;
+  ctx.lineWidth = 2;
+  ctx.font = "12px ui-monospace, monospace";
+  ctx.textBaseline = "bottom";
+  for (const d of dets) {
+    const [x1m, y1m, x2m, y2m, score, cls] = d;
+    const [x1, y1] = unletterbox(x1m, y1m, modelRes);
+    const [x2, y2] = unletterbox(x2m, y2m, modelRes);
+    const X1 = x1 * sx, Y1 = y1 * sy, X2 = x2 * sx, Y2 = y2 * sy;
+    const W = X2 - X1, H = Y2 - Y1;
+    if (W <= 1 || H <= 1) continue;
+    ctx.strokeRect(X1, Y1, W, H);
+    const name = (cls >= 0 && cls < COCO_NAMES.length) ? COCO_NAMES[cls] : String(cls);
+    const tag = `${name} ${score.toFixed(2)}`;
+    const tw = ctx.measureText(tag).width + 6;
+    ctx.fillStyle = `rgba(${rgb}, 0.85)`;
+    ctx.fillRect(X1, Math.max(0, Y1 - 14), tw, 14);
+    ctx.fillStyle = "#0a0612";
+    ctx.fillText(tag, X1 + 3, Math.max(12, Y1 - 2));
+  }
+}
+
+function drawLoop() {
+  resizeAllCanvases();
+  const res = inputResByMode[currentMode] || 640;
+  if (currentMode === "side-by-side") {
+    paintOne("v8s",  latest.v8s  ? latest.v8s.dets  : null, res);
+    paintOne("v11s", latest.v11s ? latest.v11s.dets : null, res);
+  } else if (currentMode === "large-model") {
+    paintOne("v8l", latest.v8l ? latest.v8l.dets : null, res);
+  }
+  updateFpsCaps();
+  requestAnimationFrame(drawLoop);
+}
+
+/* E2E + Aggregate FPS, computed from the per-model fps numbers the workers
+   already smooth and publish in every dets payload.
+
+   E2E   = the rate at which the user sees fresh detections on the SLOWEST
+           visible panel. In side-by-side that's max(v8s, v11s) — both
+           panels animate at their own model's rate; the "end-to-end" feel
+           is governed by the higher of the two (the lower-fps panel feels
+           choppy in comparison, but the system as a whole is delivering at
+           the higher rate).
+   Aggr  = total inferences/sec across the active chips. Side-by-side =
+           v8s + v11s (one chip each, parallel streams of the same frame).
+           Large-model = v8l × 4 (the v8l fps is the rate of complete
+           frames, each frame runs 4 tile inferences in parallel across
+           4 chips, so the aggregate tile throughput is 4× that). */
+function updateFpsCaps() {
+  const now = performance.now();
+  const stalled = _detsLastT === 0 || (now - _detsLastT) > 2000;
+  if (currentMode === "side-by-side") {
+    const f8s  = latest.v8s  ? +(latest.v8s.fps  || 0) : 0;
+    const f11s = latest.v11s ? +(latest.v11s.fps || 0) : 0;
+    const live8  = !stalled && f8s  > 0.5;
+    const live11 = !stalled && f11s > 0.5;
+    if (_e2eV8sEl)  _e2eV8sEl.textContent  = live8  ? f8s.toFixed(1)  : "—.—";
+    if (_e2eV11sEl) _e2eV11sEl.textContent = live11 ? f11s.toFixed(1) : "—.—";
+  } else if (currentMode === "large-model") {
+    const f = latest.v8l ? +(latest.v8l.fps || 0) : 0;
+    const live = !stalled && f > 0.5;
+    if (_e2eFpsEl) _e2eFpsEl.textContent = live ? f.toFixed(1)         : "—.—";
+    if (_aggFpsEl) _aggFpsEl.textContent = live ? (f * 4).toFixed(1)   : "—.—";
+  }
+}
+
+/* WebRTC: send camera, receive dets via DataChannel */
+async function startWebRTC() {
+  showSwitch("Requesting camera permission…");
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: SRC_W },
+        height: { ideal: SRC_H },
+        frameRate: { ideal: 60, min: 15 },
+      },
+      audio: false,
+    });
+  } catch (e) {
+    hideSwitch(); toast("camera permission denied: " + e.message); return;
+  }
+  camStream = stream;
+
+  // Same MediaStream attached to all three video elements; browser fans
+  // it out internally without re-decoding.
+  Object.values(cams).forEach(v => { v.srcObject = stream; });
+  await Promise.all(Object.values(cams).map(v =>
+    new Promise(res => {
+      if (v.readyState >= 1) return res();
+      v.onloadedmetadata = () => res();
+    })
+  ));
+  resizeAllCanvases();
+
+  showSwitch("Connecting WebRTC…");
+  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  dch = pc.createDataChannel("dets", { ordered: true });
+  dch.onmessage = (ev) => {
+    let payload;
+    try { payload = JSON.parse(typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data)); }
+    catch (_) { return; }
+    if (!payload || payload.k !== "dets") return;
+    if (payload.input_res && payload.mode) inputResByMode[payload.mode] = payload.input_res;
+    if (payload.v8s)  { latest.v8s  = payload.v8s;  fpsCards.v8s.textContent  = `${(payload.v8s.fps  ?? 0).toFixed(1)} FPS`; }
+    if (payload.v11s) { latest.v11s = payload.v11s; fpsCards.v11s.textContent = `${(payload.v11s.fps ?? 0).toFixed(1)} FPS`; }
+    if (payload.v8l)  { latest.v8l  = payload.v8l;  fpsCards.v8l.textContent  = `${(payload.v8l.fps  ?? 0).toFixed(1)} FPS`; }
+    _detsLastT = performance.now();
+  };
+  stream.getVideoTracks().forEach(t => pc.addTrack(t, stream));
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  if (pc.iceGatheringState !== "complete") {
+    await new Promise(resolve => {
+      const done = () => { pc.removeEventListener("icegatheringstatechange", check); clearTimeout(t); resolve(); };
+      const check = () => { if (pc.iceGatheringState === "complete") done(); };
+      pc.addEventListener("icegatheringstatechange", check);
+      const t = setTimeout(done, 5000);
+    });
+  }
+  const r = await fetch("/offer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+  });
+  if (!r.ok) { hideSwitch(); toast("WebRTC offer failed: " + r.status); return; }
+  const ans = await r.json();
+  await pc.setRemoteDescription(ans);
+  hideSwitch();
+}
+
+/* Mode switch */
+async function selectMode(mode, opts={}) {
+  if (mode === currentMode && !opts.force) return;
+  setActiveSeg(mode);
+  // Clear stale dets from the model that's about to be hidden, so old boxes
+  // don't bleed onto the new layout for a frame. Also blank the FPS rows so
+  // we don't flash the prior mode's values during the spawn warmup.
+  if (mode === "side-by-side") latest.v8l = null;
+  else { latest.v8s = null; latest.v11s = null; }
+  _detsLastT = 0;
+  showSwitch(mode === "side-by-side"
+    ? "Loading YOLOv8s + YOLOv11s…"
+    : "Loading YOLOv8L SAHI (4 chips)…");
+  try {
+    const r = await fetch("/api/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const out = await r.json();
+    if (!out.ok) {
+      hideSwitch();
+      toast("mode switch failed: " + (out.error || r.status));
+      setActiveSeg(currentMode);
+      return;
+    }
+    currentMode = mode;
+    updateModeUI(mode);
+    setTimeout(hideSwitch, 800);
+  } catch (e) {
+    hideSwitch();
+    toast("mode switch error: " + e.message);
+    setActiveSeg(currentMode);
+  }
+}
+
+segs.forEach(s => s.addEventListener("click", () => selectMode(s.dataset.id)));
+
+/* Slice overlay (large-model only): 2×2 grid representing the four 640×640
+   SAHI tiles served by chips 0–3. The seam is at exact 50/50 of the visible
+   camera area because the model is square (1280×1280) with center letterbox
+   when the source is wider than tall (1920×1080), so each tile's visible
+   half projects to one quadrant. Off-screen halves (in the letterbox grey)
+   aren't drawn — they wouldn't add information. */
+function rebuildSliceOverlay() {
+  const root = document.getElementById("sliceOverlay");
+  if (!root) return;
+  root.innerHTML = "";
+  if (currentMode !== "large-model") return;
+  const QUADRANTS = [
+    { left: "0",   top: "0",   w: "50", h: "50", chip: 0 },
+    { left: "50",  top: "0",   w: "50", h: "50", chip: 1 },
+    { left: "0",   top: "50",  w: "50", h: "50", chip: 2 },
+    { left: "50",  top: "50",  w: "50", h: "50", chip: 3 },
+  ];
+  for (const q of QUADRANTS) {
+    const box = document.createElement("div");
+    box.className = "slice-box";
+    box.style.left   = `${q.left}%`;
+    box.style.top    = `${q.top}%`;
+    box.style.width  = `${q.w}%`;
+    box.style.height = `${q.h}%`;
+    box.innerHTML = `Chip ${q.chip}<span class="slice-corner">YOLOv8L · 640×640</span>`;
+    root.appendChild(box);
+  }
+}
+function setSliceOverlay(on) {
+  sliceOverlayOn = !!on;
+  const root = document.getElementById("sliceOverlay");
+  const btn  = document.getElementById("sliceOverlayBtn");
+  if (root) root.classList.toggle("hidden", !sliceOverlayOn);
+  if (btn) {
+    btn.classList.toggle("active", sliceOverlayOn);
+    btn.textContent = sliceOverlayOn ? "Disable Slice Overlay" : "Enable Slice Overlay";
+  }
+  if (sliceOverlayOn) rebuildSliceOverlay();
+}
+const sliceBtn = document.getElementById("sliceOverlayBtn");
+if (sliceBtn) sliceBtn.addEventListener("click", () => setSliceOverlay(!sliceOverlayOn));
+
+/* Status polling */
+async function pollStatus() {
+  try {
+    const r = await fetch("/api/status");
+    const s = await r.json();
+    if (s.mode && s.mode !== currentMode && s.mode !== "idle") {
+      currentMode = s.mode;
+      setActiveSeg(s.mode);
+      updateModeUI(s.mode);
+    }
+  } catch (_) {}
+  setTimeout(pollStatus, 1000);
+}
+
+/* Boot */
+(async () => {
+  setActiveSeg(currentMode);
+  updateModeUI(currentMode);
+  drawLoop();
+  await startWebRTC();
+  await selectMode(currentMode, { force: true });
+  pollStatus();
+})();
+</script>
+</body>
+</html>

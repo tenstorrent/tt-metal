@@ -140,6 +140,11 @@ def parse_args() -> argparse.Namespace:
     # Internal: used by --dual to launch a headless worker subprocess
     p.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--_frame-file", type=str, default=None, help=argparse.SUPPRESS)
+    # Camera-mode integration: read input frames from a JPEG file (atomically
+    # rewritten by the parent supervisor each tick) and emit detections to a
+    # JSON file (consumed by the parent and forwarded to the browser).
+    p.add_argument("--frame-input-file", type=str, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--dets-out-file", type=str, default=None, help=argparse.SUPPRESS)
     return p.parse_args()
 
 
@@ -239,19 +244,19 @@ def _load_coco_names() -> list[str]:
     return [str(i) for i in range(80)]
 
 
-def nms_and_draw(
+def _nms_only(
     preds: torch.Tensor,
-    orig_bgr: np.ndarray,
+    orig_shape: tuple[int, int],
     conf_thres: float,
     iou_thres: float,
-    class_names: list[str],
     input_res: int = 640,
     content_bounds: tuple[int, int, int, int] | None = None,
-) -> np.ndarray:
-    """Run NMS and draw boxes.  ``content_bounds`` is an optional
-    (y_top, y_bot, x_left, x_right) region in *model-input* pixel coords;
-    detections whose centre falls outside this region are dropped (useful
-    for filtering false positives on letterbox padding).
+) -> torch.Tensor:
+    """Run NMS, return [(N,6)] xyxy/conf/cls in source-frame coords.
+
+    ``orig_shape`` is (H, W) of the source frame the boxes should be expressed
+    in. When the source IS the letterboxed model input (camera mode), the
+    de-letterbox step is a no-op (gain=1, pad=0).
     """
     import torchvision
 
@@ -263,20 +268,22 @@ def nms_and_draw(
     preds = preds.transpose(-1, -2)
     preds[..., :4] = _xywh2xyxy(preds[..., :4])
 
-    img = orig_bgr.copy()
-    oh, ow = img.shape[:2]
+    oh, ow = orig_shape
     gain = min(input_res / oh, input_res / ow)
     pad_x = round((input_res - ow * gain) / 2 - 0.1)
     pad_y = round((input_res - oh * gain) / 2 - 0.1)
 
+    out_per_image: list[torch.Tensor] = []
     for xi in range(preds.shape[0]):
         x = preds[xi][xc[xi]]
         if x.shape[0] == 0:
+            out_per_image.append(torch.empty((0, 6)))
             continue
         box, cls_scores = x[:, :4], x[:, 4:]
         conf, j = cls_scores.max(1, keepdim=True)
         x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
         if x.shape[0] == 0:
+            out_per_image.append(torch.empty((0, 6)))
             continue
 
         if content_bounds is not None:
@@ -286,6 +293,7 @@ def nms_and_draw(
             inside = (cx >= xl) & (cx <= xr) & (cy >= yt) & (cy <= yb)
             x = x[inside]
             if x.shape[0] == 0:
+                out_per_image.append(torch.empty((0, 6)))
                 continue
 
         c = x[:, 5:6] * 7680
@@ -299,15 +307,36 @@ def nms_and_draw(
         x[:, 1].clamp_(0, oh)
         x[:, 2].clamp_(0, ow)
         x[:, 3].clamp_(0, oh)
+        out_per_image.append(x)
+    # Single-image batch in our use; concatenate to a single tensor.
+    if len(out_per_image) == 1:
+        return out_per_image[0]
+    return torch.cat(out_per_image, dim=0) if out_per_image else torch.empty((0, 6))
 
-        for det in x:
-            x1, y1, x2, y2 = map(int, det[:4])
-            score = float(det[4])
-            cls_id = int(det[5])
-            label = f"{class_names[cls_id] if cls_id < len(class_names) else cls_id} {score:.2f}"
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(img, label, (x1, max(0, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
-    return img
+
+def _draw_dets(img: np.ndarray, dets: torch.Tensor, class_names: list[str]) -> np.ndarray:
+    out = img.copy()
+    for det in dets:
+        x1, y1, x2, y2 = map(int, det[:4])
+        score = float(det[4])
+        cls_id = int(det[5])
+        label = f"{class_names[cls_id] if cls_id < len(class_names) else cls_id} {score:.2f}"
+        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(out, label, (x1, max(0, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+    return out
+
+
+def nms_and_draw(
+    preds: torch.Tensor,
+    orig_bgr: np.ndarray,
+    conf_thres: float,
+    iou_thres: float,
+    class_names: list[str],
+    input_res: int = 640,
+    content_bounds: tuple[int, int, int, int] | None = None,
+) -> np.ndarray:
+    dets = _nms_only(preds, orig_bgr.shape[:2], conf_thres, iou_thres, input_res, content_bounds)
+    return _draw_dets(orig_bgr, dets, class_names)
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +454,14 @@ def _device_params(model: str) -> dict:
 
 
 def _open_source(args):
-    """Return (static_frame, cap) — one of them will be None."""
+    """Return (static_frame, cap) — one of them will be None.
+
+    When ``--frame-input-file`` is set, both are None — the caller polls the
+    file directly via ``_read_frame_file``.
+    """
+    if args.frame_input_file:
+        print(f"Frame-file source: {args.frame_input_file}")
+        return None, None
     static_frame = None
     cap = None
     if args.image:
@@ -459,6 +495,46 @@ def _read_frame(static_frame, cap, args):
                 return bgr
         return None
     return bgr
+
+
+def _read_frame_file(path: str, last_mtime: float, timeout_s: float = 600.0) -> tuple[np.ndarray, float] | None:
+    """Poll ``path`` for a new JPEG (different mtime than ``last_mtime``).
+
+    Returns (bgr, new_mtime) when a new frame appears, or None on timeout
+    (parent likely shutting down — caller should exit cleanly).
+    """
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        try:
+            mt = os.stat(path).st_mtime
+        except (FileNotFoundError, OSError):
+            time.sleep(0.01)
+            continue
+        if mt == last_mtime:
+            time.sleep(0.005)
+            continue
+        # Read with a short retry loop in case we caught a half-written file.
+        for _ in range(3):
+            img = cv2.imread(path)
+            if img is not None and img.size > 0:
+                return img, mt
+            time.sleep(0.005)
+        # Couldn't decode — skip and wait for the next mtime change.
+        last_mtime = mt
+    return None
+
+
+def _write_dets(path: str, payload: dict) -> None:
+    """Atomic single-line JSON write — parent overwrites on each tick."""
+    import json
+
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            f.write(json.dumps(payload, separators=(",", ":")))
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -503,18 +579,39 @@ def _run_single(args):
         print(f"[{model_name}] Raising conf threshold {args.conf} -> {conf} (bfloat8 floor)", flush=True)
 
     content_bounds = None
+    use_frame_file = bool(args.frame_input_file)
+    write_dets_only = bool(args.dets_out_file) and not frame_file
+    last_mtime = 0.0
+    frame_id = 0
 
-    print(f"Running {model_name} (input {input_res[0]}x{input_res[1]})... press Ctrl+C to stop.", flush=True)
+    if use_frame_file:
+        print(
+            f"Running {model_name} (input {input_res[0]}x{input_res[1]}) "
+            f"polling {args.frame_input_file}; dets -> {args.dets_out_file or '<draw>'}",
+            flush=True,
+        )
+    else:
+        print(f"Running {model_name} (input {input_res[0]}x{input_res[1]})... press Ctrl+C to stop.", flush=True)
     ema_dev_fps = 0.0
     first = True
 
     try:
         while not stop:
-            bgr = _read_frame(static_frame, cap, args)
-            if bgr is None:
-                break
+            if use_frame_file:
+                got = _read_frame_file(args.frame_input_file, last_mtime)
+                if got is None:
+                    print(f"[{model_name}] frame source idle — exiting.", flush=True)
+                    break
+                bgr, last_mtime = got
+            else:
+                bgr = _read_frame(static_frame, cap, args)
+                if bgr is None:
+                    break
 
-            if first:
+            if first and not use_frame_file:
+                # In camera mode the input is a clean letterboxed JPEG produced
+                # by the supervisor; padding is the model-input grey, no point
+                # auto-detecting content bounds (they'd just be (0,0,W,H)).
                 content_bounds = _detect_content_bounds(bgr)
                 if content_bounds:
                     print(
@@ -524,7 +621,10 @@ def _run_single(args):
                         flush=True,
                     )
 
-            inp = frame_to_tensor(bgr, skip_letterbox=args.pre_letterboxed, input_res=input_res)
+            # In frame-file mode the supervisor already letterboxed; bgr.shape ==
+            # (input_res, input_res). skip_letterbox is correct in either branch.
+            skip_lb = args.pre_letterboxed or use_frame_file
+            inp = frame_to_tensor(bgr, skip_letterbox=skip_lb, input_res=input_res)
 
             t_dev = time.perf_counter()
             preds = runner.run(torch_input_tensor=inp)
@@ -535,15 +635,37 @@ def _run_single(args):
             if isinstance(preds, (list, tuple)):
                 preds = preds[0]
             preds_torch = ttnn.to_torch(preds, dtype=torch.float32)
-            annotated = nms_and_draw(
-                preds_torch,
-                bgr,
-                conf,
-                args.iou,
-                coco_names,
-                input_res=input_res[0],
-                content_bounds=content_bounds,
-            )
+
+            if write_dets_only:
+                dets = _nms_only(
+                    preds_torch,
+                    bgr.shape[:2],
+                    conf,
+                    args.iou,
+                    input_res=input_res[0],
+                    content_bounds=content_bounds,
+                )
+                _write_dets(
+                    args.dets_out_file,
+                    {
+                        "t": time.time(),
+                        "frame_id": frame_id,
+                        "model": model_name,
+                        "input_res": input_res[0],
+                        "fps": round(ema_dev_fps, 1),
+                        "dets": dets.tolist() if dets.numel() else [],
+                    },
+                )
+            else:
+                annotated = nms_and_draw(
+                    preds_torch,
+                    bgr,
+                    conf,
+                    args.iou,
+                    coco_names,
+                    input_res=input_res[0],
+                    content_bounds=content_bounds,
+                )
 
             if first:
                 ema_dev_fps = 1.0 / max(dt_dev, 1e-9)
@@ -552,15 +674,17 @@ def _run_single(args):
             else:
                 ema_dev_fps = _EMA_ALPHA * (1.0 / max(dt_dev, 1e-9)) + (1 - _EMA_ALPHA) * ema_dev_fps
 
-            annotated = draw_hud(annotated, model_name, ema_dev_fps)
+            if not write_dets_only:
+                annotated = draw_hud(annotated, model_name, ema_dev_fps)
 
-            if frame_file:
-                write_frame(frame_file, annotated, args.jpeg_quality)
-            else:
-                cv2.imshow(f"{model_name} Demo", annotated)
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q") or key == 27:
-                    break
+                if frame_file:
+                    write_frame(frame_file, annotated, args.jpeg_quality)
+                else:
+                    cv2.imshow(f"{model_name} Demo", annotated)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q") or key == 27:
+                        break
+            frame_id += 1
     finally:
         print(f"[{model_name}] Shutting down...", flush=True)
         if cap is not None:
