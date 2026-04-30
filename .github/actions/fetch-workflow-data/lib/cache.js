@@ -233,6 +233,7 @@ async function restoreArtifactsFromPreviousRun(octokit, context, previousRunId, 
   let otherLogsIndexPath = path.join(workspace, 'logs', 'other', 'other-logs-index.json');
   let commitsPath = path.join(workspace, 'commits-main.json');
   let lastSuccessPath = path.join(workspace, 'last-success-timestamps.json');
+  let restoreHadLogFailures = false;
 
   core.info(`[CACHE] Starting artifact restoration from run ${previousRunId}`);
   try {
@@ -324,6 +325,7 @@ async function restoreArtifactsFromPreviousRun(octokit, context, previousRunId, 
         }
       } catch (e) {
         core.warning(`Failed to restore annotations: ${e.message}`);
+        restoreHadLogFailures = true;
       }
     }
 
@@ -356,6 +358,7 @@ async function restoreArtifactsFromPreviousRun(octokit, context, previousRunId, 
         }
       } catch (e) {
         core.warning(`Failed to restore gtest logs: ${e.message}`);
+        restoreHadLogFailures = true;
       }
     }
 
@@ -388,6 +391,7 @@ async function restoreArtifactsFromPreviousRun(octokit, context, previousRunId, 
         }
       } catch (e) {
         core.warning(`Failed to restore other logs: ${e.message}`);
+        restoreHadLogFailures = true;
       }
     }
 
@@ -461,6 +465,8 @@ async function restoreArtifactsFromPreviousRun(octokit, context, previousRunId, 
     otherLogsIndexPath,
     commitsPath,
     lastSuccessPath,
+    /** True if any log/annotation artifact restore failed (e.g. Bad credentials). When true, downstream should re-download instead of trusting cached indices. */
+    restoreHadLogFailures,
   };
 }
 

@@ -16,6 +16,10 @@ on:
         required: false
         type: boolean
         default: false
+      force-regression-workflow:
+        description: 'Force a stayed_failing workflow to be treated as a regression for auto-triage. Use the workflow run name, e.g. "apc nightly debug run with watcher". Supports substring matching.'
+        required: false
+        default: ''
 
 jobs:
   fetch-data:
@@ -250,6 +254,7 @@ jobs:
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
           alert-all: 'false'
+          force-regression-workflow: ${{ github.event.inputs.force-regression-workflow || '' }}
       - name: Upload status changes artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
