@@ -19,7 +19,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -80,12 +80,16 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Get exponent from op_kwargs (from traced config), falling back to function param or default
-    if exponent is None:
+    # Master may pass exponent as positional arg1 (wan/tt_dit) or as kwarg
+    # exponent= (other models). Prefer positional when present.
+    pos_args = extract_positional_args(kwargs)
+    if 1 in pos_args:
+        exponent = pos_args[1]
+    elif exponent is None:
         exponent = op_kwargs.get("exponent", 2.0)
     else:
         exponent = op_kwargs.get("exponent", exponent)

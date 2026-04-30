@@ -112,6 +112,127 @@ def _parse_shard_dims_from_placement(tensor_placement):
     return tuple(dims) if len(dims) == 2 else None
 
 
+_ABSENT = "__ABSENT__"
+
+
+def _was_traced(value):
+    """Return True if the loader marker indicates the kwarg WAS originally traced.
+
+    ``"__ABSENT__"`` means the master config did not include this kwarg.
+    A Python ``None`` may mean either "explicitly None" (when the key was
+    in the vector) or "default" (when it wasn't). Callers must combine this
+    check with extra context (e.g., presence of unpacked tensor fields)
+    to disambiguate when needed.
+    """
+    return value != _ABSENT
+
+
+def _torch_dtype_from_string(dtype_str):
+    """Map a TTNN/PyTorch dtype string to a torch dtype."""
+    s = str(dtype_str)
+    if "FLOAT32" in s or "float32" in s:
+        return torch.float32
+    if "BFLOAT16" in s or "bfloat16" in s:
+        return torch.bfloat16
+    if "FLOAT16" in s or "float16" in s:
+        return torch.float16
+    if "INT32" in s or "int32" in s:
+        return torch.int32
+    if "UINT32" in s or "uint32" in s:
+        return torch.int32  # torch lacks uint32; use int32 placeholder
+    return torch.bfloat16
+
+
+def _ttnn_dtype_from_string(dtype_str):
+    s = str(dtype_str)
+    if "FLOAT32" in s:
+        return ttnn.float32
+    if "BFLOAT16" in s:
+        return ttnn.bfloat16
+    if "FLOAT16" in s:
+        return ttnn.float16
+    if "INT32" in s:
+        return ttnn.int32
+    if "UINT32" in s:
+        return ttnn.uint32
+    return ttnn.bfloat16
+
+
+def _ttnn_layout_from_string(layout_str):
+    s = str(layout_str)
+    if "ROW_MAJOR" in s:
+        return ttnn.ROW_MAJOR_LAYOUT
+    return ttnn.TILE_LAYOUT
+
+
+def _parse_shape_str(s):
+    """Parse a tuple/list-shape value, accepting strings like '(1, 1, 75776, 64)'."""
+    if isinstance(s, (list, tuple)):
+        return tuple(int(x) for x in s)
+    if isinstance(s, str):
+        nums = re.findall(r"-?\d+", s)
+        return tuple(int(x) for x in nums)
+    raise ValueError(f"Cannot parse shape from {s!r}")
+
+
+def _v2_memory_config_to_ttnn(mc):
+    """Convert a V2 vector memory_config dict to a real ttnn.MemoryConfig."""
+    if mc is None or mc == _ABSENT:
+        return None
+    if isinstance(mc, ttnn.MemoryConfig):
+        return mc
+    data = mc.get("data", mc) if isinstance(mc, dict) else {}
+    buf = str(data.get("buffer_type", "DRAM"))
+    layout = str(data.get("memory_layout", "INTERLEAVED"))
+    bt = ttnn.BufferType.L1 if "L1" in buf else ttnn.BufferType.DRAM
+    if "INTERLEAVED" in layout:
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, bt)
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
+def _build_persistent_output_buffer(
+    per_device_shape, dtype_str, layout_str, mem_config_dict, tensor_placement, device, mesh_shape
+):
+    """Build a real persistent_output_buffer tensor matching the traced spec.
+
+    The traced ``persistent_output_buffer.original_shape`` is the per-device
+    shape after the gather (master records per-device sizes). To create a
+    matching tt-tensor, scale per-device shape up to the global shape by the
+    sharded mesh axes, then map via ShardTensor2dMesh with the same dims.
+    """
+    torch_dtype = _torch_dtype_from_string(dtype_str)
+    ttnn_dtype = _ttnn_dtype_from_string(dtype_str)
+    ttnn_layout = _ttnn_layout_from_string(layout_str)
+    mem_config = _v2_memory_config_to_ttnn(mem_config_dict)
+
+    shard_dims = _parse_shard_dims_from_placement(tensor_placement)
+    per_device_shape = list(per_device_shape)
+    if shard_dims is not None and len(shard_dims) == 2:
+        global_shape = list(per_device_shape)
+        for axis_idx, sd in enumerate(shard_dims):
+            if sd is not None:
+                esd = sd if sd >= 0 else len(per_device_shape) + sd
+                global_shape[esd] *= mesh_shape[axis_idx]
+        torch_global = torch.zeros(global_shape, dtype=torch_dtype)
+        return ttnn.from_torch(
+            torch_global,
+            layout=ttnn_layout,
+            dtype=ttnn_dtype,
+            memory_config=mem_config,
+            device=device,
+            mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+    torch_global = torch.zeros(per_device_shape, dtype=torch_dtype)
+    return ttnn.from_torch(
+        torch_global,
+        layout=ttnn_layout,
+        dtype=ttnn_dtype,
+        memory_config=mem_config,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
 GENERALITY_PARAMETERS = {
     "mesh_shape": list(mesh_shape_iterator(NUM_DEVICES)),
     "fabric_config": FABRIC_CONFIGS,
@@ -532,24 +653,89 @@ def run(
 
             persistent_output_buffers = []
 
+            # Pre-compute traced-presence flags for the model_traced branch.
+            # We rebuild kwargs to mirror exactly what the master trace recorded:
+            # only pass kwargs the model originally passed (some models pass
+            # `memory_config` and `mesh_device`, others pass `persistent_output_buffer`,
+            # others pass CCL hint params). Distinguishing "explicit None" from
+            # "absent" requires looking at unpacked tensor fields when applicable.
+            if is_model_traced:
+                memory_config_was_traced = memory_config is not None and _was_traced(memory_config)
+                mesh_device_was_traced = mesh_device is not None and _was_traced(mesh_device)
+
+                pob_shape_kw = kwargs.get("persistent_output_buffer_shape", _ABSENT)
+                pob_dtype_kw = kwargs.get("persistent_output_buffer_dtype", _ABSENT)
+                pob_layout_kw = kwargs.get("persistent_output_buffer_layout", _ABSENT)
+                pob_mem_config_kw = kwargs.get("persistent_output_buffer_memory_config", _ABSENT)
+                pob_placement_kw = kwargs.get("persistent_output_buffer_tensor_placement", _ABSENT)
+                # PoB-tensor case: shape was unpacked (master had a real tensor).
+                pob_tensor_was_traced = pob_shape_kw not in (_ABSENT, None)
+                # PoB-explicit-None case: the kwarg was in vector with value None
+                # AND no unpacked shape (so the model passed None explicitly).
+                pob_explicit_none = (
+                    not pob_tensor_was_traced
+                    and persistent_output_buffer is None
+                    and pob_shape_kw == _ABSENT
+                    and any(kwargs.get(k, _ABSENT) == _ABSENT for k in ("persistent_output_buffer_shape",))
+                    # Only treat as explicit None when the unpacked-fields family
+                    # is even known to the loader (i.e., wan-style run); detect
+                    # that by the presence of *any* of the unpacked keys in kwargs.
+                    and any(
+                        k in kwargs
+                        for k in (
+                            "persistent_output_buffer_shape",
+                            "persistent_output_buffer_dtype",
+                            "persistent_output_buffer_layout",
+                            "persistent_output_buffer_memory_config",
+                            "persistent_output_buffer_tensor_placement",
+                        )
+                    )
+                )
+
             for i in range(num_iters):
                 try:
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # Match gpt_oss/config.py call style — kwarg-only.
-                        # Master trace records dim and mesh_device as kwargs and
-                        # has no arg1/arg2.
-                        tt_out_tensor = ttnn.experimental.all_gather_async(
-                            tt_input,
-                            dim=dim,
-                            multi_device_global_semaphore=ccl_semaphore_handles[i],
-                            num_links=num_links,
-                            memory_config=output_memory_config,
-                            topology=topology,
-                            cluster_axis=cluster_axis,
-                            mesh_device=device,
-                        )
+                        # Build op_kwargs to mirror exactly the model trace's kwarg set.
+                        op_kwargs = {
+                            "dim": dim,
+                            "multi_device_global_semaphore": ccl_semaphore_handles[i],
+                            "num_links": num_links,
+                            "topology": topology,
+                            "cluster_axis": cluster_axis,
+                        }
+
+                        if memory_config_was_traced:
+                            op_kwargs["memory_config"] = output_memory_config
+                        if mesh_device_was_traced:
+                            op_kwargs["mesh_device"] = device
+
+                        # Optional CCL hint params: only pass when present in master.
+                        if _was_traced(chunks_per_sync) and chunks_per_sync is not None:
+                            op_kwargs["chunks_per_sync"] = int(chunks_per_sync)
+                        if _was_traced(num_workers_per_link) and num_workers_per_link is not None:
+                            op_kwargs["num_workers_per_link"] = int(num_workers_per_link)
+                        if _was_traced(num_buffers_per_channel) and num_buffers_per_channel is not None:
+                            op_kwargs["num_buffers_per_channel"] = int(num_buffers_per_channel)
+
+                        if pob_tensor_was_traced:
+                            pob_tensor = _build_persistent_output_buffer(
+                                per_device_shape=_parse_shape_str(pob_shape_kw),
+                                dtype_str=pob_dtype_kw,
+                                layout_str=pob_layout_kw,
+                                mem_config_dict=pob_mem_config_kw,
+                                tensor_placement=pob_placement_kw if isinstance(pob_placement_kw, dict) else None,
+                                device=device,
+                                mesh_shape=mesh_shape,
+                            )
+                            op_kwargs["persistent_output_buffer"] = pob_tensor
+                        elif pob_explicit_none:
+                            # Master had `persistent_output_buffer=None` explicitly.
+                            # Pass via kwarg so it shows up in the trace as None.
+                            op_kwargs["persistent_output_buffer"] = None
+
+                        tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,

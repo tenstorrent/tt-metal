@@ -79,8 +79,11 @@ def run(
         output_memory_config = memory_config
 
     pos_args = extract_positional_args(kwargs)
-    if dim is None:
-        dim = pos_args.get(1, 0)
+    # Master traces dim as positional arg1. The run() signature defaults dim to
+    # 0, so a stale default would shadow a non-zero/negative arg1 (e.g. -1).
+    # Always prefer pos_args[1] when present.
+    if 1 in pos_args:
+        dim = pos_args[1]
     if dim is None:
         dim = 0
 

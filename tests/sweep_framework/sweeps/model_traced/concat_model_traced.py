@@ -28,10 +28,10 @@ from tests.sweep_framework.master_config_loader_v2 import (
 
 
 def _parse_shard_dims_from_placement(placements):
-    """Extract (dim0, dim1) for ShardTensor2dMesh from a placements list.
+    """Extract (dim0, dim1) for ShardTensor2dMesh from a placements value.
 
-    ``placements`` is a list like ['PlacementShard(2)', 'PlacementShard(1)']
-    or ['PlacementReplicate', 'PlacementShard(3)'].
+    ``placements`` may be a Python list like ['PlacementShard(2)', 'PlacementShard(1)']
+    or its JSON-serialized string form "['PlacementShard(2)', 'PlacementShard(1)']".
 
     Returns a tuple of (dim_or_None, dim_or_None) for a 2-entry list, else None.
     """
@@ -47,22 +47,35 @@ def _parse_shard_dims_from_placement(placements):
     return tuple(dims) if len(dims) == 2 else None
 
 
-def _get_placement_from_tensor_spec(tensor_spec):
-    """Extract placement info from a raw tensor spec's mesh_device field.
+def _parse_mesh_shape(mesh_device_shape):
+    """Parse a mesh_device_shape value (list, tuple, or string like '[4, 8]') -> tuple."""
+    if isinstance(mesh_device_shape, (list, tuple)):
+        return tuple(int(x) for x in mesh_device_shape)
+    if isinstance(mesh_device_shape, str):
+        nums = re.findall(r"-?\d+", mesh_device_shape)
+        if len(nums) >= 2:
+            return tuple(int(x) for x in nums[:2])
+    return None
 
-    Returns (shard_dims, mesh_shape) or (None, None) if not available.
-    shard_dims is a tuple like (2, 1) or (None, 3).
-    mesh_shape is a tuple like (4, 8).
+
+def _get_placement_from_tensor_spec(tensor_spec):
+    """Extract (shard_dims, mesh_shape) from a tensor_spec's tensor_placement field.
+
+    The vector format stores tensor_placement = {
+        'distribution_shape': '[4, 8]',
+        'mesh_device_shape':  '[4, 8]',
+        'placement':          "['PlacementShard(2)', 'PlacementShard(3)']",
+    }
     """
-    mesh_device = tensor_spec.get("mesh_device")
-    if not mesh_device:
+    tensor_placement = tensor_spec.get("tensor_placement") if isinstance(tensor_spec, dict) else None
+    if not tensor_placement:
         return None, None
-    placements = mesh_device.get("placements", [])
-    mesh_shape = mesh_device.get("shape", mesh_device.get("distribution_shape"))
-    if not mesh_shape or not placements:
+    mesh_shape = _parse_mesh_shape(
+        tensor_placement.get("mesh_device_shape") or tensor_placement.get("distribution_shape")
+    )
+    shard_dims = _parse_shard_dims_from_placement(tensor_placement.get("placement"))
+    if mesh_shape is None or shard_dims is None:
         return None, None
-    mesh_shape = tuple(mesh_shape)
-    shard_dims = _parse_shard_dims_from_placement(placements)
     return shard_dims, mesh_shape
 
 
@@ -226,12 +239,15 @@ def run(
         op_kwargs["memory_config"] = mem_config
 
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, **op_kwargs)
-    mesh_composer = get_mesh_composer(device, kwargs.get("input_a_tensor_placement")) if is_mesh_device else None
+    # Use arg0[0]'s tensor_placement to drive the mesh composer (all inputs share
+    # the same placement for concat in the traced configs we've seen).
+    primary_placement = arg0[0].get("tensor_placement") if isinstance(arg0[0], dict) else None
+    mesh_composer = get_mesh_composer(device, primary_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     if is_mesh_device:
-        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, primary_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

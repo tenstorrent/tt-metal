@@ -84,7 +84,12 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar", "arg1"}, output_memory_config=output_memory_config)
+
+    # Master may pass a scalar as positional arg1 (e.g. ttnn.subtract(x, 1.0)).
+    # Treat numeric arg1 as a scalar when no input_b tensor was traced.
+    if scalar is None and arg1 is not None and isinstance(arg1, (int, float)) and input_b_shape is None:
+        scalar = float(arg1)
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = (

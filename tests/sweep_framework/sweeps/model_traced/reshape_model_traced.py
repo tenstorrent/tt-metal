@@ -162,8 +162,11 @@ def run(
         if m:
             tgt_shape = tuple(int(x) for x in m.group(1).split(","))
 
-    # arg2 may be a padded output shape; extract if present
-    arg2 = _clean_absent(pos_args.get(2, None))
+    # arg2 may be a padded output shape; extract if present.
+    # Detect Shape-object form so we can mirror it back when calling the op.
+    _arg2_raw = _clean_absent(pos_args.get(2, None))
+    arg2_was_shape_obj = isinstance(_arg2_raw, dict) and _arg2_raw.get("type") == "Shape"
+    arg2 = _arg2_raw
     if arg2 is not None and isinstance(arg2, dict) and "value" in arg2:
         import re
 
@@ -254,9 +257,17 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
+    # If master traced arg2 as a Shape object, wrap it back so the tracer
+    # captures the same {"type": "Shape"} structure rather than a plain list.
+    arg2_to_pass = arg2
+    if arg2_was_shape_obj and isinstance(arg2, tuple):
+        try:
+            arg2_to_pass = ttnn.Shape(list(arg2))
+        except Exception:
+            arg2_to_pass = arg2
     if arg2 is not None:
         try:
-            output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
+            output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2_to_pass, **op_kwargs)
         except (TypeError, RuntimeError):
             output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     else:

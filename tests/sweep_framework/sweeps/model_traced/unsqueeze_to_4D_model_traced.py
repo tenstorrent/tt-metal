@@ -111,9 +111,9 @@ def run(
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Ensure shape is at least 2D for TILE_LAYOUT compatibility
-    if len(shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
-        shape = (1, shape[0])
+    # Some traced models record 1D tensors with TILE layout (e.g. tt_dit/wan2.2
+    # tail-end vectors). Preserve the original rank so the trace's original_shape
+    # matches master exactly. ttnn handles 1D TILE tensors internally.
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

@@ -133,14 +133,15 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Re-inject memory_config from kwargs (build_op_kwargs strips it by default)
+    # Re-inject memory_config ONLY when the master config originally had it as a
+    # kwarg. Some models (e.g. gpt_oss) pass memory_config explicitly; others
+    # (e.g. wan/tt_dit) don't pass it at all. Falling back to output_memory_config
+    # would inject a kwarg the model never set, causing a trace diff.
     mc_raw = kwargs.get("memory_config")
-    if mc_raw is not None and "memory_config" not in op_kwargs:
+    if mc_raw not in (None, "__ABSENT__") and "memory_config" not in op_kwargs:
         parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    elif output_memory_config is not None and "memory_config" not in op_kwargs:
-        op_kwargs["memory_config"] = output_memory_config
 
     # num_heads flows through op_kwargs; read it for golden computation
     if num_q_heads is None:
