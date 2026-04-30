@@ -7,7 +7,6 @@ Decoder layer implementation for Qwen3-TTS.
 Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
 
-import os
 from typing import Optional, Tuple
 
 import ttnn
@@ -16,8 +15,6 @@ from models.demos.qwen3_tts.tt.attention import Attention
 from models.demos.qwen3_tts.tt.mlp import MLP
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
-_DECODE_SHARDED = os.environ.get("QWEN3_TTS_DECODE_SHARDED", "0") == "1"
-_PREFILL_OPTI = os.environ.get("QWEN3_TTS_PREFILL_OPTI", "0") == "1"
 _PREFILL_SEQ = 128
 
 
@@ -145,22 +142,17 @@ class DecoderLayer(LightweightModule):
         # layout can match the QKV / MLP matmul in0 grid where possible.
         # Talker (hidden=2048): 64 cores (1 tile/core).
         # CodePredictor (hidden=1024): 32 cores.
-        self._decode_ln_in_memcfg = None
-        self._decode_ln_progcfg = None
-        self._prefill_ln_in_memcfg = None
-        self._prefill_ln_progcfg = None
-        if _DECODE_SHARDED:
-            dim_tiles = hidden_size // 32
-            ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
-            self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
-                device, hidden_size, ln_num_cores, m=32
-            )
-        if _PREFILL_OPTI:
-            dim_tiles = hidden_size // 32
-            ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
-            self._prefill_ln_in_memcfg, self._prefill_ln_progcfg = _build_sharded_rmsnorm_configs(
-                device, hidden_size, ln_num_cores, m=_PREFILL_SEQ
-            )
+        # Sharded RMSNorm configs for decode (m=32) and prefill ISL=128 (m=128).
+        # Pick the largest num_cores ≤ 64 that divides dim/TILE so the output shard
+        # layout matches the QKV / MLP gate-up matmul in0 grid where applicable.
+        dim_tiles = hidden_size // 32
+        ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
+        self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
+            device, hidden_size, ln_num_cores, m=32
+        )
+        self._prefill_ln_in_memcfg, self._prefill_ln_progcfg = _build_sharded_rmsnorm_configs(
+            device, hidden_size, ln_num_cores, m=_PREFILL_SEQ
+        )
 
     def forward(
         self,
@@ -205,20 +197,15 @@ class DecoderLayer(LightweightModule):
         """
         # Resolve which sharded layernorm configs to use (decode-style or prefill-ISL=128).
         seq_len_at_entry = x.shape[-2]
-        prefill_path = (
-            _PREFILL_OPTI
-            and mode == "prefill"
-            and seq_len_at_entry == _PREFILL_SEQ
-            and self._prefill_ln_in_memcfg is not None
-        )
-        decode_path = _DECODE_SHARDED and mode == "decode" and self._decode_ln_in_memcfg is not None
+        prefill_path = mode == "prefill" and seq_len_at_entry == _PREFILL_SEQ
+        decode_path = mode == "decode"
         ln_in_memcfg = self._prefill_ln_in_memcfg if prefill_path else self._decode_ln_in_memcfg
         ln_progcfg = self._prefill_ln_progcfg if prefill_path else self._decode_ln_progcfg
 
         # Pre-norm attention
         residual = x
         residual_sharded = None
-        if decode_path and ln_in_memcfg is not None:
+        if decode_path:
             # Decode: keep the chain sharded — wo is DRAM-sharded and consumes sharded
             # input directly. Reuse the sharded `x` buffer as `residual_sharded`.
             residual_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
@@ -227,7 +214,7 @@ class DecoderLayer(LightweightModule):
                 program_config=ln_progcfg,
                 memory_config=ln_in_memcfg,
             )
-        elif prefill_path and ln_in_memcfg is not None:
+        elif prefill_path:
             # Prefill: matmul kernel inherits the input's shard grid → fewer cores.
             # Convert layernorm output back to L1_INTERLEAVED so the matmul picks its
             # default 96/128-core grid. Sharded layernorm itself is still ~3x faster.
@@ -256,7 +243,7 @@ class DecoderLayer(LightweightModule):
             cp_prefill_mask=cp_prefill_mask,
             prefill_attn_mask=prefill_attn_mask,
         )
-        if _DECODE_SHARDED and mode == "decode" and self._decode_ln_in_memcfg is not None and x.is_sharded():
+        if decode_path and x.is_sharded():
             # Sharded residual chain: wo (and later mlp.down) returned width-sharded.
             # `residual_sharded` was prepared earlier (shared with input_layernorm input).
             x = ttnn.add(residual_sharded, x, memory_config=self._decode_ln_in_memcfg)
@@ -288,7 +275,7 @@ class DecoderLayer(LightweightModule):
 
         # Pre-norm MLP
         residual = x  # now in L1
-        if decode_path and ln_in_memcfg is not None:
+        if decode_path:
             x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
             x = self.post_attention_layernorm(
                 x_sharded,
@@ -296,7 +283,7 @@ class DecoderLayer(LightweightModule):
                 memory_config=ln_in_memcfg,
             )
             ttnn.deallocate(x_sharded)
-        elif prefill_path and ln_in_memcfg is not None:
+        elif prefill_path:
             x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
             x_normed = self.post_attention_layernorm(
                 x_sharded,
