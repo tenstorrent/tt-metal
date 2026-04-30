@@ -26,7 +26,7 @@
  * captured as template params here.
  *
  * NOTE: this file does NOT include `sfpu_helpers.hpp`. Calls go directly into
- * `compute_kernel_api/eltwise_unary/*.h` and `compute_kernel_api.h`.
+ * `compute_kernel_api/eltwise_unary/...h` and `compute_kernel_api.h`.
  */
 
 namespace compute_kernel_lib {

@@ -30,6 +30,20 @@ namespace detail {
 // among all CopyTile elements in the tuple.
 // =============================================================================
 
+// Returns true iff Tuple[Js] is a CopyTile AND its CB equals This::cb.
+// Uses if constexpr to gate the T::cb access — a runtime `&&` would still
+// require the right-hand side to be a valid expression for non-CopyTile T,
+// causing a substitution failure (Exp has no `cb`).
+template <std::size_t Js, typename Tuple, typename This>
+constexpr bool same_cb_at() {
+    using T = std::tuple_element_t<Js, Tuple>;
+    if constexpr (is_copy_tile_op_v<T>) {
+        return T::cb == This::cb;
+    } else {
+        return false;
+    }
+}
+
 template <std::size_t Idx, typename Tuple>
 constexpr bool is_first_user_of_cb() {
     using This = std::tuple_element_t<Idx, Tuple>;
@@ -41,12 +55,7 @@ constexpr bool is_first_user_of_cb() {
         // Check all elements before this one. If any earlier CopyTile shares
         // the same CB, this is not the first.
         [&]<std::size_t... Js>(std::index_sequence<Js...>) {
-            ((Js < Idx ? (
-                  is_copy_tile_op_v<std::tuple_element_t<Js, Tuple>> &&
-                          std::tuple_element_t<Js, Tuple>::cb == This::cb
-                      ? (first = false)
-                      : false)
-                       : false),
+            ((Js < Idx && same_cb_at<Js, Tuple, This>() ? (first = false) : false),
              ...);
         }(std::make_index_sequence<N>{});
         return first;
@@ -62,12 +71,7 @@ constexpr bool is_last_user_of_cb() {
         bool last = true;
         constexpr std::size_t N = std::tuple_size_v<Tuple>;
         [&]<std::size_t... Js>(std::index_sequence<Js...>) {
-            ((Js > Idx ? (
-                  is_copy_tile_op_v<std::tuple_element_t<Js, Tuple>> &&
-                          std::tuple_element_t<Js, Tuple>::cb == This::cb
-                      ? (last = false)
-                      : false)
-                       : false),
+            ((Js > Idx && same_cb_at<Js, Tuple, This>() ? (last = false) : false),
              ...);
         }(std::make_index_sequence<N>{});
         return last;

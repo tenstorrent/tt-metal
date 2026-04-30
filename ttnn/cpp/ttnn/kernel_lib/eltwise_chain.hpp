@@ -27,7 +27,7 @@
  * NOTE: this is the V2 eltwise helper family. It does NOT call into
  * `sfpu_helpers.{hpp,inl}` or `binary_op_helpers.{hpp,inl}` — op structs in
  * `eltwise_math.hpp` etc. dispatch directly to the underlying
- * `compute_kernel_api/eltwise_unary/*.h` LLK wrappers (which is the public
+ * `compute_kernel_api/eltwise_unary/...h` LLK wrappers (which is the public
  * compute LLK surface — `exp_tile_init`, `exp_tile`, etc.) or to
  * `tile_move_copy.h` / `pack.h` / `reg_api.h` for tile movement and DEST
  * lifecycle. The legacy V1 helpers remain in place for callers that have not
