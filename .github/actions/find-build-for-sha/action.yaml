@@ -42,6 +42,13 @@ inputs:
       check-wheel is true to avoid matching the wrong Python version.
     required: false
     default: ''
+  enable-lto:
+    description: >
+      Whether to look for an LTO-enabled build artifact.
+      Artifacts built with enable-lto=true have '_lto' in their name.
+      Must match the calling workflow's enable-lto input.
+    required: false
+    default: 'false'
   architecture:
     description: >
       Target architecture to match (e.g., 'amd64'). Must match the architecture
@@ -86,6 +93,7 @@ runs:
           const buildType = '${{ inputs.build-type }}' || 'Release';
           const tracy = '${{ inputs.tracy }}' === 'true';
           const distributed = '${{ inputs.distributed }}' === 'true';
+          const lto = '${{ inputs.enable-lto }}' === 'true';
           const checkWheel = '${{ inputs.check-wheel }}' === 'true';
           const pythonVersion = '${{ inputs.python-version }}';
           const arch = '${{ inputs.architecture }}' || 'amd64';
@@ -93,7 +101,7 @@ runs:
             .replace(/^cmake\//, '').replace(/-toolchain\.cmake$/, '');
 
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
-          console.log(`Config: build-type=${buildType}, tracy=${tracy}, distributed=${distributed}, check-wheel=${checkWheel}`);
+          console.log(`Config: build-type=${buildType}, tracy=${tracy}, distributed=${distributed}, lto=${lto}, check-wheel=${checkWheel}`);
           console.log(`Config: arch=${arch}, toolchain=${toolchainCleaned}, python-version=${pythonVersion}`);
 
           // Strategy: find all workflow runs for this commit SHA, then check
@@ -110,7 +118,7 @@ runs:
           // check-wheel=true — the search continues to the next run.
           //
           // Artifact name patterns (underscores for build, hyphens for wheel):
-          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{BUILD_TYPE}_{SHA}_{RUN_ID}
+          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed][_lto]_{BUILD_TYPE}_{SHA}_{RUN_ID}
           //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
 
           let foundRunId = null;
@@ -133,6 +141,8 @@ runs:
             if (tracy !== hasProfiler) return false;
             const hasNoDistributed = artifact.name.includes('_no_distributed');
             if (distributed === hasNoDistributed) return false;
+            const hasLto = artifact.name.includes('_lto');
+            if (lto !== hasLto) return false;
             return true;
           }
 

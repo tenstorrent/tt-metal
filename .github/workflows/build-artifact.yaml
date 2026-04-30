@@ -296,6 +296,7 @@ jobs:
           build-type: ${{ inputs.build-type }}
           tracy: ${{ inputs.tracy }}
           distributed: ${{ inputs.distributed }}
+          enable-lto: ${{ inputs.enable-lto || false }}
           check-wheel: ${{ inputs.build-wheel }}
           python-version: ${{ needs.determine-python-version.outputs.python-version }}
           architecture: ${{ inputs.architecture }}
@@ -639,6 +640,7 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          LTO_SUFFIX="${{ (inputs.enable-lto && '_lto') || '' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
           BUILD_TYPE="${{ inputs.build-type }}"
@@ -647,7 +649,7 @@ jobs:
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${LTO_SUFFIX}"
             "${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
