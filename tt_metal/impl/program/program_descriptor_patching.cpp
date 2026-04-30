@@ -139,7 +139,9 @@ ResolvedBindings resolve_bindings(
     }
 
     // Only resolve CB bindings when the factory actually opted into the fast path
-    // by declaring at least one buffer binding via emplace_runtime_args().
+    // by declaring at least one runtime-arg buffer binding, whether via
+    // emplace_runtime_args() or emplace_common_runtime_args()
+    // (i.e. when !result.rt_args.empty()).
     // Without this guard, sharded operations that use the old API (passing
     // buffer->address() as uint32_t) would have non-empty resolved_bindings
     // due to CB entries alone, causing the adapter to take the fast path and
