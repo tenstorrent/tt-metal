@@ -368,6 +368,23 @@ def _forward_prefill_deepseek_chunk(
     assert pw.w1_w3_fused is not None, (
         "GPT-OSS prefill MoE per-expert loop currently requires fused w1_w3 weights"
     )
+
+    # Pre-slice the EPC-batched weight tensors into per-expert tensors ONCE per
+    # config and cache on `pc`. Without this we'd hit `ttnn.slice` on bfloat4_b
+    # weights on every prefill call, which falls back through host and grows
+    # RSS unbounded (DeepSeek's TtRoutedExpert avoids this by storing
+    # gate_projs/up_projs/down_projs as pre-sliced Python lists at init time).
+    if not hasattr(pc, "_per_expert_weight_slices"):
+        pc._per_expert_weight_slices = [
+            (
+                ttnn.slice(pw.w1_w3_fused, [0, e, 0, 0], [1, e + 1, H, 2 * I], [1, 1, 1, 1]),
+                ttnn.slice(pw.w1_w3_bias_fused, [0, e, 0, 0], [1, e + 1, 1, 2 * I], [1, 1, 1, 1]),
+                ttnn.slice(pw.w2, [0, e, 0, 0], [1, e + 1, I, H], [1, 1, 1, 1]),
+                ttnn.slice(pw.w2_bias, [0, e, 0, 0], [1, e + 1, 1, H], [1, 1, 1, 1]),
+            )
+            for e in range(pc.experts_per_chip)
+        ]
+
     for local_expert in range(pc.experts_per_chip):
         # 6a. extract this expert's [max_per_expert, H] BFLOAT8_B TILE region.
         tokens = ttnn.experimental.deepseek_prefill.extract(
@@ -384,23 +401,13 @@ def _forward_prefill_deepseek_chunk(
         ttnn.deallocate(tokens)
         tokens_4d = ttnn.reshape(tokens_bf16, (1, 1, max_per_expert, H))
 
-        # 6c. Slice per-expert weight + bias rows out of the EPC-batched tensors.
-        w1_w3_e = ttnn.slice(
-            pw.w1_w3_fused, [0, local_expert, 0, 0], [1, local_expert + 1, H, 2 * I], [1, 1, 1, 1]
-        )
-        w1_w3_bias_e = ttnn.slice(
-            pw.w1_w3_bias_fused, [0, local_expert, 0, 0], [1, local_expert + 1, 1, 2 * I], [1, 1, 1, 1]
-        )
-        w2_e = ttnn.slice(pw.w2, [0, local_expert, 0, 0], [1, local_expert + 1, I, H], [1, 1, 1, 1])
-        w2_bias_e = ttnn.slice(pw.w2_bias, [0, local_expert, 0, 0], [1, local_expert + 1, 1, H], [1, 1, 1, 1])
+        w1_w3_e, w1_w3_bias_e, w2_e, w2_bias_e = pc._per_expert_weight_slices[local_expert]
 
         # 6d. W1+W3 fused matmul + bias + slice into gate / up halves.
         w1_w3_out = ttnn.matmul(tokens_4d, w1_w3_e, memory_config=memory_config)
         ttnn.deallocate(tokens_4d)
         ttnn.deallocate(tokens_bf16)
-        ttnn.deallocate(w1_w3_e)
         ttnn.add(w1_w3_out, w1_w3_bias_e, output_tensor=w1_w3_out)
-        ttnn.deallocate(w1_w3_bias_e)
         sh = w1_w3_out.shape
         w1_out = ttnn.slice(w1_w3_out, [0, 0, 0, 0], [sh[0], sh[1], sh[2], I], [1, 1, 1, 1])
         w3_out = ttnn.slice(w1_w3_out, [0, 0, 0, I], [sh[0], sh[1], sh[2], 2 * I], [1, 1, 1, 1])
@@ -412,9 +419,7 @@ def _forward_prefill_deepseek_chunk(
         # 6f. W2 matmul + bias.
         expert_out_4d = ttnn.matmul(activated, w2_e, memory_config=memory_config)
         ttnn.deallocate(activated)
-        ttnn.deallocate(w2_e)
         ttnn.add(expert_out_4d, w2_bias_e, output_tensor=expert_out_4d)
-        ttnn.deallocate(w2_bias_e)
 
         # 6g. Reshape + typecast back to 2D BFLOAT8_B TILE for insert.
         expert_out_2d = ttnn.reshape(expert_out_4d, (max_per_expert, H))
