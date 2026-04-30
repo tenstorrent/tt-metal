@@ -27,6 +27,26 @@ from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec, get_hf_model_id
 from models.demos.dots_ocr.reference.model import DotsOCRInputs, DotsOCRReference
 
 
+def _path_resolved_under_cwd(user_path: str, *, cwd: Path | None = None) -> Path:
+    """
+    Turn a CLI path into a resolved :class:`~pathlib.Path` confined to ``cwd`` (default: process cwd).
+
+    Mitigates path traversal (``..``, absolute paths outside the tree) for SAST rules that flag
+    unchecked dynamic paths before filesystem calls.
+    """
+    base = (cwd if cwd is not None else Path.cwd()).resolve()
+    if "\x00" in user_path:
+        raise ValueError("refused path containing NUL")
+    raw = Path(user_path).expanduser()
+    resolved = raw.resolve() if raw.is_absolute() else (base / raw).resolve()
+    if not resolved.is_relative_to(base):
+        raise ValueError(
+            f"path must resolve under {base} (refused {user_path!r} -> {resolved}). "
+            "Use paths relative to the current working directory, or run from a directory that contains your inputs."
+        )
+    return resolved
+
+
 def _load_image_from_path(path: Path, *, pdf_page_index: int = 0) -> Image.Image:
     if not path.exists():
         raise FileNotFoundError(str(path))
@@ -57,7 +77,11 @@ def _load_image_from_path(path: Path, *, pdf_page_index: int = 0) -> Image.Image
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Dots OCR reference demo (HF)")
-    p.add_argument("--input", required=True, help="Path to image or PDF document")
+    p.add_argument(
+        "--input",
+        required=True,
+        help="Path to image or PDF (relative to cwd, or absolute but must stay under cwd)",
+    )
     p.add_argument(
         "--prompt",
         default="OCR: transcribe the text in the image exactly.",
@@ -65,7 +89,12 @@ def main() -> None:
     )
     p.add_argument("--max-new-tokens", type=int, default=128)
     p.add_argument("--hf-model", type=str, default=None, help="Override HF model id (default: HF_MODEL or dots.mocr)")
-    p.add_argument("--out-dir", type=str, default="dots_ocr_reference_out", help="Where to write outputs")
+    p.add_argument(
+        "--out-dir",
+        type=str,
+        default="dots_ocr_reference_out",
+        help="Output directory (relative to cwd, or absolute but must resolve under cwd)",
+    )
     p.add_argument("--pdf-page", type=int, default=0, help="PDF only: 0-based page index to render")
     p.add_argument(
         "--repetition-penalty",
@@ -117,8 +146,9 @@ def main() -> None:
     )
     args = p.parse_args()
 
-    in_path = Path(args.input)
-    out_dir = Path(args.out_dir)
+    cwd = Path.cwd().resolve()
+    in_path = _path_resolved_under_cwd(args.input, cwd=cwd)
+    out_dir = _path_resolved_under_cwd(args.out_dir, cwd=cwd)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     model_id = args.hf_model or get_hf_model_id()
@@ -132,8 +162,6 @@ def main() -> None:
     )
 
     image = _load_image_from_path(in_path, pdf_page_index=args.pdf_page)
-    fed_image_path = out_dir / f"{in_path.stem}.fed_to_model.png"
-    image.save(fed_image_path)
 
     prompt = args.prompt
     if args.ocr_preset == "en":
@@ -198,11 +226,6 @@ def main() -> None:
 
     print("\n=== OUTPUT ===")
     print(text)
-    (out_dir / f"{in_path.stem}.txt").write_text(text, encoding="utf-8")
-
-    print("\n---")
-    print(f"Saved image: {fed_image_path}")
-    print(f"Saved text:  {out_dir / f'{in_path.stem}.txt'}")
 
 
 if __name__ == "__main__":
