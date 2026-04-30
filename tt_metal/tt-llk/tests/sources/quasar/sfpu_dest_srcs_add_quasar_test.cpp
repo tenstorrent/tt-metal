@@ -79,9 +79,8 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #include "csfpu_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu_common.h"
-#include "llk_srcs_tdma.h"
+#include "llk_srcs.h"
 #include "params.h"
-#include "srcs.h"
 
 using namespace ckernel;
 using namespace ckernel::math;

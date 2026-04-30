@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "csfpu_common.h"
 #include "llk_pack_common.h"
 #include "llk_unpack_common.h"
 
@@ -95,11 +96,11 @@ inline void _llk_unpack_srcs_config_for_tile_(const bool srcs_32bit_mode)
 {
     if (srcs_32bit_mode)
     {
-        _llk_unpack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(true)>();
+        _llk_unpack_srcs_config_<INSTRN_COUNT, isolate_sfpu::srcs_dims::slice_count(true)>();
     }
     else
     {
-        _llk_unpack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(false)>();
+        _llk_unpack_srcs_config_<INSTRN_COUNT, isolate_sfpu::srcs_dims::slice_count(false)>();
     }
 }
 
@@ -108,10 +109,10 @@ inline void _llk_pack_srcs_config_for_tile_(const bool srcs_32bit_mode)
 {
     if (srcs_32bit_mode)
     {
-        _llk_pack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(true)>();
+        _llk_pack_srcs_config_<INSTRN_COUNT, isolate_sfpu::srcs_dims::slice_count(true)>();
     }
     else
     {
-        _llk_pack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(false)>();
+        _llk_pack_srcs_config_<INSTRN_COUNT, isolate_sfpu::srcs_dims::slice_count(false)>();
     }
 }
