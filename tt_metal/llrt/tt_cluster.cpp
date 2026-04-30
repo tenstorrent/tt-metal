@@ -474,7 +474,7 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
 
-    if (device_params.init_device) {
+    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) && device_params.init_device) {
         // Configure TLBs on all MMIO devices in parallel
         std::vector<std::shared_future<void>> futures;
         const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
