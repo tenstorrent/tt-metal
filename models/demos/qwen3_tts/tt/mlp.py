@@ -17,6 +17,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     build_dram_sharded_weight,
     dram_sharded_program_config,
     find_grid_k_n,
+    mesh_dram_shard_decode_matmul_ok,
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
@@ -41,6 +42,7 @@ class MLP(LightweightModule):
         self.intermediate_size = intermediate_size
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        self._decode_use_dram_sharded_matmul = mesh_dram_shard_decode_matmul_ok(device)
 
         def get_cache_name(name):
             if weight_cache_path is None:
@@ -78,8 +80,9 @@ class MLP(LightweightModule):
         self.up_proj = _build_proj_weight(f"{layer_prefix}.mlp.up_proj.weight", "up_proj")
         self.down_proj = _build_proj_weight(f"{layer_prefix}.mlp.down_proj.weight", "down_proj")
 
+        grid = device.compute_with_storage_grid_size()
+
         # Decode-only DRAM-sharded weights + program/memory configs (M=1 tile).
-        # gate_proj and up_proj share K=hidden, N=intermediate so they share configs.
         gate_w_kn = state_dict[f"{layer_prefix}.mlp.gate_proj.weight"].transpose(-2, -1).contiguous()
         up_w_kn = state_dict[f"{layer_prefix}.mlp.up_proj.weight"].transpose(-2, -1).contiguous()
         self.gate_proj_dram_sharded, k_gu, n_padded_gu = build_dram_sharded_weight(
@@ -88,30 +91,41 @@ class MLP(LightweightModule):
         self.up_proj_dram_sharded, _, _ = build_dram_sharded_weight(up_w_kn, device, dtype=weight_dtype)
         self._decode_gate_up_n_padded = n_padded_gu
         k_tiles_gu, n_tiles_gu = k_gu // 32, n_padded_gu // 32
-        rows_gu, cols_gu = find_grid_k_n(k_tiles_gu, n_tiles_gu)
-        self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
-            m=32, k=k_gu, n=n_padded_gu, num_cores=rows_gu * cols_gu
-        )
-        self._decode_gate_up_in0_memcfg = width_sharded_l1_memcfg(
-            m_tiles=1, k_tiles=k_tiles_gu, num_cores_x=cols_gu, num_cores_y=rows_gu
-        )
-        self._decode_gate_up_out_memcfg = width_sharded_l1_memcfg(
-            m_tiles=1, k_tiles=n_tiles_gu, num_cores_x=cols_gu, num_cores_y=rows_gu
-        )
 
         down_w_kn = state_dict[f"{layer_prefix}.mlp.down_proj.weight"].transpose(-2, -1).contiguous()
         self.down_proj_dram_sharded, k_d, n_padded_d = build_dram_sharded_weight(down_w_kn, device, dtype=weight_dtype)
         self._decode_down_n_padded = n_padded_d
         k_tiles_d, n_tiles_d = k_d // 32, n_padded_d // 32
-        rows_d, cols_d = find_grid_k_n(k_tiles_d, n_tiles_d)
-        self._decode_down_dramshard_progcfg = dram_sharded_program_config(
-            m=32, k=k_d, n=n_padded_d, num_cores=rows_d * cols_d
+
+        assert n_tiles_gu == k_tiles_d, (
+            "Decode DRAM MLP requires gate N tiles == down K tiles; "
+            f"got n_tiles_gu={n_tiles_gu}, k_tiles_d={k_tiles_d}"
         )
+        rows_dc, cols_dc = find_grid_k_n(
+            k_tiles_gu,
+            n_tiles_gu,
+            grid.y,
+            grid.x,
+            K2_tiles=k_tiles_d,
+            N2_tiles=n_tiles_d,
+        )
+        num_dc = rows_dc * cols_dc
+        self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
+            m=32, k=k_gu, n=n_padded_gu, num_cores=num_dc
+        )
+        self._decode_gate_up_in0_memcfg = width_sharded_l1_memcfg(
+            m_tiles=1, k_tiles=k_tiles_gu, num_cores_x=cols_dc, num_cores_y=rows_dc
+        )
+        self._decode_gate_up_out_memcfg = width_sharded_l1_memcfg(
+            m_tiles=1, k_tiles=n_tiles_gu, num_cores_x=cols_dc, num_cores_y=rows_dc
+        )
+
+        self._decode_down_dramshard_progcfg = dram_sharded_program_config(m=32, k=k_d, n=n_padded_d, num_cores=num_dc)
         self._decode_down_in0_memcfg = width_sharded_l1_memcfg(
-            m_tiles=1, k_tiles=k_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
+            m_tiles=1, k_tiles=k_tiles_d, num_cores_x=cols_dc, num_cores_y=rows_dc
         )
         self._decode_down_out_memcfg = width_sharded_l1_memcfg(
-            m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
+            m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_dc, num_cores_y=rows_dc
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -121,7 +135,6 @@ class MLP(LightweightModule):
             packer_l1_acc=True,
         )
         # Prefill program configs (M>1, regular 1D matmul).
-        grid = device.compute_with_storage_grid_size()
         self.short_seq_limit = 32
         _fp32 = self.compute_kernel_config.fp32_dest_acc_en
         self._decode_gate_up_progcfg = make_linear_1d_program_config(
@@ -173,64 +186,93 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # Decode path: DRAM-sharded chain (gate → mul → down all stay sharded).
+        # Decode: DRAM-sharded chain on single-chip mesh; 1D path on multi-chip (N300).
         if is_decode and seq_len < 1024:
-            # Width-shard x once, reuse for both gate and up. Skip the I→S if the
-            # caller already gave us a tensor in the matching shard config (e.g. piped
-            # from a sharded layernorm in decoder_layer).
-            if x.memory_config() == self._decode_gate_up_in0_memcfg:
-                x_sharded = x
-                _own_x_sharded = False
-            else:
-                x_sharded = ttnn.to_memory_config(x, self._decode_gate_up_in0_memcfg)
-                _own_x_sharded = True
-            gate_sharded = ttnn.linear(
-                x_sharded,
-                self.gate_proj_dram_sharded,
+            if self._decode_use_dram_sharded_matmul:
+                if x.memory_config() == self._decode_gate_up_in0_memcfg:
+                    x_sharded = x
+                    _own_x_sharded = False
+                else:
+                    x_sharded = ttnn.to_memory_config(x, self._decode_gate_up_in0_memcfg)
+                    _own_x_sharded = True
+                gate_sharded = ttnn.linear(
+                    x_sharded,
+                    self.gate_proj_dram_sharded,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=self._decode_gate_up_dramshard_progcfg,
+                    memory_config=self._decode_gate_up_out_memcfg,
+                )
+                up_sharded = ttnn.linear(
+                    x_sharded,
+                    self.up_proj_dram_sharded,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=self._decode_gate_up_dramshard_progcfg,
+                    memory_config=self._decode_gate_up_out_memcfg,
+                )
+                if _own_x_sharded:
+                    ttnn.deallocate(x_sharded)
+                hidden_sharded = ttnn.mul(
+                    gate_sharded,
+                    up_sharded,
+                    input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                    memory_config=self._decode_gate_up_out_memcfg,
+                )
+                ttnn.deallocate(gate_sharded)
+                ttnn.deallocate(up_sharded)
+                out_sharded = ttnn.linear(
+                    hidden_sharded,
+                    self.down_proj_dram_sharded,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=self._decode_down_dramshard_progcfg,
+                    memory_config=self._decode_down_out_memcfg,
+                )
+                ttnn.deallocate(hidden_sharded)
+                if self._decode_down_n_padded == self.hidden_size:
+                    return out_sharded
+                output_padded = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(out_sharded)
+                output = ttnn.slice(
+                    output_padded,
+                    [0, 0, 0, 0],
+                    [output_padded.shape[0], output_padded.shape[1], output_padded.shape[2], self.hidden_size],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(output_padded)
+                return output
+
+            x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            gate_out = ttnn.linear(
+                x_l1,
+                self.gate_proj,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_gate_up_dramshard_progcfg,
-                memory_config=self._decode_gate_up_out_memcfg,
-            )
-            up_sharded = ttnn.linear(
-                x_sharded,
-                self.up_proj_dram_sharded,
-                compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_gate_up_dramshard_progcfg,
-                memory_config=self._decode_gate_up_out_memcfg,
-            )
-            if _own_x_sharded:
-                ttnn.deallocate(x_sharded)
-            # gate/up sharding == down in0 sharding (same K). Mul preserves layout.
-            hidden_sharded = ttnn.mul(
-                gate_sharded,
-                up_sharded,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-                memory_config=self._decode_gate_up_out_memcfg,
-            )
-            ttnn.deallocate(gate_sharded)
-            ttnn.deallocate(up_sharded)
-            out_sharded = ttnn.linear(
-                hidden_sharded,
-                self.down_proj_dram_sharded,
-                compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_down_dramshard_progcfg,
-                memory_config=self._decode_down_out_memcfg,
-            )
-            ttnn.deallocate(hidden_sharded)
-            # Decoder layer's residual add wants sharded input — return sharded.
-            if self._decode_down_n_padded == self.hidden_size:
-                return out_sharded
-            # Weight N was padded; slice back via L1_INTERLEAVED.
-            output_padded = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(out_sharded)
-            output = ttnn.slice(
-                output_padded,
-                [0, 0, 0, 0],
-                [output_padded.shape[0], output_padded.shape[1], output_padded.shape[2], self.hidden_size],
+                program_config=gate_up_progcfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            ttnn.deallocate(output_padded)
-            return output
+            up_out = ttnn.linear(
+                x_l1,
+                self.up_proj,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=gate_up_progcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x_l1)
+            hidden = ttnn.mul(
+                gate_out,
+                up_out,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(gate_out)
+            ttnn.deallocate(up_out)
+            out = ttnn.linear(
+                hidden,
+                self.down_proj,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=down_progcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(hidden)
+            return ttnn.to_memory_config(out, self._decode_down_out_memcfg)
 
         # Prefill path: standard 1D-mcast matmul.
         gate_out = ttnn.linear(
