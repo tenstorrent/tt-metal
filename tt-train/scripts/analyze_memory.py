@@ -46,7 +46,7 @@ def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
 
 
 def extract_available_device_memory_mb(content: str, start_pos: int) -> Optional[int]:
-    """Extract number of parameters from logs before the memory summary"""
+    """Extract the available device memory from logs before the memory summary"""
     # Search forward from a reasonable position before start
     search_start = max(0, start_pos - 1000)
     text_before = content[search_start:start_pos]
