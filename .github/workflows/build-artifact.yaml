@@ -294,6 +294,7 @@ jobs:
         id: find
         uses: ./.github/actions/find-build-for-sha
         with:
+          build-type: ${{ inputs.build-type }}
           tracy: ${{ inputs.tracy }}
           distributed: ${{ inputs.distributed }}
           check-wheel: ${{ inputs.build-wheel }}
@@ -638,12 +639,14 @@ jobs:
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
+          BUILD_TYPE="${{ inputs.build-type }}"
           RUN_ID="${{ github.run_id }}"
           BUILD_ARTIFACT_PARTS=(
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
             "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )

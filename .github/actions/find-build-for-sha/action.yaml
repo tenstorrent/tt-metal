@@ -5,6 +5,13 @@ description: >
   types by finding runs for the same head_sha and checking their artifacts.
 
 inputs:
+  build-type:
+    description: >
+      The CMake build type to match (e.g., 'Release', 'ASan', 'TSan', 'Debug',
+      'RelWithDebInfo'). Artifacts encode the build type in their name so
+      that e.g. a Release artifact is never reused for an ASan build.
+    required: false
+    default: 'Release'
   tracy:
     description: >
       Whether to look for a profiler-enabled build artifact.
@@ -55,12 +62,13 @@ runs:
         github-token: ${{ inputs.github-token }}
         script: |
           const sha = context.sha;
+          const buildType = '${{ inputs.build-type }}' || 'Release';
           const tracy = '${{ inputs.tracy }}' === 'true';
           const distributed = '${{ inputs.distributed }}' !== 'false';
           const checkWheel = '${{ inputs.check-wheel }}' === 'true';
 
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
-          console.log(`Config: tracy=${tracy}, distributed=${distributed}, check-wheel=${checkWheel}`);
+          console.log(`Config: build-type=${buildType}, tracy=${tracy}, distributed=${distributed}, check-wheel=${checkWheel}`);
 
           // Strategy: find all workflow runs for this commit SHA, then check
           // each run's artifacts. This is O(runs * artifacts_per_run) instead
@@ -68,7 +76,7 @@ runs:
           // deep enough.
           //
           // Artifact name patterns:
-          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{SHA}_{RUN_ID}
+          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{BUILD_TYPE}_{SHA}_{RUN_ID}
           //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
 
           let foundBuild = null;
@@ -77,6 +85,10 @@ runs:
           function matchBuild(artifact) {
             if (!artifact.name.startsWith('TTMetal_build_any')) return false;
             if (!artifact.name.includes(sha)) return false;
+            // Check build type — must match exactly to prevent e.g. Release/ASan cross-contamination.
+            // The build type is encoded as '_Release_', '_ASan_', '_TSan_', etc. before the SHA.
+            const buildTypeTag = `_${buildType}_`;
+            if (!artifact.name.includes(buildTypeTag)) return false;
             const hasProfiler = artifact.name.includes('_profiler');
             if (tracy && !hasProfiler) return false;
             if (!tracy && hasProfiler) return false;
