@@ -31,14 +31,10 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
-
-def _gemma3_sdpa_decode_k_chunk_tokens() -> int:
-    """Fixed K chunk for Gemma3 paged-decode tuning (text demo path)."""
-    return 256
-
-
-# Smallest K chunk allowed by SDPA decode (power of 2, multiple of 32); minimizes L1 for traced programs.
-_GEMMA3_TRACE_SDPA_DECODE_K_CHUNK = 32
+# SDPA decode k_chunk when force_fixed_decode_k_chunk is True (paged text path; see text_demo).
+_GEMMA3_SDPA_DECODE_K_CHUNK_DEFAULT = 256
+# Under program trace, use the smallest valid k_chunk (pow2, multiple of 32) to reduce L1 vs static CB limits.
+_GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE = 32
 
 
 class ModelArgs(TTModelArgs):
@@ -91,10 +87,10 @@ class ModelArgs(TTModelArgs):
                 logger.info(f"[Gemma3] Resolved HF model '{hf_model}' to snapshot: {snapshot}")
                 os.environ["HF_MODEL"] = str(snapshot)
         self._enable_program_trace = enable_program_trace
-        # Must run before super(): parent init or @lru_cache could otherwise pin SDPA decode to k_chunk=0 path.
+        # Trace path needs fixed k_chunk and flags before super().__init__: base __init__ may consult attention config.
         if enable_program_trace:
             self.force_fixed_decode_k_chunk = True
-            self._gemma3_sdpa_decode_k_chunk_override = _GEMMA3_TRACE_SDPA_DECODE_K_CHUNK
+            self._gemma3_sdpa_decode_k_chunk_override = _GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE
 
         super().__init__(
             mesh_device,
@@ -207,7 +203,7 @@ class ModelArgs(TTModelArgs):
             return super().get_attn_sdpa_decode_program_config(prefetcher)
 
         override = getattr(self, "_gemma3_sdpa_decode_k_chunk_override", None)
-        fixed_k_chunk_tokens = _gemma3_sdpa_decode_k_chunk_tokens() if override is None else int(override)
+        k_chunk_tokens = _GEMMA3_SDPA_DECODE_K_CHUNK_DEFAULT if override is None else int(override)
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -219,14 +215,14 @@ class ModelArgs(TTModelArgs):
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,
-                k_chunk_size=fixed_k_chunk_tokens,
+                k_chunk_size=k_chunk_tokens,
             )
 
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             exp_approx_mode=False,
             q_chunk_size=0,
-            k_chunk_size=fixed_k_chunk_tokens,
+            k_chunk_size=k_chunk_tokens,
         )
 
     def get_warmup_prefill_supported_seq_lens(self):
