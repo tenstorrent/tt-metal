@@ -103,8 +103,6 @@ struct ColumnWisePipelineStageSync {
             uint32_t r2_semaphore_l1_addr,
             uint32_t r3_semaphore_l1_addr,
             size_t fabric_arg_base) {
-            // TODO: (GR) need fabric barrier between reduce_to_all fabric cores and this
-
             auto r1_semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_semaphore_l1_addr);
             auto r2_semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_semaphore_l1_addr);
             auto r3_semaphore_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r3_semaphore_l1_addr);
@@ -167,8 +165,6 @@ struct ColumnWisePipelineStageSync {
             close_connections(fabric_connection);
             noc_async_write_barrier();
             invalidate_l1_cache();
-
-            // TODO: (GR) assuming this executes on broadcast core and risc, don't need fabric barrier
         }
 
         static FORCE_INLINE void exit_device_impl(
@@ -176,8 +172,6 @@ struct ColumnWisePipelineStageSync {
             uint32_t entry_device_core_noc_y_addr,
             uint32_t r1_semaphore_l1_addr,
             size_t fabric_arg_base) {
-            // TODO: (GR) need fabric barrier between reduce_to_all fabric cores and this
-
             uint64_t r1_semaphore_noc_addr =
                 get_noc_addr(entry_device_core_noc_x_addr, entry_device_core_noc_y_addr, r1_semaphore_l1_addr);
 
@@ -198,8 +192,6 @@ struct ColumnWisePipelineStageSync {
 
             close_connections(fabric_connection);
             noc_async_write_barrier();
-
-            // TODO: (GR) need fabric barrier between this and first CCL
         }
 #endif
 
