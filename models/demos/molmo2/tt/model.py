@@ -728,22 +728,42 @@ class TtMolmo2Model(LightweightModule):
         temperature: float = 1.0,
         user_id: int = 0,
     ) -> torch.Tensor:
-        """Full autoregressive generate: TTNN prefill + CPU reference decode.
+        """Full autoregressive generate: TTNN prefill + traced TTNN decode.
 
-        CPU decode uses float32 reference ops for numerical correctness over
-        long sequences where bfloat16 TTNN SDPA may produce different logits.
-        Block weights are pulled from device once and cached for speed.
+        On the first call, captures a decode trace (warm-up + begin/end_trace_capture).
+        Subsequent calls execute the trace via execute_trace — no host transfers per step.
         """
-        return self._generate_cpu_decode(
+        B, S = input_ids.shape
+
+        # ---- TTNN prefill ----
+        logits = self.forward_prefill(
             input_ids=input_ids,
             pixel_values=pixel_values,
             pooled_patches_idx=pooled_patches_idx,
             token_type_ids=token_type_ids,
-            max_new_tokens=max_new_tokens,
-            eos_token_id=eos_token_id,
-            temperature=temperature,
             user_id=user_id,
         )
+        next_token = _sample(logits[0, -1], temperature)
+        generated_ids = [next_token]
+
+        # ---- Ensure decode trace is ready ----
+        if self._decode_trace_id is None:
+            print("  [decode] capturing TTNN decode trace (warm-up + capture)...", flush=True)
+            self._decode_trace_tensors = self._allocate_decode_trace_tensors()
+            self._decode_trace_id, self._decode_trace_output = self._capture_decode_trace(self._decode_trace_tensors, S)
+            print("  [decode] trace ready", flush=True)
+
+        # ---- Traced decode loop ----
+        current_pos = S
+        for step in range(max_new_tokens - 1):
+            if eos_token_id is not None and next_token == eos_token_id:
+                break
+            logits_1 = self._execute_decode_trace(next_token, current_pos)
+            next_token = _sample(logits_1, temperature)
+            generated_ids.append(next_token)
+            current_pos += 1
+
+        return torch.tensor(generated_ids, dtype=torch.long)
 
     def _build_cpu_block_weights(self):
         """Extract and reconstruct per-block CPU weights from TTNN device tensors.

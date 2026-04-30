@@ -143,7 +143,12 @@ class Molmo2Config:
         cfg["ATTN_W_LAYOUT_TILE"] = ttnn.TILE_LAYOUT
         cfg["USE_FUSED_ALL_GATHER_MATMUL"] = False
         cfg["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.DRAM_MEMORY_CONFIG
-        cfg["SDPA_DECODE_PROGCFG"] = None  # auto-select
+        cfg["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            exp_approx_mode=False,
+            q_chunk_size=256,
+            k_chunk_size=256,
+        )
         cfg["SDPA_DECODE_COMPUTE_PROGCFG"] = self.compute_kernel_config_hifi4
 
         def sdpa_prog(seq_len):
