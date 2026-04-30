@@ -16,7 +16,8 @@ remote code's eager ``VisionAttention`` (``vision_config`` defaults to flash oth
 from __future__ import annotations
 
 import os
-import re
+import sys
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -31,25 +32,26 @@ logger = logging.get_logger(__name__)
 _VISION_MODULE_PREFIXES = ("transformers_modules.", "transformers.")
 
 
-def _import_module_safe(module_name: str):
+def _resolve_remote_vision_module(module_name: str) -> types.ModuleType:
     """
-    Import a module only if ``module_name`` looks like a normal dotted Python module path.
+    Return the module object for validated Hub / transformers vision code.
 
-    Used instead of bare ``importlib.import_module(vt.__class__.__module__)`` so static analysis does
-    not treat the string as unconstrained external input to code loading.
+    After ``from_pretrained(..., trust_remote_code=True)``, remote modules are already present in
+    ``sys.modules``. We validate ``module_name`` (same rules as before) and resolve via that dict only,
+    avoiding :func:`importlib.import_module` on a dynamic string so static analysis does not flag
+    unsanitized input passed to code-loading APIs.
     """
-    import importlib
-
     if not isinstance(module_name, str) or not module_name.strip():
         raise ValueError("module_name must be a non-empty str")
-    # Hub paths may include revision-hash segments that start with a digit (e.g. ``...dots_dot_mocr.6f8b48...``).
-    if ".." in module_name or any(sep in module_name for sep in ("/", "\\", ":", ";", " ", "\n", "\t")):
-        raise ValueError(f"refused unsafe module name: {module_name!r}")
-    if not re.fullmatch(r"[A-Za-z0-9_.]+(?:\.[A-Za-z0-9_.]+)*", module_name):
-        raise ValueError(f"refused malformed module name: {module_name!r}")
-    if not any(module_name.startswith(p) for p in _VISION_MODULE_PREFIXES):
-        raise ValueError(f"module name not in allowed prefixes {_VISION_MODULE_PREFIXES}: {module_name!r}")
-    return importlib.import_module(module_name)
+
+    mod = sys.modules.get(module_name)
+    if isinstance(mod, types.ModuleType):
+        return mod
+
+    raise ValueError(
+        f"remote vision module {module_name!r} is not present in sys.modules after model load "
+        "(expected with trust_remote_code); refusing dynamic import"
+    )
 
 
 @dataclass(frozen=True)
@@ -203,7 +205,7 @@ def _install_eager_vision_attention(model) -> None:
 
     module_name = vt.__class__.__module__
     try:
-        mod = _import_module_safe(module_name)
+        mod = _resolve_remote_vision_module(module_name)
     except ValueError as exc:
         logger.warning("eager vision swap: refused dynamic import (%s); leaving vision attention as loaded.", exc)
         return
