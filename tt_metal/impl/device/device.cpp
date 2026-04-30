@@ -1011,6 +1011,22 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
         std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(erisc_term_signal));
 
         for (const auto& [eth_chan_id, direction] : active_channels) {
+            // FIX PY (#42429): If relay_path_broken_ was set by a prior channel in this
+            // same Phase 2.5 loop iteration (not just the outer guard above), skip remaining
+            // channels on this non-MMIO device immediately.  Without this, after the FIRST
+            // channel fails and spends 3×retry×5s≈21s setting fabric_relay_path_broken_=true,
+            // the REMAINING channels each also spin through the full 21s retry cycle even
+            // though we already know the relay is dead.  Skipping them is safe — Phase 3's
+            // FIX Q guard already skips configure_fabric_cores() when relay_path_broken_=true.
+            if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "relay already marked broken by prior channel — skipping (FIX PY #42429).",
+                    this->id(),
+                    eth_chan_id);
+                continue;
+            }
             const auto eth_logical_core = env_impl.get_cluster()
                                               .get_soc_desc(this->id())
                                               .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
