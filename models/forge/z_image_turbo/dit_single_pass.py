@@ -484,6 +484,12 @@ def main():
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
 
+    print("Fusing w1+w3 MLP weights ...")
+    dit._prep_fused_w1w3()
+
+    print("Converting MLP weights to BFP8 ...")
+    _convert_mlp_weights_to_bfp8(dit)
+
     # Encode a real prompt for caption features
     print("Encoding prompt ...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, subfolder="tokenizer")
