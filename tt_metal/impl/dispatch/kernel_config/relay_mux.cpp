@@ -109,6 +109,21 @@ void RelayMux::GenerateStaticConfigs() {
         // Get the device which is downstream on the specified tunnel
         destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(descriptor_, device_id_, tunnel_id_);
     }
+    // FIX NY+ (#42429): Also guard the destination device — when topology degrades (e.g. 2x4→2x2),
+    // the MMIO source device may still be in the cluster but its non-MMIO tunnel destination may
+    // have been excluded from the downgraded mesh mapping.  Calling
+    // get_fabric_node_id_from_physical_chip_id() on an excluded destination triggers a TT_FATAL.
+    if (!control_plane_ref.is_physical_chip_in_fabric_cluster(destination_device_id)) {
+        log_warning(
+            tt::LogMetal,
+            "FIX NY+: RelayMux::GenerateStaticConfigs — destination device {} not in fabric cluster "
+            "(degraded topology), skipping static config generation for device {} → {}",
+            destination_device_id,
+            device_id_,
+            destination_device_id);
+        return;
+    }
+
     const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
     const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
 
