@@ -25,6 +25,40 @@ import ttnn
 TILE = ttnn.TILE_SIZE  # 32
 
 
+def _wormhole_mesh_on_mmio_multi_chip_board(device) -> bool:
+    """N300-style board: multiple WH chips share one host MMIO while ``open_device`` still yields a 1x1 mesh."""
+    try:
+        if device.arch() != ttnn.device.Arch.WORMHOLE_B0:
+            return False
+        n = int(ttnn.device.GetNumAvailableDevices())
+        if n < 2:
+            return False
+        get_ids = getattr(device, "get_device_ids", None)
+        if not callable(get_ids):
+            return False
+        mmio_parent = [int(ttnn.device.GetPCIeDeviceID(i)) for i in range(n)]
+        peer_count: dict[int, int] = {}
+        for m in mmio_parent:
+            peer_count[m] = peer_count.get(m, 0) + 1
+        return any(peer_count.get(int(ttnn.device.GetPCIeDeviceID(int(cid))), 0) > 1 for cid in get_ids())
+    except Exception:
+        return False
+
+
+def mesh_dram_shard_decode_matmul_ok(device) -> bool:
+    """Allow DRAM-sharded decode matmul only for safe single-logical-device paths (see N300 MMIO note above)."""
+    try:
+        get_n = getattr(device, "get_num_devices", None)
+        if callable(get_n) and int(get_n()) > 1:
+            return False
+        sh = device.shape
+        if int(sh[0]) * int(sh[1]) > 1:
+            return False
+    except Exception:
+        pass
+    return not _wormhole_mesh_on_mmio_multi_chip_board(device)
+
+
 def _largest_divisor(n: int, max_divisor: int = 8) -> int:
     for i in range(max_divisor, 0, -1):
         if n % i == 0:
@@ -32,17 +66,33 @@ def _largest_divisor(n: int, max_divisor: int = 8) -> int:
     return 1
 
 
-def find_grid_k_n(K_tiles: int, N_tiles: int, max_rows: int = 10, max_cols: int = 13) -> Tuple[int, int]:
-    """Largest core grid (rows, cols) where num_cores divides BOTH K_tiles and N_tiles.
+def find_grid_k_n(
+    K_tiles: int,
+    N_tiles: int,
+    max_rows: int = 10,
+    max_cols: int = 13,
+    *,
+    K2_tiles: int | None = None,
+    N2_tiles: int | None = None,
+) -> Tuple[int, int]:
+    """Largest grid whose core count divides K/N tile axes (and optionally a second K/N pair for decode MLP).
 
-    Both divisibility constraints are needed: K for `in0_block_w`, N for the
-    width-sharded output (each core must own a tile-aligned N slice).
-
-    Default max grid bumped to 13×10 to support Blackhole's 130-core compute grid;
-    callers on Wormhole get the same code path (constraints just cap at 64 anyway).
+    On Wormhole pass ``max_rows`` / ``max_cols`` from ``compute_with_storage_grid_size()`` so shards fit
+    harvested grids (often 8×7). Defaults suit large grids (e.g. Blackhole).
     """
+    if (K2_tiles is None) ^ (N2_tiles is None):
+        raise ValueError("K2_tiles and N2_tiles must be passed together or not at all")
+
+    def divides_all(c: int) -> bool:
+        if K_tiles % c or N_tiles % c:
+            return False
+        if K2_tiles is not None:
+            assert N2_tiles is not None
+            return K2_tiles % c == 0 and N2_tiles % c == 0
+        return True
+
     max_cores = max_rows * max_cols
-    candidates = [c for c in range(1, max_cores + 1) if K_tiles % c == 0 and N_tiles % c == 0]
+    candidates = [c for c in range(1, max_cores + 1) if divides_all(c)]
     candidates.sort(reverse=True)
     for cores in candidates:
         for rows in range(1, max_rows + 1):
@@ -50,7 +100,8 @@ def find_grid_k_n(K_tiles: int, N_tiles: int, max_rows: int = 10, max_cols: int 
                 cols = cores // rows
                 if cols <= max_cols:
                     return rows, cols
-    raise AssertionError(f"No grid divides both K={K_tiles} and N={N_tiles} tiles within {max_rows}x{max_cols}.")
+    extra = f", K2={K2_tiles}, N2={N2_tiles}" if K2_tiles is not None else ""
+    raise AssertionError(f"No grid divides K={K_tiles}, N={N_tiles}{extra} tiles within {max_rows}x{max_cols}.")
 
 
 def pad_n_for_dram_align(n: int, dram_cores: int) -> int:

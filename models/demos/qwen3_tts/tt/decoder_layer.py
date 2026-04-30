@@ -20,6 +20,18 @@ from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 _PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
 
 
+def _sharded_ln_core_grid_fits(device, num_cores: int) -> bool:
+    """True if ``num_cores`` fits a cols×rows rectangle inside the compute grid."""
+    compute_grid = device.compute_with_storage_grid_size()
+    cols = min(compute_grid.x, num_cores)
+    while cols > 0 and num_cores % cols != 0:
+        cols -= 1
+    if cols <= 0:
+        return False
+    rows = num_cores // cols
+    return rows <= compute_grid.y
+
+
 def _build_sharded_rmsnorm_configs(device, dim: int, num_cores: int, m: int = 32):
     """Build (input_memcfg, program_config) for a width-sharded multi-core RMSNorm
     on a [1,1,m,dim] tensor.  m and dim/TILE must both divide cleanly.
@@ -139,16 +151,11 @@ class DecoderLayer(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-        # Optional sharded RMSNorm configs for decode-mode (env-gated).
-        # Pick the largest num_cores ≤ 64 that divides dim/TILE, so the output shard
-        # layout can match the QKV / MLP matmul in0 grid where possible.
-        # Talker (hidden=2048): 64 cores (1 tile/core).
-        # CodePredictor (hidden=1024): 32 cores.
-        # Sharded RMSNorm configs for decode (m=32) and each prefill bucket size.
-        # num_cores: largest ≤ 64 that divides dim/TILE so the output shard layout
-        # matches the QKV / MLP gate-up matmul in0 grid where applicable.
+        # Largest num_cores ≤ 64 dividing dim/TILE that fits compute grid (8×7 harvested WH).
         dim_tiles = hidden_size // 32
-        ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
+        ln_num_cores = next(
+            c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0 and _sharded_ln_core_grid_fits(device, c)
+        )
         self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
             device, hidden_size, ln_num_cores, m=32
         )

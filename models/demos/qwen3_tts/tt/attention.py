@@ -21,6 +21,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     build_dram_sharded_weight,
     dram_sharded_program_config,
     find_grid_k_n,
+    mesh_dram_shard_decode_matmul_ok,
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
@@ -85,6 +86,7 @@ class Attention(LightweightModule):
             return out
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        self._decode_use_dram_sharded_matmul = mesh_dram_shard_decode_matmul_ok(device)
 
         def get_cache_name(name):
             if weight_cache_path is None:
@@ -309,7 +311,7 @@ class Attention(LightweightModule):
         self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight(wqkv_kn, device, dtype=weight_dtype)
         self._decode_wqkv_n_padded = n_padded_q
         k_tiles_q, n_tiles_q = k_q // 32, n_padded_q // 32
-        rows_q, cols_q = find_grid_k_n(k_tiles_q, n_tiles_q)
+        rows_q, cols_q = find_grid_k_n(k_tiles_q, n_tiles_q, max_rows=_grid.y, max_cols=_grid.x)
         self._decode_wqkv_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_q, n=n_padded_q, num_cores=rows_q * cols_q
         )
@@ -324,7 +326,7 @@ class Attention(LightweightModule):
         self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight(wo_kn, device, dtype=weight_dtype)
         self._decode_wo_n_padded = n_padded_o
         k_tiles_o, n_tiles_o = k_o // 32, n_padded_o // 32
-        rows_o, cols_o = find_grid_k_n(k_tiles_o, n_tiles_o)
+        rows_o, cols_o = find_grid_k_n(k_tiles_o, n_tiles_o, max_rows=_grid.y, max_cols=_grid.x)
         self._decode_wo_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_o, n=n_padded_o, num_cores=rows_o * cols_o
         )
@@ -458,7 +460,7 @@ class Attention(LightweightModule):
             wqkv_progcfg = wo_progcfg = None
 
         # QKV projection — DRAM-sharded matmul path applies to decode (M=1) only.
-        use_dram_shard_qkv = is_decode and seq_len == 1
+        use_dram_shard_qkv = is_decode and seq_len == 1 and self._decode_use_dram_sharded_matmul
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
         # since wqkv was rearranged to KV-group-interleaved layout.
         sharded_qkv_split = use_dram_shard_qkv
@@ -839,7 +841,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(attn_output_f32)
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
-        use_dram_shard_o = is_decode and seq_len == 1
+        use_dram_shard_o = is_decode and seq_len == 1 and self._decode_use_dram_sharded_matmul
         # Pick decode (m=32) vs prefill bucket-size sharded NLPConcat memcfgs.
         sharded_concat_decode = is_decode
         sharded_concat_prefill = not is_decode and seq_len in self._prefill_concat_configs
