@@ -85,13 +85,13 @@ def _apply_matmul_config_patch():
 
 
 def _apply_compute_config_patch():
-    """Use HiFi2 + packer_l1_acc for matmuls (faster), keep HiFi4 for norms."""
+    """Use HiFi2 + packer_l1_acc + no fp32 acc for matmuls."""
     import dit.model_ttnn as dit_mod
 
     FAST_MATMUL_KERNEL = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
 
