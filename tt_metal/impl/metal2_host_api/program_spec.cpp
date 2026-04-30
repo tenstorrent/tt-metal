@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS (host-side max)
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
@@ -1289,7 +1290,12 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
+    // Size unpack_modes to NUM_CIRCULAR_BUFFERS (the max-CB allocation expected by the JIT
+    // build framework — see get_unpack_dst_formats in tt_metal/jit_build/data_format.cpp).
+    // Sizing only to dfb_name_to_id.size() trips the framework's "must have N elements" TT_FATAL
+    // for any compute kernel that uses fewer DFBs than the architectural CB max.
+    std::vector<UnpackToDestMode> unpack_modes(
+        std::max<size_t>(NUM_CIRCULAR_BUFFERS, dfb_name_to_id.size()), UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
         unpack_modes[dfb_id] = mode;

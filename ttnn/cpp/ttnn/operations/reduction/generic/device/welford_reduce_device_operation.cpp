@@ -13,7 +13,7 @@ WelfordReduceDeviceOperation::program_factory_t WelfordReduceDeviceOperation::se
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     using namespace tt::tt_metal;
 
-    return WelfordReduceProgramFactory{};
+    return WelfordReduceDeviceOperation::WelfordReduceProgramFactory{};
 }
 
 void WelfordReduceDeviceOperation::validate_on_program_cache_miss(

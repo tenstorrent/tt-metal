@@ -5,17 +5,21 @@
 #include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
-SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
+tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor) {
+    using namespace tt::tt_metal;
+
     const auto& input_values_tensor = tensor_args.input_values;
     const auto& input_indices_tensor = tensor_args.input_indices;
     const auto& k = tensor_args.k;
@@ -25,7 +29,6 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     const auto& seed = operation_attributes.seed;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    tt::tt_metal::Program program{};
     uint32_t random_seed = 0;
 
     tt::DataFormat input_values_cb_data_format =
@@ -72,20 +75,31 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
 
+    ProgramDescriptor desc;
+
     // Two tiles are loaded in for sampling_local_sort at a time, and we double buffer to avoid stalls, so allocate four
     // tiles of space
     uint32_t input_values_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig input_values_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_in_units * input_values_tile_size, {{input_values_cb_index, input_values_cb_data_format}})
-            .set_page_size(input_values_cb_index, input_values_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, input_values_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb_in_units * input_values_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_values_cb_index),
+            .data_format = input_values_cb_data_format,
+            .page_size = input_values_tile_size,
+        }}},
+    });
 
     uint32_t index_cb_index = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
-            .set_page_size(index_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, index_input_intermed0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb_in_units * index_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(index_cb_index),
+            .data_format = index_cb_data_format,
+            .page_size = index_tile_size,
+        }}},
+    });
 
     // Reduce scaler CBs — separate because MAX and SUM use different tile fill layouts
     tt::DataFormat scalar_df =
@@ -94,107 +108,163 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     uint32_t scalar_tile_size = tile_size(scalar_df);
 
     uint32_t scaler_max_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig scaler_max_cb_config =
-        tt::tt_metal::CircularBufferConfig(scale_tiles * scalar_tile_size, {{scaler_max_cb_index, scalar_df}})
-            .set_page_size(scaler_max_cb_index, scalar_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, scaler_max_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(scaler_max_cb_index),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
     uint32_t scaler_sum_cb_index = tt::CBIndex::c_17;
-    tt::tt_metal::CircularBufferConfig scaler_sum_cb_config =
-        tt::tt_metal::CircularBufferConfig(scale_tiles * scalar_tile_size, {{scaler_sum_cb_index, scalar_df}})
-            .set_page_size(scaler_sum_cb_index, scalar_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, scaler_sum_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(scaler_sum_cb_index),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
     uint32_t topk_mask_cb_index = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig topk_mask_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_in_units * input_values_tile_size, {{topk_mask_cb_index, input_values_cb_data_format}})
-            .set_page_size(topk_mask_cb_index, input_values_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, topk_mask_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb_in_units * input_values_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(topk_mask_cb_index),
+            .data_format = input_values_cb_data_format,
+            .page_size = input_values_tile_size,
+        }}},
+    });
 
     // Compute kernel CBs
-    // // Single buffered circular buffer that holds the transposed input tiles
+    // Single buffered circular buffer that holds the transposed input tiles
     uint32_t input_transposed_cb_index = tt::CBIndex::c_5;
-    tt::tt_metal::CircularBufferConfig input_transposed_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            Wt * input_values_tile_size, {{input_transposed_cb_index, input_values_cb_data_format}})
-            .set_page_size(input_transposed_cb_index, input_values_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, input_transposed_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = Wt * input_values_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_transposed_cb_index),
+            .data_format = input_values_cb_data_format,
+            .page_size = input_values_tile_size,
+        }}},
+    });
 
-    // // Single buffered circular buffer that holds the transposed index tiles
+    // Single buffered circular buffer that holds the transposed index tiles
     uint32_t index_transposed_cb_index = tt::CBIndex::c_6;
-    tt::tt_metal::CircularBufferConfig index_transposed_cb_config =
-        tt::tt_metal::CircularBufferConfig(Wt * index_tile_size, {{index_transposed_cb_index, index_cb_data_format}})
-            .set_page_size(index_transposed_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, index_transposed_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = Wt * index_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(index_transposed_cb_index),
+            .data_format = index_cb_data_format,
+            .page_size = index_tile_size,
+        }}},
+    });
 
-    // // Output sampling values
+    // Output sampling values
     uint32_t values_cb_index = tt::CBIndex::c_7;
-    tt::tt_metal::CircularBufferConfig values_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_cb_unit * input_values_tile_size, {{values_cb_index, input_values_cb_data_format}})
-            .set_page_size(values_cb_index, input_values_tile_size);
-
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, values_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cb_unit * input_values_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(values_cb_index),
+            .data_format = input_values_cb_data_format,
+            .page_size = input_values_tile_size,
+        }}},
+    });
 
     uint32_t cb_local_vals_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig cb_local_vals_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_cb_unit * input_values_tile_size, {{cb_local_vals_index, input_values_cb_data_format}})
-            .set_page_size(cb_local_vals_index, input_values_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_local_vals_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cb_unit * input_values_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_local_vals_index),
+            .data_format = input_values_cb_data_format,
+            .page_size = input_values_tile_size,
+        }}},
+    });
 
-    // // Output local indices
+    // Output local indices
     uint32_t output_ind_cb_index = tt::CBIndex::c_8;
-    tt::tt_metal::CircularBufferConfig output_ind_cb_config =
-        tt::tt_metal::CircularBufferConfig(num_cb_unit * index_tile_size, {{output_ind_cb_index, index_cb_data_format}})
-            .set_page_size(output_ind_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, output_ind_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cb_unit * index_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_ind_cb_index),
+            .data_format = index_cb_data_format,
+            .page_size = index_tile_size,
+        }}},
+    });
 
     uint32_t num_out_tiles = Ht;
     uint32_t cb_cur_max_index = tt::CBIndex::c_9;
-    tt::tt_metal::CircularBufferConfig cb_cur_max_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_out_tiles * input_values_tile_size, {{cb_cur_max_index, input_values_cb_data_format}})
-            .set_page_size(cb_cur_max_index, input_values_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_cur_max_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_out_tiles * input_values_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_cur_max_index),
+            .data_format = input_values_cb_data_format,
+            .page_size = input_values_tile_size,
+        }}},
+    });
 
     uint32_t cb_cur_sum_index = tt::CBIndex::c_10;
-    tt::tt_metal::CircularBufferConfig cb_cur_sum_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_out_tiles * input_values_tile_size, {{cb_cur_sum_index, input_values_cb_data_format}})
-            .set_page_size(cb_cur_sum_index, input_values_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_cur_sum_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_out_tiles * input_values_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_cur_sum_index),
+            .data_format = input_values_cb_data_format,
+            .page_size = input_values_tile_size,
+        }}},
+    });
 
     // RM CBs for sampling
 
     // random number
     const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
     constexpr uint32_t rand_tile_index = tt::CBIndex::c_11;
-    tt::tt_metal::CircularBufferConfig cb_rand_config =
-        tt::tt_metal::CircularBufferConfig(rand_tile_size, {{rand_tile_index, tt::DataFormat::Float16_b}})
-            .set_page_size(rand_tile_index, rand_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_rand_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = rand_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(rand_tile_index),
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = rand_tile_size,
+        }}},
+    });
 
     // final indices
     uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();  // 4 for int32
     uint32_t aligned_final_indices_rm_unit_size = Wt * tile_width * final_indices_rm_unit_size;
     uint32_t final_indices_rm_cb_index = tt::CBIndex::c_12;
-    tt::tt_metal::CircularBufferConfig final_indices_rm_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            Ht * tile_height * aligned_final_indices_rm_unit_size,
-            {{final_indices_rm_cb_index, input_indices_cb_data_format}})
-            .set_page_size(final_indices_rm_cb_index, aligned_final_indices_rm_unit_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, final_indices_rm_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = Ht * tile_height * aligned_final_indices_rm_unit_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(final_indices_rm_cb_index),
+            .data_format = input_indices_cb_data_format,
+            .page_size = aligned_final_indices_rm_unit_size,
+        }}},
+    });
 
-    // // Output sampling indices
+    // Output sampling indices
     uint32_t output_unit_size = output_tensor.element_size();
     uint32_t aligned_out0_unit_size = Ht * tile_height * output_unit_size;
     uint32_t output_cb_index = tt::CBIndex::c_13;
-    tt::tt_metal::CircularBufferConfig output_cb_config =
-        tt::tt_metal::CircularBufferConfig(aligned_out0_unit_size, {{output_cb_index, index_cb_data_format}})
-            .set_page_size(output_cb_index, aligned_out0_unit_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, output_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = aligned_out0_unit_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = index_cb_data_format,
+            .page_size = aligned_out0_unit_size,
+        }}},
+    });
 
     // Add k and p circular buffers
     const uint32_t uint32_bytes = 4;
@@ -202,27 +272,42 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     uint32_t k_cb_index = tt::CBIndex::c_14;
     // Increase buffer size to accommodate all cores to avoid unaligned NOC reads
     uint32_t k_chunk_size = num_cores * uint32_bytes;
-    tt::tt_metal::CircularBufferConfig k_cb_config =
-        tt::tt_metal::CircularBufferConfig(k_chunk_size, {{k_cb_index, k_cb_data_format}})
-            .set_page_size(k_cb_index, k_chunk_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, k_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = k_chunk_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(k_cb_index),
+            .data_format = k_cb_data_format,
+            .page_size = k_chunk_size,
+        }}},
+    });
 
     uint32_t p_cb_index = tt::CBIndex::c_15;
     // Increase buffer size to accommodate all cores to avoid unaligned NOC reads
     uint32_t p_chunk_size = num_cores * bf16_bytes;
-    tt::tt_metal::CircularBufferConfig p_cb_config =
-        tt::tt_metal::CircularBufferConfig(p_chunk_size, {{p_cb_index, p_cb_data_format}})
-            .set_page_size(p_cb_index, p_chunk_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, p_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = p_chunk_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(p_cb_index),
+            .data_format = p_cb_data_format,
+            .page_size = p_chunk_size,
+        }}},
+    });
 
     // Add temp circular buffer
     uint32_t temp_cb_index = tt::CBIndex::c_16;
     // Increase buffer size to accommodate all cores to avoid unaligned NOC reads
     uint32_t temp_chunk_size = num_cores * bf16_bytes;
-    tt::tt_metal::CircularBufferConfig temp_cb_config =
-        tt::tt_metal::CircularBufferConfig(temp_chunk_size, {{temp_cb_index, temp_cb_data_format}})
-            .set_page_size(temp_cb_index, temp_chunk_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, temp_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = temp_chunk_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(temp_cb_index),
+            .data_format = temp_cb_data_format,
+            .page_size = temp_chunk_size,
+        }}},
+    });
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_values_cb_index,
@@ -234,29 +319,28 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
         tile_height};
     tt::tt_metal::TensorAccessorArgs(input_values_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        core_grid,
-        {
-            input_values_buffer->address(),
-            input_indices_buffer->address(),
-        });
-
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    writer_kernel_ids.reserve(cores.size());
-
-    std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
-    compute_kernel_ids.reserve(cores.size());
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
+    // The reader kernel is created once on the entire core_grid; set the same runtime args on every core
+    for (const auto& core : cores) {
+        reader_desc.emplace_runtime_args(
+            core,
+            {
+                input_values_buffer,
+                input_indices_buffer,
+            });
+    }
+    desc.kernels.push_back(std::move(reader_desc));
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
+        CoreRangeSet single_core{CoreRange(core, core)};
 
         std::vector<uint32_t> writer_compile_time_args;
         tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
@@ -283,19 +367,16 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
                 tile_width,
                 num_cores,
             });
-        tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp",
-            core,
-            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output_buffer->address(), temp_buffer->address(), k_buffer->address(), p_buffer->address()});
-
-        writer_kernel_ids.push_back(writer_kernel_id);
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp";
+        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_desc.core_ranges = single_core;
+        writer_desc.compile_time_args = writer_compile_time_args;
+        writer_desc.config = WriterConfigDescriptor{};
+        writer_desc.emplace_runtime_args(core, {output_buffer, temp_buffer, k_buffer, p_buffer});
+        desc.kernels.push_back(std::move(writer_desc));
 
         std::vector<uint32_t> compute_args = {
             input_values_cb_index,
@@ -311,55 +392,23 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             cb_cur_sum_index,
             Ht,
             Wt,
-            (std::uint32_t)std::log2(Wt),
+            static_cast<uint32_t>(std::log2(Wt)),
             rand_tile_index,
             random_seed,
             cb_local_vals_index,
             temp_cb_index,
             tile_width};
 
-        tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp",
-            core,
-            tt::tt_metal::ComputeConfig{.compile_args = compute_args});
-
-        compute_kernel_ids.push_back(compute_kernel_id);
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp";
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = single_core;
+        compute_desc.compile_time_args = compute_args;
+        compute_desc.config = ComputeConfigDescriptor{};
+        desc.kernels.push_back(std::move(compute_desc));
     }
 
-    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_ids, cores}};
-}
-
-void SamplingProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SamplingParams& /*operation_attributes*/,
-    const SamplingInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
-    auto& reader_kernel_id = shared_vars.reader_kernel_id;
-    auto& writer_kernel_ids = shared_vars.writer_kernel_ids;
-    auto& cores = shared_vars.cores;
-
-    auto* input_values_buffer = tensor_args.input_values.buffer();
-    auto* input_indices_buffer = tensor_args.input_indices.buffer();
-    auto* k_buffer = tensor_args.k.buffer();
-    auto* p_buffer = tensor_args.p.buffer();
-    auto* temp_buffer = tensor_args.temp.buffer();
-    auto* output_buffer = tensor_return_value.buffer();
-
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const auto& core = cores[i];
-        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_runtime_args[0] = input_values_buffer->address();
-        reader_runtime_args[1] = input_indices_buffer->address();
-
-        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids.at(i), core);
-        writer_runtime_args[0] = output_buffer->address();
-        writer_runtime_args[1] = temp_buffer->address();
-        writer_runtime_args[2] = k_buffer->address();
-        writer_runtime_args[3] = p_buffer->address();
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

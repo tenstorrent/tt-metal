@@ -66,6 +66,16 @@ string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
     if (is_metal2_kernel) {
+        // The auto-generated kernel_args_generated.h emits FORCE_INLINE wrappers
+        // (get_vararg / get_common_vararg) that reference get_arg_val<T>, and
+        // experimental/kernel_args.h defines experimental::get_arg<T> in terms of
+        // get_arg_addr. Both names are non-dependent inside their definitions, so
+        // they must be in scope at parse time. For DM kernels, brisck.cc/ncrisck.cc
+        // pre-include api/dataflow/dataflow_api.h before kernel_includes.hpp; the
+        // TRISC entry point (trisck.cc -> chlkc_list.h -> chlkc_*.cpp) has no such
+        // pre-include, so we inject the compute-side declarations here before the
+        // metal2 generated headers.
+        prolog << "#include \"api/compute/common.h\"\n";
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
     }

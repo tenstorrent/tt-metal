@@ -7,9 +7,10 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "tt_stl/reflection.hpp"
 
 #include "welford_reduce_device_operation_types.hpp"
-#include "welford_reduce_program_factory.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -18,6 +19,13 @@ struct WelfordReduceDeviceOperation {
     using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+
+    struct WelfordReduceProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
 
     using program_factory_t = std::variant<WelfordReduceProgramFactory>;
 
@@ -42,8 +50,8 @@ ttnn::Tensor welford_reduce(
     tt::tt_metal::ReduceOpMath reduce_math,
     tt::tt_metal::ReduceOpDim reduce_dim,
     float scalar,
-    const MemoryConfig& output_mem_config,
-    const std::optional<DataType>& output_dtype,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,

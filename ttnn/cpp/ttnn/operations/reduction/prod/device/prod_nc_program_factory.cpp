@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prod_nc_program_factory.hpp"
+#include "prod_nc_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -12,7 +12,10 @@
 
 namespace ttnn::prim {
 
-ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
+using namespace tt;
+using namespace tt::tt_metal;
+
+tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::create_descriptor(
     const ProdNcParams& operation_attributes, const ProdNcInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
@@ -24,12 +27,14 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = input.device();
-    auto program = tt::tt_metal::Program();
+
+    ProgramDescriptor desc;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const uint32_t single_tile_size = tile_size(cb_data_format);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t tile_height = input.tensor_spec().tile().get_height();
@@ -48,9 +53,9 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
     const auto num_output_tiles = output.physical_volume() / tile_hw;
 
-    log_debug(tt::LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
+    log_debug(tt::LogOp, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(
-        tt::LogTest,
+        tt::LogOp,
         "dim {} num_reduce_input_tile {} input_tile_offset {}, num_output_tiles {}",
         dim,
         num_reduce_input_tile,
@@ -79,16 +84,42 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    operations::CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},        // input
-            {tt::CBIndex::c_1, in1_t},        // zero
-            {tt::CBIndex::c_2, intermed0_t},  // accumulated sum
-            {tt::CBIndex::c_3, out0_t},       // output
-        });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),  // input
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_t * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),  // zero
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = intermed0_t * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),  // accumulated sum
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),  // output
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -98,37 +129,50 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
     constexpr uint32_t cb_id_out = tt::CBIndex::c_3;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_id_out)};
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
-    const auto* const writer_kernel_file =
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    const auto reader_kernel_id =
-        operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<std::string, std::string> compute_defines;
 
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
-    const auto compute_kernel_1_id = operations::CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = compute_args_group_1;
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .dst_full_sync_en = false,
+    };
 
-    std::optional<tt::tt_metal::KernelHandle> compute_kernel_2_id = std::nullopt;
+    std::optional<KernelDescriptor> compute_desc_2;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = ttnn::operations::CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines);
+        KernelDescriptor cd2;
+        cd2.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
+        cd2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        cd2.core_ranges = core_group_2;
+        cd2.compile_time_args = compute_args_group_2;
+        cd2.config = ComputeConfigDescriptor{
+            .dst_full_sync_en = false,
+        };
+        compute_desc_2 = std::move(cd2);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -137,7 +181,7 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -146,11 +190,9 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id,
+        reader_desc.emplace_runtime_args(
             core,
-            {input.buffer()->address(),
+            {input.buffer(),
              num_reduce_input_tile,
              num_tiles_per_core,
              input_tile_offset,
@@ -159,60 +201,32 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
              CHtWt,
              static_cast<uint32_t>(dim)});
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
+        writer_desc.emplace_runtime_args(
             core,
-            {output.buffer()->address(),
+            {output.buffer(),
              num_tiles_per_core,
              tile_offset,
              static_cast<uint32_t>(ttnn::operations::is_dram(output))});
 
         if (core_group_1.contains(core)) {
-            tt::tt_metal::SetRuntimeArgs(
-                program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
+            compute_desc_1.emplace_runtime_args(core, {num_reduce_input_tile, num_tiles_per_core});
         } else if (core_group_2.contains(core)) {
-            TT_FATAL(compute_kernel_2_id.has_value(), "compute_kernel_2_id needs to have a value");
-            tt::tt_metal::SetRuntimeArgs(
-                program, compute_kernel_2_id.value(), core, {num_reduce_input_tile, num_tiles_per_core});
+            TT_FATAL(compute_desc_2.has_value(), "compute_desc_2 needs to have a value");
+            compute_desc_2->emplace_runtime_args(core, {num_reduce_input_tile, num_tiles_per_core});
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
         tile_offset += num_tiles_per_core;
     }
 
-    return {
-        std::move(program),
-        shared_variables_t{
-            .reader_kernel_id = reader_kernel_id,
-            .writer_kernel_id = writer_kernel_id,
-            .num_cores_to_be_used = num_cores_to_be_used,
-            .num_cores_y = num_cores_y}};
-}
-
-void ProdNcProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ProdNcParams& /*operation_attributes*/,
-    const ProdNcInputs& tensor_args,
-    Tensor& /*tensor_return_value*/) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-
-    const auto* input_buffer = tensor_args.input.buffer();
-    const auto* output_buffer = tensor_args.output.buffer();
-
-    for (uint32_t i = 0; i < shared_variables.num_cores_to_be_used; ++i) {
-        tt::tt_metal::CoreCoord core = {i / shared_variables.num_cores_y, i % shared_variables.num_cores_y};
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
-            runtime_args[0] = input_buffer->address();
-        }
-
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
-            runtime_args[0] = output_buffer->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (compute_desc_2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_2));
     }
+
+    return desc;
 }
 
 }  // namespace ttnn::prim

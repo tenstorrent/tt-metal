@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "argmax_single_core_program_factory.hpp"
+#include "argmax_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
+
+using namespace tt::tt_metal;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
@@ -39,26 +42,6 @@ static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     }
 }
 
-static void create_circular_buffers_single_core(
-    tt::tt_metal::Program& program,
-    auto& all_cores,
-    uint32_t src_cb_index,
-    uint32_t dst_cb_index,
-    uint32_t src_page_size,
-    uint32_t dst_page_size,
-    tt::DataFormat input_format,
-    tt::DataFormat output_format) {
-    // Create input CB
-    auto src_cb_config = tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_index, input_format}})
-                             .set_page_size(src_cb_index, src_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
-
-    // Create output CB
-    auto dst_cb_config = tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_index, output_format}})
-                             .set_page_size(dst_cb_index, dst_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_cb_config);
-}
-
 static std::vector<uint32_t> get_ctime_args_single_core(
     const Tensor& input,
     uint32_t src_page_size,
@@ -85,7 +68,7 @@ static std::vector<uint32_t> get_ctime_args_single_core(
                 outer_dim_units,
                 inner_dim_units,
                 red_dim_units,
-                (uint32_t)(reduce_all),
+                static_cast<uint32_t>(reduce_all),
             };
         }
         case Layout::TILE: {
@@ -110,8 +93,8 @@ static std::vector<uint32_t> get_ctime_args_single_core(
                 h_logical,
                 w_logical,
                 outer_dim_units,
-                (uint32_t)(reduce_all),
-                (uint32_t)(keepdim),
+                static_cast<uint32_t>(reduce_all),
+                static_cast<uint32_t>(keepdim),
             };
         }
         default:
@@ -122,14 +105,14 @@ static std::vector<uint32_t> get_ctime_args_single_core(
     }
 }
 
-ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory::create(
+ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
     const tt::tt_metal::IDevice* device = output.device();
     const bool reduce_all = not dim.has_value();
 
@@ -145,15 +128,28 @@ ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory:
     const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
-    create_circular_buffers_single_core(
-        program,
-        all_cores,
-        src_cb_index,
-        dst_cb_index,
-        src_page_size,
-        dst_page_size,
-        input_data_format,
-        output_data_format);
+
+    // Create input CB
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = src_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src_cb_index),
+            .data_format = input_data_format,
+            .page_size = src_page_size,
+        }}},
+    });
+
+    // Create output CB
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = dst_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(dst_cb_index),
+            .data_format = output_data_format,
+            .page_size = dst_page_size,
+        }}},
+    });
 
     // Compile-time args
     std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
@@ -170,36 +166,22 @@ ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory:
             ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
             : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
 
-    const std::map<std::string, std::string> kernel_defines;
-    const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, kernel_path, all_cores, tt::tt_metal::ReaderDataMovementConfig(ctime_args, kernel_defines));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kernel_path;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(ctime_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Runtime args
     const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
     for (const auto& core : cores) {
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
+        reader_desc.emplace_runtime_args(core, {src_buffer, dst_buffer});
     }
 
-    return {std::move(program), {reader_kernel_id, cores}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
 
-void ArgMaxSingleCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ArgmaxParams& /*operation_attributes*/,
-    const ArgmaxInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto* src_buffer = tensor_args.input.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
-
-    auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    for (const auto& core : cores) {
-        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        runtime_args[0] = src_buffer->address();
-        runtime_args[1] = dst_buffer->address();
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim
