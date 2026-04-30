@@ -101,10 +101,10 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_offset);
     if (mask_chunk) {
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
-        // Zero Dest
-        uint32_t dst_face = dst_offset / 16;
+        // Load mask from SRCB context 1 (SRC_ROW16_OFFSET) into Dest so Q@K accumulates on top.
+        // Mask values are 0 (unmasked) or -inf (masked), pre-applying the attention bias.
         for (uint32_t i = 0; i < ct_dim * 2; i++) {
-            TTI_MOVB2D(0, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_4, p_movb2d::MOV_8_ROW_BRCST, 0);
+            TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_4, p_movb2d::MOV_8_ROW_BRCST, 0);
         }
         TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
     } else {
