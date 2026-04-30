@@ -1,0 +1,278 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "f388a0a4",
+   "metadata": {},
+   "source": [
+    "# Basic Convolution"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "7eaf7729",
+   "metadata": {},
+   "source": [
+    "This tutorial details convolution layer operation when building neural models.\n",
+    "\n",
+    "We will create an example file, `ttnn_basic_conv.py`\n",
+    "\n",
+    "## Import Libraries"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "8b15303e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import torch\n",
+    "import ttnn\n",
+    "from loguru import logger"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "4a28bf9b",
+   "metadata": {},
+   "source": [
+    "## Set Manual Seed\n",
+    "\n",
+    "Setting a manual seed ensures that results are reproducible by initializing random number generators to a fixed state."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "ee99fd4f",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "torch.manual_seed(0)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "4b443270",
+   "metadata": {},
+   "source": [
+    "## Open the Device\n",
+    "\n",
+    "Create the device that will run the program, with custom L1 memory config. The following parameter we use here, `l1_small_size`, allocates on-chip L1 memory for sliding-window operations like convolutions, kernels, and memory. 8kB is enough for simple CNNs, 32kB or more for more complex models."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "e0bf19fb",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "device = ttnn.open_device(device_id=0, l1_small_size=8192)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "918b3d33",
+   "metadata": {},
+   "source": [
+    "## Create Forward Method\n",
+    "\n",
+    "This function executes convolution operations on input tensors using initialized layer parameters. Convolutions require the following configuration parameter: [ttnn.Conv2dConfig](../../api/ttnn.Conv2dConfig.rst)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "54c8ac6c",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def forward(\n",
+    "    input_tensor: ttnn.Tensor,\n",
+    "    weight_tensor: ttnn.Tensor,\n",
+    "    bias_tensor: ttnn.Tensor,\n",
+    "    out_channels: int,\n",
+    "    kernel_size: tuple,\n",
+    "    device: ttnn.Device,\n",
+    ") -> ttnn.Tensor:\n",
+    "    # Permute input from PyTorch BCHW (batch, channel, height, width)\n",
+    "    # to NHWC (batch, height, width, channel) which TTNN expects\n",
+    "    permuted_input = ttnn.permute(input_tensor, (0, 2, 3, 1))\n",
+    "\n",
+    "    # Get shape after permutation\n",
+    "    B, H, W, C = permuted_input.shape\n",
+    "\n",
+    "    # Reshape input to a flat image of shape (1, 1, B*H*W, C)\n",
+    "    # This flattens the spatial dimensions and prepares it for TTNN conv2d\n",
+    "    reshaped_input = ttnn.reshape(permuted_input, (1, 1, B * H * W, C))\n",
+    "\n",
+    "    # Set up convolution configuration for TTNN conv2d\n",
+    "    conv_config = ttnn.Conv2dConfig(weights_dtype=weight_tensor.dtype)\n",
+    "\n",
+    "    # Perform 2D convolution using TTNN\n",
+    "    out = ttnn.conv2d(\n",
+    "        input_tensor=reshaped_input,\n",
+    "        weight_tensor=weight_tensor,\n",
+    "        bias_tensor=bias_tensor,\n",
+    "        in_channels=C,\n",
+    "        out_channels=out_channels,\n",
+    "        device=device,\n",
+    "        kernel_size=kernel_size,\n",
+    "        stride=(1, 1),\n",
+    "        padding=(1, 1),\n",
+    "        batch_size=1,\n",
+    "        input_height=1,\n",
+    "        input_width=B * H * W,\n",
+    "        conv_config=conv_config,\n",
+    "        groups=0,  # No grouped convolution\n",
+    "    )\n",
+    "\n",
+    "    # Optionally convert back to torch tensor: out_torch = ttnn.to_torch(out)\n",
+    "    return out"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "50c1b501",
+   "metadata": {},
+   "source": [
+    "## Set Input and Convolution Parameters"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "b88119e3",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "batch = 1\n",
+    "in_channels = 3\n",
+    "out_channels = 4\n",
+    "height = width = 2  # Small dimensions to avoid device memory issues\n",
+    "kernel_size = (3, 3)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "eb42e2ae",
+   "metadata": {},
+   "source": [
+    "## Create Tensors\n",
+    "\n",
+    "To create the input tensor, weight tensor, and bias tensor for the convolution operation, see the [Tensors Creation Guide](../../tensor.rst)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "44bd5d83",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create random input tensor in BCHW format\n",
+    "x = ttnn.rand((batch, in_channels, height, width), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)\n",
+    "\n",
+    "# Random weight tensor for convolution: (out_channels, in_channels, kH, kW)\n",
+    "w = ttnn.rand((out_channels, in_channels, *kernel_size), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)\n",
+    "\n",
+    "# Bias tensor, broadcastable to the output shape\n",
+    "b = ttnn.zeros((1, 1, 1, out_channels), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "c695e1f6",
+   "metadata": {},
+   "source": [
+    "## Run the Convolution Operation"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "80feabdd",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Run forward conv pass and print output shape\n",
+    "out_torch = forward(x, w, b, out_channels, kernel_size, device)\n",
+    "logger.info(f\"✅ Success! Conv2D output shape: {out_torch.shape}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "2f0fc30a",
+   "metadata": {},
+   "source": [
+    "## Close the Device"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "a8422d1c",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "ttnn.close_device(device)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "27341081",
+   "metadata": {},
+   "source": [
+    "## Full Example and Output\n",
+    "\n",
+    "Lets put everything together in a complete example that can be run\n",
+    "directly.\n",
+    "\n",
+    "[ttnn_basic_conv.py](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_basic_conv.py)\n",
+    "\n",
+    "Running this script will generate output the as shown below:\n",
+    "\n",
+    "``` console\n",
+    "$ python3 $TT_METAL_HOME/ttnn/tutorials/basic_python/ttnn_basic_conv.py\n",
+    "2025-07-07 13:02:09.649 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)\n",
+    "2025-07-07 13:02:09.651 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)\n",
+    "2025-07-07 13:02:09.658 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:190)\n",
+    "2025-07-07 13:02:09.658 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)\n",
+    "2025-07-07 13:02:09.659 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)\n",
+    "2025-07-07 13:02:09.666 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)\n",
+    "2025-07-07 13:02:09.667 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)\n",
+    "2025-07-07 13:02:09.673 | info     |   SiliconDriver | Harvesting mask for chip 0 is 0x100 (NOC0: 0x100, simulated harvesting mask: 0x0). (cluster.cpp:282)\n",
+    "2025-07-07 13:02:09.772 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)\n",
+    "2025-07-07 13:02:09.817 | info     |   SiliconDriver | Opening local chip ids/pci ids: {0}/[7] and remote chip ids {} (cluster.cpp:147)\n",
+    "2025-07-07 13:02:09.828 | info     |   SiliconDriver | Software version 6.0.0, Ethernet FW version 6.14.0 (Device 0) (cluster.cpp:1039)\n",
+    "2025-07-07 13:02:09.915 | info     |           Metal | AI CLK for device 0 is:   1000 MHz (metal_context.cpp:128)\n",
+    "2025-07-07 13:02:10.487 | info     |           Metal | Initializing device 0. Program cache is enabled (device.cpp:428)\n",
+    "2025-07-07 13:02:10.489 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (hardware_command_queue.cpp:74)\n",
+    "2025-07-07 13:02:13.921 | warning  |              Op | conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess. (conv2d.cpp:563)\n",
+    "2025-07-07 13:02:13.922 | warning  |              Op | conv2d: Device bias not properly prepared, pulling back to host and reprocessing. (conv2d.cpp:582)\n",
+    "2025-07-07 13:02:15.390 | INFO     | __main__:main:78 - ✅ Success! Conv2D output shape: Shape([1, 1, 4, 4])\n",
+    "2025-07-07 13:02:15.390 | info     |           Metal | Closing mesh device 1 (mesh_device.cpp:488)\n",
+    "2025-07-07 13:02:15.391 | info     |           Metal | Closing mesh device 0 (mesh_device.cpp:488)\n",
+    "2025-07-07 13:02:15.391 | info     |           Metal | Closing device 0 (device.cpp:468)\n",
+    "2025-07-07 13:02:15.391 | info     |           Metal | Disabling and clearing program cache on device 0 (device.cpp:783)\n",
+    "2025-07-07 13:02:15.392 | info     |           Metal | Closing mesh device 1 (mesh_device.cpp:488)\n",
+    "```"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "3bf128f0",
+   "metadata": {},
+   "source": []
+  }
+ ],
+ "metadata": {
+  "language_info": {
+   "name": "python"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

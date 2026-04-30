@@ -1,0 +1,8 @@
+﻿ttnn.get\_optimal\_worker\_cores\_for\_sharded\_tensor
+======================================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.get_optimal_worker_cores_for_sharded_tensor:
+
+.. autodata:: ttnn.get_optimal_worker_cores_for_sharded_tensor
