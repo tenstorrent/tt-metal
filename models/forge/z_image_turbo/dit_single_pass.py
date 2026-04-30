@@ -28,6 +28,29 @@ from transformers import AutoTokenizer
 
 import ttnn
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+REF_OUTPUT_PATH = os.path.join(HERE, "reference_output.pt")
+
+
+def compute_pcc(a, b):
+    a = a.float().flatten()
+    b = b.float().flatten()
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+def compute_metrics(a, b):
+    a_f = a.float()
+    b_f = b.float()
+    diff = (a_f - b_f).abs()
+    rel = diff / (b_f.abs() + 1e-10)
+    return {
+        "pcc": compute_pcc(a, b),
+        "max_abs_diff": diff.max().item(),
+        "max_rel_diff": rel.max().item(),
+        "mean_abs_diff": diff.mean().item(),
+    }
+
+
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
 CAP_TOKENS = 128
 IMG_LATENT_H = 64
@@ -157,6 +180,7 @@ def main():
     # ── Timed runs ────────────────────────────────────────────────────────────
     print(f"[3/3] Running {args.runs} timed iterations ...")
     timings = []
+    last_out = None
     for i in range(args.runs):
         tt_lat = _to_device_bf16(lat_pt, mesh_device)
         tt_ts = _to_device_bf16(ts_pt, mesh_device)
@@ -170,10 +194,31 @@ def main():
         timings.append(elapsed_ms)
         print(f"  Run {i + 1}: {elapsed_ms:.1f} ms")
 
-        for t in out:
-            ttnn.deallocate(t, force=True)
+        if i < args.runs - 1:
+            for t in out:
+                ttnn.deallocate(t, force=True)
+        else:
+            last_out = out
         ttnn.deallocate(tt_lat, force=True)
         ttnn.deallocate(tt_ts, force=True)
+
+    # ── PCC check ─────────────────────────────────────────────────────────────
+    if last_out is not None:
+        out_torch = _tt_to_torch(last_out[0], mesh_device)
+        for t in last_out:
+            ttnn.deallocate(t, force=True)
+
+        if not os.path.exists(REF_OUTPUT_PATH):
+            torch.save(out_torch, REF_OUTPUT_PATH)
+            print(f"\nSaved reference output to {REF_OUTPUT_PATH}")
+            print(f"PCC: 1.0000 (reference)")
+        else:
+            ref = torch.load(REF_OUTPUT_PATH, weights_only=True)
+            m = compute_metrics(out_torch, ref)
+            print(f"\nPCC: {m['pcc']:.6f}")
+            print(f"Max abs diff: {m['max_abs_diff']:.6f}")
+            print(f"Max rel diff: {m['max_rel_diff']:.6f}")
+            print(f"Mean abs diff: {m['mean_abs_diff']:.6f}")
 
     # Summary
     avg = sum(timings) / len(timings)
