@@ -17,9 +17,8 @@ on:
         type: boolean
         default: false
       slack-channel-id:
-        description: 'Slack channel ID for notifications (defaults to the standard triage channel)'
+        description: 'Slack channel ID for notifications. Leave empty to use repo secret SLACK_METAL_INFRA_CHANNEL_ID.'
         required: false
-        default: 'C08SJ7MGESY'
 
 jobs:
   fetch-data:
@@ -296,7 +295,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          channel_id: ${{ github.event.inputs.slack-channel-id || 'C08SJ7MGESY' }}
+          channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           alert_all_message_path: ${{ github.workspace }}/regression-notification-inputs/alert-all-message.txt
         env:
@@ -340,6 +339,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
           slack_ts_map: ${{ needs.handle-failures.outputs.slack_ts_map }}
-          slack_channel_id: ${{ github.event.inputs.slack-channel-id || 'C08SJ7MGESY' }}
+          slack_channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
