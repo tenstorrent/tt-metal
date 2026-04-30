@@ -20,6 +20,22 @@
 namespace tt::tt_metal {
 
 void RelayMux::GenerateStaticConfigs() {
+    // FIX NY: Guard against chips excluded from the fabric cluster due to damaged ETH.
+    // The dispatch topology is built from UMD tunnels (which still list the chip), but the fabric
+    // control plane may have excluded it from the mesh mapping (e.g. 2x4 → 2x2 downgrade).
+    // Calling get_fabric_node_id_from_physical_chip_id() on an excluded chip triggers a TT_FATAL.
+    // Returning early here lets MeshDevice::create() fail fast with a topology mismatch error
+    // rather than crashing inside the dispatch kernel compiler.
+    const auto& control_plane_ref = get_control_plane_ref();
+    if (!control_plane_ref.is_physical_chip_in_fabric_cluster(device_id_)) {
+        log_warning(
+            tt::LogMetal,
+            "FIX NY: RelayMux::GenerateStaticConfigs — device {} not in fabric cluster (degraded topology), "
+            "skipping static config generation",
+            device_id_);
+        return;
+    }
+
     uint32_t l1_base = 0;
     uint32_t l1_size = 0;
 
