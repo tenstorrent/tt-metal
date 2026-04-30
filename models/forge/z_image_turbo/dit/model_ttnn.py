@@ -363,16 +363,26 @@ class ZImageTransformerTTNN(LightweightModule):
 
     # ── Optimized MLP ──────────────────────────────────────────────────────────
 
+    def _mm_silu(self, x, weight, M, K, N):
+        """Matmul with fused silu activation."""
+        config = _get_matmul_config(M, K, N, self._core_grid)
+        return ttnn.experimental.minimal_matmul(
+            input_tensor=x,
+            weight_tensor=weight,
+            config=config,
+            compute_kernel_config=REDUCE_KERNEL,
+            dtype=ttnn.DataType.BFLOAT16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        )
+
     def _mlp(self, x, seq_len, block_prefix):
-        """SwiGLU MLP with minimal_matmul for all three projections."""
+        """SwiGLU MLP with fused silu in w1 matmul."""
         w1T = self.weights[f"{block_prefix}.feed_forward.w1.weight_mmT"]
         w3T = self.weights[f"{block_prefix}.feed_forward.w3.weight_mmT"]
         w2T = self.weights[f"{block_prefix}.feed_forward.w2.weight_mmT"]
 
-        gate = self._mm(x, w1T, seq_len, HIDDEN_DIM, MLP_PER_DEV)
-        old_gate = gate
-        gate = ttnn.silu(old_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(old_gate, False)
+        gate = self._mm_silu(x, w1T, seq_len, HIDDEN_DIM, MLP_PER_DEV)
         up = self._mm(x, w3T, seq_len, HIDDEN_DIM, MLP_PER_DEV)
         h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate, False)
