@@ -417,10 +417,20 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
     }
 
     // 1b. Entry and exit on different mesh columns (coord[1]) when coordinates are 2D: coord[1] is the LINE axis
-    // (second MGD dim, e.g. width 2 in blitz decode 4x2). Skip for 1D meshes (no coord[1]).
+    // (second MGD dim, e.g. width 2 in blitz decode 4x2). Skip for 1D meshes (no coord[1]). Skip when an adjacent
+    // hop in the ring is intra-mesh (same stage_index as previous or next stage): LINE-axis separation may be
+    // infeasible for those legs while still satisfying hop and unclaimed-node constraints.
+    const std::size_t n = stages.size();
     for (std::size_t i = 0; i < check_distinct_until; i++) {
         const auto& s = stages[i];
         if (s.entry_node_coord.dims() < 2) {
+            continue;
+        }
+        const std::size_t prev_i = (i + n - 1) % n;
+        const std::size_t next_i = (i + 1) % n;
+        const bool incoming_intra_mesh = stages[prev_i].stage_index == s.stage_index;
+        const bool outgoing_intra_mesh = s.stage_index == stages[next_i].stage_index;
+        if (incoming_intra_mesh || outgoing_intra_mesh) {
             continue;
         }
         TT_FATAL(

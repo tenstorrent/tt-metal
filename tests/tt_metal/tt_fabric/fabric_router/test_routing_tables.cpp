@@ -1343,9 +1343,23 @@ void validate_sp5_blitz_decode_pipeline_stages(
     }
 
     // 1b. Entry and exit on different columns: for 2D meshes coord[1] is the LINE axis (second MGD dim, width 2 in
-    // blitz decode 4x2); endpoints must not share the same column.
-    for (std::size_t i = 0; i < stages.size(); i++) {
+    // blitz decode 4x2); endpoints must not share the same column. Skip when an adjacent hop in the ring is
+    // intra-mesh (previous stage shares stage_index with this stage, or this stage shares stage_index with next):
+    // that leg completes on one logical mesh while the next hop stays on the same mesh (typical mesh-0 bookends),
+    // where LINE separation may be infeasible given hop/unclaimed constraints.
+    const std::size_t num_stages = stages.size();
+    for (std::size_t i = 0; i < num_stages; i++) {
         const auto& s = stages[i];
+        if (s.entry_node_coord.dims() < 2) {
+            continue;
+        }
+        const std::size_t prev_i = (i + num_stages - 1) % num_stages;
+        const std::size_t next_i = (i + 1) % num_stages;
+        const bool incoming_intra_mesh = stages[prev_i].stage_index == s.stage_index;
+        const bool outgoing_intra_mesh = s.stage_index == stages[next_i].stage_index;
+        if (incoming_intra_mesh || outgoing_intra_mesh) {
+            continue;
+        }
         EXPECT_NE(s.entry_node_coord[1], s.exit_node_coord[1])
             << "Stage [" << i << "] (stage_index=" << s.stage_index
             << ") entry and exit must use different mesh "
@@ -2195,33 +2209,51 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
 
     for (std::size_t si = 0; si < stages.size(); si++) {
         const auto& s = stages[si];
+        MeshId stage_mesh_id{static_cast<uint32_t>(s.stage_index)};
+        const FabricNodeId entry_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.entry_node_coord));
+        const FabricNodeId exit_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.exit_node_coord));
+
         fmt::print(
-            "stage{}: MeshCoordinate([{}, {}]) -> MeshCoordinate([{}, {}])\n",
+            "stage{}: stage_index={} entry_mesh_coord=[{}, {}] exit_mesh_coord=[{}, {}]\n",
             si,
+            s.stage_index,
             s.entry_node_coord[0],
             s.entry_node_coord[1],
             s.exit_node_coord[0],
             s.exit_node_coord[1]);
 
-        MeshId stage_mesh_id{static_cast<uint32_t>(s.stage_index)};
-        FabricNodeId entry_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.entry_node_coord));
-        FabricNodeId exit_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.exit_node_coord));
-
-        auto print_endpoint = [&](const FabricNodeId& fn, std::string_view label) {
+        auto print_endpoint = [&](std::string_view label, const MeshCoordinate& coord, const FabricNodeId& fn) {
             const std::string hostname = topology_mapper.get_hostname_for_fabric_node_id(fn);
             tt::tt_metal::TrayID tray_id = topology_mapper.get_tray_id_for_fabric_node_id(fn);
             tt::tt_metal::ASICLocation asic_location = topology_mapper.get_asic_location_for_fabric_node_id(fn);
             fmt::print(
-                "             {:9} hostname={} mesh_id={} tray_id={} asic_location={}\n",
+                "             {:9} mesh_coord=[{}, {}] fabric_node={} chip_id={} hostname={} mesh_id={} tray_id={} "
+                "asic_location={}\n",
                 label,
+                coord[0],
+                coord[1],
+                fn,
+                fn.chip_id,
                 hostname,
                 *fn.mesh_id,
                 *tray_id,
                 *asic_location);
         };
 
-        print_endpoint(entry_fn, "entry");
-        print_endpoint(exit_fn, "exit");
+        for (const auto& [label, coord, fn] :
+             {std::tuple<std::string_view, const MeshCoordinate&, const FabricNodeId&>{
+                  "entry", s.entry_node_coord, entry_fn},
+              {"exit", s.exit_node_coord, exit_fn}}) {
+            print_endpoint(label, coord, fn);
+        }
+
+        for (const auto& coord : mesh_graph.get_coord_range(stage_mesh_id)) {
+            if (coord == s.entry_node_coord || coord == s.exit_node_coord) {
+                continue;
+            }
+            const FabricNodeId fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, coord));
+            print_endpoint("other", coord, fn);
+        }
     }
 
     validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
