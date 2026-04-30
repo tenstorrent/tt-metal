@@ -203,11 +203,27 @@ def _apply_cached_freqs_patch():
         if hasattr(self, "_freqs_cache"):
             return
         self._freqs_cache = {}
+        self._freqs_real_cache = {}
+        self._freqs_imag_cache = {}
         for seq_len in (dit_mod.IMG_PATCHES, dit_mod.CAP_TOKENS, dit_mod.IMG_PATCHES + dit_mod.CAP_TOKENS):
             fc = self._build_freqs_cis_orig(seq_len)
             fc_tile = ttnn.to_layout(fc, ttnn.Layout.TILE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(fc, False)
             self._freqs_cache[seq_len] = fc_tile
+            self._freqs_real_cache[seq_len] = ttnn.slice(
+                fc_tile,
+                [0, 0, 0, 0, 0],
+                [1, seq_len, 1, dit_mod.HEAD_DIM // 2, 1],
+                [1, 1, 1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._freqs_imag_cache[seq_len] = ttnn.slice(
+                fc_tile,
+                [0, 0, 0, 0, 1],
+                [1, seq_len, 1, dit_mod.HEAD_DIM // 2, 2],
+                [1, 1, 1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     _orig_build = dit_mod.ZImageTransformerTTNN._build_freqs_cis
     dit_mod.ZImageTransformerTTNN._build_freqs_cis_orig = _orig_build
@@ -224,7 +240,8 @@ def _apply_cached_freqs_patch():
     def _apply_rope_cached(self, q_f32, seq_len, num_heads, is_caption=False):
         if not hasattr(self, "_freqs_cache"):
             _init_freqs_cache(self)
-        freqs_cis = self._freqs_cache[seq_len]
+        f_real = self._freqs_real_cache[seq_len]
+        f_imag = self._freqs_imag_cache[seq_len]
         q = ttnn.reshape(
             q_f32, [1, seq_len, num_heads, dit_mod.HEAD_DIM // 2, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -239,21 +256,6 @@ def _apply_cached_freqs_patch():
             q,
             [0, 0, 0, 0, 1],
             [1, seq_len, num_heads, dit_mod.HEAD_DIM // 2, 2],
-            [1, 1, 1, 1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(q, False)
-        f_real = ttnn.slice(
-            freqs_cis,
-            [0, 0, 0, 0, 0],
-            [1, seq_len, 1, dit_mod.HEAD_DIM // 2, 1],
-            [1, 1, 1, 1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        f_imag = ttnn.slice(
-            freqs_cis,
-            [0, 0, 0, 0, 1],
-            [1, seq_len, 1, dit_mod.HEAD_DIM // 2, 2],
             [1, 1, 1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
