@@ -1,5 +1,99 @@
 # TurboQuant KV Cache Quantization
 
+## 🚦 Next Steps (2026-04-30 EOD)
+
+**Where we are:**
+- Track A K=1 works on N150 (37 ms/tok, 88.9% top-1) and T3K (56.8 ms/tok,
+  86.1% top-1).
+- Track B (Hybrid sliding-window) works on both: N150 W=64 best at 94.1%
+  top-1, T3K W=128 best at 89.5% top-1, ~8% latency over Track A K=1.
+- Baseline BFP8: N150 37.9 ms/tok, T3K **14.2 ms/tok**. T3K TQ is 4×
+  baseline — the per-chip work distribution underutilizes Tensix cores.
+- Compressed KV cache (memory_efficient=True) verified end-to-end through
+  prefill+decode on the needle test.
+- Long context up to 128K validated for both tracks (needle retrieval).
+
+**Open blockers / next priorities, ordered by impact:**
+
+### 🥇 1. Fix K-split kernel for FP32 dst mode
+The single biggest perf lever on T3K. Estimated **~28 ms/tok savings**
+(56.8 → 28.9 ms K=14, then K-split + hybrid simultaneous).
+
+- Tagged checkpoint: `pre-K-split-fix-checkpoint` at commit `c82766dabec`
+- Confirmed minimal isolated fix (verified, but reverted because the rest
+  of the work isn't done):
+  ```cpp
+  // sdpa_tq_program_factory.cpp ComputeConfig:
+  .fp32_dest_acc_en = true,
+  // sdpa_tq_decode.cpp lines 241, 329:
+  copy_dest_values<DataFormat::Float32>(0, 2);  // was Float16_b
+  ```
+  This protects K=1. K>1 drift unchanged at 5e-3 because cross-core
+  merge CBs are still BF16.
+- For K>1 to actually fix: coordinated upgrade of merge CBs (c_3, c_4,
+  c_18-23) and alias state CBs (c_25-30) to FP32, with every
+  pack_reconfig_data_format / reconfig_data_format / unpack_reconfig
+  call audited so all merge ops have consistent format on both inputs.
+  Tried partial upgrades — cross-core CBs only → cos 0.58 (mixed-format
+  inputs to max_block); global im_df=Float32 → inf/nan everywhere.
+- Estimated effort: multi-day focused PR with build-test cycles.
+
+### 🥈 2. Single fused Hybrid SDPA kernel
+Track B currently runs two SDPA calls + LSE combine per layer per step.
+A unified kernel with two K/V data sources (TQ for old chunks, BFP8
+ring for recent W) and one chunk loop would eliminate ~10-15 ms/tok of
+dispatch + combine overhead. Architecturally clean — Flash Attention
+already handles arbitrary chunks.
+
+- Once K-split fix lands, also **remove the K=1 hard-code** at
+  `ttnn_integration.py:1065` so hybrid+K>1 stacks.
+
+### 🥉 3. Long-context teacher-forced eval
+Current accuracy comparisons are at 1024-tok eval (step-populated cache).
+The needle test at 128K passes for both A and B, but it's a binary metric
+and doesn't capture the per-token-distribution gap.
+
+- Extend `eval_token_accuracy.py` to populate cache via prefill (using
+  `migrate_prefill_kv_to_compressed_tq` from `test_needle_in_haystack.py`)
+  and run teacher-forced top-1 on the next 1024 tokens after a long
+  prefix. This gives the sensitive accuracy metric at long context that
+  the W-sweep gives at 1024 tokens.
+
+### Smaller wins (queueable in parallel)
+- **Truncate TQ-far in hybrid** to `[0..cur_pos-W]` (kernel sub-chunk
+  boundary fix). ~5% saving.
+- **Skip combine on LSE imbalance** (data-dependent; trace-incompatible).
+  ~3 ms saving in dominated cases.
+- **Parallel SDPA dispatch** on disjoint core groups (kernel core-range
+  work). Saves max(branches) instead of sum(branches).
+- **3A: Hoist cascade `*_init` calls outside per-tile loop** (already
+  noted in older PLAN.md section). Half-day work, 5-10% off cascade.
+
+### Things that turned out NOT to be wins
+- **Lookup-table attention** (Optimization A from this session): math
+  reorganization is correct (`test_lookup_attention.py` validates), but
+  collapses to fused dequant-into-matmul (option 1A) when implemented
+  efficiently. SFPU ops are tile-vector so the existing dequant cascade
+  is already efficient. See "Optimization A (RETRACTED)" section below.
+- **Pre-rescaled BFP4** (`--tq-rescaled-bfp4`): fast (1.35× baseline T3K)
+  but loses 31 pp top-1 (66.6% vs 97.3% baseline) — accuracy collapse
+  rules it out.
+- **Naive `fp32_dest_acc_en=true`** alone broke K=1 9× (output magnitude).
+  Root caused to `copy_dest_values<Float16_b>` op. The one-line fix
+  protects K=1 but doesn't help K>1 alone.
+
+### Useful artifacts in repo
+- `turbo_quant/test_K_split_low_nqh.py` — repro for K-split drift
+- `turbo_quant/test_lookup_attention.py` — math reference for fused-
+  dequant-matmul
+- `turbo_quant/test_needle_in_haystack.py` — long-context retrieval
+  test, multi-needle/distractor mode, memory_efficient prefill flow
+- `turbo_quant/test_hybrid_long_context.py` — single-layer 4K→128K
+  finiteness smoke
+- Tagged `pre-K-split-fix-checkpoint` for safe roll-back
+
+---
+
 ## ⚡ Optimization A — Lookup-Table Attention (2026-04-30, RETRACTED)
 
 **Math validated** (`test_lookup_attention.py`: max diff 5.96e-8, cos
