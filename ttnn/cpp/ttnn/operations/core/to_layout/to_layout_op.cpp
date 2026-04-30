@@ -49,13 +49,6 @@ Tensor to_layout_impl(
                 "dtype "
                 "won't be changed!");
         }
-        if (memory_config.has_value() and memory_config.value() != get_memory_config(tensor_arg).value()) {
-            log_warning(
-                tt::LogOp,
-                "ttnn::to_layout: memory_config is specified but the tensor is already in the requested layout! "
-                "So, "
-                "the memory_config won't be changed!");
-        }
         return tensor_arg;
     }
 
