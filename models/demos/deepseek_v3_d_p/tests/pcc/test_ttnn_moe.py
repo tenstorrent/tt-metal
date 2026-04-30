@@ -227,7 +227,7 @@ def test_ttnn_moe(
                 routed_expert_weights_dtype=ttnn.bfloat4_b,
                 shared_expert_weights_dtype=ttnn.bfloat8_b,
                 cache_path=moe_cache_dir,
-                layer_idx=0,
+                layer_idx=layer_idx,
             )
             profiler.end("ttnn_cache_build")
 
