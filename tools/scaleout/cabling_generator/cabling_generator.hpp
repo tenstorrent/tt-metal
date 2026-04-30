@@ -92,6 +92,7 @@ struct Node {
     std::string motherboard;
     std::map<TrayId, Board> boards;
     HostId host_id{0};
+    std::string node_descriptor_name;
 
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
     using BoardEndpoint = std::pair<TrayId, PortId>;

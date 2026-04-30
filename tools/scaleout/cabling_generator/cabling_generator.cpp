@@ -423,11 +423,13 @@ Node build_node(
     if (it != node_templates.end()) {
         Node node = it->second;  // Copy template
         node.host_id = host_id;
+        node.node_descriptor_name = node_descriptor_name;
         return node;
     }
 
     // Build new node template (with host_id=0)
     Node template_node;
+    template_node.node_descriptor_name = node_descriptor_name;
 
     auto node_descriptor = find_node_descriptor(node_descriptor_name, cluster_descriptor);
 
@@ -528,6 +530,7 @@ Node build_node(
     // Create instance with actual host_id
     Node node = template_node;
     node.host_id = host_id;
+    node.node_descriptor_name = node_descriptor_name;
     return node;
 }
 
@@ -1102,6 +1105,7 @@ static Node create_base_node_from_template(
     // (template only has ports marked as used for inter-board connections from node descriptor)
     Node base_node = template_node;
     base_node.host_id = source_node.host_id;
+    base_node.node_descriptor_name = source_node.node_descriptor_name;  // Preserve original descriptor name
     // Copy inter_board_connections from source (they may have been merged from multiple files)
     base_node.inter_board_connections = source_node.inter_board_connections;
     // Re-mark ports as used for the merged inter-board connections
@@ -1510,15 +1514,21 @@ static void resolved_graph_to_protobuf(
         child->set_name(name);
         auto* node_ref = child->mutable_node_ref();
 
-        auto template_key = find_template_key_for_node(node, node_templates);
-        if (!template_key) {
-            throw std::runtime_error(fmt::format(
-                "Could not find node descriptor for node '{}' with motherboard '{}' and {} boards",
-                name,
-                node.motherboard,
-                node.boards.size()));
+        // Use the preserved node_descriptor_name to maintain original template name
+        if (node.node_descriptor_name.empty()) {
+            // Fallback to find_template_key_for_node if node_descriptor_name is not set
+            auto template_key = find_template_key_for_node(node, node_templates);
+            if (!template_key) {
+                throw std::runtime_error(fmt::format(
+                    "Could not find node descriptor for node '{}' with motherboard '{}' and {} boards",
+                    name,
+                    node.motherboard,
+                    node.boards.size()));
+            }
+            node_ref->set_node_descriptor(*template_key);
+        } else {
+            node_ref->set_node_descriptor(node.node_descriptor_name);
         }
-        node_ref->set_node_descriptor(*template_key);
     }
 
     // Add internal_connections
