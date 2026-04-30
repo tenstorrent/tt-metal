@@ -1205,8 +1205,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto to_hw_access_pattern = [](DFBAccessPattern pattern) -> experimental::dfb::AccessPattern {
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
-            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
-            case DFBAccessPattern::CONTIGUOUS: TT_FATAL(false, "CONTIGUOUS access pattern is not yet supported");
+            case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
+            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };

@@ -2,17 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
-No MATH kernel. Unpack and pack use llk_srcs (unpack to SrcS, pack from SrcS).
-Same structure and parameter coverage as test_sfpu_square_quasar.
+Isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
+No MATH kernel. Two operands unpacked to SrcS slices 0 and 1, added by SFPU,
+result packed from SrcS slice 2 to L1.
 """
-
-import math
 
 import pytest
 import torch
 from helpers.format_config import DataFormat
-from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
 from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
@@ -36,11 +34,12 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-# Safety factor applied to format maxima when clamping square operands.
-# Keeps x² comfortably within the output format and |x| within the input format.
-SQUARE_RANGE_SAFETY_FACTOR = 0.9
+# Safety factor applied to format maxima when clamping add operands.
+# Ensures |a| + |b| stays within representable range with headroom for rounding /
+# quantization (two operands each capped at 45% of max -> sum <= 90% of max).
+ADD_RANGE_SAFETY_FACTOR = 0.45
 
-SFPU_SQUARE_FORMATS = input_output_formats(
+SFPU_ADD_FORMATS = input_output_formats(
     [
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
@@ -50,20 +49,20 @@ SFPU_SQUARE_FORMATS = input_output_formats(
     ]
 )
 
-SFPU_SQUARE_COMBINATIONS = [
+SFPU_ADD_COMBINATIONS = [
     (fmt, dest_acc, implied_math_format, input_dimensions)
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_SQUARE_FORMATS)
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_ADD_FORMATS)
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_SQUARE_COMBINATIONS)
-def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
+@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
+def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
     """
-    Test isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
-    No MATH kernel (stub only).
+    Test isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
+    No MATH kernel (stub only). Two input operands unpacked to SrcS, added, packed.
     """
     (formats, dest_acc, implied_math_format, input_dimensions) = (
         formats_dest_acc_implied_math_input_dims[0]
@@ -79,48 +78,52 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         sfpu=True,
     )
 
-    # Both caps invert the squaring op so x² stays representable. For the input
-    # cap this is because the SFPU squares in the input format's math precision
-    # (except for MX, where squaring uses a wider intermediate and |x| itself
-    # is the binding constraint -- mx_elem_max is already small).
-    input_elem_max = format_elem_max(formats.input_format)
-    input_magnitude_cap = (
-        input_elem_max
-        if formats.input_format.is_mx_format()
-        else math.sqrt(input_elem_max)
-    ) * SQUARE_RANGE_SAFETY_FACTOR
-    output_magnitude_cap = (
-        math.sqrt(format_elem_max(formats.output_format)) * SQUARE_RANGE_SAFETY_FACTOR
-    )
-
     min_magnitude, max_magnitude = compute_safe_input_magnitude_range(
         formats.input_format,
         formats.output_format,
-        input_magnitude_cap=input_magnitude_cap,
-        output_magnitude_cap=output_magnitude_cap,
+        input_magnitude_cap=format_elem_max(formats.input_format)
+        * ADD_RANGE_SAFETY_FACTOR,
+        output_magnitude_cap=format_elem_max(formats.output_format)
+        * ADD_RANGE_SAFETY_FACTOR,
     )
     src_A = apply_log_uniform_magnitudes(
         src_A,
         min_magnitude=min_magnitude,
         max_magnitude=max_magnitude,
         cast_to_format=formats.input_format,
-        sign_source=src_B,
+        alternate_sign_every_n=3,
+    )
+    src_B = apply_log_uniform_magnitudes(
+        src_B,
+        min_magnitude=min_magnitude,
+        max_magnitude=max_magnitude,
+        cast_to_format=formats.input_format,
+        alternate_sign_every_n=3,
     )
 
     num_faces = 4
 
-    generate_golden = get_golden_generator(UnarySFPUGolden)
+    # Golden: use BinarySFPUGolden so we can swap ops for future binary kernels.
+    # SrcS path is untilized, so skip_tilize=True. Concatenate full tensors:
+    # [all A tiles | all B tiles], then index by tile count offset.
+    generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_tensor = generate_golden(
-        MathOperation.Square,
-        src_A,
+        MathOperation.SfpuElwadd,
+        torch.cat([src_A, src_B]),
+        0,  # src1_idx: first tile of A
+        tile_cnt_A,  # src2_idx: first tile of B
+        0,  # dst_idx: write result starting at tile 0
+        tile_cnt_A * 32,  # num_iterations: 32 rows per tile
+        [input_dimensions[0] * 2, input_dimensions[1]],
         formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
+        skip_tilize=True,
+        input_format=formats.input_format,
+    )[
+        : src_A.numel()
+    ]  # Extract only the result region (A's tiles)
 
     configuration = TestConfig(
-        "sources/quasar/isolate_sfpu_square_quasar_test.cpp",
+        "sources/quasar/isolate_sfpu_add_quasar_test.cpp",
         formats,
         templates=[
             IMPLIED_MATH_FORMAT(implied_math_format),
@@ -144,7 +147,6 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        # Input MX formats require disable_format_inference
         disable_format_inference=formats.input_format.is_mx_format(),
     )
 
