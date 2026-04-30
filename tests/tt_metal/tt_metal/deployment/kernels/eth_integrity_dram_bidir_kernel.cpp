@@ -44,7 +44,7 @@ uint32_t buf_to_dram(
     uint32_t remaining_send = end_addr - curraddr;
     uint32_t to_send = remaining_send > transfer_size ? transfer_size : remaining_send;
 
-    uint64_t noc_addr = get_noc_addr_from_bank_id<true>(write_bank, curraddr);
+    uint64_t noc_addr = get_noc_addr_from_bank_id<true>(write_bank, curraddr, 1);
     noc_async_write(recvbuf, noc_addr, to_send);
 
     return to_send;

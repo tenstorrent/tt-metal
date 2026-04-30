@@ -104,7 +104,8 @@ static bool run_test_integrity_dram_bidir(
 
     TT_FATAL(dram_end_addr > dram_start_addr, "End address must be greater than start address");
 
-    // dram_end_addr = dram_start_addr + ((dram_end_addr - dram_start_addr) / transfer_size) * transfer_size;
+    // TODO
+    dram_end_addr = dram_start_addr + ((dram_end_addr - dram_start_addr) / transfer_size) * transfer_size;
 
     uint32_t num_bytes_per_send = transfer_size;
     uint64_t total_transferred = dram_end_addr - dram_start_addr;
