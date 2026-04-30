@@ -1363,36 +1363,13 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
     return result;
 }
 
-void ProgramImpl::set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
+void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     // ZoneScoped;
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
         for (const auto& dfb : dfbs_on_core) {
-            build_options.set_cb_dataformat_all_cores(static_cast<CBIndex>(dfb->id), dfb->config.data_format);
-        }
-    }
-}
-
-void ProgramImpl::set_dfb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
-    for (const auto& logical_cr : crs) {
-        const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
-        for (const auto& dfb : dfbs_on_core) {
-            auto tile = dfb->config.tile;
-            if (tile.has_value()) {
-                build_options.set_cb_tile_dims_all_cores(
-                    static_cast<CBIndex>(dfb->id),
-                    tile->get_num_faces(),
-                    tile->get_partial_face(),
-                    tile->get_face_shape()[0],
-                    tile->get_narrow_tile(),
-                    tile->get_tile_shape()[0],
-                    tile->get_tile_shape()[1]);
-                build_options.set_cb_tile_size_all_cores(static_cast<CBIndex>(dfb->id), tile->get_tile_size(dfb->config.data_format));
-            } else {
-                Tile t;
-                build_options.set_cb_tile_size_all_cores(static_cast<CBIndex>(dfb->id), t.get_tile_size(dfb->config.data_format));
-            }
+            build_options.set_cb_data_fmt_and_tile(
+                static_cast<CBIndex>(dfb->id), dfb->config.data_format, dfb->config.tile);
         }
     }
 }
