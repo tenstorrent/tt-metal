@@ -85,7 +85,6 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=False,
                 axis_name="tp",
             )
@@ -93,7 +92,6 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=False,
                 axis_name="tp",
             )
@@ -101,7 +99,6 @@ class LlamaMLP(AbstractModuleBase):
                 intermediate_size,
                 embedding_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 input_is_parallel=True,
                 axis_name="tp",
             )
@@ -110,19 +107,16 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
             self.w3 = LinearLayer(
                 embedding_size,
                 intermediate_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
             self.w2 = LinearLayer(
                 intermediate_size,
                 embedding_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
