@@ -30,6 +30,16 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     if ((grid_size.x == 0) && (grid_size.y == 0)) {
         grid_size = device->compute_with_storage_grid_size();
     }
+    {
+        const auto ema_device_grid = device->compute_with_storage_grid_size();
+        TT_FATAL(
+            grid_size.x <= ema_device_grid.x && grid_size.y <= ema_device_grid.y,
+            "EMA grid_size ({}, {}) must fit within device compute grid ({}, {})",
+            grid_size.x,
+            grid_size.y,
+            ema_device_grid.x,
+            ema_device_grid.y);
+    }
     auto num_cores_available = grid_size.x * grid_size.y;
 
     // Compute total_tiles to determine core split
@@ -50,6 +60,16 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     // We now have the number of cores to use, compute per core parameters
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
 
+    {
+        const auto ema_device_grid_sz = device->compute_with_storage_grid_size();
+        const CoreRangeSet ema_full_device_grid =
+            num_cores_to_corerangeset(ema_device_grid_sz.x * ema_device_grid_sz.y, ema_device_grid_sz, false);
+        TT_FATAL(
+            ema_full_device_grid.contains(all_cores),
+            "EMA program cores {} must be contained in device compute grid {}",
+            all_cores,
+            ema_full_device_grid);
+    }
     log_debug(
         tt::LogOp,
         "EmaProgramFactory: grid_size=({}, {}), num_cores={}, total_batch_channel_tiles={}",
@@ -60,6 +80,16 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
 
     auto total_tiles_per_core = total_batch_channel_tiles_per_core * tiles_per_channel;
 
+    {
+        const uint32_t ema_tile_hw = input.tensor_spec().tile().get_tile_hw();
+        const uint32_t ema_total_tile_units = input.physical_volume() / ema_tile_hw;
+        TT_FATAL(
+            num_cores * total_tiles_per_core == ema_total_tile_units,
+            "EMA workload mismatch: num_cores={} * tiles_per_core={} must equal input tile count {}",
+            num_cores,
+            total_tiles_per_core,
+            ema_total_tile_units);
+    }
     // Precompute the alpha and beta bits
     // Used by the EMA SFPU instructions
     // ----------------------------------

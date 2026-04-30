@@ -141,6 +141,15 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
                 : (use_sub_core_grids
                        ? tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_output_tiles)
                        : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
+    {
+        const uint32_t fr_nc_device_total_cores = num_cores_x * num_cores_y;
+        const CoreRangeSet fr_nc_program_device_grid = num_cores_to_corerangeset(fr_nc_device_total_cores, grid, true);
+        TT_FATAL(
+            fr_nc_program_device_grid.contains(all_cores),
+            "FastReduceNC program all_cores {} must be contained in device compute grid {}",
+            all_cores,
+            fr_nc_program_device_grid);
+    }
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 
