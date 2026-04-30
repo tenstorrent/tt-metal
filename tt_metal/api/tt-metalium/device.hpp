@@ -198,6 +198,13 @@ public:
     // teardown() populates relay_broken_non_mmio so FIX AY + FIX AC fire and reset the stale
     // ERISC firmware — preventing UMD topology discovery failures on the next open (#42429).
     virtual void set_fabric_relay_path_broken() {}
+    // Called by FabricFirmwareInitializer::verify_all_fabric_channels_healthy() when an MMIO
+    // device's own master router ETH channel was excluded from configure_fabric_cores() (pre-dead —
+    // L1 corrupt or probe timed out at init).  No fabric firmware was loaded on that channel so
+    // the device's fabric routing is non-functional.  FIX QD (#42429): setting this flag lets
+    // tests (e.g. AllGather fixtures) detect the broken state and issue GTEST_SKIP() instead of
+    // hanging.
+    virtual void set_fabric_channels_not_ready_for_traffic() {}
 
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.

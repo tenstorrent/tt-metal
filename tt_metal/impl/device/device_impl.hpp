@@ -216,6 +216,9 @@ public:
     // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
     void set_fabric_teardown_timed_out() override { fabric_teardown_timed_out_.store(true); }
     void set_fabric_relay_path_broken() override { fabric_relay_path_broken_.store(true); }
+    void set_fabric_channels_not_ready_for_traffic() override {
+        fabric_channels_not_ready_for_traffic_.store(true);
+    }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

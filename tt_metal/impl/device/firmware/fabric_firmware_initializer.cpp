@@ -2067,8 +2067,13 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
                 tt::LogMetal,
                 "verify_all_fabric_channels_healthy: Device {} own master router chan is pre-dead "
                 "(no fabric firmware loaded — L1 was corrupt at init). "
-                "Skipping health check. (#42429 FIX AN)",
+                "Marking fabric_channels_not_ready_for_traffic_ so callers can skip AllGather. "
+                "Skipping health check. (#42429 FIX AN / FIX QD)",
                 dev->id());
+            // FIX QD (#42429): Set the not-ready flag so test fixtures (e.g. MeshDevice1x4Fixture)
+            // can detect this state and issue GTEST_SKIP() instead of running an AllGather that
+            // will hang because no fabric firmware was loaded on the master router channel.
+            dev->set_fabric_channels_not_ready_for_traffic();
             continue;
         }
         const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
