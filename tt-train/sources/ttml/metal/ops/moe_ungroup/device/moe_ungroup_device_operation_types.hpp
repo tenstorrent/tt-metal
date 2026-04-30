@@ -12,7 +12,6 @@ namespace ttml::metal::ops::moe_ungroup::device {
 
 struct MoeUngroupAttributes {
     uint32_t e_local{};
-    uint32_t k{};
     uint32_t d{};
     uint32_t b{};
     uint32_t s{};
@@ -21,12 +20,10 @@ struct MoeUngroupAttributes {
 };
 
 struct MoeUngroupTensorArgs {
-    ttnn::Tensor expert_out;        // [1, 1, T_cap, H]   TILE  bf16
-    ttnn::Tensor plan;              // [1, 1, 1, T_cap]   ROW_MAJOR uint32
-    ttnn::Tensor offsets;           // [1, 1, 1, E_local+1] ROW_MAJOR uint32
-    ttnn::Tensor metadata;          // [D, B, S, K]       ROW_MAJOR uint16
-    ttnn::Tensor scores;            // [D, B, S, K]       ROW_MAJOR bf16
-    ttnn::Tensor local_expert_ids;  // [E_local]          ROW_MAJOR uint16
+    ttnn::Tensor expert_out;      // [1, 1, T_cap, H]     TILE      bf16
+    ttnn::Tensor plan;            // [1, 1, 1, T_cap]     ROW_MAJOR uint32
+    ttnn::Tensor offsets;         // [1, 1, 1, E_local+1] ROW_MAJOR uint32
+    ttnn::Tensor grouped_scores;  // [1, 1, 1, T_cap]     ROW_MAJOR bf16
 };
 
 using MoeUngroupSpecReturn = ttnn::TensorSpec;

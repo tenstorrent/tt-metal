@@ -14,6 +14,11 @@
 //          ungrouped rows, hand them to compute which adds the scaled
 //          expert contribution, write back.
 //        - If e+1 < E_local: another local handshake with NCRISC.
+//
+// With moe_group emitting `grouped_scores[T_cap]` (= scores[plan[i], k_slot])
+// directly, the writer no longer scans metadata to find k_slot or look up
+// the scalar. Per tile-row, it reads a 32-entry bf16 slice of grouped_scores
+// straight into w_buf — one DMA, zero scalar work.
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
@@ -21,7 +26,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 constexpr uint32_t cb_out0 = tt::CBIndex::c_2;
-constexpr uint32_t cb_scratch = tt::CBIndex::c_4;      // BRISC scratch (zero buf, plan slice, md, sc, rmw_buf)
+constexpr uint32_t cb_scratch = tt::CBIndex::c_4;      // BRISC scratch (zero buf, plan slice, gs slice, rmw_buf)
 constexpr uint32_t cb_w = tt::CBIndex::c_5;            // 32×32 broadcast weight tile pushed to compute
 constexpr uint32_t cb_existing_rm = tt::CBIndex::c_6;  // row-major existing rows from ungrouped
 
@@ -31,30 +36,22 @@ constexpr uint32_t hidden_chunk_bytes = get_compile_time_arg_val(2);
 constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
 constexpr uint32_t last_chunk_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t total_rows = get_compile_time_arg_val(5);  // D*B*S
-constexpr uint32_t k = get_compile_time_arg_val(6);
-constexpr uint32_t e_local = get_compile_time_arg_val(7);
-constexpr uint32_t num_total_cores = get_compile_time_arg_val(8);
-constexpr uint32_t brisc_done_sem_id = get_compile_time_arg_val(9);
-constexpr uint32_t brisc_release_sem_id = get_compile_time_arg_val(10);
+constexpr uint32_t e_local = get_compile_time_arg_val(6);
+constexpr uint32_t num_total_cores = get_compile_time_arg_val(7);
+constexpr uint32_t brisc_done_sem_id = get_compile_time_arg_val(8);
+constexpr uint32_t brisc_release_sem_id = get_compile_time_arg_val(9);
 
-constexpr auto ungrouped_args = TensorAccessorArgs<11>();
+constexpr auto ungrouped_args = TensorAccessorArgs<10>();
 constexpr auto plan_args = TensorAccessorArgs<ungrouped_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
-constexpr auto metadata_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
-constexpr auto scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
-constexpr auto leids_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
+constexpr auto gs_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
 
-constexpr uint32_t md_aligned_page = decltype(metadata_args)::AlignedPageSize;
-constexpr uint32_t sc_aligned_page = decltype(scores_args)::AlignedPageSize;
-constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 constexpr uint32_t ungrouped_aligned_page = decltype(ungrouped_args)::AlignedPageSize;
 
 constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t TILE_W = 32U;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
-constexpr uint32_t MD_ROW_STRIDE_U16 = md_aligned_page / sizeof(uint16_t);
-constexpr uint32_t SC_ROW_STRIDE_U16 = sc_aligned_page / sizeof(uint16_t);
 
 // Local BRISC<->NCRISC handshake on the same core (no NOC; both RISCs share L1).
 // Pattern: BRISC sets brisc_done = 1, polls brisc_release until 1, resets it.
@@ -76,28 +73,21 @@ void kernel_main() {
     const uint32_t ungrouped_addr = get_arg_val<uint32_t>(0);
     const uint32_t plan_addr = get_arg_val<uint32_t>(1);
     const uint32_t offsets_addr = get_arg_val<uint32_t>(2);
-    const uint32_t metadata_addr = get_arg_val<uint32_t>(3);
-    const uint32_t scores_addr = get_arg_val<uint32_t>(4);
-    const uint32_t leids_addr = get_arg_val<uint32_t>(5);
-    const uint32_t my_core_idx = get_arg_val<uint32_t>(6);
+    const uint32_t gs_addr = get_arg_val<uint32_t>(3);
+    const uint32_t my_core_idx = get_arg_val<uint32_t>(4);
 
     const auto ungrouped_addrgen = TensorAccessor(ungrouped_args, ungrouped_addr, ungrouped_aligned_page);
     const auto plan_addrgen = TensorAccessor(plan_args, plan_addr);
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
-    const auto md_addrgen = TensorAccessor(metadata_args, metadata_addr);
-    const auto sc_addrgen = TensorAccessor(scores_args, scores_addr);
-    const auto leids_addrgen = TensorAccessor(leids_args, leids_addr);
+    const auto gs_addrgen = TensorAccessor(gs_args, gs_addr);
 
     // ---------------------------------------------------------------
     // L1 scratch layout in cb_scratch (BRISC):
-    //   [zero_buf (h*2 bytes)]
+    //   [zero_buf    (h*2 bytes)]
     //   [offsets_buf ((e_local+1)*4 bytes, aligned 32)]
-    //   [leids_buf   (e_local*2 bytes,     aligned 32)]
     //   [plan_buf    (32*4 bytes)]
-    //   [md_buf      (32*K*2 bytes per row, batched as needed)]
-    //   [sc_buf      (32*K*2 bytes)]
-    //   [w_buf       (32*2 bytes — bf16 weights, copied straight from sc_buf)]
-    //   [rmw_buf     (max(hidden_chunk_bytes) bytes per row staging)]
+    //   [w_buf       (32*2 bytes — bf16, read directly from grouped_scores)]
+    //   [stage_buf   (32 * hidden_chunk_bytes — barrier-coalesced writeback)]
     // ---------------------------------------------------------------
     cb_reserve_back(cb_scratch, 1U);
     uint32_t scratch = get_write_ptr(cb_scratch);
@@ -110,21 +100,9 @@ void kernel_main() {
     off += round_up((e_local + 1U) * 4U, 32U);
     volatile tt_l1_ptr uint32_t* offsets_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_buf_addr);
 
-    uint32_t leids_buf_addr = scratch + off;
-    off += round_up(e_local * 2U, 32U);
-    volatile tt_l1_ptr uint16_t* leids_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(leids_buf_addr);
-
     uint32_t plan_buf_addr = scratch + off;
     off += round_up(32U * 4U, 32U);
     volatile tt_l1_ptr uint32_t* plan_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_buf_addr);
-
-    uint32_t md_buf_addr = scratch + off;
-    off += round_up(32U * md_aligned_page, 32U);
-    volatile tt_l1_ptr uint16_t* md_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(md_buf_addr);
-
-    uint32_t sc_buf_addr = scratch + off;
-    off += round_up(32U * sc_aligned_page, 32U);
-    volatile tt_l1_ptr uint16_t* sc_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sc_buf_addr);
 
     uint32_t w_buf_addr = scratch + off;
     off += round_up(32U * sizeof(uint16_t), 32U);
@@ -152,10 +130,10 @@ void kernel_main() {
     brisc_signal_done_wait_release();
 
     // ---------------------------------------------------------------
-    // Read offsets and leids into L1 (one-shot).
+    // Read offsets into L1 (one-shot). leids no longer needed —
+    // grouped_scores already encodes the right scalar per active row.
     // ---------------------------------------------------------------
     noc_async_read(get_noc_addr(0, offsets_addrgen), offsets_buf_addr, off_page_bytes);
-    noc_async_read(get_noc_addr(0, leids_addrgen), leids_buf_addr, leids_aligned_page);
     noc_async_read_barrier();
 
     // ---------------------------------------------------------------
@@ -168,49 +146,28 @@ void kernel_main() {
         uint32_t my_start_in_e = slice.start;
         uint32_t my_real_count = slice.count;
 
-        uint32_t leid_e = leids_buf[e];
-
         for (uint32_t step = 0; step < my_real_count; ++step) {
             uint32_t tr_global = expert_start_tr + my_start_in_e + step;
 
-            // Pre-fetch plan slice + metadata + scores, then derive w[r].
+            // Pre-fetch plan slice + grouped_scores slice. Both are
+            // [TILE_H = 32]-entry contiguous slices of [T_cap]-sized
+            // ROW_MAJOR DRAM tensors, indexed by tr_global * TILE_H.
+            //
+            // grouped_scores[tr_global*32 .. tr_global*32 + 32) goes
+            // straight into w_buf — moe_group already pre-baked
+            // scores[plan[i], k_slot] per row, so no metadata scan, no
+            // k_slot lookup. SENTINEL plan rows have grouped_scores = 0,
+            // which produces a no-op multiply downstream.
+            //
             // Pre-zero of the output buffer makes the first-touch RMW read 0
             // for every row, so we don't need a pure-write fast path — every
             // expert just does scaled += and the first one effectively writes.
             {
                 uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tr_global * TILE_H * sizeof(uint32_t);
                 noc_async_read(plan_noc, plan_buf_addr, TILE_H * sizeof(uint32_t));
+                uint64_t gs_noc = get_noc_addr(0, gs_addrgen) + tr_global * TILE_H * sizeof(uint16_t);
+                noc_async_read(gs_noc, w_buf_addr, TILE_H * sizeof(uint16_t));
                 noc_async_read_barrier();
-
-                for (uint32_t r = 0; r < TILE_H; ++r) {
-                    uint32_t flat = plan_buf[r];
-                    if (flat == SENTINEL) {
-                        continue;
-                    }
-                    noc_async_read(get_noc_addr(flat, md_addrgen), md_buf_addr + r * md_aligned_page, md_aligned_page);
-                    noc_async_read(get_noc_addr(flat, sc_addrgen), sc_buf_addr + r * sc_aligned_page, sc_aligned_page);
-                }
-                noc_async_read_barrier();
-
-                for (uint32_t r = 0; r < TILE_H; ++r) {
-                    uint32_t flat = plan_buf[r];
-                    if (flat == SENTINEL) {
-                        w_buf[r] = 0U;
-                        continue;
-                    }
-                    uint32_t md_off = r * MD_ROW_STRIDE_U16;
-                    uint32_t sc_off = r * SC_ROW_STRIDE_U16;
-                    uint32_t k_slot = 0U;
-                    bool found = false;
-                    for (uint32_t ki = 0; ki < k; ++ki) {
-                        if (static_cast<uint32_t>(md_buf[md_off + ki]) == leid_e) {
-                            k_slot = ki;
-                            found = true;
-                            break;
-                        }
-                    }
-                    w_buf[r] = found ? sc_buf[sc_off + k_slot] : static_cast<uint16_t>(0U);
-                }
             }
 
             // Per chunk:

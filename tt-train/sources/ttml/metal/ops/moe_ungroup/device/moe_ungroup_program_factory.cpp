@@ -75,7 +75,6 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
 
     const uint32_t h = attrs.h;
     const uint32_t e_local = attrs.e_local;
-    const uint32_t k = attrs.k;
     const uint32_t total_rows = attrs.d * attrs.b * attrs.s;
 
     const uint32_t num_chunks = pick_num_chunks(h);
@@ -182,17 +181,16 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             .set_page_size(kCbCtrl, cb_ctrl_bytes);
     CreateCircularBuffer(program, worker_all, cb_ctrl_cfg);
 
-    // cb_scratch: writer's big scratch — zero buf + offsets + leids + plan + md + sc + w + rmw_buf
+    // cb_scratch: writer's scratch — zero buf + offsets + plan + grouped_scores
+    // slice + w + rmw_buf. With moe_group emitting grouped_scores per row, we
+    // no longer keep metadata/scores/leids buffers here; the writer reads a
+    // 32-entry slice of grouped_scores per tile-row directly into w_buf.
     uint32_t scratch_bytes = 0U;
     scratch_bytes += tt::round_up(h * 2U, kL1_ALIGN);                             // zero_buf
     scratch_bytes += tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);  // offsets_buf
-    scratch_bytes += tt::round_up(e_local * sizeof(uint16_t), kL1_ALIGN);         // leids_buf
     scratch_bytes += tt::round_up(32U * sizeof(uint32_t), kL1_ALIGN);             // plan_buf
-    // md_buf and sc_buf: 32 rows * aligned page each.
-    uint32_t md_aligned = tt::round_up(k * sizeof(uint16_t), kL1_ALIGN);
-    scratch_bytes += tt::round_up(32U * md_aligned, kL1_ALIGN);        // md_buf
-    scratch_bytes += tt::round_up(32U * md_aligned, kL1_ALIGN);        // sc_buf (same row stride as md)
-    scratch_bytes += tt::round_up(32U * sizeof(uint16_t), kL1_ALIGN);  // w_buf (bf16, copied from sc_buf)
+    scratch_bytes += tt::round_up(32U * sizeof(uint16_t), kL1_ALIGN);             // w_buf (bf16,
+                                                                       //   directly read from grouped_scores)
     // stage_buf: 32 contiguous slots of hidden_chunk_bytes — required by the
     // OPT 1 barrier-coalesced writer. Worst-case size: 32 * 128KB / 32 = 128KB
     // (chunk size is capped at kTargetChunkBytes).
@@ -224,9 +222,7 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     auto* ungrouped_buf = output.buffer();
     auto* plan_buf = args.plan.buffer();
     auto* offsets_buf = args.offsets.buffer();
-    auto* metadata_buf = args.metadata.buffer();
-    auto* scores_buf = args.scores.buffer();
-    auto* leids_buf = args.local_expert_ids.buffer();
+    auto* grouped_scores_buf = args.grouped_scores.buffer();
 
     // -------------------------------------------------------------------------
     // Mcast rectangle (covers full worker grid).
@@ -281,18 +277,15 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         tiles_per_chunk,       // 3
         last_chunk_bytes,      // 4
         total_rows,            // 5
-        k,                     // 6
-        e_local,               // 7
-        num_total_cores,       // 8
-        brisc_done_sem_id,     // 9
-        brisc_release_sem_id,  // 10
+        e_local,               // 6
+        num_total_cores,       // 7
+        brisc_done_sem_id,     // 8
+        brisc_release_sem_id,  // 9
     };
     tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(scores_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(leids_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_scores_buf).append_to(writer_ct_args);
 
     auto writer_kernel_g1 = create_writer_kernel(program, worker_group_1, writer_ct_args, {}, kWriterKernelPath);
     tt::tt_metal::KernelHandle writer_kernel_g2{};
@@ -336,13 +329,11 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
             worker_idx,                 // 2 my_core_idx
         };
         std::vector<uint32_t> writer_rt = {
-            ungrouped_buf->address(),  // 0
-            plan_buf->address(),       // 1
-            offsets_buf->address(),    // 2
-            metadata_buf->address(),   // 3
-            scores_buf->address(),     // 4
-            leids_buf->address(),      // 5
-            worker_idx,                // 6 my_core_idx
+            ungrouped_buf->address(),       // 0
+            plan_buf->address(),            // 1
+            offsets_buf->address(),         // 2
+            grouped_scores_buf->address(),  // 3
+            worker_idx,                     // 4 my_core_idx
         };
 
         SetRuntimeArgs(program, is_g1 ? reader_kernel_g1 : reader_kernel_g2, core, reader_rt);
@@ -374,9 +365,7 @@ void MoeUngroupProgramFactory::override_runtime_arguments(
     auto* ungrouped_buf = output.buffer();
     auto* plan_buf = tensor_args.plan.buffer();
     auto* offsets_buf = tensor_args.offsets.buffer();
-    auto* metadata_buf = tensor_args.metadata.buffer();
-    auto* scores_buf = tensor_args.scores.buffer();
-    auto* leids_buf = tensor_args.local_expert_ids.buffer();
+    auto* grouped_scores_buf = tensor_args.grouped_scores.buffer();
 
     auto worker_cores_vec = tt::tt_metal::corerange_to_cores(sv.worker_all, sv.num_cores, /*row_wise=*/true);
     for (const auto& core : worker_cores_vec) {
@@ -390,9 +379,7 @@ void MoeUngroupProgramFactory::override_runtime_arguments(
         writer_rt[0] = ungrouped_buf->address();
         writer_rt[1] = plan_buf->address();
         writer_rt[2] = offsets_buf->address();
-        writer_rt[3] = metadata_buf->address();
-        writer_rt[4] = scores_buf->address();
-        writer_rt[5] = leids_buf->address();
+        writer_rt[3] = grouped_scores_buf->address();
     }
 }
 

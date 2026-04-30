@@ -45,9 +45,7 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
     check(args.expert_out, "expert_out", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check(args.plan, "plan", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
     check(args.offsets, "offsets", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
-    check(args.metadata, "metadata", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
-    check(args.scores, "scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
-    check(args.local_expert_ids, "local_expert_ids", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
+    check(args.grouped_scores, "grouped_scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
 
     const auto& es = args.expert_out.logical_shape();
     TT_FATAL(es.rank() == 4U, "moe_ungroup: expert_out must be 4D [1,1,T_cap,H]");
@@ -71,20 +69,13 @@ void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
         os.rank(),
         os);
 
-    const auto& ms = args.metadata.logical_shape();
-    TT_FATAL(ms.rank() == 4U, "moe_ungroup: metadata must be 4D [D,B,S,K]");
+    const auto& gss = args.grouped_scores.logical_shape();
     TT_FATAL(
-        ms[0] == attrs.d && ms[1] == attrs.b && ms[2] == attrs.s && ms[3] == attrs.k,
-        "moe_ungroup: metadata shape mismatch");
-
-    const auto& ss = args.scores.logical_shape();
-    TT_FATAL(ss.rank() == 4U, "moe_ungroup: scores must be 4D [D,B,S,K]");
-    TT_FATAL(
-        ss[0] == attrs.d && ss[1] == attrs.b && ss[2] == attrs.s && ss[3] == attrs.k,
-        "moe_ungroup: scores shape mismatch");
-
-    const auto& ls = args.local_expert_ids.logical_shape();
-    TT_FATAL(ls.rank() == 1U && ls[0] == attrs.e_local, "moe_ungroup: local_expert_ids shape mismatch");
+        gss.rank() == 4U && gss[0] == 1U && gss[1] == 1U && gss[2] == 1U && gss[3] == attrs.t_cap,
+        "moe_ungroup: grouped_scores must be [1,1,1,T_cap={}], got rank={} shape={}",
+        attrs.t_cap,
+        gss.rank(),
+        gss);
 
     TT_FATAL(attrs.h > 0U, "moe_ungroup: H must be > 0");
 }
@@ -120,11 +111,8 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
     const ttnn::Tensor& expert_out,
     const ttnn::Tensor& plan,
     const ttnn::Tensor& offsets,
-    const ttnn::Tensor& metadata,
-    const ttnn::Tensor& scores,
-    const ttnn::Tensor& local_expert_ids,
+    const ttnn::Tensor& grouped_scores,
     uint32_t e_local,
-    uint32_t k,
     uint32_t d,
     uint32_t b,
     uint32_t s) {
@@ -136,7 +124,6 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
 
     auto attrs = Op::operation_attributes_t{
         .e_local = e_local,
-        .k = k,
         .d = d,
         .b = b,
         .s = s,
@@ -147,9 +134,7 @@ ttml::metal::ops::moe_ungroup::device::MoeUngroupDeviceOperation::tensor_return_
         .expert_out = expert_out,
         .plan = plan,
         .offsets = offsets,
-        .metadata = metadata,
-        .scores = scores,
-        .local_expert_ids = local_expert_ids,
+        .grouped_scores = grouped_scores,
     };
 
     return ttnn::device_operation::launch<Op>(attrs, tensor_args);

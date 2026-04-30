@@ -156,15 +156,21 @@ def _make_metadata(D: int, B: int, S: int, K: int, E: int, seed: int = 0) -> tor
 def moe_group_torch_reference(
     dispatched: torch.Tensor,
     metadata: torch.Tensor,
+    scores: torch.Tensor,
     local_expert_ids: torch.Tensor,
     *,
     k: int,
     num_total_cores: int = 64,
     t_cap: int = 0,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Torch reference for moe_group — needed here to fabricate
-    (grouped, counts, offsets, plan) inputs to ungroup without calling the
-    device moe_group op."""
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Torch reference for moe_group — fabricates (grouped, grouped_scores,
+    counts, offsets, plan) inputs to ungroup without calling the device
+    moe_group op so this test file stays independent of moe_group's
+    implementation/PR.
+
+    `grouped_scores[i] = scores[plan[i], k_slot]` for each active row i,
+    where `k_slot` is the position in metadata[plan[i], :K] that matches
+    the local expert owning row i. 0.0 in pad/sentinel slots."""
     D, B, S, H = dispatched.shape
     E_local = int(local_expert_ids.numel())
     T_cap = t_cap if t_cap > 0 else moe_group_t_cap(E_local, k, D, B, S, num_total_cores=num_total_cores)
@@ -173,10 +179,15 @@ def moe_group_torch_reference(
     flat = dispatched.reshape(total_rows, H)
     md_np = metadata.reshape(total_rows, k).numpy()
     leids = local_expert_ids.numpy().astype(md_np.dtype)
+    sc_np = scores.reshape(total_rows, k).to(torch.bfloat16).float().numpy()
 
+    # Per-expert hit mask + the matching k_slot per active row.
     hits = np.zeros((E_local, total_rows), dtype=np.bool_)
+    k_slots = np.zeros((E_local, total_rows), dtype=np.uint32)
     for e_idx in range(E_local):
-        hits[e_idx] = (md_np == leids[e_idx]).any(axis=1)
+        eq = md_np == leids[e_idx]
+        hits[e_idx] = eq.any(axis=1)
+        k_slots[e_idx] = np.argmax(eq, axis=1).astype(np.uint32)
     counts = hits.sum(axis=1).astype(np.uint32)
 
     slice_size = (total_rows + num_total_cores - 1) // num_total_cores
@@ -201,6 +212,7 @@ def moe_group_torch_reference(
         offsets[e_idx + 1] = _round_up_32(running)
 
     plan = np.full(T_cap, SENTINEL, dtype=np.uint32)
+    grouped_scores_np = np.zeros(T_cap, dtype=np.float32)
     for e_idx in range(E_local):
         running = int(offsets[e_idx])
         for c in range(num_total_cores):
@@ -208,10 +220,13 @@ def moe_group_torch_reference(
             s_end = min(s_start + slice_size, total_rows)
             if s_start >= total_rows:
                 continue
-            core_hits = np.nonzero(hits[e_idx, s_start:s_end])[0].astype(np.uint32) + s_start
-            n = len(core_hits)
+            core_hit_idx = np.nonzero(hits[e_idx, s_start:s_end])[0].astype(np.uint32) + s_start
+            n = len(core_hit_idx)
             if n > 0:
-                plan[running : running + n] = core_hits
+                plan[running : running + n] = core_hit_idx
+                # grouped_scores[i] = scores[t, k_slot] for each active row.
+                ks = k_slots[e_idx, core_hit_idx]
+                grouped_scores_np[running : running + n] = sc_np[core_hit_idx, ks]
             running += int(_round_up_4(n))
 
     grouped = torch.zeros(1, 1, T_cap, H, dtype=dispatched.dtype)
@@ -222,6 +237,7 @@ def moe_group_torch_reference(
 
     return (
         grouped,
+        torch.from_numpy(grouped_scores_np),
         torch.from_numpy(counts.astype(np.int64)),
         torch.from_numpy(offsets.astype(np.int64)),
         torch.from_numpy(plan.astype(np.int64)),
@@ -268,28 +284,43 @@ class TestMoeUngroupDevice:
     def _build_group_inputs(
         dispatched: torch.Tensor,
         metadata: torch.Tensor,
+        scores: torch.Tensor,
         local_expert_ids: torch.Tensor,
         k: int,
     ):
-        """Compute (grouped, counts, offsets, plan) via the torch reference
-        and push to device. Replaces the device moe_group call so this PR
-        can land before moe_group."""
+        """Use the torch reference for moe_group to fabricate
+        (grouped, grouped_scores, counts, offsets, plan), then push to
+        device. Keeps this test file independent of the moe_group device op
+        — it only exercises moe_ungroup."""
         D, B, S, H = dispatched.shape
         E_local = int(local_expert_ids.numel())
         num_total_cores = _device_num_total_cores(E_local, k, D, B, S)
-        grouped_t, counts_t, offsets_t, plan_t = moe_group_torch_reference(
-            dispatched, metadata, local_expert_ids, k=k, num_total_cores=num_total_cores
+        grouped_t, grouped_scores_t, counts_t, offsets_t, plan_t = moe_group_torch_reference(
+            dispatched, metadata, scores, local_expert_ids, k=k, num_total_cores=num_total_cores
         )
         # Push to device. grouped goes TILE bf16; for H not divisible by 32 the
         # row-major → TILE conversion needs explicit padding, so use from_torch
         # with TILE layout directly which pads with zeros internally.
         grouped_tt = _to_device_tensor(grouped_t.float(), ttnn.TILE_LAYOUT, ttnn.bfloat16)
+        grouped_scores_tt = _to_device_tensor(
+            grouped_scores_t.reshape(1, 1, 1, -1).float(), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16
+        )
         counts_tt = _to_device_tensor(counts_t.to(torch.int32).reshape(1, 1, 1, -1), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
         offsets_tt = _to_device_tensor(
             offsets_t.to(torch.int32).reshape(1, 1, 1, -1), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32
         )
         plan_tt = _to_device_tensor(plan_t.to(torch.int32).reshape(1, 1, 1, -1), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
-        return grouped_tt, counts_tt, offsets_tt, plan_tt, grouped_t, counts_t, offsets_t, plan_t
+        return (
+            grouped_tt,
+            grouped_scores_tt,
+            counts_tt,
+            offsets_tt,
+            plan_tt,
+            grouped_t,
+            counts_t,
+            offsets_t,
+            plan_t,
+        )
 
     @staticmethod
     def _run_group_then_ungroup(
@@ -303,12 +334,9 @@ class TestMoeUngroupDevice:
         D, B, S, H = dispatched.shape
         E_local = int(local_expert_ids.numel())
 
-        md_tt = _to_device_tensor(metadata.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint16)
-        le_tt = _to_device_tensor(local_expert_ids.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint16)
-        scores_tt = _to_device_tensor(scores.float(), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
-
         (
             grouped,
+            grouped_scores,
             counts,
             offsets,
             plan,
@@ -316,7 +344,7 @@ class TestMoeUngroupDevice:
             counts_t,
             offsets_t,
             plan_t,
-        ) = TestMoeUngroupDevice._build_group_inputs(dispatched, metadata, local_expert_ids, k)
+        ) = TestMoeUngroupDevice._build_group_inputs(dispatched, metadata, scores, local_expert_ids, k)
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
         ttnn.synchronize_device(device)
@@ -324,11 +352,8 @@ class TestMoeUngroupDevice:
             grouped,
             plan,
             offsets,
-            md_tt,
-            scores_tt,
-            le_tt,
+            grouped_scores,
             int(E_local),
-            int(k),
             int(D),
             int(B),
             int(S),
@@ -510,10 +535,6 @@ class TestMoeUngroupProfile:
             metadata = _make_metadata(D, B, S, K, E, seed=seed)
         scores = torch.rand(D, B, S, K, generator=torch.Generator().manual_seed(seed)) * 0.5
 
-        md_tt = _to_device_tensor(metadata.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint16)
-        le_tt = _to_device_tensor(local_expert_ids.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint16)
-        sc_tt = _to_device_tensor(scores.float(), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
-
         try:
             from tracy import signpost as _signpost
         except Exception:
@@ -529,10 +550,11 @@ class TestMoeUngroupProfile:
         )
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
-        # Build (grouped, counts, offsets, plan) once via the torch reference
-        # and reuse them across iters — we're timing moe_ungroup, not moe_group.
-        grouped, counts, offsets, plan, _, _, _, _ = TestMoeUngroupDevice._build_group_inputs(
-            dispatched, metadata, local_expert_ids, int(K)
+        # Build (grouped, grouped_scores, counts, offsets, plan) once via the
+        # torch reference and reuse across iters — we're timing moe_ungroup
+        # only (and the torch ref keeps this independent of moe_group).
+        grouped, grouped_scores, _counts, offsets, plan, _, _, _, _ = TestMoeUngroupDevice._build_group_inputs(
+            dispatched, metadata, scores, local_expert_ids, int(K)
         )
         # Warmup.
         for _ in range(warmup):
@@ -540,11 +562,8 @@ class TestMoeUngroupProfile:
                 grouped,
                 plan,
                 offsets,
-                md_tt,
-                sc_tt,
-                le_tt,
+                grouped_scores,
                 int(E_local),
-                int(K),
                 int(D),
                 int(B),
                 int(S),
@@ -557,11 +576,8 @@ class TestMoeUngroupProfile:
                 grouped,
                 plan,
                 offsets,
-                md_tt,
-                sc_tt,
-                le_tt,
+                grouped_scores,
                 int(E_local),
-                int(K),
                 int(D),
                 int(B),
                 int(S),
