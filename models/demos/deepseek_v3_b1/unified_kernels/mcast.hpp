@@ -346,6 +346,13 @@ struct Mcast {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
         static void sender_impl(const SenderArgs& s) {
             cb_wait_front(s.src_cb, s.src_num_pages);
+
+            auto input_data_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(s.input_data_addr);
+            for (uint32_t i = 0; i < 10; ++i) {
+                DPRINT << "Sender: input_data_addr[" << i << "] = " << BF16(input_data_addr[i]) << ENDL();
+            }
+
             mcast_send_with_state<
                 CTArgsT::mcast_num_cores,
                 CTArgsT::loopback,

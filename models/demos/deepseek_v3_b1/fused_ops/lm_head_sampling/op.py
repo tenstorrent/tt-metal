@@ -664,6 +664,9 @@ class LMHeadSampling:
         bcast_pkt_cb = 30  # Packet buffer for CCL broadcast
         mtp_bcast_pkt_cb = 13  # [MTP] Packet buffer for MTP token broadcast
 
+        # Sync CB for h_rmsnorm and lm head norm on TRISC
+        hnorm_ready_cb = 37
+
         # ====================================================================
         # Semaphore IDs (for intra-device mcast)
         # ====================================================================
@@ -1392,6 +1395,7 @@ class LMHeadSampling:
                     ("rmsnorm_h_output_cb", mcast_eh_src_cb),
                     ("rmsnorm_e_input_cb", embedding_cb),
                     ("rmsnorm_e_output_cb", mcast_eh_src_cb),
+                    ("hnorm_ready_cb", hnorm_ready_cb),
                     # [MTP] semaphores
                     ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
                     ("metadata_ready_semaphore_id", metadata_ready_semaphore_id),
@@ -1523,6 +1527,7 @@ class LMHeadSampling:
                         "mcast_eh_data_receiver_semaphore",
                         mcast_eh_data_receiver_semaphore_id if enable_mtp_on_device else 0,
                     ),
+                    ("hnorm_ready_cb", hnorm_ready_cb),
                     ("mcast_eh_src_cb", mcast_eh_src_cb if enable_mtp_on_device else 0),
                     ("mcast_eh_dst_cb", mcast_eh_dst_cb if enable_mtp_on_device else 0),
                     ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp_on_device else 0),
@@ -1646,6 +1651,7 @@ class LMHeadSampling:
                     ("reduce_received_cb", reduce_received_cb),
                     ("reduce_output_cb", reduce_output_cb),
                     ("reduce_scratch_cb", reduce_scratch_cb),
+                    ("hnorm_ready_cb", hnorm_ready_cb),
                     ("is_e_norm_device", 1 if is_e_norm_device else 0),
                     # ── Sampling kernel additions (sampling.hpp ComputeCTArgs) ──
                     ("sampling_softmax_in_cb", sampling_softmax_in_cb),
@@ -1915,12 +1921,26 @@ class LMHeadSampling:
                     )
                     eh_gather_cb_descriptor.total_size = (eh_gather_dst_num_pages + 4) * eh_output_tile_size
                     print("EH gather total size=", eh_gather_cb_descriptor.total_size, flush=True)
+                    
+                    # CB 37: Sync CB for h_rmsnorm and lm head norm on TRISC
+                    hnorm_ready_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=hnorm_ready_cb,
+                        data_format=ttnn.uint32,
+                        page_size=16,
+                    )
+                    hnorm_ready_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=16,
+                        core_ranges=mcast_sender_core_grid,
+                        format_descriptors=[hnorm_ready_cb_format],
+                    )
+                    
                     mtp_cb_descriptors = [
                         mcast_eh_src_cb_descriptor,
                         matmul_eh_cb_descriptor,
                         matmul_out_eh_cb_descriptor,
                         eh_gather_cb_descriptor,
                         mcast_eh_dst_cb_descriptor,
+                        hnorm_ready_cb_descriptor,
                     ]
                     if h_gamma_cb_descriptor is not None:
                         mtp_cb_descriptors.append(h_gamma_cb_descriptor)
@@ -2334,7 +2354,7 @@ class LMHeadSampling:
                                 id=reduce_gate_semaphore_id,
                                 core_ranges=all_cores,
                                 initial_value=0,
-                            ),
+                            )
                         ]
                     )
                 if is_exit_device:

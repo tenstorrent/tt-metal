@@ -4186,7 +4186,7 @@ def create_input_page(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1460500,
+            "worker_l1_size": 1453716,
         }
     ],
     indirect=True,
@@ -4276,7 +4276,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 slot_id=slot_id,
                 temperature=0.6,
                 top_k=32,
-                probability_mass_threshold=0.95,
+                probability_mass_threshold=1.0,
             )
             pipeline.write_token(token_tensor)
             logger.debug(f"[TEST P{pid}] iter {iteration} read_output")

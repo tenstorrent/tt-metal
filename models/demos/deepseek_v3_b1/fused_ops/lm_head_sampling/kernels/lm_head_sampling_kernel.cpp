@@ -908,6 +908,14 @@ void kernel_main() {
             mcast(mcast_args);
         }
 
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_rmsnorm_core && !Core::is_e_norm_device && Core::enable_mtp) {
+            constexpr uint32_t hnorm_ready_cb = get_named_compile_time_arg_val("hnorm_ready_cb");
+            cb_reserve_back(hnorm_ready_cb, 1);
+            cb_push_back(hnorm_ready_cb, 1);
+        }
+#endif
+
 // #if defined(COMPILE_FOR_NCRISC)
 //         if constexpr (Core::is_matmul_core) {
 //             constexpr uint32_t mcast_dst = get_named_compile_time_arg_val("mcast_dst_cb");
@@ -1159,6 +1167,9 @@ void kernel_main() {
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
                 e_rmsnorm(rmsnorm_args);
             } else {
+                constexpr uint32_t hnorm_ready_cb = get_named_compile_time_arg_val("hnorm_ready_cb");
+                cb_wait_front(hnorm_ready_cb, 1);
+                cb_pop_front(hnorm_ready_cb, 1);
                 DeviceZoneScopedN("MTP_H_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 h_rmsnorm(rmsnorm_args);
