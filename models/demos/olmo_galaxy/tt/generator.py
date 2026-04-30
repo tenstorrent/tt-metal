@@ -251,21 +251,16 @@ class Generator(WarmupForwardMixin):
         ):
             use_batched_prefill = True
 
-        # OLMo multi-user sequential prefill workaround: for short ISLs (≤ 2048), force
-        # eager mode. Traced sequential prefill keeps cluster_axis=0 QK-norm
-        # (fused_rms_minimal) async Ethernet CCL in-flight beyond the trace, so the
-        # next user's trace starts before the previous user's fabric drains, causing
-        # NOC deadlocks after ~8 sequential users. Only gate this when there is more
-        # than one user in the call — single-user prefill can't deadlock against
-        # itself, so it must keep tracing to preserve B1 prefill performance.
-        olmo_force_eager_threshold = 2048
+        # OLMo multi-user sequential prefill workaround: force eager mode for
+        # any multi-user (b > 1) non-batched prefill. Traced prefill keeps
+        # cluster_axis=0 QK-norm (fused_rms_minimal) async Ethernet CCL
+        # in-flight beyond the trace, so the next user's trace starts before
+        # the previous user's fabric drains, causing NOC deadlocks.
+        # Single-user calls (b=1 from vllm or demo) keep tracing — no next
+        # user to collide with within the call, and traced 64K b=1 reuses
+        # the captured all-gather buffer (eager 64K would OOM).
         num_sequential_users = 1 if use_batched_prefill else len(empty_slots)
-        if (
-            is_olmo
-            and not use_batched_prefill
-            and num_sequential_users > 1
-            and any(s <= olmo_force_eager_threshold for s in prefill_seq_lens)
-        ):
+        if is_olmo and not use_batched_prefill and num_sequential_users > 1:
             enable_trace = False
 
         if return_logits:
@@ -372,10 +367,12 @@ class Generator(WarmupForwardMixin):
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
 
-            # For OLMo eager sequential prefill (multi-user only), drain after the
-            # whole per-user prefill path, including final norm / LM head / sampling
-            # all-gather. Skip for single-user runs — there is no next user to
-            # collide with, so the sync + semaphore reset is pure overhead.
+            # For OLMo eager sequential prefill in a single call (demo b=32),
+            # drain after the per-user prefill path so the next user's CCL
+            # doesn't collide with in-flight fabric. Skipped in vllm context
+            # (single-user-per-call) — decode runs between prefill calls and
+            # the gather semaphore reset corrupts the concurrently-active
+            # decode CCL state.
             if is_olmo and not use_batched_prefill and not enable_trace and num_sequential_users > 1:
                 ttnn.synchronize_device(self.mesh_device)
                 self.model.tt_ccl.reset_gather_semaphores()
@@ -592,6 +589,19 @@ class Generator(WarmupForwardMixin):
         )
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
+        # OLMo: traced prefill leaves cluster_axis=0 fused_rms_minimal gather
+        # semaphores at non-zero values. Inside a single multi-user call, the
+        # demo calls reset_gather_semaphores() between users. Under vLLM
+        # (single-user-per-call), there's no such between-user boundary, so
+        # the semaphores accumulate across calls until the next replay's
+        # "wait for sem==0" never triggers and the device hangs (~15 calls
+        # in). Sync + reset here ensures every traced replay starts clean.
+        # No-op for non-OLMo wrappers.
+        is_olmo = getattr(self.model.args, "is_olmo", False)
+        if is_olmo:
+            ttnn.synchronize_device(self.mesh_device)
+            self.model.tt_ccl.reset_gather_semaphores()
 
         return tt_out_trace
 
