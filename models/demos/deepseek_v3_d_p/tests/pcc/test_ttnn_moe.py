@@ -156,8 +156,8 @@ def test_ttnn_moe(
     logger.debug(f"{'='*60}")
     logger.debug(f"mesh_shape={mesh_device.shape}, num_devices={num_devices}")
     logger.debug(f"dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
-    logger.debug(f"num eth links={num_links}, topology={topology}")
-    logger.debug(f"IS_BLACKHOLE={is_blackhole()}, IS_GALAXY={is_galaxy()}")
+    logger.info(f"num eth links={num_links}, topology={topology}")
+    logger.info(f"IS_BLACKHOLE={is_blackhole()}, IS_GALAXY={is_galaxy()}")
 
     signpost(
         f"TtMoe PCC test - mesh {mesh_device.shape}, seq_len={seq_len_per_chip}, "
