@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 /*
  * This test serves as a simple, stable tt_metal executable that issues both

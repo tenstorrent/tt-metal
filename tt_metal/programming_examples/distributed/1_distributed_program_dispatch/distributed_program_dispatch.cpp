@@ -19,7 +19,7 @@ int main() {
     // an example compute kernel targeting a 2x2 core range.
     auto example_program = CreateProgram();
     auto target_tensix_cores = CoreRange{
-        CoreCoord{0, 0} /* start_coord */, CoreCoord{1, 1} /* end_coord */
+        tt::tt_metal::CoreCoord{0, 0} /* start_coord */, tt::tt_metal::CoreCoord{1, 1} /* end_coord */
     };
 
     auto compute_kernel_id = CreateKernel(

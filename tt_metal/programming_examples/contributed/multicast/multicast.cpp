@@ -29,6 +29,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 using namespace tt::constants;
 using namespace std;
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;

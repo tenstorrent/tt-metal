@@ -23,6 +23,7 @@
 // 7. Clean up the device. Exit
 
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif

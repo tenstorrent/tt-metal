@@ -15,6 +15,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 int main() {
     // Create a 1x1 mesh device (Mesh API). For multi-device setups, create a larger mesh shape.

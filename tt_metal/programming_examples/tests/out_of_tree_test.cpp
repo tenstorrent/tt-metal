@@ -9,6 +9,7 @@
 #include "tt_stl/assert.hpp"
 
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 constexpr std::string_view null_kernel_dm =
     R"(

@@ -17,6 +17,7 @@ using namespace tt::constants;
 using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 // Reference implementation of matrix multiplication.
 // Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.

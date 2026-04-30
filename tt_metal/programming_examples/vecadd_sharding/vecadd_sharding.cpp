@@ -26,6 +26,7 @@
 #include <vector>
 
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 

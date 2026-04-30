@@ -24,7 +24,7 @@ int main() {
 
     // Initialize mesh device (1x1), command queue, workload, device range, and program.
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    constexpr CoreCoord core = {0, 0};
+    constexpr tt::tt_metal::CoreCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();

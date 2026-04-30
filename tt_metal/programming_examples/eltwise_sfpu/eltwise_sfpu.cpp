@@ -12,6 +12,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 /*
  * 1. Host creates one vector of data.

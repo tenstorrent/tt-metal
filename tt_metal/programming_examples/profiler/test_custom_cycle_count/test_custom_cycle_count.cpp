@@ -15,6 +15,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count) {
     bool pass = true;

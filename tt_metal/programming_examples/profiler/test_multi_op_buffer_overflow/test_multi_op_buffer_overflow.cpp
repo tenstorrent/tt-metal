@@ -8,6 +8,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 constexpr uint32_t OP_COUNT = 1400;
 

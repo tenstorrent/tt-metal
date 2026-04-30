@@ -15,6 +15,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count) {
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();

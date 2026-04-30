@@ -19,6 +19,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 /**
  * @brief Computes the softplus activation function element-wise on input vector

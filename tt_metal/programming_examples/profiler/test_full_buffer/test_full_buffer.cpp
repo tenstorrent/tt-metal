@@ -13,6 +13,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 // Local constants for profiler example
 constexpr uint32_t DRAM_MARKER_COUNT = 6000;

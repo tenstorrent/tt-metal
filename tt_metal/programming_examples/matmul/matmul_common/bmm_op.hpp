@@ -14,7 +14,7 @@
 
 #include <tt-metalium/work_split.hpp>
 
-using CoreCoord = tt_xy_pair;
+using CoreCoord = tt::tt_metal::CoreCoord;
 
 inline std::vector<uint32_t> get_prime_factors(uint32_t n) {
     uint32_t i = 2;

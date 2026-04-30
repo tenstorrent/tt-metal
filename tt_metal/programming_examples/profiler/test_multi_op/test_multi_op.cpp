@@ -10,6 +10,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::CoreCoord;
 
 // Local constant for profiler example
 constexpr uint32_t OP_COUNT = 1000;
