@@ -4,9 +4,11 @@
 
 #include <tt_stl/fmt.hpp>
 #include "data_collector.hpp"
+#include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
+#include <exception>
 #include <filesystem>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
@@ -183,24 +185,71 @@ tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtime
     tt::ProgramRealtimeProfilerCallback callback) {
     std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
     auto handle = next_callback_handle_++;
-    program_realtime_profiler_callbacks_.emplace_back(handle, std::move(callback));
+    program_realtime_profiler_callbacks_.push_back(
+        {handle, std::move(callback), std::make_shared<RealtimeCallbackState>()});
     return handle;
 }
 
 void DataCollector::UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    program_realtime_profiler_callbacks_.erase(
-        std::remove_if(
-            program_realtime_profiler_callbacks_.begin(),
-            program_realtime_profiler_callbacks_.end(),
-            [handle](const auto& entry) { return entry.first == handle; }),
-        program_realtime_profiler_callbacks_.end());
+    std::unique_lock<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    auto it = std::find_if(
+        program_realtime_profiler_callbacks_.begin(),
+        program_realtime_profiler_callbacks_.end(),
+        [handle](const auto& entry) { return entry.handle == handle; });
+    if (it == program_realtime_profiler_callbacks_.end()) {
+        return;
+    }
+
+    auto state = it->state;
+    state->unregistering = true;
+    program_realtime_profiler_callbacks_.erase(it);
+
+    // Wait until all in-flight callback invocations that already captured this
+    // registration have completed.
+    state->drained_cv.wait(lock, [&state]() { return state->in_flight_invocations == 0; });
 }
 
 void DataCollector::InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    for (const auto& [handle, callback] : program_realtime_profiler_callbacks_) {
-        callback(record);
+    using ActiveCallback = std::pair<tt::ProgramRealtimeProfilerCallback, std::shared_ptr<RealtimeCallbackState>>;
+    std::vector<ActiveCallback> active_callbacks;
+    {
+        std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+        active_callbacks.reserve(program_realtime_profiler_callbacks_.size());
+        for (auto& registration : program_realtime_profiler_callbacks_) {
+            if (registration.state->unregistering) {
+                continue;
+            }
+            registration.state->in_flight_invocations++;
+            active_callbacks.emplace_back(registration.callback, registration.state);
+        }
+    }
+
+    std::exception_ptr callback_exception;
+    for (const auto& [callback, state] : active_callbacks) {
+        (void)state;
+        try {
+            callback(record);
+        } catch (...) {
+            if (!callback_exception) {
+                callback_exception = std::current_exception();
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+        for (const auto& [callback, state] : active_callbacks) {
+            (void)callback;
+            TT_ASSERT(state->in_flight_invocations > 0, "In-flight callback accounting underflow");
+            state->in_flight_invocations--;
+            if (state->unregistering && state->in_flight_invocations == 0) {
+                state->drained_cv.notify_all();
+            }
+        }
+    }
+
+    if (callback_exception) {
+        std::rethrow_exception(callback_exception);
     }
 }
 

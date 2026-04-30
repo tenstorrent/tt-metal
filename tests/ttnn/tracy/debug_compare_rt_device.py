@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os, threading, time, torch, ttnn
+import os, threading, torch, ttnn
 
 
 def main():
@@ -51,7 +51,6 @@ def main():
         ttnn.release_trace(dev, tid)
         ttnn.synchronize_device(dev)
     finally:
-        time.sleep(2.0)
         ttnn.close_mesh_device(dev)
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(h)
 

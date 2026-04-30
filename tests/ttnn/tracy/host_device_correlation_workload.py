@@ -19,7 +19,6 @@ import json
 import os
 import sys
 import threading
-import time
 
 import ttnn
 
@@ -84,9 +83,6 @@ def main():
             model_location_generator=None,
         )
     finally:
-        # Give the receiver thread time to deliver remaining records
-        time.sleep(5.0)
-
         with lock:
             pre_close_count = len(records)
         print(f"Records before close: {pre_close_count}", flush=True)

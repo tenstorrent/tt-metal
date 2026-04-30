@@ -23,7 +23,6 @@ import json
 import os
 import sys
 import threading
-import time
 
 import torch
 
@@ -114,9 +113,8 @@ def main():
             ttnn.release_trace(device, tid)
             ttnn.synchronize_device(device)
     finally:
-        time.sleep(1.0)
-        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
         ttnn.close_mesh_device(device)
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
 
     with lock:
         snapshot = list(records)

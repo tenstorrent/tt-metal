@@ -653,8 +653,10 @@ void device_module(nb::module_& m_device) {
             }
         },
         nb::arg("handle"),
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Unregister a previously registered real-time profiler callback.
+            This call waits for any in-flight invocations of the callback to finish.
 
             Args:
                 handle (int): The handle returned by RegisterProgramRealtimeProfilerCallback.

@@ -41,6 +41,8 @@ ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(Pr
 
 /**
  * Unregister a previously registered callback by its handle.
+ *
+ * This call blocks until any in-flight invocation of that callback has completed.
  */
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
 
