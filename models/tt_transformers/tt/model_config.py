@@ -578,7 +578,7 @@ class ModelArgs:
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
-        supported_batches = {1, 2, 4, 8, 16, 32}
+        supported_batches = {1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 32}
         if self.max_batch_size not in supported_batches:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
@@ -1176,10 +1176,18 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     def use_short_seq_l1_prefill(self, seq_len: int = None):
-        """L1-backed prefill activations on single-chip meshes when batch is 1 and sequence is short.
+        """L1-backed prefill activations on single-chip meshes when sequence is short.
 
         Reduces DRAM traffic for short prompts (e.g. Qwen3-Embedding). Threshold is
         ``TT_SHORT_SEQ_L1_PREFILL_MAX`` (default 512). Opt out with ``TT_PREFILL_FORCE_DRAM=1``.
+
+        Batched prefill (batch>1): the seq_len that flows through the network is
+        ``batch*per_user_seq`` (see attention.py reshape). We gate on the per-user
+        seq fitting the short-seq threshold AND a total-bytes cap so the FF
+        intermediates (~3x activation size) don't exceed L1 capacity.
+        ``TT_BATCHED_L1_PREFILL_MAX_BYTES`` controls the cap (default 24 MB —
+        empirically safe through ~bs=16 at ISL=512 on Qwen3-Embedding-0.6B; bs=32
+        goes OOM).
         """
         force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
         if force_dram:
@@ -1188,11 +1196,45 @@ class ModelArgs:
             return False
         if self.num_devices != 1:
             return False
-        if self.max_batch_size != 1:
-            return False
         max_short = int(os.getenv("TT_SHORT_SEQ_L1_PREFILL_MAX", "512"))
-        effective_seq_len = self.max_seq_len if seq_len is None else seq_len
-        return effective_seq_len <= max_short
+        # The gate is called in two contexts:
+        #   - config time (e.g. residual mem-config setup): seq_len is None or the
+        #     model's max_seq_len, which is the PER-USER seq.
+        #   - runtime (e.g. residual placement during prefill): seq_len is the
+        #     ALREADY-FLATTENED batch*per_user seq (16384 for bs=32 isl=512).
+        # We need the same answer in both contexts. Disambiguate by checking
+        # whether seq_len is already > max_seq_len (then it's flattened) or not.
+        per_user_seq = self.max_seq_len if seq_len is None else seq_len
+        if per_user_seq > self.max_seq_len:  # already flattened across batch
+            per_user_seq = per_user_seq // max(1, self.max_batch_size)
+        flat_seq = per_user_seq * self.max_batch_size
+        # Single-user fast path
+        if self.max_batch_size == 1:
+            return per_user_seq <= max_short
+        # Batched prefill: opt-in via TT_BATCHED_L1_PREFILL=1 (default off because
+        # this can OOM on bigger batches; user must validate per-shape).
+        if os.getenv("TT_BATCHED_L1_PREFILL", "0") != "1":
+            return False
+        if per_user_seq > max_short:
+            return False
+        # Cap on total flattened activation bytes (bf16 = 2 B/element). Always
+        # use the FLAT batch*per_user shape for the budget, regardless of
+        # which form `seq_len` came in as.
+        # Empirically on Qwen3-Embedding-0.6B / P150 with all promotions enabled:
+        #   bs=8  isl=512 ( 8 MB act): passes consistently, ~21% faster than DRAM
+        #   bs=10 isl=512 (10 MB act): unstable — sometimes passes, sometimes
+        #     fails trace capture with the L1/static-CB clash
+        #     ("L1 buffer allocated at 580160 and static circular buffer region
+        #      ends at 659968"); the 80 KB gap is too tight when the per-core CB
+        #      region grows after program-cache fills with nested ops.
+        #   bs=11 isl=512 (11 MB act): fails consistently
+        #   bs=16 isl=512 (16 MB act): OOMs outright
+        # 8 MB is the safe default. Override with TT_BATCHED_L1_PREFILL_MAX_BYTES
+        # for experiments (e.g. 10485760 to attempt bs=10).
+        max_bytes = int(os.getenv("TT_BATCHED_L1_PREFILL_MAX_BYTES", str(8 * 1024 * 1024)))
+        if flat_seq * self.dim * 2 > max_bytes:
+            return False
+        return True
 
     def get_prefill_activation_mem_config(self, seq_len: int = None):
         """Preferred prefill activation memory placement (L1 for guarded short-seq path)."""
@@ -1208,10 +1250,21 @@ class ModelArgs:
         kernel/launch cost actually makes it slower than the well-tuned
         ``MatmulMultiCoreReuseMultiCastProgramConfig`` path — per-op it was 53us
         vs 21us in the profile. Force the traditional path in that regime.
+
+        Only the genuinely-small case (single-user prefill with short seq) wants
+        the legacy path; any batched prefill should keep using minimal_matmul
+        even if the activation happens to be L1-resident.
+
+        Override the bs=1 default with QWEN_MINIMAL_MM_BS1=1 for experiments
+        (the matmul-analyzer flagged the legacy path as SLOW on QKV; routing
+        bs=1 to minimal_matmul lifts FLOPS utilization on that op for problems
+        where K isn't (32 * grid_y)-divisible).
         """
         if seq_len <= 128:
             return False
-        if self.use_short_seq_l1_prefill(seq_len):
+        if self.max_batch_size == 1 and self.use_short_seq_l1_prefill(seq_len):
+            if os.getenv("QWEN_MINIMAL_MM_BS1", "0") == "1":
+                return True
             return False
         return True
 
@@ -1289,6 +1342,24 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             if self.use_minimal_matmul_prefill(seq_len):
                 grid = self.mlp1_3_grid(seq_len)
+                # On Blackhole the find_prefill_grid helper caps at (8,8)=64 cores
+                # because its hardcoded max_rows=8. minimal_matmul handles non-
+                # integer M_tiles/grid_y internally (rounds up per_core_M, leaves
+                # extra rows partly idle), so we can opt-in to (8,10)=80 cores
+                # for FF1/FF3 with QWEN_MM_BIG_GRID_BH=1. Auto-disabled when
+                # the activation lives in L1 (TT_BATCHED_L1_PREFILL on bs<=10):
+                # the wider grid grows the static CB region per core, and on
+                # rows 8-9 it collides with the L1-resident activation buffer
+                # ("Statically allocated circular buffers ... clash with L1
+                # buffers on core range [(x=0,y=0) - (x=7,y=9)]"). For bs>=11
+                # (DRAM activations) the wider grid is a clean ~2-3% win.
+                if (
+                    is_blackhole()
+                    and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
+                    and grid == (8, 8)
+                    and not self.use_short_seq_l1_prefill(seq_len)
+                ):
+                    grid = (8, 10)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1348,6 +1419,17 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             if self.use_minimal_matmul_prefill(seq_len):
                 grid = self.mlp2_grid(seq_len)
+                # See QWEN_MM_BIG_GRID_BH note in get_mlp_ff1_3_prg_config: only
+                # safe when activations live in DRAM (not the L1 batched-prefill
+                # path) because the wider grid's per-core CB region collides
+                # with L1 activations on bs<=10.
+                if (
+                    is_blackhole()
+                    and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
+                    and grid == (8, 8)
+                    and not self.use_short_seq_l1_prefill(seq_len)
+                ):
+                    grid = (8, 10)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1522,9 +1604,40 @@ class ModelArgs:
         # work units, so we can afford larger q/k chunks which improve the
         # per-core compute-to-memory ratio. Empirically:
         #   bs=1  seq=512: q_chunk=64  (16 batch-heads only — need many Q chunks to keep 64 cores busy)
-        #   bs=32 seq=512: q_chunk=128 (512 batch-heads — bigger chunks save ~22ms; q_chunk=256 showed
-        #                               bs8-short regression + negligible bs32 win so we cap at 128)
-        short_seq_chunk = 128 if batch_size > 1 and seq_len % 128 == 0 and seq_len >= 128 else 64
+        #   bs=8  seq=512: q_chunk=256 (128 batch-heads × 2 q-chunks = 256 work units → 4 rounds on 64
+        #                               cores with 2x more work per kernel launch — net win)
+        #   bs=32 seq=512: q_chunk=256 (1024 work units / 80-core grid = ~13 rounds, less per-round
+        #                               setup cost than q_chunk=128's ~26 rounds)
+        # Earlier comment said q_chunk=256 regressed bs8-short — that test uses synthetic real-text
+        # inputs padded to ~1024 with batch_size=8 (different shape from bs8 ISL=512 batched). The
+        # gate on `batch_size >= 4 and seq_len == 512` keeps the win for our embedding workload
+        # without touching that other test path.
+        # CRITICAL: q/k_chunk=256 grows the SDPA static CB region by ~24 KB per core (q + k + scratch
+        # buffers all double). When activations are L1-resident (use_short_seq_l1_prefill=True, e.g.
+        # bs=8 ISL=512 with TT_BATCHED_L1_PREFILL=1) those CBs clash with the L1 activation buffer
+        # — observed as "Statically allocated CBs ... clash with L1 buffers" on bs=8. So only
+        # promote to chunk=256 when the activations live in DRAM (which gives SDPA the full L1
+        # budget, which is exactly bs=32 today).
+        try:
+            activations_in_l1 = self.use_short_seq_l1_prefill(batch_size * seq_len)
+        except Exception:
+            activations_in_l1 = False
+        if batch_size >= 4 and seq_len % 256 == 0 and seq_len >= 256 and seq_len <= 512 and not activations_in_l1:
+            short_seq_chunk = 256
+        elif batch_size > 1 and seq_len % 128 == 0 and seq_len >= 128:
+            short_seq_chunk = 128
+        else:
+            short_seq_chunk = 64
+        # Override: bigger chunk for bs=1 short-seq experiment. Per the matmul
+        # analyzer's hint that SDPA can benefit from larger chunks when combined
+        # with a bigger compute grid. Opt-in via QWEN_SDPA_BIG_CHUNK_BS1=1.
+        if (
+            batch_size == 1
+            and seq_len % 128 == 0
+            and seq_len >= 128
+            and os.getenv("QWEN_SDPA_BIG_CHUNK_BS1", "0") == "1"
+        ):
+            short_seq_chunk = 128
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
@@ -1557,6 +1670,12 @@ class ModelArgs:
         # Threshold >128 picks up bs32+ without regressing bs8.
         n_q_heads = getattr(self, "n_heads", 32)
         use_big_grid = is_blackhole() and (batch_size * n_q_heads) > 128
+        # Override: let the user force the larger grid for bs=1 short-seq, where
+        # each (batch_head, q_chunk) work unit is fairly small and the extra
+        # cores can sometimes pay off if combined with bigger q_chunk / k_chunk
+        # (more work per unit). Opt-in via QWEN_SDPA_BIG_GRID=1.
+        if is_blackhole() and os.getenv("QWEN_SDPA_BIG_GRID", "0") == "1":
+            use_big_grid = True
         sdpa_grid = (8, 10) if use_big_grid else (8, 8)
         # exp_approx_mode uses a fast piecewise-polynomial approximation of exp()
         # inside the online softmax; verified to have negligible impact on
@@ -1684,24 +1803,42 @@ class ModelArgs:
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
                 )
             else:
-                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                    out_subblock_h=1,  # Must be divisible by per_core_M
-                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    per_core_M=7
+                # Tuned per ttnn-visualizer matmul analyzer for the bs=1 / short-seq
+                # path (use_minimal_matmul_prefill = False). The previous config used
+                # in0_block_w=1 and out_subblock 1x1 which the analyzer flagged as
+                # SLOW; bumping in0_block_w to the largest divisor of K-per-row and
+                # out_subblock_w via get_out_subblock_w lifts the per-call FLOPS
+                # utilization toward the analyzer's "look good" band.
+                #
+                # Grid choice: matmul_config requires K to be divisible by
+                # TILE*grid_y. For Qwen3-Embedding K=dim=1024, grid_y=8 gives
+                # K_per_row=4 (clean) while grid_y=10 gives 3.2 (forces fallback to
+                # in0_block_w=1). Drop to grid (8,8) here — the matmul on a single
+                # short prefill batch was already only utilizing 64 cores in
+                # practice (M=16 doesn't divide 10), so the (8,8) explicit cap is
+                # not a regression and unlocks proper block-w / subblock-w.
+                qkv_grid_y = 8
+                qkv_grid_x = 8
+                qkv_per_core_M = (
+                    7
                     if self.device_name == "P100"
-                    else (
-                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                            1,
-                            8
-                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
-                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                        )
-                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                    per_core_N=math.ceil(
-                        self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
-                    ),  # N / TILE_WIDTH / grid width
+                    else max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                        1,
+                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),
+                    )
+                )
+                qkv_per_core_N = math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width)
+                # in0_block_w: largest divisor of K-tiles-per-row (capped at 8).
+                k_tiles_per_row = max(1, (self.dim // ttnn.TILE_SIZE) // qkv_grid_y)
+                qkv_in0_block_w = self.find_largest_divisor(k_tiles_per_row)
+                qkv_out_subblock_w = get_out_subblock_w(qkv_per_core_N, out_subblock_h=1) if not self.is_galaxy else 1
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(qkv_grid_x, qkv_grid_y),
+                    in0_block_w=qkv_in0_block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=qkv_out_subblock_w,
+                    per_core_M=qkv_per_core_M,
+                    per_core_N=qkv_per_core_N,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -2018,6 +2155,16 @@ class ModelArgs:
             )
             if self.use_minimal_matmul_prefill(seq_len) and not self.is_galaxy:
                 grid = self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE)
+                # See QWEN_MM_BIG_GRID_BH note in get_mlp_ff1_3_prg_config: only
+                # safe when activations live in DRAM (not the L1 batched-prefill
+                # path).
+                if (
+                    is_blackhole()
+                    and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
+                    and grid == (8, 8)
+                    and not self.use_short_seq_l1_prefill(seq_len)
+                ):
+                    grid = (8, 10)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -3597,6 +3744,104 @@ class ModelArgs:
             block_w=block_w,
             inplace=False,
         )
+
+    def get_prefill_block_sharded_norm_config(self, seq_len):
+        """Build (block-sharded input mem cfg, sharded LN program cfg) for prefill RMSNorm.
+
+        Returns None when the env knob is off, the model is multi-chip/galaxy/distributed-
+        norm, or the shape can't be cleanly tiled across a 8x8 grid.
+
+        Per-op profile vs. the interleaved 16-core path on Qwen3-Embedding-0.6B
+        (bs=1 ISL=512, full-dim attn_norm / ff_norm):
+                                  cores  kernel_us   conv_in   conv_out
+            interleaved (curr.)    16      ~16.6        -          -
+            block-sharded BGE-style 64      ~13.1      ~1.0       ~1.0
+            net per LN: ~1.5 us saved (matches BGE-M3 ttnn-visualizer report).
+
+        Per Qwen3-Embedding-0.6B prefill iter: 56 full-dim LNs (28 attn_norm + 28
+        ff_norm). Expected savings ~85 us / iter -> ~1% on bs=1 ISL=512 trace.
+
+        Opt-in via QWEN_LN_BLOCK_SHARDED=1 to keep blast radius small while we
+        validate; q_norm/k_norm already run on 130 cores via head-dim sharding so
+        they are NOT touched by this path.
+        """
+        if os.getenv("QWEN_LN_BLOCK_SHARDED", "0") != "1":
+            return None
+        if self.is_multichip or self.is_galaxy:
+            return None
+        if seq_len is None or seq_len <= 0 or seq_len % ttnn.TILE_SIZE != 0:
+            return None
+
+        # Only enable when activations are already L1-resident. With DRAM-resident
+        # activations, the I2S / S2I round-trip on every LN actually goes through
+        # DRAM (~500 GB/s) for an 8 MB tensor (bs=8 ISL=512 DRAM); paying that
+        # ~16 us per direction x 56 LNs/iter = ~1.8 ms wipes out the LN kernel's
+        # ~3 us savings several times over (measured: bs=8 ISL=512 went 45 -> 62
+        # ms with sharded LN over DRAM activations). When activations are L1-
+        # resident the conversions are L1-to-L1 (~3 TB/s) and the savings hold.
+        if not self.use_short_seq_l1_prefill(seq_len):
+            return None
+
+        m_tiles = seq_len // ttnn.TILE_SIZE
+        k_tiles = self.dim // ttnn.TILE_SIZE
+        if m_tiles == 0 or k_tiles == 0:
+            return None
+
+        # Aim for an 8x8 worker grid (matches BGE-M3's 64-core LN); shrink along
+        # an axis if the tile counts can't be split cleanly. Bigger grids don't
+        # pay off for LN since the per-tile work is tiny and reduction overhead
+        # grows with core count.
+        gx_max = 8
+        gy_max = 8
+        gx = min(gx_max, k_tiles)
+        while gx > 0 and k_tiles % gx != 0:
+            gx -= 1
+        gy = min(gy_max, m_tiles)
+        while gy > 0 and m_tiles % gy != 0:
+            gy -= 1
+        if gx <= 0 or gy <= 0:
+            return None
+        # Skip if we'd end up with fewer cores than the current interleaved path
+        # already gets (16 for full-dim LN at dim=1024); no point paying the
+        # I2S/S2I overhead for a wash.
+        if gx * gy < 32:
+            return None
+
+        block_h = m_tiles // gy
+        block_w = k_tiles // gx
+        # Per-core L1 budget: the LN kernel allocates ~6 static CBs each of size
+        # block_h*block_w tiles (input, gamma, interim, output, plus stats), so
+        # roughly block_h*block_w*~12 KB of static-CB region per core. With
+        # L1-resident activations eating most of L1, an empirical cap of 16
+        # tiles per core (~192 KB) avoids clashes with dynamic L1 buffers.
+        # bs=8 ISL=512 batched (block_h=16, block_w=4 -> 64) hit a CB clash
+        # precisely at this regime; bs=1 ISL=512 (2*4 = 8) runs cleanly.
+        if block_h * block_w > 16:
+            return None
+        # subblock_w must divide block_w and be in [1, 4] (kernel constraint).
+        subblock_w = min(4, block_w)
+        while subblock_w > 1 and block_w % subblock_w != 0:
+            subblock_w -= 1
+
+        shard_shape = (block_h * ttnn.TILE_SIZE, block_w * ttnn.TILE_SIZE)
+        sharded_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=shard_shape,
+            core_grid=ttnn.CoreGrid(y=gy, x=gx),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[gx, gy],
+            subblock_w=subblock_w,
+            block_h=block_h,
+            block_w=block_w,
+            inplace=False,
+        )
+        return {
+            "sharded_input_mem_cfg": sharded_mem_cfg,
+            "sharded_program_config": program_config,
+        }
 
     def create_tokenizer(self):
         from transformers import AutoTokenizer

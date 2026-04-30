@@ -161,6 +161,15 @@ class RMSNorm(LightweightModule):
         )
 
         if in_sharded and not out_sharded:
+            # Honor output_mem_config on the S2I path too. Default behavior of
+            # ttnn.sharded_to_interleaved is DRAM-interleaved, which silently
+            # spills the LN output to DRAM right before the next consumer
+            # (QKV / FF1 / FF3 matmul) has to read it back. The ttnn-visualizer
+            # matmul analyzer flagged this as "input 0 currently in
+            # DEV_0_DRAM_INTERLEAVED" on every QKV/FF1/FF3 call. When
+            # output_mem_config asks for L1, route the unshard straight into L1.
+            if output_mem_config is not None:
+                return ttnn.sharded_to_interleaved(x, memory_config=output_mem_config)
             return ttnn.sharded_to_interleaved(x)
         else:
             if output_mem_config is not None:

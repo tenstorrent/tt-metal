@@ -925,15 +925,19 @@ class Attention(LightweightModule):
             # actually keeps the QKV output in L1. Without this, minimal_matmul defaults
             # to DRAM regardless of the model_config setting, which forces NlpCreateHeads
             # to round-trip through DRAM (was ~10% of per-iteration kernel time).
-            # NOTE: dtype is intentionally left unset (defaults to input dtype / bf16)
-            # because Q/K-norm downstream require bf16. Casting QKV output to bfp8 here
-            # would add bf8->bf16 typecasts before the norms, undoing the win.
+            # Force BF16 output: q_norm/k_norm/rotary downstream all require BF16
+            # tensors. minimal_matmul defaults the output dtype to the input dtype,
+            # which becomes BFP8 when QWEN_RESIDUAL_BFP8=1 propagates a BFP8 residual
+            # stream into QKV — that would crash rotary at runtime. Pinning bf16 here
+            # keeps the FF1/FF3/FF2 BFP8 chain intact while preserving rotary's
+            # bf16 invariant.
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
                 self.wqkv,
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
                 config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
                 memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None, prefill_seq_len=seq_len),
+                dtype=ttnn.bfloat16,
             )
         else:
             xqkv_fused = ttnn.linear(

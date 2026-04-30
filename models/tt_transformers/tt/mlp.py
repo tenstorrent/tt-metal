@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -167,6 +169,18 @@ class MLP(LightweightModule):
             and isinstance(pc_1, ttnn.MinimalMatmulConfig)
         )
 
+        # Optional: emit FF1/FF3 outputs as BFP8 instead of BF16. This halves the
+        # DRAM write/read bandwidth of the [seq, hidden_dim] gate/up tensors that
+        # feed the silu*mul fused op (which already produces BFP8). Targeted to
+        # the MLP path specifically because it doesn't touch the rotary
+        # embedding op (rotary requires BF16 inputs and asserts otherwise).
+        # Profiler showed MinimalMatmul unpacker efficiency ~28% on FF1/FF3,
+        # i.e. the FPU is starved on activation reads — bumping FF1/FF3 outputs
+        # to BFP8 trades 1 bit of mantissa for halved activation traffic on
+        # the FF2 read path. Opt-in via QWEN_FF13_OUT_BFP8=1.
+        ff13_out_dtype = (
+            ttnn.bfloat8_b if mode == Mode.PREFILL and os.getenv("QWEN_FF13_OUT_BFP8", "0") == "1" else None
+        )
         if use_mm_ff1_3:
             w1_out = ttnn.experimental.minimal_matmul(
                 x,
@@ -176,6 +190,7 @@ class MLP(LightweightModule):
                 memory_config=self.args.get_mlp_ff1_3_mem_config(
                     mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
                 ),
+                dtype=ff13_out_dtype,
             )
             w3_out = ttnn.experimental.minimal_matmul(
                 x,
@@ -185,12 +200,13 @@ class MLP(LightweightModule):
                 memory_config=self.args.get_mlp_ff1_3_mem_config(
                     mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
                 ),
+                dtype=ff13_out_dtype,
             )
         else:
             w1_out = ttnn.linear(
                 x,
                 self.w1,
-                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                dtype=ff13_out_dtype or (ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16),
                 core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
                 compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                 program_config=pc_1,
@@ -205,7 +221,7 @@ class MLP(LightweightModule):
             w3_out = ttnn.linear(
                 x,
                 self.w3,
-                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                dtype=ff13_out_dtype or (ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16),
                 core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
                 compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                 program_config=pc_3,

@@ -38,7 +38,159 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+    determine_device_name,
+)
+
+
+def _qwen_embedding_optimizations(model_args):
+    """Build a DecodersPrecision config layered on top of `performance` with optional
+    BFP8 -> BFP4 weight promotions for Qwen3-Embedding workloads.
+
+    Defaults match upstream `performance` (FF1/FF3 already BFP4 + LOFI).
+    The following env vars opt extra weight classes into BFP4 + LOFI fidelity:
+
+      QWEN_FF2_BFP4=1   FF2 (down_proj) weights go BFP4
+      QWEN_QKV_BFP4=1   QKV projection weights go BFP4
+      QWEN_WO_BFP4=1    WO (attention output) weights go BFP4
+
+    BFP4 cuts each weight's DRAM footprint in half (vs BFP8). Per-knob measured
+    on Qwen3-Embedding-0.6B / P150 (dp1-batch{1,8,32}-isl512, real text bs=8):
+
+                 bs=1   bs=8   bs=32   AI/AI   AI/weather (lower=better)
+      base       12.1   23.8   247.1   0.685   0.166
+      +FF2       12.0   23.3   243.6   0.703   0.243   <- biggest accuracy hit
+      +QKV       11.7   23.2   242.2   0.701   0.183
+      +WO        12.0   23.6   244.5   0.673   0.181
+      +QKV+WO    11.6   22.5   239.4   0.698   0.200   <- best perf/accuracy
+      +all 3     11.6   22.6   235.8   0.710   0.261
+
+    QKV+WO is the recommended profile: ~3% wall-time win across all bs with
+    only +0.034 AI/weather drift; FF2 doubles the gain but accelerates the
+    weather/AI confusion (+0.061 from +QKV+WO baseline). Left opt-in so the
+    default test path stays bit-identical for CI/QA.
+    """
+    base = DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+
+    promote_ff2 = os.getenv("QWEN_FF2_BFP4", "0") == "1"
+    promote_qkv = os.getenv("QWEN_QKV_BFP4", "0") == "1"
+    promote_wo = os.getenv("QWEN_WO_BFP4", "0") == "1"
+    # Companion env vars (read elsewhere in the model):
+    #
+    #   QWEN_FF13_OUT_BFP8=1   (mlp.py)     - FF1/FF3 matmul output -> BFP8.
+    #                                          Halves the activation DRAM write/read
+    #                                          bandwidth between FF1/FF3 and FF2.
+    #
+    #   QWEN_FFNORM_IN_BFP8=1  (decoder.py) - Post-attn residual add output -> BFP8.
+    #                                          Propagates through ff_norm and into
+    #                                          FF1/FF3 inputs, halving the DRAM read
+    #                                          on the [seq, dim] activation. Does NOT
+    #                                          touch the rotary path (final residual
+    #                                          add still emits bf16).
+    #
+    #   QWEN_ROPE_PREFILL_L1=1 (rope.py)    - cos/sin/trans_mat tables -> L1.
+    #                                          Rotary kernel was MATH=4% on bs=32 due
+    #                                          to redundant DRAM reads of cos/sin
+    #                                          tables (~128 KB each) on every
+    #                                          (head, seq_tile) inner-loop iteration.
+    #                                          L1-resident tables hit the ~3 TB/s L1
+    #                                          path instead of ~500 GB/s DRAM.
+    #                                          Auto-disables if max_seq_len*head_dim*2
+    #                                          > 8 MB (still safely fits in L1, but
+    #                                          conservative for big-context models).
+    #
+    #   QWEN_LN_BLOCK_SHARDED=1 (model_config.py / distributed_norm.py)
+    #                                        - Block-shard the prefill RMSNorm input
+    #                                          across an 8x8 (64-core) grid instead
+    #                                          of running the interleaved kernel on
+    #                                          16 cores. Cuts the full-dim LN kernel
+    #                                          from ~16.6 us -> ~13.0 us (matches
+    #                                          BGE-M3); even after I2S/S2I overhead
+    #                                          (~1 us each) nets ~1.5 us per LN.
+    #                                          56 full-dim LNs/iter (28 attn_norm +
+    #                                          28 ff_norm) -> ~85 us / iter on bs=1.
+    #                                          q_norm/k_norm already use 130 cores
+    #                                          so they're untouched. Auto-disables
+    #                                          when block_h*block_w > 64 (i.e. for
+    #                                          batched prefill where the per-core
+    #                                          shard exceeds the L1 CB budget).
+    #
+    #   QWEN_RESIDUAL_BFP8=1 (decoder.py)    - post-FFN final residual add -> BFP8.
+    #                                          Sibling of QWEN_FFNORM_IN_BFP8 (which
+    #                                          covers the post-attn add). Together
+    #                                          they keep the ENTIRE residual stream
+    #                                          BFP8 across all 28 layers, halving
+    #                                          the activation read of every QKV /
+    #                                          FF1 / FF3 matmul. Safe wrt rotary
+    #                                          (which asserts BF16 inputs): QKV's
+    #                                          minimal_matmul / linear path now
+    #                                          forces output dtype=bf16 regardless
+    #                                          of input dtype, so Q/K split into
+    #                                          rotary still get bf16. Cosine-sim
+    #                                          actually IMPROVED slightly in the
+    #                                          measured run (0.694 -> 0.700 on
+    #                                          AI/AI), likely because the BFP8
+    #                                          accumulation across more ops cancels
+    #                                          some round-toward-zero bias.
+    #
+    # Cumulative measured impact on Qwen3-Embedding-0.6B / P150:
+    #
+    #               bs=1   bs=8   bs=32   AI/AI (real text bs=8)   AI/weather
+    #   baseline    12.1   23.8   247.1   0.685                    0.166
+    #   +QKV+WO     11.7   23.3   239.6   0.698                    0.200
+    #   +FF13_OUT   11.3   22.5   232.2   0.694                    0.193
+    #   +FFNORM_IN  11.3   21.8   228.5   0.694                    0.196
+    #   +ROPE_L1    11.2   21.1   217.9   0.694                    0.196
+    #   +LN_BSHARD   9.8   20.8   213.6   0.694                    0.196
+    #   +LN_S2I_L1   9.5   20.8   213.4   0.694                    0.196 (rmsnorm fix)
+    #   +RESID_BF8   9.4   19.8   208.9   0.700                    0.208
+    #   +SDPA_CHK    9.4   19.8   208.3   (untested)                       <- recommended
+    #
+    # Recommended steady-state config:
+    #   QWEN_QKV_BFP4=1 QWEN_WO_BFP4=1 QWEN_FF13_OUT_BFP8=1 QWEN_FFNORM_IN_BFP8=1 \
+    #   QWEN_RESIDUAL_BFP8=1 QWEN_ROPE_PREFILL_L1=1 QWEN_LN_BLOCK_SHARDED=1
+    #
+    # NlpCreateHeads (currently 16 cores / 42 us / call on bs=1) is at a structural
+    # ceiling — the kernel splits work along the seq tile axis (16 tiles for
+    # ISL=512), and the Sharded variant caps at 8 cores for Qwen3's GQA layout
+    # (n_kv_heads=8). Further wins here need a new kernel.
+    # SDPA on bs=1 is similarly at a structural ceiling: 16 batch-heads × 1 batch
+    # = 16 work units, so 16 cores is the max grid utilization.
+
+    if not (promote_ff2 or promote_qkv or promote_wo):
+        return base
+
+    # DecodersPrecision shares a single ModelOptimizations instance across all
+    # decoder ids by default (see DecodersPrecision.__init__), so mutating any
+    # entry mutates them all. Dedupe by id() to handle the future case where a
+    # JSON-driven path gives each layer its own instance.
+    seen = set()
+    for decoder_id in range(model_args.n_layers):
+        opt = base.decoder_optimizations[decoder_id]
+        if id(opt) in seen:
+            continue
+        seen.add(id(opt))
+        tp = opt._opt_settings["TensorPrecision"]
+        of = opt._opt_settings["OpFidelity"]
+        if promote_ff2:
+            tp[TensorGroup.FF2] = PrecisionSetting.BFP4
+            of[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
+        if promote_qkv:
+            tp[TensorGroup.WQKV] = PrecisionSetting.BFP4
+            of[OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.LOFI
+            of[OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
+        if promote_wo:
+            tp[TensorGroup.WO] = PrecisionSetting.BFP4
+            of[OpGroup.LI_O_PREFILL] = MathFidelitySetting.LOFI
+            of[OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
+    base._update_full_name()
+    return base
+
 
 MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 BLOCK_SIZE = 32
@@ -236,9 +388,9 @@ def clear_all_kv_caches(generator):
             256,
             256,
             {"page_block_size": 32, "page_max_num_blocks": 512},
-            10,
-            True,
             1,
+            True,
+            10,
         ),
         (  # dp1-batch1-seqlt1024: batch=1, max_seq_len and ISL both < 1024 (synthetic tokens)
             1,
@@ -411,7 +563,110 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
-        (  # dp1-batch8-short: 8 texts, 1024 tokens, single device
+        (  # dp1-batch2-isl512
+            2,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch4-isl512
+            4,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch8-isl512
+            8,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch9-isl512
+            9,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 9 * 64},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch10-isl512
+            10,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 10 * 64},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch11-isl512
+            11,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 11 * 64},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch12-isl512
+            12,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 12 * 64},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch13-isl512
+            13,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 13 * 64},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch14-isl512
+            14,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 14 * 64},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch15-isl512
+            15,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 15 * 64},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch16-isl512
+            16,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            10,
+            True,
+            1,
+        ),
+        (  # dp1-batch8-short: 8 SAMPLE_TEXTS tokenized as real text and padded
+            # by `tokenize_and_pad` up to max_seq_len; with ~30 real tokens per
+            # text the per-user padded prefill seq lands at 128 (next power of 2),
+            # so total tokens = 8*128 = 1024. Used for the bs>1 cosine-similarity
+            # smoke test (synthetic random tokens give meaningless cosine numbers).
             8,
             1024,
             None,
@@ -488,6 +743,17 @@ def clear_all_kv_caches(generator):
         "dp1-batch32-isl2048",
         "dp1-batch32-isl4096",
         "dp1-batch32-isl8192",
+        "dp1-batch2-isl512",
+        "dp1-batch4-isl512",
+        "dp1-batch8-isl512",
+        "dp1-batch9-isl512",
+        "dp1-batch10-isl512",
+        "dp1-batch11-isl512",
+        "dp1-batch12-isl512",
+        "dp1-batch13-isl512",
+        "dp1-batch14-isl512",
+        "dp1-batch15-isl512",
+        "dp1-batch16-isl512",
         "dp1-batch8-short",
         "dp32-isl512",
         "dp32-isl1024",
@@ -498,7 +764,7 @@ def clear_all_kv_caches(generator):
 )
 @pytest.mark.parametrize(
     "optimizations",
-    [lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)],
+    [_qwen_embedding_optimizations],
     ids=["performance"],
 )
 @pytest.mark.parametrize(
@@ -629,6 +895,17 @@ def test_embedding_perf(
     logger.info(f"Compile prefill: {profiler.get_duration('compile_prefill'):.2f}s")
 
     # ---- Benchmark iterations ----
+    # QWEN_NUM_ITER overrides the per-test num_iterations (used for clean
+    # single-iteration profiler captures, e.g. QWEN_NUM_ITER=1).
+    _iter_override = os.environ.get("QWEN_NUM_ITER")
+    if _iter_override is not None:
+        try:
+            override_n = int(_iter_override)
+        except ValueError:
+            override_n = num_iterations
+        if override_n > 0:
+            logger.info(f"QWEN_NUM_ITER override active: {num_iterations} -> {override_n}")
+            num_iterations = override_n
     logger.info(f"Running {num_iterations} benchmark iterations...")
     iteration_times = []
     embeddings = None
@@ -790,7 +1067,7 @@ if __name__ == "__main__":
         profiler.start("run")
 
         texts = load_input_texts(None, args.batch_size)
-        optimizations = lambda ma: DecodersPrecision.performance(ma.n_layers, ma.model_name)
+        optimizations = _qwen_embedding_optimizations
 
         generator, model_args, tokenizer, kv_caches, page_table = prepare_embedding_model(
             device,

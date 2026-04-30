@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -355,6 +356,7 @@ def get_rot_mats(
     rope_scaling: Optional[RopeScaling],
     datatype: Any = ttnn.bfloat16,
     rot_mats_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> List[ttnn.Tensor]:
     cos_matrix, sin_matrix = compute_gather_cos_sin(
         dhead=head_dim,
@@ -368,6 +370,7 @@ def get_rot_mats(
         device=device,
         layout=rot_mats_layout,
         dtype=datatype,
+        memory_config=memory_config,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
     sin_matrix = ttnn.from_torch(
@@ -375,6 +378,7 @@ def get_rot_mats(
         device=device,
         layout=rot_mats_layout,
         dtype=datatype,
+        memory_config=memory_config,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
     return [cos_matrix, sin_matrix]
@@ -484,6 +488,18 @@ class RotarySetup(LightweightModule):
             rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+        # Prefill cos/sin tables are read at the inner-loop frequency of the rotary
+        # kernel (~56 ops/iter on Qwen3-Embedding) and the matching rotary kernel
+        # was profiling at MATH=4% on bs=32 — pure DRAM bandwidth on cos/sin reads.
+        # Move them to L1 for short-seq prefill workloads where they fit comfortably
+        # (max_seq_len * head_dim * 2 bytes; e.g. 512*128*2 = 128 KB for Qwen3-Embedding).
+        # Opt-in via QWEN_ROPE_PREFILL_L1=1 since downstream models with very long
+        # max_seq_len may exceed L1 capacity. Cap at 8 MB raw size by default to be
+        # safe (per-core slice across 130 BH cores is well under the 1.5 MB budget).
+        prefill_rope_l1 = (
+            os.getenv("QWEN_ROPE_PREFILL_L1", "0") == "1" and (max_seq_len * head_dim * 2) <= 8 * 1024 * 1024
+        )
+        prefill_rope_memcfg = ttnn.L1_MEMORY_CONFIG if prefill_rope_l1 else None
         self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats(
             head_dim=head_dim,
             device=device,
@@ -492,6 +508,7 @@ class RotarySetup(LightweightModule):
             rope_scaling=rope_scaling,
             datatype=datatype,
             rot_mats_layout=ttnn.TILE_LAYOUT,
+            memory_config=prefill_rope_memcfg,
         )
 
         def get_batch_grid(batch_size, core_grid, start_core, batch_size_per_device_group, prefetcher):
@@ -545,12 +562,14 @@ class RotarySetup(LightweightModule):
 
         # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?
         prefill_trans_mat_torch = get_rot_transformation_mat(dhead=head_dim)
+        # trans_mat is tiny (head_dim x head_dim, e.g. 128*128*2 = 32 KB at bf16) and
+        # read every rotary call. L1 placement is essentially free.
         self.transformation_mat_prefill = ttnn.from_torch(
             prefill_trans_mat_torch,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if prefill_rope_l1 else ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
 

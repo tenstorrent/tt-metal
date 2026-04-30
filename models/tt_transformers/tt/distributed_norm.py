@@ -90,6 +90,45 @@ class DistributedNorm(LightweightModule):
                 seq_len=int(x.shape[-2]) if hasattr(x, "shape") else None
             )
 
+        # Optional: block-sharded prefill RMSNorm. The interleaved prefill path
+        # runs LN on only 16 cores at dim=1024 (~16.6 us per call); block-sharding
+        # the input across 64 cores cuts the kernel to ~13 us, and even after
+        # paying for I2S in / S2I out (~1 us each at this shape), nets ~1.5 us
+        # per full-dim LN. With 56 full-dim LNs/iter on Qwen3-Embedding-0.6B
+        # prefill that's ~85 us / iter (~1% on bs=1 ISL=512). Opt-in via
+        # QWEN_LN_BLOCK_SHARDED=1 for now; q_norm/k_norm are unaffected (they
+        # already shard over the head dimension).
+        if (
+            mode != Mode.DECODE
+            and not self.TG
+            and not self.args.is_multichip
+            and not self.args.is_distributed_norm(mode)
+        ):
+            seq_len_int = int(x.shape[-2]) if hasattr(x, "shape") else None
+            bs_norm_cfg = self.args.get_prefill_block_sharded_norm_config(seq_len_int)
+            if bs_norm_cfg is not None:
+                # I2S into block-sharded layout, run sharded LN, S2I back.
+                # `RMSNorm.forward(in_sharded=True, out_sharded=False)` emits
+                # the trailing sharded_to_interleaved. CRITICAL: route that S2I
+                # into the same L1-interleaved memory config the residual stream
+                # already lives in — otherwise the unshard defaults to DRAM and
+                # the next matmul (QKV / FF1 / FF3) has to read its input from
+                # DRAM. The matmul analyzer flagged this case explicitly as
+                # "input 0 currently in DEV_0_DRAM_INTERLEAVED" on every layer.
+                post_norm_mem_cfg = self.args.get_prefill_activation_mem_config(seq_len=seq_len_int)
+                x = ttnn.to_memory_config(x, bs_norm_cfg["sharded_input_mem_cfg"])
+                x = self.norm(
+                    x,
+                    mode=mode,
+                    in_sharded=True,
+                    out_sharded=False,
+                    norm_config={
+                        "sharded_program_config": bs_norm_cfg["sharded_program_config"],
+                        "output_mem_config": post_norm_mem_cfg,
+                    },
+                )
+                return x
+
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
