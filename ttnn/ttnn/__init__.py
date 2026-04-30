@@ -197,6 +197,7 @@ from ttnn._ttnn.hd_socket import (
 from ttnn.types import (
     TILE_SIZE,
     DataType,
+    DumpTensorMode,
     uint8,
     uint16,
     int32,
