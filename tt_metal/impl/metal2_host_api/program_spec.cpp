@@ -675,8 +675,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // a DFB configuration-dependent way.
     // Unfortunately, those checks won't trigger until the DFB code runs... not until the
     // Program is actually enqueued :(
-    //
-    // TODO: Find a way to fix this usability issue.
     {
         const uint32_t max_dfbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
         if (spec.dataflow_buffers.size() > max_dfbs) {
@@ -687,7 +685,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     spec.program_id,
                     spec.dataflow_buffers.size(),
                     max_dfbs);
-            } else {
+            } else if (is_gen2_arch()) {
                 TT_THROW(
                     "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The permitted "
                     "number of DFBs for the target architecture is configuration-dependent, "
@@ -695,6 +693,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     spec.program_id,
                     spec.dataflow_buffers.size(),
                     max_dfbs);
+            } else {
+                TT_FATAL(false, "Unknown architecture");
             }
         }
     }
