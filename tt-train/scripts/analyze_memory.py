@@ -103,7 +103,7 @@ def find_memory_summaries(
         # Try to extract number of parameters
         num_params = extract_number_of_parameters(content, match.start())
 
-        # Try to extract the
+        # Try to extract the available device memory
         device_memory_mb = extract_available_device_memory_mb(content, match.start())
 
         # Try to find a section name (e.g., "tinyllama (memory_efficient)")
