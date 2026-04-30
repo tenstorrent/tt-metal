@@ -184,19 +184,34 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
 
     Default shapes: (1,1) single card, (1,2) N300, (1,8) T3K.
 
+    When ``CI=true`` is set in the environment, only the largest mesh shape
+    that fits on the current system is parametrized. This lets the same test
+    entry in the pipeline yamls run on any SKU (N150, N300, T3K) without
+    needing per-SKU ``-k "1xN"`` filters or duplicate yaml entries — each SKU
+    automatically picks the largest mesh its device count supports.
+
     Usage:
         @parametrize_mesh_with_fabric()           # default: all shapes that fit
         @parametrize_mesh_with_fabric([(1,8)])     # explicit shapes
 
-        pytest -k "1x1"   # single card (TP=1)
-        pytest -k "1x2"   # N300 (TP=2)
-        pytest -k "1x8"   # T3K (TP=8)
+        pytest -k "1x1"   # single card (TP=1)         (manual / non-CI)
+        pytest -k "1x2"   # N300 (TP=2)                (manual / non-CI)
+        pytest -k "1x8"   # T3K (TP=8)                 (manual / non-CI)
     """
     num_devices = ttnn.get_num_devices()
 
     if mesh_shapes is None:
         all_shapes = [(1, 1), (1, 2), (1, 8)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
+    else:
+        # User-provided shapes: still filter to those that fit, so an explicit
+        # mesh_shapes=[(1,8)] decorator gracefully skips on smaller systems.
+        mesh_shapes = [s for s in mesh_shapes if s[0] * s[1] <= num_devices]
+
+    # CI mode: pick only the largest fitting shape so that one yaml entry can
+    # target multiple SKUs and let each runner select the appropriate mesh.
+    if os.getenv("CI") == "true" and len(mesh_shapes) > 1:
+        mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
     if not mesh_shapes:
         params = [
