@@ -30,6 +30,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
 def reference_model(hf_config):
     """Build the routed-experts-only MoE reference used by the TT MoE test."""
     torch.use_deterministic_algorithms(True)
+    torch.utils.deterministic.fill_uninitialized_memory = False
     moe_config = deepcopy(hf_config)
     moe_config.n_shared_experts = None
     return DeepseekV3MoE(moe_config).eval()

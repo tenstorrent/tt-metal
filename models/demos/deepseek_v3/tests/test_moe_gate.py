@@ -52,6 +52,7 @@ def test_forward_pass(
 
     # Get state dict from actual model - pass directly to convert_weights
     torch.use_deterministic_algorithms(True)
+    torch.utils.deterministic.fill_uninitialized_memory = False
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
     hf_state_dict = reference_model.state_dict()
 

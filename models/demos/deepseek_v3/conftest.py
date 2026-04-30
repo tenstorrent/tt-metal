@@ -241,6 +241,8 @@ def set_deterministic_env():
     """
     torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
+    # DeepSeek reference tensors are too large for PyTorch's deterministic debug fill.
+    torch.utils.deterministic.fill_uninitialized_memory = False
 
 
 @pytest.fixture(scope="session")
