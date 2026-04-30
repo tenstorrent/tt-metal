@@ -1607,13 +1607,6 @@ _COMBINED_ATTN_SRAM_CAP_BYTES = 960 * 1024
 _SHARED_EXPERT_FIELDS = ("shared_gate_proj", "shared_up_proj", "shared_down_proj")
 
 
-# One-shot guard for ``_log_attn_breakdown_per_core``: the per-tensor SRAM
-# trim breakdown is identical for every MoE layer (same attention shapes,
-# same fusion specs), so logging it once per process keeps the signal
-# without flooding stderr in 16-rank runs.
-_ATTN_BREAKDOWN_LOGGED = False
-
-
 def _tensor_l1_per_core_footprint(tt_tensor: ttnn.Tensor) -> tuple[int, list[tuple[int, int]]]:
     """Return ``(per_core_bytes, cores)`` for an L1-sharded ``ttnn.Tensor``.
 
@@ -1755,109 +1748,6 @@ def per_core_l1_lowest_addr_on_cores(
             if prev is None or addr < prev:
                 lowest[c_xy] = addr
     return lowest
-
-
-def _log_attn_breakdown_per_core(
-    named_tensors: list[tuple[str, Any]],
-    target_cores: set[tuple[int, int]] | list[tuple[int, int]],
-    *,
-    layer_idx: int,
-    l1_top_addr: int,
-) -> None:
-    """One-shot diagnostic: per-tensor L1 footprint contribution to ``attn_max``.
-
-    For each ``(field_name, tensor)`` pair, queries the on-device per-core
-    bytes / sample-core address / lockstep-vs-per-core flag / grid size, and
-    logs them.  Only fields that are sharded in L1 contribute to the SRAM
-    trim's ``initial_lowest_addr``; host-staged or DRAM tensors are flagged
-    explicitly so it's obvious which fields are silently outside the cap.
-    Also reports the per-core sum (matching ``attn_max~=l1_top - lowest``)
-    plus the highest-cost core to make the bottleneck visible.
-
-    Sampling note: a "sample core" is the one in ``target_cores`` with the
-    highest reservation total -- that's the core that dominates the
-    cap-vs-headroom calculation.
-    """
-    target = set(target_cores)
-    per_field_lines: list[str] = []
-    per_core_total: dict[tuple[int, int], int] = {}
-    grand_total_unique: int = 0
-    seen_fused: set[int] = set()
-
-    for name, obj in named_tensors:
-        if obj is None:
-            per_field_lines.append(f"    {name:<14s}: None")
-            continue
-        if hasattr(obj, "fused_tensor"):
-            tt_tensor = obj.fused_tensor
-            tid = tt_tensor.tensor_id
-            fused_marker = f" fused(tid={tid})"
-            already_counted = tid in seen_fused
-            if not already_counted:
-                seen_fused.add(tid)
-        elif isinstance(obj, ttnn.Tensor):
-            tt_tensor = obj
-            fused_marker = ""
-            already_counted = False
-        else:
-            per_field_lines.append(f"    {name:<14s}: <unrecognized type {type(obj).__name__}>")
-            continue
-        on_device = ttnn.is_tensor_storage_on_device(tt_tensor)
-        if not on_device:
-            per_field_lines.append(f"    {name:<14s}: HOST-STAGED (off-cap){fused_marker}")
-            continue
-        mc = tt_tensor.memory_config()
-        buf_type = "L1" if mc.buffer_type == ttnn.BufferType.L1 else f"{mc.buffer_type}"
-        if mc.shard_spec is None:
-            per_field_lines.append(f"    {name:<14s}: {buf_type} non-sharded (off-cap){fused_marker}")
-            continue
-        per_core_bytes, cores = _tensor_l1_per_core_footprint(tt_tensor)
-        is_per_core = bool(getattr(tt_tensor, "is_per_core_allocated", lambda: False)())
-        cores_in_target = [c for c in cores if c in target]
-        sample_core = cores_in_target[0] if cores_in_target else (cores[0] if cores else None)
-        if sample_core is not None and is_per_core:
-            sample_addr = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(sample_core[0], sample_core[1]))
-        elif sample_core is not None:
-            sample_addr = tt_tensor.buffer_address()
-        else:
-            sample_addr = -1
-        for c in cores_in_target:
-            if not already_counted:
-                per_core_total[c] = per_core_total.get(c, 0) + per_core_bytes
-        if not already_counted:
-            grand_total_unique += per_core_bytes
-        alloc_kind = "per-core" if is_per_core else "lockstep"
-        in_target = len(cores_in_target)
-        dup_note = " (dup-skip)" if already_counted else ""
-        per_field_lines.append(
-            f"    {name:<14s}: {per_core_bytes:>7d} B/core  [{alloc_kind:<8s}] "
-            f"grid={len(cores):>3d}c (in_target={in_target:>3d}c) "
-            f"sample@({sample_core[0] if sample_core else '-'},{sample_core[1] if sample_core else '-'})"
-            f"=0x{sample_addr:x} dtype={tt_tensor.dtype}{dup_note}{fused_marker}"
-        )
-
-    if per_core_total:
-        max_core, max_bytes = max(per_core_total.items(), key=lambda kv: kv[1])
-        min_core, min_bytes = min(per_core_total.items(), key=lambda kv: kv[1])
-    else:
-        max_core, max_bytes, min_core, min_bytes = (None, 0, None, 0)
-
-    logger.info(
-        "Attn L1 breakdown (layer {}, one-shot): l1_top=0x{:x}={} bytes; "
-        "{} target cores tracked; per-core max={} B on {}, min={} B on {}, "
-        "sum-of-unique-reservations={} B/core (lockstep upper bound)\n"
-        "  per-field:\n{}",
-        layer_idx,
-        l1_top_addr,
-        l1_top_addr,
-        len(target),
-        max_bytes,
-        max_core,
-        min_bytes,
-        min_core,
-        grand_total_unique,
-        "\n".join(per_field_lines),
-    )
 
 
 def _quantize_dequantize_bfp_fn(x, fmt_str):
@@ -2954,21 +2844,20 @@ def prepare_moe_layer_weights(
                 skip_fields=_SHARED_EXPERT_FIELDS,
             )
 
-        named_persistent_attn_tensors = [
-            ("q_a_proj", result.q_a_proj),
-            ("q_b_proj", result.q_b_proj),
-            ("kv_a_proj", result.kv_a_proj),
-            ("o_proj", result.o_proj),
-            ("gate_mm", result.gate_mm),
-            ("attn_norm", result.attn_norm),
-            ("q_norm", result.q_norm),
-            ("kv_norm", result.kv_norm),
-            ("ffn_norm", result.ffn_norm),
-            ("gate_bias", result.gate_bias),
-            ("kv_b1_proj", result.kv_b1_proj),
-            ("kv_b2_proj", result.kv_b2_proj),
+        persistent_attn_tensors = [
+            result.q_a_proj,
+            result.q_b_proj,
+            result.kv_a_proj,
+            result.o_proj,
+            result.gate_mm,
+            result.attn_norm,
+            result.q_norm,
+            result.kv_norm,
+            result.ffn_norm,
+            result.gate_bias,
+            result.kv_b1_proj,
+            result.kv_b2_proj,
         ]
-        persistent_attn_tensors = [t for _, t in named_persistent_attn_tensors]
         boundary_addr, attn_lowest_addr, l1_top_addr = _compute_sram_trim_budget(
             device,
             persistent_attn_tensors,
@@ -2976,20 +2865,6 @@ def prepare_moe_layer_weights(
             worker_l1_size,
             combined_attn_sram_cap_bytes,
         )
-        global _ATTN_BREAKDOWN_LOGGED
-        if not _ATTN_BREAKDOWN_LOGGED:
-            _ATTN_BREAKDOWN_LOGGED = True
-            sram_core_set = (
-                set(_core_list(sram_core_grids.gate))
-                | set(_core_list(sram_core_grids.up))
-                | set(_core_list(sram_core_grids.down))
-            )
-            _log_attn_breakdown_per_core(
-                named_persistent_attn_tensors,
-                sram_core_set,
-                layer_idx=layer_idx,
-                l1_top_addr=l1_top_addr,
-            )
         initial_min_addr = min(attn_lowest_addr.values(), default=l1_top_addr)
         attn_max_per_core = l1_top_addr - initial_min_addr
         sram_headroom = initial_min_addr - boundary_addr

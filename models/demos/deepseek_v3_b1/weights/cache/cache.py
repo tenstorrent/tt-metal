@@ -252,21 +252,12 @@ class TensorCache:
         if meta is None:
             with open(paths.object_dir / "metadata.json") as f:
                 meta = json.load(f)
-        # The per-core allocation flag is now round-tripped through the tensor
+        # The per-core allocation flag is round-tripped through the tensor
         # flatbuffer schema (``MemoryConfig.per_core_allocation`` in
         # ``tensor_spec.fbs``), so a plain ``ttnn.load_tensor(device=...)``
         # reconstructs the correct allocator semantics with no Python-side
         # patching required.
-        # TODO: drop these debug log lines once per-core round-trip is
-        # confirmed working end-to-end (attn_max ≈ 495 KiB, SRAM experts ≥ ~25).
         fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
-        if move_to_device and device is not None:
-            got_per_core = bool(getattr(fused, "is_per_core_allocated", lambda: False)())
-            logger.info(
-                "[cache._load_fused] post-load is_per_core_allocated={} for {}",
-                got_per_core,
-                paths.object_dir.name[:12],
-            )
         # If the loaded fused buffer ended up per-core allocated, verify that its
         # L1 base address is the same on every core it spans.  Downstream kernel
         # setup (e.g. attention_block/op.py::_fused_base_addr) queries a single
