@@ -25,6 +25,7 @@ on:
           - mochi
           - wan2.2-t2v-a14b
           - gpt-oss-20b
+          - gpt-oss-120b
       system-type:
         description: 'Select system type to test'
         required: false
