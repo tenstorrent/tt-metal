@@ -5,47 +5,13 @@
 #include "nlp_create_qkv_heads_decode.hpp"
 
 #include <utility>
-#include <tt-metalium/hal.hpp>
 #include "device/nlp_create_qkv_heads_decode_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 
 namespace ttnn::experimental {
 
-namespace {
-
-// The interleaved reader kernel for nlp_create_qkv_heads_decode reads each
-// face row as a single 16-element transaction, i.e. `16 * element_size` bytes
-// per noc_async_read. On Wormhole that is 32 bytes for bfloat16, which equals
-// the 32-byte DRAM read alignment so the read is well-formed. On Blackhole
-// the DRAM read alignment is 64 bytes, so a 32-byte transaction is
-// sub-alignment and silently returns wrong data — every odd-indexed Q/K/V
-// head ends up reading the *previous* user's row instead of its own (see
-// issue #43270 for the gpt-oss-20b symptom and isolation diagnostics).
-//
-// Until the kernel is taught to read in alignment-compliant chunks, promote
-// the input tensor to L1 (which has 16-byte read alignment regardless of
-// arch) when the per-face-row read size would be below the DRAM alignment.
-// On Wormhole the predicate is false (32 < 32 is false), so the WH path is
-// untouched. On any architecture / dtype combination where the kernel's
-// read size already meets DRAM alignment (e.g. fp32 on Blackhole — 64 bytes)
-// the predicate is false and the original DRAM path is used.
-bool needs_l1_promotion_for_dram_alignment(const ttnn::Tensor& input_tensor) {
-    if (input_tensor.is_sharded()) {
-        return false;  // sharded inputs don't go through the interleaved reader
-    }
-    if (input_tensor.memory_config().buffer_type() != tt::tt_metal::BufferType::DRAM) {
-        return false;
-    }
-    const uint32_t face_row_read_bytes = 16u * input_tensor.element_size();
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    return face_row_read_bytes < dram_alignment;
-}
-
-}  // namespace
-
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode(
-    const Tensor& input_tensor_in,
+    const Tensor& input_tensor,
     const uint32_t num_heads,
     const std::optional<const uint32_t> num_kv_heads,
     std::optional<std::array<Tensor, 3>>& /*optional_output_tensors*/,
@@ -53,12 +19,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode
     const std::optional<const Tensor>& batch_offset,
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& memory_config) {
-    Tensor input_tensor = input_tensor_in;
-    if (needs_l1_promotion_for_dram_alignment(input_tensor)) {
-        const tt::tt_metal::MemoryConfig l1_interleaved{
-            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
-        input_tensor = ttnn::to_memory_config(input_tensor, l1_interleaved, std::nullopt);
-    }
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
     const bool overlap_qk_coregrid_val = input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true;
     // Check if input is on subcoregrids
