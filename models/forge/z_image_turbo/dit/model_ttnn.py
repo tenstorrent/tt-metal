@@ -24,6 +24,7 @@ import sys
 from dit import consteval, model_pt, params
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -78,11 +79,6 @@ REDUCE_KERNEL = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
 )
-
-
-class LightweightModule:
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
 
 
 # ── Main model class ───────────────────────────────────────────────────────────

@@ -23,12 +23,7 @@ import torch
 from text_encoder import params
 
 import ttnn
-
-
-class LightweightModule:
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
-
+from models.common.lightweightmodule import LightweightModule
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
