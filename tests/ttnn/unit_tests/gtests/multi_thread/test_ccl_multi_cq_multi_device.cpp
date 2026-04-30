@@ -119,7 +119,36 @@ protected:
         }
     }
     void TearDown() override {
-        MeshDeviceFixtureBase::TearDown();
+        // FIX RX (#42429): Skip TearDown quiesce when the test body already found broken fabric.
+        // After the pre-AllGather quiesce_devices() (FIX AA probe) sets
+        // fabric_channels_not_ready_for_traffic_ or fabric_relay_path_broken_, running
+        // quiesce_devices() again in TearDown burns ~72 s:
+        //   • Phase 2.5 force-resets 6 ETH channels × 2 s on each of 2 MMIO devices = 24 s
+        //   • Phase 5 relay-read timeouts (3 s each) for non-MMIO devices = ~48 s
+        // The result is the same degraded state we already know about. Skip directly to
+        // mesh_device_->close(); FabricFirmwareInitializer::teardown() will handle any
+        // residual active channels with its own 5 s timeout + force-reset, and
+        // terminate_stale_erisc_routers in the next SetUp() cleans up anything remaining.
+        // Net saving: ~68 s per test × up to 4 tests = ~272 s per job.
+        bool fabric_broken = false;
+        if (mesh_device_) {
+            for (auto* idev : mesh_device_->get_devices()) {
+                if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic()) {
+                    fabric_broken = true;
+                    break;
+                }
+            }
+        }
+        if (fabric_broken && mesh_device_ && !mesh_device_->is_remote_only()) {
+            log_warning(
+                tt::LogMetal,
+                "[MultiCQFabricMeshDevice2x4Fixture::TearDown] FIX RX (#42429): fabric broken after "
+                "test body — skipping quiesce_devices() (~72 s) and calling close() directly.");
+            mesh_device_->close();
+            mesh_device_.reset();
+        } else {
+            MeshDeviceFixtureBase::TearDown();
+        }
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 
