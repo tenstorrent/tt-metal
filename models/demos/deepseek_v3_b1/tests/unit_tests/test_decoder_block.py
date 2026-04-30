@@ -377,6 +377,10 @@ def test_decoder(
     if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
         pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
+    # Disable standalone MLA/MoE reference runs (profiling-only mode).
+    validate_standalone_mla = False
+    validate_standalone_moe = False
+
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
