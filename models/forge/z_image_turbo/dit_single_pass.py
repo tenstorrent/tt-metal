@@ -123,20 +123,19 @@ def _apply_fast_activations_patch():
     )
 
 
-def _convert_weights_to_bfp8(dit):
-    """Convert MLP + to_out matmul weights from BF16 to BFLOAT8_B."""
+def _convert_mlp_weights_to_bfp8(dit):
+    """Convert MLP matmul weights from BF16 to BFLOAT8_B to halve DRAM bandwidth."""
     converted = 0
     for key in list(dit.weights.keys()):
-        is_mlp = "feed_forward" in key and key.endswith("_mmT")
-        is_to_out = "to_out" in key and key.endswith("_mmT")
-        if is_mlp or is_to_out:
+        is_mlp_mm = "feed_forward" in key and key.endswith("_mmT")
+        if is_mlp_mm:
             w = dit.weights[key]
             if w.dtype == ttnn.DataType.BFLOAT16:
                 new_w = ttnn.typecast(w, ttnn.DataType.BFLOAT8_B, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w, force=True)
                 dit.weights[key] = new_w
                 converted += 1
-    print(f"  Converted {converted} weights to BFLOAT8_B")
+    print(f"  Converted {converted} MLP weights to BFLOAT8_B")
 
 
 def compute_pcc(a, b):
@@ -248,8 +247,8 @@ def main():
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
 
-    print("Converting weights to BFP8 ...")
-    _convert_weights_to_bfp8(dit)
+    print("Converting MLP weights to BFP8 ...")
+    _convert_mlp_weights_to_bfp8(dit)
 
     # Encode a real prompt for caption features
     print("Encoding prompt ...")
