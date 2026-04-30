@@ -207,7 +207,7 @@ def test_moe_subgroups_8x4(
     )
     ttnn.synchronize_device(mesh_device)
 
-    skip_experts = os.environ.get("TT_MOE_SUBGROUPS_SKIP_EXPERTS", "1") == "1"
+    skip_experts = os.environ.get("TT_MOE_SUBGROUPS_SKIP_EXPERTS", "0") == "1"
     logger.info(f"skip_experts={skip_experts}")
 
     tt_output, _ = tt_moe(tt_x, return_intermediates=False, skip_experts=skip_experts)

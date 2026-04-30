@@ -22,8 +22,9 @@ Correctness strategy mirrors test_ttnn_moe_subgroups.py:
 - Tile the input num_dispatch_subgroups times along the device axis.
 - Run TtMoe with num_dispatch_subgroups=4 on the working mesh.
 - Split the output into num_dispatch_subgroups row-slices and verify each against
-  the torch reference (PCC >= 0.96).  Set TT_MOE_SUBGROUPS_SKIP_EXPERTS=0 to
-  enable PCC; default is 1 (dispatch->combine connectivity check only).
+  the torch reference (PCC >= 0.96).  Set TT_MOE_SUBGROUPS_SKIP_EXPERTS=1 to
+  bypass the routed-expert matmul (dispatch->combine connectivity smoke
+  check only); default is 0 (full PCC).
 
 Run command (set HOSTS before invoking):
     HOSTS=bh-glx-c07u02,bh-glx-c07u08,bh-glx-c08u02,bh-glx-c08u08
@@ -242,7 +243,7 @@ def test_moe_subgroups_32x4(
     )
     ttnn.synchronize_device(working_mesh)
 
-    skip_experts = os.environ.get("TT_MOE_SUBGROUPS_SKIP_EXPERTS", "1") == "1"
+    skip_experts = os.environ.get("TT_MOE_SUBGROUPS_SKIP_EXPERTS", "0") == "1"
     logger.info(f"skip_experts={skip_experts}")
 
     tt_output, _ = tt_moe(tt_x, return_intermediates=False, skip_experts=skip_experts)
