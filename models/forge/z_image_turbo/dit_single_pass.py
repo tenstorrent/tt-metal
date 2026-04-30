@@ -112,7 +112,7 @@ def _apply_compute_config_patch():
 
 
 def _apply_fast_activations_patch():
-    """Disable fp32_dest_acc_en on REDUCE_KERNEL used for norms to speed them up."""
+    """HiFi2 + approx + packer_l1_acc for REDUCE_KERNEL (norms, activations)."""
     import dit.model_ttnn as dit_mod
 
     dit_mod.REDUCE_KERNEL = ttnn.WormholeComputeKernelConfig(
@@ -121,6 +121,102 @@ def _apply_fast_activations_patch():
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+
+
+def _apply_sdpa_patch():
+    """Add compute_kernel_config to SDPA for faster attention."""
+    import dit.model_ttnn as dit_mod
+
+    SDPA_KERNEL = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    _orig_attn = dit_mod.ZImageTransformerTTNN._attention
+
+    def _fast_attention(self, x, seq_len, block_prefix, is_caption=False):
+        import dit.model_ttnn as dm
+
+        x_2d = ttnn.reshape(x, [seq_len, dm.HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        N = dm.HEADS_PER_DEV * dm.HEAD_DIM
+
+        fused_qkv = self.weights[f"{block_prefix}.attention.qkv_fused_mmT"]
+        config = dm._get_matmul_config(seq_len, dm.HIDDEN_DIM, 3 * N, self._core_grid)
+        q_2d, k_2d, v_2d = ttnn.experimental.minimal_matmul_split(
+            x_2d,
+            fused_qkv,
+            chunks=3,
+            dim=-1,
+            config=config,
+            compute_kernel_config=dm.REDUCE_KERNEL,
+            dtype=ttnn.DataType.BFLOAT16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x_2d, False)
+
+        q = ttnn.reshape(q_2d, [1, seq_len, dm.HEADS_PER_DEV, dm.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_2d, False)
+        old_q = q
+        q = self._qk_norm(old_q, self.weights[f"{block_prefix}.attention.norm_q.weight"], seq_len, dm.HEADS_PER_DEV)
+        ttnn.deallocate(old_q, False)
+        old_q = q
+        q = self._apply_rope(old_q, seq_len, dm.HEADS_PER_DEV, is_caption=is_caption)
+        ttnn.deallocate(old_q, False)
+
+        k = ttnn.reshape(k_2d, [1, seq_len, dm.HEADS_PER_DEV, dm.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(k_2d, False)
+        old_k = k
+        k = self._qk_norm(old_k, self.weights[f"{block_prefix}.attention.norm_k.weight"], seq_len, dm.HEADS_PER_DEV)
+        ttnn.deallocate(old_k, False)
+        old_k = k
+        k = self._apply_rope(old_k, seq_len, dm.HEADS_PER_DEV, is_caption=is_caption)
+        ttnn.deallocate(old_k, False)
+
+        v_4d = ttnn.reshape(v_2d, [1, 1, seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(v_2d, False)
+        old_v_4d = v_4d
+        v_4d = self._ensure_tile(old_v_4d)
+        if v_4d is not old_v_4d:
+            ttnn.deallocate(old_v_4d, False)
+        v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            v_4d,
+            num_heads=dm.HEADS_PER_DEV,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(v_4d, False)
+
+        attn_out = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=None,
+            is_causal=False,
+            scale=dm.ATTN_SCALE,
+            sliding_window_size=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=SDPA_KERNEL,
+        )
+        ttnn.deallocate(q, False)
+        ttnn.deallocate(k, False)
+        ttnn.deallocate(v, False)
+        old_attn = attn_out
+        attn_out = ttnn.transformer.concatenate_heads(old_attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_attn, False)
+        old_attn = attn_out
+        attn_out = ttnn.reshape(old_attn, [seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_attn, False)
+
+        out_wT = self.weights[f"{block_prefix}.attention.to_out.0.weight_mmT"]
+        old_attn = attn_out
+        attn_out = self._mm(old_attn, out_wT, seq_len, N, dm.HIDDEN_DIM)
+        ttnn.deallocate(old_attn, False)
+        return self._all_reduce(attn_out, seq_len)
+
+    dit_mod.ZImageTransformerTTNN._attention = _fast_attention
 
 
 def _convert_mlp_weights_to_bfp8(dit):
@@ -243,6 +339,7 @@ def main():
     _apply_matmul_config_patch()
     _apply_compute_config_patch()
     _apply_fast_activations_patch()
+    _apply_sdpa_patch()
 
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
