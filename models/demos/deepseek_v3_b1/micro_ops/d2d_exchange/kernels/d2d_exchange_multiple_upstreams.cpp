@@ -41,6 +41,10 @@ constexpr uint32_t packet_header_slot_start = get_compile_time_arg_val(15);
 constexpr uint32_t receiver_socket_addrs_start_idx = 16;
 constexpr uint32_t downstream_header_ring_size = 2;
 constexpr uint32_t downstream_header_slot_count = use_fabric_on_sender ? downstream_header_ring_size : 0;
+constexpr uint8_t downstream_stateful_data_cmd_buf = write_reg_cmd_buf;
+constexpr uint8_t downstream_stateful_sync_cmd_buf = write_at_cmd_buf;
+constexpr uint8_t upstream_dual_stateful_data_cmd_buf = write_cmd_buf;
+constexpr uint8_t upstream_dual_stateful_sync_cmd_buf = read_cmd_buf;
 
 struct DownstreamSendState {
     std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, downstream_header_ring_size> packet_headers = {};
@@ -111,7 +115,7 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
 
     wait_for_cached_free_write_slot(fabric_connection, downstream_send_state.cached_free_write_slots);
 
-    fabric_connection.send_current_slot_non_blocking(
+    fabric_connection.send_current_slot_stateful_non_blocking(
         l1_read_addr, packet_size, reinterpret_cast<uint32_t>(packet_header_addr));
 
     downstream_send_state.cached_free_write_slots--;
@@ -139,6 +143,13 @@ FORCE_INLINE void send_worker_data_over_fabric(
     write_data_to_remote_core_with_ack(fabric_connection, downstream_send_state, src, dst, remaining);
 }
 
+FORCE_INLINE void flush_downstream_fabric_writes(DownstreamSendState& downstream_send_state) {
+    if (downstream_send_state.packet_headers_in_use > 0) {
+        noc_async_writes_flushed();
+        downstream_send_state.packet_headers_in_use = 0;
+    }
+}
+
 FORCE_INLINE void notify_sender_over_fabric(
     const SocketReceiverInterface& socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -147,7 +158,7 @@ FORCE_INLINE void notify_sender_over_fabric(
     bool& flush_pending) {
     packet_header_addr->set_unicast_inline_write_value(socket.bytes_acked);
     wait_for_cached_free_write_slot(fabric_connection, cached_free_write_slots);
-    fabric_connection.send_payload_flush_non_blocking_from_address(
+    fabric_connection.send_current_slot_stateful_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header_addr), sizeof(PACKET_HEADER_TYPE));
     cached_free_write_slots--;
     flush_pending = true;
@@ -198,6 +209,8 @@ FORCE_INLINE bool process_upstream_sockets(
                     l1_read_addr,
                     dst_addr,
                     receiver_sockets[worker_idx].page_size);
+                // Preserve current downstream-before-upstream ordering even with disjoint stateful cmd-buf pairs.
+                flush_downstream_fabric_writes(downstream_send_state);
             } else {
                 write_data_to_local_core_with_ack(
                     l1_read_addr, dst_addr, receiver_sockets[worker_idx].page_size);
@@ -237,10 +250,16 @@ void kernel_main() {
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        downstream_fabric_connection.set_stateful_cmd_bufs(
+            downstream_stateful_data_cmd_buf, downstream_stateful_sync_cmd_buf);
     }
     if constexpr (use_fabric_on_receiver) {
         upstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        if constexpr (use_fabric_on_sender) {
+            upstream_fabric_connection.set_stateful_cmd_bufs(
+                upstream_dual_stateful_data_cmd_buf, upstream_dual_stateful_sync_cmd_buf);
+        }
     }
 
     constexpr uint32_t downstream_page_size = page_size;
@@ -318,6 +337,12 @@ void kernel_main() {
                 NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addrs[i], receiver_sockets[i].bytes_acked});
             header_addr += sizeof(PACKET_HEADER_TYPE);
         }
+    }
+    if constexpr (use_fabric_on_sender) {
+        downstream_fabric_connection.setup_stateful_send_cmd_bufs();
+    }
+    if constexpr (use_fabric_on_receiver) {
+        upstream_fabric_connection.setup_stateful_send_cmd_bufs();
     }
 
     bool terminated = false;
