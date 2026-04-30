@@ -172,7 +172,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             bbox.end_coord.x - bbox.start_coord.x + 1,
             bbox.end_coord.y - bbox.start_coord.y + 1);
 
-        {
             const auto& shard_shape = shard_spec.shape;
             const auto& shard_grid = shard_spec.grid;
 
@@ -231,7 +230,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 shard_shape[1],
                 total_from_shards,
                 a.physical_volume());
-        }
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
