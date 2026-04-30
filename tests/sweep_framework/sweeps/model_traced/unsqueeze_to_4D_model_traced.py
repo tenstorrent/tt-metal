@@ -20,11 +20,22 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-import ast as _ast_mod
+import re as _re_mod
 
 
-def _ast_literal_eval(s):
-    return _ast_mod.literal_eval(s)
+def _parse_mesh_shape(s):
+    """Parse a mesh_device_shape string like '[4, 8]' or '(4, 8)' into a list of ints.
+
+    Avoids ast.literal_eval (Cycode SAST CWE-400) by extracting integer tokens
+    directly. mesh_device_shape comes from the trace's machine_info and is
+    always a short list/tuple of small positive ints.
+    """
+    if not isinstance(s, str) or len(s) > 64:
+        return None
+    matches = _re_mod.findall(r"-?\d+", s)
+    if not matches:
+        return None
+    return [int(m) for m in matches]
 
 
 TIMEOUT = 300
@@ -86,10 +97,7 @@ def run(
     if is_mesh_device and isinstance(input_a_tensor_placement, dict):
         _target_str = input_a_tensor_placement.get("mesh_device_shape")
         if isinstance(_target_str, str):
-            try:
-                _target = list(_ast_literal_eval(_target_str))
-            except Exception:
-                _target = None
+            _target = _parse_mesh_shape(_target_str)
             _current = list(device.shape) if hasattr(device, "shape") else None
             if _target and _current and _target != _current:
                 _saved_mesh_shape = _current

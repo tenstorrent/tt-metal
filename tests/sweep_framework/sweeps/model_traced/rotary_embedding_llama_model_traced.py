@@ -436,13 +436,6 @@ def run(
     # (INTERLEAVED) uses create_tensor_on_mesh, which actually shards the
     # global tensor across chips — so we MUST keep the global shape and skip
     # the shrink.
-    def _is_height_sharded(mc):
-        if hasattr(mc, "memory_layout"):
-            return "HEIGHT_SHARDED" in str(mc.memory_layout)
-        if isinstance(mc, dict):
-            return mc.get("data", {}).get("memory_layout") == "HEIGHT_SHARDED"
-        return False
-
     # V2 vectors carry the per-chip shape (master's original_shape).
     # create_tensor_on_mesh routes Shard placements through
     # replicate_with_topology, which keeps per-chip .shape == torch input shape

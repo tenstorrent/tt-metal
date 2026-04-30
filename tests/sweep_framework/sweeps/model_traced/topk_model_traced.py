@@ -144,12 +144,10 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # The kernel runs per-chip topk and the mesh assembler concats the per-chip
-    # values along the input shard axis. When topk's dim coincides with the
-    # shard axis, the global result is k*mesh_factor wide along that dim, not k
-    # wide. Mirror the kernel: chunk along the shard axis, run torch.topk on
-    # each chunk, and concat the values along that same axis.
-    _topk_shard_axis, _topk_shard_factor = _topk_input_shard_axis_and_factor(input_a_tensor_placement)
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and runs topk independently. The gathered output
+    # is the per-chip topk tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
     torch_values, torch_indices = torch.topk(
         torch_input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag
     )

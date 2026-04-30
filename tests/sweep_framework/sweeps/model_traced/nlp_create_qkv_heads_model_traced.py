@@ -177,11 +177,10 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Sharded-aware torch reference: when input's last dim is sharded, the kernel
-    # splits Q/K/V using the per-chip head_dim and the mesh assembler concats
-    # the per-chip Q tensors along the last axis. Run per-chip and concat to
-    # match.
-    _qkv_shard_axis, _qkv_shard_factor = _qkv_input_shard_axis_and_factor(input_a_tensor_placement)
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and runs the kernel independently. The gathered
+    # output is the per-chip Q tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
     (ref_q, _, _) = torch.split(
         torch_input_tensor_a,
         [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],

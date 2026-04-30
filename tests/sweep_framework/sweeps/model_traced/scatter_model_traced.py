@@ -187,14 +187,7 @@ def run(
     # (input/index/src all may be Sharded), scatter per-chip, then concat
     # along the input shard axis.
     _scat_in_axis, _scat_in_factor = _scatter_input_shard_axis_and_factor(input_a_tensor_placement)
-    _scat_idx_axis, _scat_idx_factor = _scatter_input_shard_axis_and_factor(
-        index_info.get("tensor_placement") if index_info else None
-    )
-    _scat_src_axis, _scat_src_factor = _scatter_input_shard_axis_and_factor(
-        src_info.get("tensor_placement") if src_info else None
-    )
     n_in = len(shape)
-    _dim_norm = dim if dim >= 0 else dim + n_in
     _scat_in_axis_norm = (
         (_scat_in_axis if _scat_in_axis >= 0 else _scat_in_axis + n_in) if _scat_in_axis is not None else None
     )
