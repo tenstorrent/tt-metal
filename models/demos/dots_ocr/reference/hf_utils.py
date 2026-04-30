@@ -15,7 +15,6 @@ remote code's eager ``VisionAttention`` (``vision_config`` defaults to flash oth
 
 from __future__ import annotations
 
-import os
 import sys
 import types
 from dataclasses import dataclass
@@ -63,8 +62,16 @@ class HFLoadSpec:
     use_fast_processor: Optional[bool] = None
 
 
+_DOTS_MOCR_HUB_ID = "rednote-hilab/dots.mocr"
+
+# Public default used when seeding ``HF_MODEL`` for ``tt_transformers.ModelArgs`` (required).
+DOTS_OCR_DEFAULT_HF_MODEL_ID = _DOTS_MOCR_HUB_ID
+
+
 def get_hf_model_id(default: str = "rednote-hilab/dots.mocr") -> str:
-    return os.environ.get("HF_MODEL", default)
+    """Canonical Dots OCR Hub checkpoint id (fixed; not read from ``HF_MODEL``)."""
+    _ = default  # kept for call-site compatibility; value is always the canonical Hub id
+    return DOTS_OCR_DEFAULT_HF_MODEL_ID
 
 
 def load_processor_and_model(spec: HFLoadSpec):
@@ -100,7 +107,7 @@ def load_processor_and_model(spec: HFLoadSpec):
     elif looks_like_local_path:
         raise FileNotFoundError(
             f"HF model path does not exist: {model_path}. "
-            "Set HF_MODEL to a valid local model directory or a Hub id like 'rednote-hilab/dots.mocr'."
+            "Pass a valid local model directory or a Hub id like 'rednote-hilab/dots.mocr' in HFLoadSpec.model_id."
         )
     else:
         try:
@@ -242,8 +249,6 @@ def _install_eager_vision_attention(model) -> None:
 def pick_tiny_model_fallback() -> str:
     """
     Best-effort tiny model id for tests (to avoid downloading multi-GB weights).
-    If you have a local/internal tiny checkpoint, set HF_MODEL.
     """
     # There is no guaranteed official tiny for dots.mocr; use a tiny random multimodal CausalLM if available.
-    # Users/CI should set HF_MODEL explicitly when needed.
-    return os.environ.get("HF_MODEL", "hf-internal-testing/tiny-random-LlamaForCausalLM")
+    return "hf-internal-testing/tiny-random-LlamaForCausalLM"

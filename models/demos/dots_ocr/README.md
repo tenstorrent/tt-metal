@@ -7,11 +7,10 @@ TTNN-based implementation of the Dots OCR vision-language model family (HF: `red
 - TTNN implementation optimized for Tenstorrent devices
 - Demo script + performance benchmark
 
-
 Run demo in TTNN:
 
 ```bash
-HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo \
+python -m models.demos.dots_ocr.tests.demo.demo \
   --image models/demos/dots_ocr/tests/demo/image.png \
   --backend ttnn \
   --vision-backend ttnn
@@ -20,7 +19,7 @@ HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo
 Run HF reference only:
 
 ```bash
-HF_MODEL=rednote-hilab/dots.mocr python -m models.demos.dots_ocr.tests.demo.demo --image models/demos/dots_ocr/tests/demo/test12.png --backend hf
+python -m models.demos.dots_ocr.tests.demo.demo --image models/demos/dots_ocr/tests/demo/test12.png --backend hf
 ```
 
 Text prefill PCC:
@@ -29,7 +28,11 @@ Text prefill PCC:
 pytest models/demos/dots_ocr/tests/pcc/test_text_prefill_pcc.py
 ```
 
-*Only passing in N150
+Vision Transformer PCC:
+
+```bash
+pytest models/demos/dots_ocr/tests/pcc/test_vision_transformer_pcc.py
+```
 
 ### Supported Wormhole topologies
 

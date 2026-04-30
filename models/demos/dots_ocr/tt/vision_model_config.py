@@ -49,14 +49,7 @@ class DotsVisionModelArgs(DotsModelArgs):
         **kwargs,
     ):
         # Forward ``mesh_device`` positionally (including ``None`` for CPU-only test paths).
-        # ``DotsModelArgs`` handles ``trust_remote_code_hf`` for us. For vision-only / smoke
-        # paths that do not pass ``hf_config`` and don't set ``HF_MODEL``, seed it to the
-        # canonical Dots OCR checkpoint so the parent can resolve it (mirrors the convention
-        # already used by ``DotsModelArgs`` itself).
-        import os
-
-        if hf_config is None and os.getenv("HF_MODEL") is None:
-            os.environ["HF_MODEL"] = "rednote-hilab/dots.mocr"
+        # ``DotsModelArgs`` handles ``trust_remote_code_hf`` for us.
 
         init_args = (mesh_device,) if not args else args
         super().__init__(*init_args, hf_config=hf_config, **kwargs)

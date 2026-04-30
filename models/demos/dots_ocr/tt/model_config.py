@@ -7,6 +7,7 @@ import os
 
 from loguru import logger
 
+from models.demos.dots_ocr.reference.hf_utils import DOTS_OCR_DEFAULT_HF_MODEL_ID
 from models.tt_transformers.tt.model_config import ModelArgs, PrecisionSetting, TensorGroup
 
 
@@ -44,11 +45,15 @@ class DotsModelArgs(ModelArgs):
     """
 
     def __init__(self, *args, hf_config=None, **kwargs):
+        # Parent ``ModelArgs`` reads ``HF_MODEL`` from the environment to set ``CKPT_DIR``.
+        # Seed it when unset so Dots works without exporting HF_MODEL (prefer HF config path).
         if os.getenv("HF_MODEL") is None:
-            # Keep legacy behavior (HF_MODEL drives shared tt_transformers loading),
-            # but don't hard-require it for call sites that already provide HF-derived weights/configs.
             if hf_config is not None:
-                os.environ["HF_MODEL"] = getattr(hf_config, "_name_or_path", None) or "rednote-hilab/dots.mocr"
+                name_or_path = getattr(hf_config, "_name_or_path", None)
+                os.environ["HF_MODEL"] = name_or_path if name_or_path else DOTS_OCR_DEFAULT_HF_MODEL_ID
+            else:
+                os.environ["HF_MODEL"] = DOTS_OCR_DEFAULT_HF_MODEL_ID
+
         # Dots OCR TT stacks always load real checkpoint tensors (filtered loaders in ``tt/load.py``).
         kwargs["dummy_weights"] = False
         super().__init__(*args, **kwargs)

@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 from PIL import Image
 
-from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec, get_hf_model_id
+from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec
 from models.demos.dots_ocr.reference.model import DotsOCRReference
 
 
@@ -276,53 +276,6 @@ def _load_dots_ttnn_state_dict(model_args, *, text_qkv_permute: bool) -> dict:
     if missing:
         raise KeyError(f"Real state_dict missing required keys: {missing}")
     return real_sd
-
-
-def _build_tt_stack(model_id: str, mesh_device, *, max_seq_len: int, text_qkv_permute: bool = True):
-    """
-    Shared TT stack builder for demos + perf benchmark.
-
-    Returns: (ref, model_args, tt_model, generator, visual)
-    """
-    import ttnn
-    from models.demos.dots_ocr.tt.generator import Generator
-    from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
-    from models.demos.dots_ocr.tt.model_config import DotsModelArgs
-    from models.demos.dots_ocr.tt.vision_model_config import DotsVisionModelArgs
-
-    os.environ.setdefault("HF_MODEL", model_id)
-    ref = DotsOCRReference(HFLoadSpec(model_id=model_id))
-
-    model_args = DotsModelArgs(
-        mesh_device=mesh_device,
-        hf_config=ref.model.config,
-        max_batch_size=1,
-        max_seq_len=max_seq_len,
-    )
-    model_args.dots_text_qkv_permute = bool(text_qkv_permute)
-    model_args.dots_use_host_rope = True
-    state_dict = _load_dots_ttnn_state_dict(model_args, text_qkv_permute=text_qkv_permute)
-
-    # Dense KV cache (max_seq_len along seq dim). Paged KV + prefill without page_table uses
-    # fill_cache, which requires cache seq >= padded prefill; paged tensors only expose
-    # block_size (e.g. 32) on that axis — use paged attention only when wiring page_table
-    # paged path (create_tt_page_table + paged_fill_cache).
-    tt_model = DotsTransformer(
-        args=model_args,
-        dtype=ttnn.bfloat8_b,
-        mesh_device=mesh_device,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
-        paged_attention_config=None,
-    )
-    generator = Generator(tt_model, model_args, mesh_device, processor=ref.processor, tokenizer=ref.tokenizer)
-
-    visual = None
-    if hasattr(ref.model, "vision_tower") or hasattr(ref.model, "visual"):
-        vision_model_args = DotsVisionModelArgs(mesh_device=mesh_device, hf_config=ref.model.config)
-        visual = DropInVisionTransformer(ref.model, vision_model_args, debug=False)
-
-    return ref, model_args, tt_model, generator, visual
 
 
 def _decode_loop(
@@ -584,8 +537,6 @@ def run_ttnn_backend(
     visual = None
     ref = None
     try:
-        os.environ.setdefault("HF_MODEL", model_id)
-
         # HF reference for processor + token embeddings + config access.
         ref = DotsOCRReference(HFLoadSpec(model_id=model_id, use_fast_processor=not use_slow_processor))
 
@@ -943,7 +894,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    model_id = args.hf_model or get_hf_model_id()
+    model_id = args.hf_model or "rednote-hilab/dots.mocr"
     preset = args.ocr_preset
 
     ttnn_repetition_penalty = args.ttnn_repetition_penalty

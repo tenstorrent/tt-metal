@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 from PIL import Image
 
-from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec, get_hf_model_id
+from models.demos.dots_ocr.reference.hf_utils import HFLoadSpec
 from models.demos.dots_ocr.reference.model import DotsOCRInputs, DotsOCRReference
 
 
@@ -88,7 +88,12 @@ def main() -> None:
         help="OCR prompt",
     )
     p.add_argument("--max-new-tokens", type=int, default=128)
-    p.add_argument("--hf-model", type=str, default=None, help="Override HF model id (default: HF_MODEL or dots.mocr)")
+    p.add_argument(
+        "--hf-model",
+        type=str,
+        default=None,
+        help="Override HF model id (default: rednote-hilab/dots.mocr)",
+    )
     p.add_argument(
         "--out-dir",
         type=str,
@@ -151,7 +156,7 @@ def main() -> None:
     out_dir = _path_resolved_under_cwd(args.out_dir, cwd=cwd)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    model_id = args.hf_model or get_hf_model_id()
+    model_id = args.hf_model or "rednote-hilab/dots.mocr"
     dtype = torch.float32 if args.dtype == "fp32" else torch.bfloat16
     ref = DotsOCRReference(
         HFLoadSpec(
