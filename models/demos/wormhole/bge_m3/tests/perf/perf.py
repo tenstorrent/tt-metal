@@ -97,6 +97,21 @@ def _is_fixed_b1s512_case(
     )
 
 
+def _is_fixed_s512_single_dp_case(
+    *,
+    runtime: dict,
+    tt_data_parallel: int,
+    seq_len: int,
+    max_seq_len: int,
+) -> bool:
+    return (
+        tt_data_parallel == 1
+        and runtime.get("local_data_parallel", 1) == 1
+        and int(seq_len) == 512
+        and int(max_seq_len) == 512
+    )
+
+
 def _maybe_enable_async_slow_dispatch(mesh_device, enable: bool) -> bool:
     """
     Enable async slow dispatch when requested and return whether we need to restore it.
@@ -756,6 +771,12 @@ def test_embedding_perf(
         seq_len=isl,
         max_seq_len=max_seq_len,
     )
+    fixed_s512_single_dp_case = _is_fixed_s512_single_dp_case(
+        runtime=runtime,
+        tt_data_parallel=tt_data_parallel,
+        seq_len=isl,
+        max_seq_len=max_seq_len,
+    )
     manual_trace_requested = _env_flag("BGE_M3_USE_TRACE") or _env_flag("BGE_M3_USE_TRACE_REPLAY")
     auto_trace_requested = _env_flag("BGE_M3_AUTO_TRACE", "1") and fixed_b1s512_case
     use_trace = manual_trace_requested or auto_trace_requested
@@ -778,20 +799,20 @@ def test_embedding_perf(
         )
 
     position_ids = None
-    use_precomputed_position_ids = _env_flag("BGE_M3_PRECOMPUTE_POSITION_IDS", "1") and fixed_b1s512_case
+    use_precomputed_position_ids = _env_flag("BGE_M3_PRECOMPUTE_POSITION_IDS", "1") and fixed_s512_single_dp_case
     if use_precomputed_position_ids:
         position_ids = build_position_ids(input_ids, model_args.pad_token_id)
         logger.info(
-            "Precomputed host position_ids for fixed B1/S512 benchmark. "
+            "Precomputed host position_ids for fixed single-DP S512 benchmark. "
             "Set BGE_M3_PRECOMPUTE_POSITION_IDS=0 to use the on-device builder."
         )
 
     model_attention_mask = None
-    use_precomputed_attention_mask = _env_flag("BGE_M3_PRECOMPUTE_ATTENTION_MASK", "1") and fixed_b1s512_case
+    use_precomputed_attention_mask = _env_flag("BGE_M3_PRECOMPUTE_ATTENTION_MASK", "1") and fixed_s512_single_dp_case
     if use_precomputed_attention_mask:
         model_attention_mask = build_additive_attention_mask(attention_mask, seq_len=input_ids.shape[1])
         logger.info(
-            "Precomputed host additive attention mask for fixed B1/S512 benchmark. "
+            "Precomputed host additive attention mask for fixed single-DP S512 benchmark. "
             "Set BGE_M3_PRECOMPUTE_ATTENTION_MASK=0 to use the on-device builder."
         )
 
