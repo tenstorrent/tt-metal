@@ -1,4 +1,4 @@
-name: 🌙 Nightly Tests
+name: "LLK Nightly Tests"
 
 on:
   schedule:
@@ -19,39 +19,35 @@ permissions:
 
 jobs:
   build-images:
-    name: "🐳️ Docker setup"
+    name: "Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
 
   nightly-test-wormhole:
-    name: "🌀 Nightly Tests (Wormhole)"
-    uses: ./.github/workflows/llk-setup-and-test.yaml
-    secrets: inherit
+    name: "LLK Nightly Tests (Wormhole)"
     needs: build-images
+    uses: ./.github/workflows/llk-nightly-tests-impl.yaml
+    secrets: inherit
     with:
-      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      runs_on: tt-ubuntu-2204-n150-stable
-      test_splits: 5
-      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
-      random_order: false
-      timeout_minutes: 360
+      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      enabled-skus: wh_n150_civ2
+      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      runs-on-for-coverage: tt-ubuntu-2204-n150-stable
       coverage: true
 
   nightly-test-blackhole:
-    name: "🕳️ Nightly Tests (Blackhole)"
-    uses: ./.github/workflows/llk-setup-and-test.yaml
-    secrets: inherit
+    name: "LLK Nightly Tests (Blackhole)"
     needs: build-images
+    uses: ./.github/workflows/llk-nightly-tests-impl.yaml
+    secrets: inherit
     with:
-      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      runs_on: tt-ubuntu-2204-p150b-stable
-      test_splits: 5
-      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
-      random_order: false
-      timeout_minutes: 360
+      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      enabled-skus: bh_p150b_civ2
+      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      runs-on-for-coverage: tt-ubuntu-2204-p150b-stable
       coverage: true
 
   nightly-summary:
-    name: "📊 Nightly Summary"
+    name: "Nightly summary"
     if: always()
     needs:
       - nightly-test-wormhole
@@ -64,7 +60,7 @@ jobs:
           jobs: ${{ toJSON(needs) }}
 
   report-status:
-    name: "🔔 Report status"
+    name: "Report status"
     runs-on: ubuntu-latest
     if: always()
     needs: nightly-summary

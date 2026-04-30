@@ -1,4 +1,4 @@
-name: 🌙 Nightly Performance Tests
+name: "LLK Nightly Performance Tests"
 
 on:
   schedule:
@@ -14,12 +14,12 @@ permissions:
 
 jobs:
   nightly-performance-tests:
-    name: "🚀 Nightly Performance Tests"
+    name: "LLK Nightly Performance Tests"
     uses: ./.github/workflows/llk-run-perf-tests.yaml
     secrets: inherit
 
   report-status:
-    name: "🔔 Report status"
+    name: "Report status"
     runs-on: ubuntu-latest
     if: always()
     needs: nightly-performance-tests

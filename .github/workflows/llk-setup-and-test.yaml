@@ -1,4 +1,4 @@
-name: "⚙️ Setup and Test"
+name: "LLK Setup and Test"
 
 on:
   workflow_call:
@@ -80,7 +80,7 @@ jobs:
     container:
       image: ${{ inputs.docker_image }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
-    name: "🦄 Run tests (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
+    name: "Run tests (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
@@ -161,9 +161,9 @@ jobs:
 
       # Step 4: Zip performance data if perf tests were run
       - name: Zip performance data
-        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('{0}/perf_data/**', env.LLK_PATH)) != ''
+        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles('tt_metal/tt-llk/tests/python_tests/perf_data/**') != ''
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
         run: |
           zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip perf_data/
           echo "Performance data zipped successfully"
@@ -179,10 +179,10 @@ jobs:
       # Step 5: Upload performance data
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('{0}/perf_data-{1}-{2}.zip', env.LLK_PATH, env.CHIP_ARCH, matrix.test_group)) != ''
+        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('tt_metal/tt-llk/tests/python_tests/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test_group)) != ''
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
-          path: ${{ env.LLK_PATH }}/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

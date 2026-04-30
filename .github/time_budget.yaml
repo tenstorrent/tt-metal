@@ -177,3 +177,12 @@ models:
     wh_n150: 10
     wh_llmbox_perf: 30
     wh_galaxy: 30
+
+# LLK: sum of per-job timeouts for each matrix row in tests/pipeline_reorg/llk_* (explicit split rows, like ttnn-tests.yaml).
+llk:
+  nightly:
+    wh_n150_civ2: 1800
+    bh_p150b_civ2: 1800
+  perf:
+    wh_n150_civ2: 1200
+    bh_p150b_civ2: 1200
