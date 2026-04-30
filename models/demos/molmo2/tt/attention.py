@@ -385,14 +385,17 @@ class TtMolmo2TextAttention(LightweightModule):
         ttnn.deallocate(k_8b)
         ttnn.deallocate(v_8b)
 
-        # Pad Q/K/V seq dim to next multiple of q_chunk_size (256) before SDPA.
-        # TTNN SDPA has a partial-tile bug: when S % chunk ≠ 0 and the last tile is
-        # small (e.g. S=4778, last tile=170 tokens), the kernel enters an infinite loop.
-        # Padding makes every Q-tile full; we slice the output back to seq_len after.
-        # Causal masking ensures real positions (0..S-1) see only valid K/V entries.
+        # Pad Q/K/V (and mask) seq dim to the next multiple of q_chunk_size=256.
+        # TTNN SDPA hangs for certain S values where S%256 gives a "problematic" last
+        # partial tile (e.g. S=4778 with 170-token last tile → infinite loop).
+        # Padding eliminates all partial tiles. We slice the output back after SDPA.
+        # Real Q positions (0..S-1) see only real K positions via the padded mask or
+        # causal structure; padding output rows (S..S_padded-1) are discarded.
         q_chunk = 256
         S_padded = ((seq_len + q_chunk - 1) // q_chunk) * q_chunk
-        if S_padded > seq_len:
+        need_pad = S_padded > seq_len
+
+        if need_pad:
             pad_len = S_padded - seq_len
 
             def _pad_seq(t, n_heads):
@@ -411,8 +414,33 @@ class TtMolmo2TextAttention(LightweightModule):
             q_sdpa = _pad_seq(q, self.n_local_heads)
             k_sdpa = _pad_seq(k, self.n_local_kv_heads)
             v_sdpa = _pad_seq(v, self.n_local_kv_heads)
+
+            if mask is not None:
+                # Extend mask [1,1,S,S] → [1,1,S_padded,S_padded] with large-neg padding
+                # so real positions don't attend to padding tokens.
+                neg_inf_val = -1e4
+
+                def _to_tt_mask(t_cpu):
+                    return ttnn.from_torch(
+                        t_cpu.to(torch.bfloat16),
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    )
+
+                pad_cols = _to_tt_mask(torch.full((1, 1, seq_len, pad_len), neg_inf_val))
+                mask_ext = ttnn.concat([mask, pad_cols], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(pad_cols)
+                pad_rows = _to_tt_mask(torch.full((1, 1, pad_len, S_padded), neg_inf_val))
+                mask_sdpa = ttnn.concat([mask_ext, pad_rows], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(mask_ext)
+                ttnn.deallocate(pad_rows)
+            else:
+                mask_sdpa = None
         else:
-            q_sdpa, k_sdpa, v_sdpa = q, k, v
+            q_sdpa, k_sdpa, v_sdpa, mask_sdpa = q, k, v, mask
 
         # SDPA: is_causal and attn_mask are mutually exclusive in TTNN SDPA.
         # When a custom mask is provided (image-bidir override), it already encodes
@@ -422,7 +450,7 @@ class TtMolmo2TextAttention(LightweightModule):
             k_sdpa,
             v_sdpa,
             is_causal=(mask is None),
-            attn_mask=mask,
+            attn_mask=mask_sdpa,
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -430,11 +458,13 @@ class TtMolmo2TextAttention(LightweightModule):
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        if S_padded > seq_len:
+        if need_pad:
             ttnn.deallocate(q_sdpa)
             ttnn.deallocate(k_sdpa)
             ttnn.deallocate(v_sdpa)
-            # Slice back to real seq_len; reshape requires ROW_MAJOR for non-tile-aligned slice
+            if mask is not None:
+                ttnn.deallocate(mask_sdpa)
+            # Slice back to real seq_len; convert to ROW_MAJOR for non-tile-aligned S
             attn_out_padded = ttnn.to_layout(attn_out_padded, ttnn.ROW_MAJOR_LAYOUT)
             attn_out = attn_out_padded[:, :, :seq_len, :]
             ttnn.deallocate(attn_out_padded)
