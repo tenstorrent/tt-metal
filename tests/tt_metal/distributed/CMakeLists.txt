@@ -52,6 +52,7 @@ target_sources(
         test_gap52_fixpg_phase25_relay_retry.cpp
         test_gap53_fixph_yaml_ethcoord_graceful_skip.cpp
         test_gap54_fixba_teardown_null_control_plane.cpp
+        test_gap55_fixe2ay_probe_dead_fay_trigger.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
