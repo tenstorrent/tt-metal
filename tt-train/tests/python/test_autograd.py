@@ -516,6 +516,42 @@ def test_numpy_autograd_conversion_expecting_runtime_error(tensor_data, numpy_ty
     )
 
 
+def test_to_numpy_prefer_half_returns_bfloat16_dtype():
+    # prefer_half=True should return an ml_dtypes.bfloat16 array, not float32.
+    numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
+    tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
+    result = tensor.to_numpy(prefer_half=True)
+    assert result.dtype == ml_dtypes.bfloat16, f"Expected ml_dtypes.bfloat16, got {result.dtype}"
+
+
+def test_to_numpy_prefer_half_matches_float32_path():
+    # prefer_half=True + .astype(float32) must be numerically identical to to_numpy(FLOAT32).
+    numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
+    tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
+    via_prefer_half = tensor.to_numpy(prefer_half=True).astype(np.float32)
+    via_float32 = tensor.to_numpy(ttnn.DataType.FLOAT32)
+    np.testing.assert_array_equal(via_prefer_half, via_float32)
+
+
+def test_to_numpy_prefer_half_with_new_type_float32():
+    # prefer_half=True + new_type=FLOAT32 is valid: bf16 is fetched from device (no AutocastTensor
+    # float32 cache created) and converted to float32 in C++ on the CPU side.
+    numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
+    tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
+    result = tensor.to_numpy(prefer_half=True, new_type=ttnn.DataType.FLOAT32)
+    assert result.dtype == np.float32
+    np.testing.assert_array_equal(result, tensor.to_numpy(ttnn.DataType.FLOAT32))
+
+
+def test_to_numpy_prefer_half_false_unchanged():
+    # prefer_half=False (default) must behave identically to the pre-existing default path.
+    numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
+    tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
+    default_result = tensor.to_numpy(ttnn.DataType.FLOAT32)
+    explicit_false_result = tensor.to_numpy(prefer_half=False, new_type=ttnn.DataType.FLOAT32)
+    np.testing.assert_array_equal(default_result, explicit_false_result)
+
+
 def make_tensors(tensor_data, numpy_type, autograd_type, layout):
     numpy_tensor = np.array(tensor_data, dtype=numpy_type)
 

@@ -143,12 +143,16 @@ void py_module(nb::module_& m) {
             "to_numpy",
             [](const Tensor& tensor,
                std::optional<tt::tt_metal::DataType> new_type,
-               ttnn::distributed::MeshToTensor* composer) {
-                return ttml::nanobind::util::make_numpy_tensor(
-                    tensor.get_value(PreferredPrecision::FULL), new_type, composer);
+               ttnn::distributed::MeshToTensor* composer,
+               bool prefer_half) {
+                // prefer_half=True reads bf16 storage directly, avoiding a device-side float32
+                // typecast and its persistent cache in AutocastTensor. Avoids OOM on checkpoint.
+                auto prec = prefer_half ? PreferredPrecision::HALF : PreferredPrecision::FULL;
+                return ttml::nanobind::util::make_numpy_tensor(tensor.get_value(prec), new_type, composer);
             },
             nb::arg("new_type") = std::nullopt,
             nb::arg("composer") = nullptr,
+            nb::arg("prefer_half") = false,
             "Construct a numpy tensor from a Tensor");
         py_tensor.def(
             "to_string",
