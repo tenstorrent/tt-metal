@@ -86,7 +86,7 @@ enum DatumIndex { WormholeIndex = 0, BlackholeIndex = 1 };
 
 // Measured NOC bandwidth maps: transaction_size -> {Wormhole GB/s, Blackhole GB/s}.
 // Used by common_tm_bw_model and CCL roofline models via get_cycles_for_transaction_size.
-std::map<uint32_t, std::array<float, 2>> noc_dram_bw = {
+const std::map<uint32_t, std::array<float, 2>> noc_dram_bw = {
     {16, {0.436, 0.387}},
     {32, {0.868, 0.772}},
     {64, {1.736, 1.545}},
@@ -101,7 +101,7 @@ std::map<uint32_t, std::array<float, 2>> noc_dram_bw = {
     {32768, {27.758, 50.695}},
     {65536, {28.694, 50.626}}};
 
-std::map<uint32_t, std::array<float, 2>> noc_l1_read_bw = {
+const std::map<uint32_t, std::array<float, 2>> noc_l1_read_bw = {
     {16, {0.868, 0.671}},
     {32, {1.724, 1.336}},
     {64, {3.477, 2.673}},
@@ -116,7 +116,7 @@ std::map<uint32_t, std::array<float, 2>> noc_l1_read_bw = {
     {32768, {28.618, 50.335}},
     {65536, {28.7, 50.403}}};
 
-std::map<uint32_t, std::array<float, 2>> noc_l1_write_bw = {
+const std::map<uint32_t, std::array<float, 2>> noc_l1_write_bw = {
     {16, {0.681, 0.511}},
     {32, {1.254, 1.018}},
     {64, {2.709, 2.036}},
@@ -131,7 +131,7 @@ std::map<uint32_t, std::array<float, 2>> noc_l1_write_bw = {
     {32768, {27.811, 50.412}},
     {65536, {28.808, 50.383}}};
 
-std::map<uint32_t, std::array<float, 2>> noc_l1_local_bw = {
+const std::map<uint32_t, std::array<float, 2>> noc_l1_local_bw = {
     {16, {0.868, 0.671}},
     {32, {1.724, 1.337}},
     {64, {3.477, 2.675}},

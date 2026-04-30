@@ -207,8 +207,8 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;
 
-    const uint32_t read_pages = static_cast<uint32_t>(S / read_page_size);
-    const uint32_t write_pages = static_cast<uint32_t>(S / write_page_size);
+    const uint32_t read_pages = tt::div_up(S, read_page_size);
+    const uint32_t write_pages = tt::div_up(S, write_page_size);
     const uint32_t read_pages_per_core = tt::div_up(read_pages, num_cores);
     const uint32_t write_pages_per_core = tt::div_up(write_pages, num_cores);
 
@@ -228,7 +228,7 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     constexpr uint32_t UNPACKER_BW_BYTES_PER_CYCLE = 80;
     const uint64_t total_unpack_bytes = 2ULL * (N - 1) * slice_size;
     const int compute_cycles =
-        static_cast<int>(total_unpack_bytes / (static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE));
+        tt::div_up(total_unpack_bytes, static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE);
 
     // =========================================================================
     // 4. PIPELINED MODEL

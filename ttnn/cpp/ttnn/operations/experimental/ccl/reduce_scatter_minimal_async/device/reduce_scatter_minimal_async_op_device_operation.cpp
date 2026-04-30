@@ -255,10 +255,10 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     const uint32_t num_cores = device_rows * device_cols;
 
     const uint64_t total_read_bytes = input_size_bytes;  // S
-    const uint32_t read_pages_per_core = tt::div_up(total_read_bytes / read_page_size, num_cores);
+    const uint32_t read_pages_per_core = tt::div_up(tt::div_up(total_read_bytes, read_page_size), num_cores);
 
     const uint64_t total_write_bytes = slice_size;  // S/N
-    const uint32_t write_pages_per_core = tt::div_up(total_write_bytes / write_page_size, num_cores);
+    const uint32_t write_pages_per_core = tt::div_up(tt::div_up(total_write_bytes, write_page_size), num_cores);
 
     auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
         read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_core, arch, /*is_read=*/true);
@@ -290,7 +290,8 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     // =========================================================================
     constexpr uint32_t UNPACKER_BW_BYTES_PER_CYCLE = 80;
     const uint64_t total_unpack_bytes = 2ULL * (N - 1) * slice_size;
-    const int compute_cycles = total_unpack_bytes / (num_cores * UNPACKER_BW_BYTES_PER_CYCLE);
+    const int compute_cycles =
+        tt::div_up(total_unpack_bytes, static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE);
 
     // =========================================================================
     // 4. PIPELINED MODEL

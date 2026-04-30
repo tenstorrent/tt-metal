@@ -256,8 +256,8 @@ AllGatherDeviceOperation::create_op_performance_model(
     const uint32_t num_cores = device_rows * device_cols;
 
     const int64_t output_size_bytes = N * input_size_bytes;
-    const uint32_t read_pages = static_cast<uint32_t>(input_size_bytes / read_page_size);
-    const uint32_t write_pages = static_cast<uint32_t>(output_size_bytes / write_page_size);
+    const uint32_t read_pages = tt::div_up(input_size_bytes, read_page_size);
+    const uint32_t write_pages = tt::div_up(output_size_bytes, write_page_size);
     const uint32_t read_pages_per_core = tt::div_up(read_pages, num_cores);
     const uint32_t write_pages_per_core = tt::div_up(write_pages, num_cores);
 
