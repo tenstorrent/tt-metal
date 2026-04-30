@@ -25,7 +25,9 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
 
-_PREFILL_SEQ = 128
+# Prefill bucket sizes for which we pre-build sharded NLP head op memcfgs.
+# Matches SUPPORTED_PREFILL_LENS in demo_full_ttnn_tts.py.
+_PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
 
 
 class Attention(LightweightModule):
@@ -383,13 +385,8 @@ class Attention(LightweightModule):
         self._decode_qkv_split_k_out_memcfg = _dec["k_out"]
         self._decode_qkv_split_v_out_memcfg = self._decode_qkv_split_k_out_memcfg
 
-        _pre = _build_sharded_nlp_memcfgs(_PREFILL_SEQ)
-        self._prefill_concat_heads_in_memcfg = _pre["concat_in"]
-        self._prefill_concat_heads_out_memcfg = _pre["concat_out"]
-        self._prefill_qkv_split_in_memcfg = _pre["qkv_in"]
-        self._prefill_qkv_split_q_out_memcfg = _pre["q_out"]
-        self._prefill_qkv_split_k_out_memcfg = _pre["k_out"]
-        self._prefill_qkv_split_v_out_memcfg = self._prefill_qkv_split_k_out_memcfg
+        # Per-bucket prefill sharded NLPConcat memcfgs.
+        self._prefill_concat_configs = {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
 
         # Pre-compute HEIGHT_SHARDED memory config for paged_update_cache input.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
@@ -843,16 +840,17 @@ class Attention(LightweightModule):
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
         use_dram_shard_o = is_decode and seq_len == 1
-        # Pick decode (m=32) vs prefill ISL=128 (m=128) sharded NLPConcat memcfgs.
+        # Pick decode (m=32) vs prefill bucket-size sharded NLPConcat memcfgs.
         sharded_concat_decode = is_decode
-        sharded_concat_prefill = not is_decode and seq_len == _PREFILL_SEQ
+        sharded_concat_prefill = not is_decode and seq_len in self._prefill_concat_configs
         use_sharded_concat = sharded_concat_decode or sharded_concat_prefill
-        concat_in_memcfg = (
-            self._prefill_concat_heads_in_memcfg if sharded_concat_prefill else self._decode_concat_heads_in_memcfg
-        )
-        concat_out_memcfg = (
-            self._prefill_concat_heads_out_memcfg if sharded_concat_prefill else self._decode_concat_heads_out_memcfg
-        )
+        if sharded_concat_prefill:
+            _pre = self._prefill_concat_configs[seq_len]
+            concat_in_memcfg = _pre["concat_in"]
+            concat_out_memcfg = _pre["concat_out"]
+        else:
+            concat_in_memcfg = self._decode_concat_heads_in_memcfg
+            concat_out_memcfg = self._decode_concat_heads_out_memcfg
         # Reshape: [b, num_heads, seq, head_dim] → [b, 1, seq, hidden_size]
         if use_sharded_concat:
             if attn_output.memory_config() == concat_in_memcfg:
