@@ -464,18 +464,16 @@ int main() {
         // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
 
         /* Create source data */
-        // CI mode uses a smaller problem size (~8x faster) to keep gate times down.
-        // The original sizes (M=3584, N=3072, K=768) match the accompanying walkthrough.
 #ifdef TT_METAL_CI_MODE
-        constexpr uint32_t M = 2048;  // CI-friendly (must stay ≤2048 for num_cores_r=2)
-        constexpr uint32_t N = 1024;
-        constexpr uint32_t K = 512;
+        constexpr uint32_t M = 2048;  // CI values
+        constexpr uint32_t N = 1024;  // CI values
+        constexpr uint32_t K = 512;   // CI values
 #else
-        constexpr uint32_t M = 3584;  // user-defined (original walkthrough value)
-        constexpr uint32_t N = 3072;  // user-defined
-        constexpr uint32_t K = 768;   // user-defined
+        constexpr uint32_t M = 3584;  // tutorial values
+        constexpr uint32_t N = 3072;  // tutorial values
+        constexpr uint32_t K = 768;   // tutorial values
 #endif
-        constexpr uint32_t B = 1;     // user-defined
+        constexpr uint32_t B = 1;     // tutorial values
 
         uint32_t Mt = M / TILE_HEIGHT;
         uint32_t Kt = K / TILE_WIDTH;
