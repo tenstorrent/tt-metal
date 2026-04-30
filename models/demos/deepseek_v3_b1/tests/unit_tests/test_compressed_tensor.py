@@ -573,3 +573,67 @@ def test_from_bspm_tile_counts(device):
     assert counts.get("bfp4", 0) > total_tiles // 2, f"bfp4 should dominate at 3.5 b/e: {counts}"
     # Should NOT be all-bfp4 (that would mean BSPM codes were ignored)
     assert counts.get("bfp4", 0) < total_tiles, f"All tiles are bfp4 — BSPM assignment was not applied: {counts}"
+
+
+def test_from_bspm_all_bfp0_assignment(device):
+    """Synthetic regression for 100%-bfp0 (all-zero) BSPM assignments.
+
+    R26 iter 2 production BSPMs contain ~356 fully-zeroed routed experts (entire
+    expert/projection assigned code 3 / bfp0). ``pack_compact_tiles`` writes zero
+    bytes for these and ``global_max`` in ``_pack_data_and_assignment`` lands on
+    0, which would SIGFPE in the C++ buffer ``page_size`` path without the
+    ``max(_align(global_max, alignment), alignment)`` defensive floor.
+
+    Verifies:
+      - ``from_bspm()`` does not crash on an all-bfp0 assignment.
+      - ``max_shard_size > 0`` (floor kicked in, no zero-sized buffer page).
+      - ``tile_counts`` reports every tile as bfp0.
+      - ``to_torch()`` round-trips to an all-zeros weight tensor.
+    """
+    K, N = 128, 256  # 4x8 tile grid, divides cleanly across 8 DRAM banks
+    tiles_h, tiles_w = K // 32, N // 32
+
+    # All-bfp0: every tile is code 3 (zero).
+    assignment = np.full((tiles_h, tiles_w), 3, dtype=np.int8)
+
+    # Random weights — every value gets quantized away by the bfp0 code.
+    torch.manual_seed(0)
+    weight = torch.randn(K, N).float()
+
+    num_banks = device.dram_grid_size().x
+    N_padded = ((N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    per_core_N = N_padded // num_banks
+    dram_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.dram_grid_size().x - 1, 0))}
+    )
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    # Smoke: must not crash. Without the defensive floor in
+    # _pack_data_and_assignment this would SIGFPE in the C++ buffer setup.
+    ct = CompressedTensor.from_bspm(weight, assignment, device=device, memory_config=mem_config)
+
+    # Floor invariant: max_shard_size must be a strictly positive multiple of
+    # the buffer alignment, not zero.  We don't pin the exact alignment constant
+    # — just that the resulting shard size is non-zero.
+    assert ct.max_shard_size > 0, (
+        f"max_shard_size={ct.max_shard_size}; defensive floor in "
+        f"_pack_data_and_assignment must keep it above zero when every tile is bfp0"
+    )
+
+    # Tile-count sanity: every tile should be bfp0, no other formats present.
+    counts = ct.tile_counts
+    total_tiles = tiles_h * tiles_w
+    print(f"All-bfp0 tile counts: {counts} / {total_tiles} total")
+    assert counts.get("bfp0", 0) == total_tiles, f"Expected {total_tiles} bfp0 tiles, got {counts}"
+    for fmt in ("bfp8", "bfp4", "bfp2"):
+        assert counts.get(fmt, 0) == 0, f"Unexpected {fmt} tiles in all-bfp0 assignment: {counts}"
+
+    # Round-trip: bfp0 stores no data, so unpack must produce zeros.
+    recovered = ct.to_torch()
+    assert torch.all(
+        recovered == 0
+    ), f"All-bfp0 round-trip should produce zeros, got max abs value {recovered.abs().max().item()}"

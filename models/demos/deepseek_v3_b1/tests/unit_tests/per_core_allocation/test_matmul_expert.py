@@ -2845,3 +2845,203 @@ def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
         active_expert_ids=[0, 2],  # sparse: only experts 0 and 2 selected this step
         pcc_threshold=0.90,
     )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_matmul_expert_all_bfp0_kernel_skip_tp8(bh_2d_mesh_device):
+    """Diagnostic for TP=8 + all-bfp0 routed expert through the DRAM matmul kernel.
+
+    R26 iter 2 production BSPMs contain ~356 fully-zeroed routed experts (every
+    tile in every projection assigned code 3 / bfp0). The BSPM TP=8 cache helper
+    (``get_or_create_bspm_expert_tp8``) accepts these correctly thanks to the
+    defensive ``max(_align(global_max, alignment), alignment)`` floor in
+    ``_pack_data_and_assignment``, but it's untested whether the DRAM streaming
+    matmul kernel handles a 0-byte ``tiles.bin`` per-shard correctly at runtime.
+
+    This test sets up the production TP=8 routed-expert path (per-device shape
+    K=7168, N=256 — gate_proj at TP=8) with a synthetic all-bfp0 assignment, runs
+    ``ExpertKernel.op``, and asserts every per-device output is exactly zero.
+    Random weights are uploaded but every value is quantized away by the bfp0
+    code, so the on-device representation is a 0-byte tiles.bin per shard.
+
+    Expected first-pass behavior: this test may **fail** if the DRAM kernel
+    does not gracefully handle an all-bfp0 weight (e.g., reads garbage past the
+    0-byte tile buffer).  A failure here is the signal that we need a kernel-side
+    fix before fully-zeroed experts work end-to-end in production runs.
+    """
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+
+    import numpy as np
+
+    from models.demos.deepseek_v3_b1.weights.transforms.moe import shuffle_dram_assignment
+
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    mesh_rows, mesh_cols = 4, 2
+    num_devices = mesh_rows * mesh_cols  # 8
+
+    # Production gate_proj sliced TP=8: per-device (K=7168, N=256).
+    M, K = 1, 7168
+    per_device_N = 256
+    tile_w = 32
+    n_parallel_per_bank = 1
+    k_parallel_per_bank = 1
+    cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
+
+    grids = _setup_core_grids(mesh, cores_per_dram_bank, 0, None, False)
+    dram_core_grid = grids["dram_core_grid"]
+    compute_core_grid = grids["compute_core_grid"]
+    num_dram_cores = len(grids["dram_cores_list"])
+    num_banks = num_dram_cores // cores_per_dram_bank
+    num_cores = compute_core_grid.num_cores()
+
+    Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device = _compute_dram_matmul_params(
+        K,
+        per_device_N,
+        tile_w,
+        num_banks,
+        num_dram_cores,
+        num_dram_cores,
+        cores_per_dram_bank,
+        None,  # num_subblocks_k → default
+        None,  # num_subblocks_n → default
+        k_parallel_per_bank=k_parallel_per_bank,
+    )
+    assert N_dram_per_device == per_device_N, f"unexpected N_dram_per_device={N_dram_per_device} != {per_device_N}"
+
+    # ----- All-bfp0 assignment (every tile is code 3) -----
+    K_tiles = K // tile_w
+    N_tiles = per_device_N // tile_w
+    per_device_assignment = np.full((K_tiles, N_tiles), 3, dtype=np.int8)
+    per_device_assignment_shuffled = shuffle_dram_assignment(per_device_assignment, num_banks)
+    # Stack along K so the 4D weight (mesh_rows, mesh_cols, K, N) lines up with
+    # an assignment of shape (num_devices*K_tiles, N_tiles) — the convention
+    # CompressedTensor expects for multi-device + Shard2dMeshMapper(dims=(0,1)).
+    stacked_assignment = np.tile(per_device_assignment_shuffled, (num_devices, 1))
+
+    # Random per-device weights.  Every value gets quantized away by bfp0 →
+    # 0 packed bytes per shard.  The kernel must still output zero.
+    per_device_shuffled = []
+    for dev_idx in range(num_devices):
+        torch.manual_seed(dev_idx + 7)
+        b = torch.randn(K, per_device_N).float()
+        per_device_shuffled.append(shuffle_tensor_tiles(b, tile_w, num_banks))
+    b_4d = torch.stack(per_device_shuffled).reshape(mesh_rows, mesh_cols, K, per_device_N)
+
+    # Per-device WIDTH_SHARDED DRAM mem config.
+    dram_grid_size = mesh.dram_grid_size()
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        ]
+    )
+    shard_width = dram_per_core_N * tile_w * n_parallel_per_bank
+    dram_b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    # Build the all-bfp0 CompressedTensor directly (bypass from_torch + assigner).
+    # This is the same path get_or_create_bspm_expert_tp8 takes via from_bspm.
+    ct = CompressedTensor(
+        b_4d,
+        stacked_assignment,
+        device=mesh,
+        memory_config=dram_b_mem,
+        per_core_allocation=False,
+        mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+    )
+    logger.info(f"All-bfp0 TP=8 ct.tile_counts: {ct.tile_counts}")
+    total_tiles = num_devices * K_tiles * N_tiles
+    assert ct.tile_counts.get("bfp0", 0) == total_tiles, f"Expected {total_tiles} bfp0 tiles, got {ct.tile_counts}"
+    assert ct.max_shard_size > 0, "Defensive floor must keep max_shard_size > 0 on TP=8 all-bfp0 upload"
+
+    # ----- Kernel inputs -----
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    a_tensor = _build_activation_tensor(torch_a, mesh, compute_core_grid, num_cores, M, K, tile_w)
+    is_dram_flags = [1]
+    index_tensor = _build_index_tensor([0], mesh, compute_core_grid, num_cores, is_dram_flags)
+
+    num_subblocks_k = Kt // subblock_k
+    dram_meta_tensors = create_dram_expert_tensors_multi_device(
+        mesh,
+        [ct],
+        subblock_k,
+        num_subblocks_k,
+        dram_per_core_N,
+        n_parallel_per_bank=n_parallel_per_bank,
+        num_total_experts=1,
+        is_dram_flags=is_dram_flags,
+        subblock_n=subblock_n,
+        k_parallel_per_bank=k_parallel_per_bank,
+    )
+
+    out_tensor = _build_dram_output(
+        mesh,
+        M,
+        dram_per_core_N,
+        1,  # num_active_experts
+        num_dram_cores,
+        num_devices,
+        dram_core_grid,
+        tile_w,
+    )
+
+    # ----- Run the kernel -----
+    result = ExpertKernel.op(
+        a_tensor,
+        [],  # sram_cts
+        [ct],  # dram_cts
+        out_tensor,
+        index_tensor,
+        num_active_experts=1,
+        subblock_k=subblock_k,
+        subblock_n=subblock_n,
+        dram_core_grid=dram_core_grid,
+        dram_meta_tensors=dram_meta_tensors,
+        dram_per_core_n=dram_per_core_N,
+        has_sram=False,
+        sram_core_grid=None,
+        sram_fmt_tensors={},
+        sram_base_addr_tensors={},
+        sram_k_offsets=None,
+        n_parallel_per_bank=n_parallel_per_bank,
+        k_parallel_per_bank=k_parallel_per_bank,
+        sram_per_core_n=0,
+        sram_k_per_core=Kt,
+        sram_output_tensor=None,
+        dram_fuse_silu=False,
+        tp_expert=True,
+        num_loop_iters=1,
+    )
+
+    # ----- Per-device output zero check -----
+    # Mirror _validate_dram_output's slicing for one active dram expert, no K-parallelism.
+    dram_core_width = dram_per_core_N * tile_w
+    failures = []
+    max_abs_overall = 0.0
+    for dev_idx, out_dev in enumerate(ttnn.get_device_tensors(result)):
+        output_dev = ttnn.to_torch(out_dev)
+        slices = []
+        for bank_idx in range(num_banks):
+            core_flat_idx = bank_idx * cores_per_dram_bank
+            start = core_flat_idx * dram_core_width  # exp_offset=0, per_core_slots=1
+            slices.append(output_dev[..., start : start + dram_core_width])
+        expert_output = torch.cat(slices, dim=-1)
+        max_abs = float(expert_output.abs().max().item())
+        max_abs_overall = max(max_abs_overall, max_abs)
+        logger.info(f"Device {dev_idx}: all-bfp0 output max abs={max_abs}, shape={tuple(expert_output.shape)}")
+        if not torch.all(expert_output == 0):
+            failures.append((dev_idx, max_abs))
+
+    assert not failures, (
+        f"All-bfp0 TP=8 kernel produced non-zero output on {len(failures)}/{num_devices} device(s); "
+        f"max abs across mesh = {max_abs_overall}.  Devices failing: {[f[0] for f in failures]}.  "
+        f"This means the DRAM matmul kernel does not handle a fully-bfp0 weight cleanly — a fix is "
+        f"needed before R26's ~356 all-zero experts work in production."
+    )
