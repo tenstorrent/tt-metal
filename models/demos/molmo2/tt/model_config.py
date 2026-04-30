@@ -151,16 +151,18 @@ class Molmo2Config:
         )
         cfg["SDPA_DECODE_COMPUTE_PROGCFG"] = self.compute_kernel_config_hifi4
 
-        # chunk=256: L1 usage = 4*256² + 2048*256 + 290208 = 1.03 MB < 1.43 MB (always safe).
-        # Larger chunks overflow L1 (e.g. chunk=480 → 2.09 MB for S=7179).
-        # Partial-tile bug: TTNN SDPA hangs when S % 256 produces a small last Q-tile
-        # (e.g. S=4778 → last tile has 170 tokens, triggers deadlock).
-        # Fix: Q/K/V are padded to next multiple of 256 in attention.py before SDPA.
-        cfg["SDPA_PROGCFG"] = lambda seq_len: ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            q_chunk_size=256,
-            k_chunk_size=256,
-        )
+        # chunk=256 is L1-safe (1.08 MB < 1.43 MB max).
+        # S is padded to the next power-of-2 in model.py forward_prefill before the
+        # decoder loop, ensuring S_pad/256 is always a power-of-2 (no partial tiles,
+        # no problematic Q-tile counts like 19 that caused TTNN SDPA deadlocks).
+        def sdpa_prog(seq_len):
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                q_chunk_size=256,
+                k_chunk_size=256,
+            )
+
+        cfg["SDPA_PROGCFG"] = sdpa_prog
 
         # Phase 1: let TTNN auto-select matmul program configs.
         # Hand-crafted configs require seq_len divisible by specific grid factors and

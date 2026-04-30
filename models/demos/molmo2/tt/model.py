@@ -829,14 +829,38 @@ class TtMolmo2Model(LightweightModule):
             ttnn.deallocate(logits)
             return logits_cpu  # [1, 1, vocab_size]
 
-        # ---- Eager path (no trace — use actual sequence length S, no padding) ----
-        # Running with S avoids ttnn.concat on non-tile-aligned tensors.
-        # JIT kernels compile for S on first call; subsequent same-S calls reuse them.
+        # ---- Eager path: pad S to next power-of-2 for SDPA compatibility ----
+        # TTNN SDPA hangs for specific (S, chunk=256) combinations where Q-tile count
+        # hits a problematic value (empirically: Q-tiles=19 deadlocks).
+        # Padding to the next power-of-2 guarantees S_pad/256 is also a power-of-2,
+        # giving Q-tile counts of 8, 16, 32, 64 — all safe.
+        # Mask, x, and rot_mats are all built for S_pad; we slice back to S for lm_head.
+        S_pad = max(256, 1 << math.ceil(math.log2(S)) if S > 1 else 256)
+        pad_len = S_pad - S
+
+        if pad_len > 0:
+            # Pad embedding output: [1,1,S,dim] → [1,1,S_pad,dim]
+            x_pad = ttnn.from_torch(
+                torch.zeros(1, 1, pad_len, self.configuration.dim, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            x_ttnn = ttnn.concat([x_ttnn, x_pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_pad)
+
         attn_mask = None
         if token_type_ids is not None:
-            attn_mask = build_molmo2_prefill_mask(S, token_type_ids.long(), self.mesh_device, dtype=ttnn.bfloat8_b)
+            # Build mask for S_pad; padding columns/rows are −∞ (attend to nothing)
+            if pad_len > 0:
+                tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, pad_len, dtype=torch.long)], dim=1)
+            else:
+                tti_padded = token_type_ids.long()
+            attn_mask = build_molmo2_prefill_mask(S_pad, tti_padded, self.mesh_device, dtype=ttnn.bfloat8_b)
 
-        rot_mats = self._get_rot_mats_prefill(S)
+        rot_mats = self._get_rot_mats_prefill(S_pad)
 
         for layer in self.layers:
             x_ttnn = layer.forward(
@@ -852,10 +876,9 @@ class TtMolmo2Model(LightweightModule):
 
         x_ttnn = self.ln_f(x_ttnn, mode=Mode.PREFILL)
 
-        # Slice to the last real token on CPU BEFORE applying lm_head.
-        # Applying lm_head to all S tokens allocates S×vocab_size×2 bytes of DRAM
-        # (e.g. 7179×152064×2 = 2.19 GB for a 30-frame video), which OOMs on T3K.
-        # Downloading [1,1,S,4096] and re-uploading [1,1,1,4096] is cheap compared to OOM.
+        # Slice to the last REAL token (position S-1) on CPU before lm_head.
+        # Applying lm_head to all S_pad tokens would allocate S_pad×vocab×2 bytes DRAM
+        # (e.g. 8192×152064×2 = 2.5 GB) causing OOM.
         x_norm_cpu = ttnn.to_torch(ttnn.get_device_tensors(x_ttnn)[0]).float()
         ttnn.deallocate(x_ttnn)
         x_last = x_norm_cpu[:, :, S - 1 : S, :].to(torch.bfloat16)  # [1, 1, 1, 4096]
