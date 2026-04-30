@@ -143,7 +143,13 @@ class DeepSeekPrefillConfig:
             init_zeros=True,
         )
 
-        self.routing_setup = TtMoERoutingSetup(mesh_device, expert_dispatch_table, num_links=num_links)
+        # IMPORTANT: TtMoERoutingSetup defaults experts_per_chip=32. GPT-OSS-120b on a 4x8 mesh
+        # has only 4 experts per chip; with the wrong value the offset_cumsum produces
+        # expert_region_offsets sized for 32 experts, which extract then reads as out-of-range
+        # offsets and the device kernel enters an unbounded host-allocating retry path.
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device, expert_dispatch_table, experts_per_chip=experts_per_chip, num_links=num_links
+        )
 
         self.permuted_weights = None  # Set by mlp.py after host-side permutation
 
@@ -392,8 +398,8 @@ def _forward_prefill_deepseek_chunk(
             expert_region_offsets,
             tt_counts,
             pc.global_expert_idx_table,
-            local_expert,
-            max_per_expert,
+            local_expert_id=local_expert,
+            max_dispatched_tokens_per_expert=max_per_expert,
         )
 
         # 6b. matmul wants BFLOAT16 acts + 4D shape. Typecast and unsqueeze.
@@ -436,7 +442,7 @@ def _forward_prefill_deepseek_chunk(
             expert_region_offsets,
             tt_counts,
             pc.global_expert_idx_table,
-            local_expert,
+            local_expert_id=local_expert,
         )
         ttnn.deallocate(expert_out_bf8)
 
