@@ -156,7 +156,7 @@ def open_mesh_device():
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape((1, 4)),
         l1_small_size=1 << 15,
-        trace_region_size=0,
+        trace_region_size=70_000_000,
     )
     device.enable_program_cache()
     return device
@@ -259,7 +259,7 @@ def main():
     ttnn.deallocate(tt_ts, force=True)
 
     # ── Warm run (programs cached) ────────────────────────────────────────────
-    print("[2/3] Warm run ...")
+    print("[2/4] Warm run ...")
     tt_lat = _to_device_bf16(lat_pt, mesh_device)
     tt_ts = _to_device_bf16(ts_pt, mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -273,48 +273,45 @@ def main():
     ttnn.deallocate(tt_lat, force=True)
     ttnn.deallocate(tt_ts, force=True)
 
-    # ── Timed runs ────────────────────────────────────────────────────────────
-    print(f"[3/3] Running {args.runs} timed iterations ...")
-    timings = []
-    last_out = None
-    for i in range(args.runs):
-        tt_lat = _to_device_bf16(lat_pt, mesh_device)
-        tt_ts = _to_device_bf16(ts_pt, mesh_device)
-        ttnn.synchronize_device(mesh_device)
+    # ── Trace capture ─────────────────────────────────────────────────────────
+    print("[3/4] Capturing metal trace ...")
+    lat_buf = _to_device_bf16(lat_pt, mesh_device)
+    ts_buf = _to_device_bf16(ts_pt, mesh_device)
 
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    trace_out = dit._forward_impl([lat_buf], ts_buf)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    dit_output_ref = trace_out[0]
+    print("  Trace captured.")
+
+    # ── Timed runs (trace replay) ─────────────────────────────────────────────
+    print(f"[4/4] Running {args.runs} timed iterations (traced) ...")
+    timings = []
+    for i in range(args.runs):
+        ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
-        out = dit([tt_lat], tt_ts)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         timings.append(elapsed_ms)
         print(f"  Run {i + 1}: {elapsed_ms:.1f} ms")
 
-        if i < args.runs - 1:
-            for t in out:
-                ttnn.deallocate(t, force=True)
-        else:
-            last_out = out
-        ttnn.deallocate(tt_lat, force=True)
-        ttnn.deallocate(tt_ts, force=True)
+    # ── PCC check (read from persistent trace output) ─────────────────────────
+    out_torch = _tt_to_torch(dit_output_ref, mesh_device)
 
-    # ── PCC check ─────────────────────────────────────────────────────────────
-    if last_out is not None:
-        out_torch = _tt_to_torch(last_out[0], mesh_device)
-        for t in last_out:
-            ttnn.deallocate(t, force=True)
-
-        if not os.path.exists(REF_OUTPUT_PATH):
-            torch.save(out_torch, REF_OUTPUT_PATH)
-            print(f"\nSaved reference output to {REF_OUTPUT_PATH}")
-            print(f"PCC: 1.0000 (reference)")
-        else:
-            ref = torch.load(REF_OUTPUT_PATH, weights_only=True)
-            m = compute_metrics(out_torch, ref)
-            print(f"\nPCC: {m['pcc']:.6f}")
-            print(f"Max abs diff: {m['max_abs_diff']:.6f}")
-            print(f"Max rel diff: {m['max_rel_diff']:.6f}")
-            print(f"Mean abs diff: {m['mean_abs_diff']:.6f}")
+    if not os.path.exists(REF_OUTPUT_PATH):
+        torch.save(out_torch, REF_OUTPUT_PATH)
+        print(f"\nSaved reference output to {REF_OUTPUT_PATH}")
+        print("PCC: 1.0000 (reference)")
+    else:
+        ref = torch.load(REF_OUTPUT_PATH, weights_only=True)
+        m = compute_metrics(out_torch, ref)
+        print(f"\nPCC: {m['pcc']:.6f}")
+        print(f"Max abs diff: {m['max_abs_diff']:.6f}")
+        print(f"Max rel diff: {m['max_rel_diff']:.6f}")
+        print(f"Mean abs diff: {m['mean_abs_diff']:.6f}")
 
     # Summary
     avg = sum(timings) / len(timings)
@@ -326,6 +323,7 @@ def main():
     print(f"  Best:  {best:.1f} ms")
     print(f"  Worst: {worst:.1f} ms")
 
+    ttnn.release_trace(mesh_device, trace_id)
     ttnn.close_mesh_device(mesh_device)
     print("\nDone.")
 
