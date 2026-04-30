@@ -516,40 +516,42 @@ def test_numpy_autograd_conversion_expecting_runtime_error(tensor_data, numpy_ty
     )
 
 
-def test_to_numpy_prefer_half_returns_bfloat16_dtype():
-    # prefer_half=True should return an ml_dtypes.bfloat16 array, not float32.
+def test_to_numpy_no_device_cast_returns_bfloat16_dtype():
+    # cast_on_device=False on a bf16 tensor should return ml_dtypes.bfloat16 — the raw
+    # storage is returned without triggering a device-side typecast.
     numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
     tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
-    result = tensor.to_numpy(prefer_half=True)
+    result = tensor.to_numpy(cast_on_device=False)
     assert result.dtype == ml_dtypes.bfloat16, f"Expected ml_dtypes.bfloat16, got {result.dtype}"
 
 
-def test_to_numpy_prefer_half_matches_float32_path():
-    # prefer_half=True + .astype(float32) must be numerically identical to to_numpy(FLOAT32).
+def test_to_numpy_no_device_cast_matches_float32_path():
+    # cast_on_device=False + .astype(float32) must be numerically identical to the
+    # default cast_on_device=True path with new_type=FLOAT32.
     numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
     tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
-    via_prefer_half = tensor.to_numpy(prefer_half=True).astype(np.float32)
-    via_float32 = tensor.to_numpy(ttnn.DataType.FLOAT32)
-    np.testing.assert_array_equal(via_prefer_half, via_float32)
+    via_cpu_cast = tensor.to_numpy(cast_on_device=False).astype(np.float32)
+    via_device_cast = tensor.to_numpy(ttnn.DataType.FLOAT32)
+    np.testing.assert_array_equal(via_cpu_cast, via_device_cast)
 
 
-def test_to_numpy_prefer_half_with_new_type_float32():
-    # prefer_half=True + new_type=FLOAT32 is valid: bf16 is fetched from device (no AutocastTensor
-    # float32 cache created) and converted to float32 in C++ on the CPU side.
+def test_to_numpy_no_device_cast_with_new_type_float32():
+    # cast_on_device=False + new_type=FLOAT32: bf16 fetched from device without caching a
+    # float32 copy in AutocastTensor; conversion to float32 happens on the CPU side.
     numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
     tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
-    result = tensor.to_numpy(prefer_half=True, new_type=ttnn.DataType.FLOAT32)
+    result = tensor.to_numpy(cast_on_device=False, new_type=ttnn.DataType.FLOAT32)
     assert result.dtype == np.float32
     np.testing.assert_array_equal(result, tensor.to_numpy(ttnn.DataType.FLOAT32))
 
 
-def test_to_numpy_prefer_half_false_unchanged():
-    # prefer_half=False (default) must behave identically to the pre-existing default path.
+def test_to_numpy_cast_on_device_true_unchanged():
+    # cast_on_device=True (default) must behave identically to the pre-existing default path.
     numpy_tensor = np.array(default_tensor_data, dtype=ml_dtypes.bfloat16)
     tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=ttnn.DataType.BFLOAT16)
     default_result = tensor.to_numpy(ttnn.DataType.FLOAT32)
-    explicit_false_result = tensor.to_numpy(prefer_half=False, new_type=ttnn.DataType.FLOAT32)
-    np.testing.assert_array_equal(default_result, explicit_false_result)
+    explicit_true_result = tensor.to_numpy(cast_on_device=True, new_type=ttnn.DataType.FLOAT32)
+    np.testing.assert_array_equal(default_result, explicit_true_result)
 
 
 def make_tensors(tensor_data, numpy_type, autograd_type, layout):

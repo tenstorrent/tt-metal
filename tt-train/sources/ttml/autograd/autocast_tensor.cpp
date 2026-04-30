@@ -36,11 +36,19 @@ bool AutocastTensor::has_full() const {
     return core::is_tensor_initialized(m_full_precision_tensor);
 }
 
-const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision) const {
+const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision, bool autocast) const {
     // Non-float tensors (e.g. UINT32 embedding indices) are stored in the full-precision
     // slot and returned unchanged — they cannot be typecast to half/full float precision.
     if (has_full() && !is_float_dtype(m_full_precision_tensor.dtype())) {
         return m_full_precision_tensor;
+    }
+
+    if (!autocast) {
+        TT_FATAL(has_half() || has_full(), "AutocastTensor has neither half nor full precision tensor initialized");
+        if (preferred_precision == PreferredPrecision::HALF) {
+            return has_half() ? m_half_precision_tensor : m_full_precision_tensor;
+        }
+        return has_full() ? m_full_precision_tensor : m_half_precision_tensor;
     }
 
     // TODO: Lazy precision caching can leave the FULL/FLOAT32 view stale
