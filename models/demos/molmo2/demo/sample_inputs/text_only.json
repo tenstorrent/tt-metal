@@ -1,0 +1,14 @@
+[
+    [
+        {
+            "role": "user",
+            "content": "What is a vision-language model and how does it differ from a pure language model?"
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": "Explain the difference between supervised and unsupervised learning in two sentences."
+        }
+    ]
+]
