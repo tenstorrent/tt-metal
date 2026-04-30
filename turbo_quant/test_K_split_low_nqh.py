@@ -18,8 +18,12 @@ from turbo_quant.ttnn_integration import TTNNTurboQuantCache
 
 
 def main():
+    import os
+
     device = ttnn.open_device(device_id=0)
-    nqh, nkh, head_dim, bits = 4, 1, 128, 3  # mimic T3K per-chip layout
+    nqh = int(os.environ.get("NQH", 4))
+    nkh = int(os.environ.get("NKH", 1))
+    head_dim, bits = 128, 3
     scale = head_dim**-0.5
     seq_len = 1024
     block_size = 32
