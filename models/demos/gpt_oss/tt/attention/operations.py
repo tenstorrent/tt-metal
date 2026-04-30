@@ -125,6 +125,11 @@ _FUSED_MM_RS_CONFIGS = {
 }
 
 
+def is_shape_fused_mm_rs_supported(tensor) -> bool:
+    m_tiles = (tensor.shape[-2] + 31) // 32
+    return m_tiles in _FUSED_MM_RS_CONFIGS
+
+
 def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_config, ccl_manager):
     """Attention output projection + TP reduce-scatter fused into one device op.
 
@@ -158,11 +163,12 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     K_tiles = K // TILE
     N_tiles = N // TILE
 
-    assert M_tiles in _FUSED_MM_RS_CONFIGS, (
-        f"No tuned fused o_proj MM+RS config for M_tiles={M_tiles}; "
-        f"tuned shapes: {sorted(_FUSED_MM_RS_CONFIGS)}. "
-        f"Use apply_output_projection + apply_allreduce for untuned shapes."
-    )
+    if M_tiles not in _FUSED_MM_RS_CONFIGS:
+        raise ValueError(
+            f"No tuned fused o_proj MM+RS config for M_tiles={M_tiles}; "
+            f"tuned shapes: {sorted(_FUSED_MM_RS_CONFIGS)}. "
+            f"Use apply_output_projection + apply_allreduce for untuned shapes."
+        )
     grid_y, m_block, k_block, n_block, chunk_width, subblock_h, subblock_w, num_workers = _FUSED_MM_RS_CONFIGS[M_tiles]
 
     mm_core_grid = ttnn.CoreCoord(8, grid_y)
