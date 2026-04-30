@@ -151,11 +151,21 @@ class Molmo2Config:
         )
         cfg["SDPA_DECODE_COMPUTE_PROGCFG"] = self.compute_kernel_config_hifi4
 
-        # Let TTNN auto-select SDPA program config.
-        # A fixed (8,8) grid with chunk=256 causes hangs for seq_lens where
-        # ceil(S/256) * n_local_heads > 64 (e.g. S=4778: 19 Q-chunks × 4 heads = 76 > 64).
-        # Auto-select picks a valid config for any S, consistent with QKV/WO matmuls.
-        cfg["SDPA_PROGCFG"] = lambda seq_len: None
+        def sdpa_prog(seq_len):
+            # Keep Q-tiles ≤ (grid_cores / n_local_heads) = 64 / 4 = 16.
+            # Fixed chunk=256 gives ceil(S/256) Q-tiles which exceeds 16 for S > 4096
+            # (e.g. S=4778 → 19 tiles), causing a TTNN grid deadlock.
+            # Increase chunk size for longer sequences so Q-tiles stay ≤ 16.
+            max_q_tiles = 64 // self.n_local_heads  # 64 cores / 4 local heads = 16
+            min_chunk = (seq_len + max_q_tiles - 1) // max_q_tiles  # ceil(S / 16)
+            q_chunk_size = max(256, ((min_chunk + 31) // 32) * 32)  # round up to tile
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=q_chunk_size,
+            )
+
+        cfg["SDPA_PROGCFG"] = sdpa_prog
 
         # Phase 1: let TTNN auto-select matmul program configs.
         # Hand-crafted configs require seq_len divisible by specific grid factors and
