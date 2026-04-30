@@ -6,12 +6,14 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
 #include <cmath>
 #include <map>
 #include <string>
+#include <cstdlib>
 
 using namespace tt::tt_metal;
 
@@ -142,6 +144,35 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Combined core set for shared circular buffer allocation
     auto all_cores_range_set = local_cores_range_set;
     all_cores_range_set = all_cores_range_set.merge(final_cores_range_set);
+
+    {
+        const auto device_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+        TT_FATAL(
+            device_grid_size.x > 0 && device_grid_size.y > 0,
+            "TopK multi-core requires non-empty device compute grid, got ({}, {})",
+            device_grid_size.x,
+            device_grid_size.y);
+        const CoreRangeSet device_grid =
+            num_cores_to_corerangeset(device_grid_size.x * device_grid_size.y, device_grid_size, false);
+        // Test-only: same message as the following contains() check (natural path rarely fails from Python).
+        if (std::getenv("TTNN_TOPK_TEST_MULTICORE_FACTORY_GRID_FATAL") != nullptr) {
+            TT_FATAL(
+                false,
+                "TopK multi-core program core grid {} must be contained in device compute grid {}",
+                all_cores_range_set,
+                device_grid);
+        }
+        TT_FATAL(
+            device_grid.contains(all_cores_range_set),
+            "TopK multi-core program core grid {} must be contained in device compute grid {}",
+            all_cores_range_set,
+            device_grid);
+        TT_FATAL(
+            first_core_range_set.contains(all_cores_range_set),
+            "TopK multi-core active cores {} must be contained in sub_core_grids {}",
+            all_cores_range_set,
+            first_core_range_set);
+    }
 
     // Calculate processing dimensions in tile units
     const uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core

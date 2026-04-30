@@ -35,6 +35,19 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
         input.dtype());
+
+    {
+        TT_FATAL(
+            tensor_args.input.logical_shape().rank() == tensor_args.output.logical_shape().rank(),
+            "Prod_nc input logical rank {} must match output logical rank {} for in-place reduction",
+            tensor_args.input.logical_shape().rank(),
+            tensor_args.output.logical_shape().rank());
+        TT_FATAL(
+            static_cast<int64_t>(tensor_args.input.logical_shape().rank()) == static_cast<int64_t>(input_shape.rank()),
+            "Prod_nc input logical rank {} must match padded rank {}",
+            tensor_args.input.logical_shape().rank(),
+            input_shape.rank());
+    }
 }
 
 ProdNcDeviceOperation::spec_return_value_t ProdNcDeviceOperation::compute_output_specs(

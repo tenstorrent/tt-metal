@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/allocator.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
 #include <optional>
@@ -132,6 +133,18 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.k != 0, "K must be non-zero");
 
+    {
+        const int8_t logical_rank = static_cast<int8_t>(input_tensor.logical_shape().rank());
+        const int8_t last_dim = logical_rank - 1;
+        TT_FATAL(
+            args.dim == -1 || args.dim == last_dim,
+            "TopK device operation expects reduction on the last dimension (dim=-1 or dim={} for logical rank "
+            "{}), got {})",
+            last_dim,
+            logical_rank,
+            args.dim);
+    }
+
     // Memory configuration validation
     TT_FATAL(args.output_memory_config.is_sharded() == false, "Sharded implementation not supported yet");
 
@@ -173,6 +186,106 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             input_tensor_dtype);
     }
 
+    {
+        auto validate_padded_and_shard_tile = [](const Tensor& t, const char* tensor_name) {
+            const auto& padded_shape = t.padded_shape();
+            const uint32_t tile_height = t.tensor_spec().tile().get_height();
+            const uint32_t tile_width = t.tensor_spec().tile().get_width();
+            TT_FATAL(
+                padded_shape.rank() >= 2,
+                "TopK {} padded_shape rank {} must be at least 2 for H/W checks",
+                tensor_name,
+                padded_shape.rank());
+            TT_FATAL(
+                padded_shape[-2] > 0 && padded_shape[-1] > 0,
+                "TopK {} padded spatial dims must be positive: height={}, width={}",
+                tensor_name,
+                padded_shape[-2],
+                padded_shape[-1]);
+            TT_FATAL(
+                padded_shape[-2] % tile_height == 0,
+                "TopK {} padded_height={} must be tile-height-aligned ({})",
+                tensor_name,
+                padded_shape[-2],
+                tile_height);
+            TT_FATAL(
+                padded_shape[-1] % tile_width == 0,
+                "TopK {} padded_width={} must be tile-width-aligned ({})",
+                tensor_name,
+                padded_shape[-1],
+                tile_width);
+
+            const auto& tensor_memory_config = t.memory_config();
+            if (tensor_memory_config.shard_spec().has_value()) {
+                const auto& shard_shape = tensor_memory_config.shard_spec().value().shape;
+                TT_FATAL(
+                    shard_shape[0] > 0 && shard_shape[1] > 0,
+                    "TopK {} shard_shape must be positive, got [{}, {}]",
+                    tensor_name,
+                    shard_shape[0],
+                    shard_shape[1]);
+                TT_FATAL(
+                    shard_shape[0] % tile_height == 0,
+                    "TopK {} shard_shape[0]={} must be tile-height-aligned ({})",
+                    tensor_name,
+                    shard_shape[0],
+                    tile_height);
+                TT_FATAL(
+                    shard_shape[1] % tile_width == 0,
+                    "TopK {} shard_shape[1]={} must be tile-width-aligned ({})",
+                    tensor_name,
+                    shard_shape[1],
+                    tile_width);
+            }
+            if (tensor_memory_config.nd_shard_spec().has_value()) {
+                const auto& nd_shard_shape = tensor_memory_config.nd_shard_spec().value().shard_shape;
+                if (nd_shard_shape.rank() >= 2) {
+                    TT_FATAL(
+                        nd_shard_shape[-2] > 0 && nd_shard_shape[-1] > 0,
+                        "TopK {} ND shard last-2 dims must be positive, got [..., {}, {}]",
+                        tensor_name,
+                        nd_shard_shape[-2],
+                        nd_shard_shape[-1]);
+                    TT_FATAL(
+                        nd_shard_shape[-2] % tile_height == 0,
+                        "TopK {} ND shard_shape[-2]={} must be tile-height-aligned ({})",
+                        tensor_name,
+                        nd_shard_shape[-2],
+                        tile_height);
+                    TT_FATAL(
+                        nd_shard_shape[-1] % tile_width == 0,
+                        "TopK {} ND shard_shape[-1]={} must be tile-width-aligned ({})",
+                        tensor_name,
+                        nd_shard_shape[-1],
+                        tile_width);
+                }
+            }
+        };
+
+        validate_padded_and_shard_tile(input_tensor, "input");
+        if (indices_tensor.has_value()) {
+            validate_padded_and_shard_tile(indices_tensor.value(), "indices");
+        }
+        if (preallocated_outputs.has_value()) {
+            validate_padded_and_shard_tile(std::get<0>(preallocated_outputs.value()), "preallocated_values");
+            validate_padded_and_shard_tile(std::get<1>(preallocated_outputs.value()), "preallocated_indices");
+        }
+    }
+    {
+        const auto device_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+        TT_FATAL(
+            device_grid_size.x > 0 && device_grid_size.y > 0,
+            "TopK requires non-empty device compute grid, got ({}, {})",
+            device_grid_size.x,
+            device_grid_size.y);
+        const CoreRangeSet device_grid =
+            num_cores_to_corerangeset(device_grid_size.x * device_grid_size.y, device_grid_size, false);
+        TT_FATAL(
+            device_grid.contains(args.sub_core_grids),
+            "TopK sub_core_grids {} must be contained in device compute grid {}",
+            args.sub_core_grids,
+            device_grid);
+    }
     // Execution feasibility validation
     // Verify that the operation can be executed with available hardware resources
     bool can_run = false;

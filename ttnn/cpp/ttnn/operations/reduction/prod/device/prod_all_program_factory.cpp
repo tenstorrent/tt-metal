@@ -5,6 +5,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
 
@@ -25,6 +26,26 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
     uint32_t single_tile_size = tile_size(cb_data_format);
 
     uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
+
+    {
+        auto* prod_all_device = input.device();
+        TT_FATAL(prod_all_device != nullptr, "Prod_all input must be on device");
+        const auto prod_all_gs = prod_all_device->compute_with_storage_grid_size();
+        TT_FATAL(
+            prod_all_gs.x > 0 && prod_all_gs.y > 0,
+            "Prod_all requires non-empty device compute grid, got ({}, {})",
+            prod_all_gs.x,
+            prod_all_gs.y);
+        const tt::tt_metal::CoreRangeSet prod_all_device_grid =
+            tt::tt_metal::num_cores_to_corerangeset(prod_all_gs.x * prod_all_gs.y, prod_all_gs, false);
+        const tt::tt_metal::CoreRangeSet prod_all_program_cores{tt::tt_metal::CoreRange({0, 0}, {0, 0})};
+        TT_FATAL(
+            prod_all_device_grid.contains(prod_all_program_cores),
+            "Prod_all program core grid {} must be contained in device compute grid {}",
+            prod_all_program_cores,
+            prod_all_device_grid);
+        TT_FATAL(num_tiles > 0, "Prod_all workload num_tiles must be > 0, got {}", num_tiles);
+    }
 
     uint32_t num_input_tiles = 2;
     desc.cbs.push_back(CBDescriptor{

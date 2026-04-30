@@ -47,6 +47,30 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
     const auto Wt = input_shape[3] / tile_width;
     TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={})", Ht, Wt);
 
+    {
+        const auto& prod_nc_output_padded = output.padded_shape();
+        TT_FATAL(
+            input_shape[2] % tile_height == 0,
+            "Prod_nc input padded_height={} must be tile-height-aligned ({})",
+            input_shape[2],
+            tile_height);
+        TT_FATAL(
+            input_shape[3] % tile_width == 0,
+            "Prod_nc input padded_width={} must be tile-width-aligned ({})",
+            input_shape[3],
+            tile_width);
+        TT_FATAL(
+            prod_nc_output_padded[2] % tile_height == 0,
+            "Prod_nc output padded_height={} must be tile-height-aligned ({})",
+            prod_nc_output_padded[2],
+            tile_height);
+        TT_FATAL(
+            prod_nc_output_padded[3] % tile_width == 0,
+            "Prod_nc output padded_width={} must be tile-width-aligned ({})",
+            prod_nc_output_padded[3],
+            tile_width);
+    }
+
     const auto HtWt = Ht * Wt;
     const auto CHtWt = C * Ht * Wt;
     const auto num_reduce_input_tile = input_shape[dim];
@@ -80,6 +104,86 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
          core_group_2,
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
+
+    {
+        const tt::tt_metal::CoreRangeSet prod_nc_device_grid =
+            tt::tt_metal::num_cores_to_corerangeset(grid.x * grid.y, grid, false);
+        TT_FATAL(
+            prod_nc_device_grid.contains(all_cores),
+            "Prod_nc program cores {} must be contained in device compute grid {}",
+            all_cores,
+            prod_nc_device_grid);
+        const uint32_t prod_nc_workload_tiles_g1 = core_group_1.num_cores() * num_cols_per_core_group_1;
+        const uint32_t prod_nc_workload_tiles_g2 = core_group_2.num_cores() * num_cols_per_core_group_2;
+        TT_FATAL(
+            prod_nc_workload_tiles_g1 + prod_nc_workload_tiles_g2 == num_output_tiles,
+            "Prod_nc workload mismatch: group1_output_tiles={} + group2_output_tiles={} must equal num_output_tiles={} "
+            "",
+            prod_nc_workload_tiles_g1,
+            prod_nc_workload_tiles_g2,
+            num_output_tiles);
+        auto prod_nc_validate_shard_grid_subset_program = [&](const Tensor& t, const char* tensor_name) {
+            const auto& prod_nc_mc = t.memory_config();
+            if (prod_nc_mc.shard_spec().has_value()) {
+                TT_FATAL(
+                    all_cores.contains(prod_nc_mc.shard_spec().value().grid),
+                    "Prod_nc {} shard grid {} must be contained in program cores {}",
+                    tensor_name,
+                    prod_nc_mc.shard_spec().value().grid,
+                    all_cores);
+                const auto& prod_nc_shard_shape = prod_nc_mc.shard_spec().value().shape;
+                TT_FATAL(
+                    prod_nc_shard_shape[0] > 0 && prod_nc_shard_shape[1] > 0,
+                    "Prod_nc {} shard_shape must be positive, got [{}, {}]",
+                    tensor_name,
+                    prod_nc_shard_shape[0],
+                    prod_nc_shard_shape[1]);
+                TT_FATAL(
+                    prod_nc_shard_shape[0] % tile_height == 0,
+                    "Prod_nc {} shard_shape[0]={} must be tile-height-aligned ({})",
+                    tensor_name,
+                    prod_nc_shard_shape[0],
+                    tile_height);
+                TT_FATAL(
+                    prod_nc_shard_shape[1] % tile_width == 0,
+                    "Prod_nc {} shard_shape[1]={} must be tile-width-aligned ({})",
+                    tensor_name,
+                    prod_nc_shard_shape[1],
+                    tile_width);
+            }
+            if (prod_nc_mc.nd_shard_spec().has_value()) {
+                TT_FATAL(
+                    all_cores.contains(prod_nc_mc.nd_shard_spec().value().grid),
+                    "Prod_nc {} ND shard grid {} must be contained in program cores {}",
+                    tensor_name,
+                    prod_nc_mc.nd_shard_spec().value().grid,
+                    all_cores);
+                const auto& prod_nc_nd_shard_shape = prod_nc_mc.nd_shard_spec().value().shard_shape;
+                if (prod_nc_nd_shard_shape.rank() >= 2) {
+                    TT_FATAL(
+                        prod_nc_nd_shard_shape[-2] > 0 && prod_nc_nd_shard_shape[-1] > 0,
+                        "Prod_nc {} ND shard last-2 dims must be positive, got [..., {}, {}]",
+                        tensor_name,
+                        prod_nc_nd_shard_shape[-2],
+                        prod_nc_nd_shard_shape[-1]);
+                    TT_FATAL(
+                        prod_nc_nd_shard_shape[-2] % tile_height == 0,
+                        "Prod_nc {} ND shard_shape[-2]={} must be tile-height-aligned ({})",
+                        tensor_name,
+                        prod_nc_nd_shard_shape[-2],
+                        tile_height);
+                    TT_FATAL(
+                        prod_nc_nd_shard_shape[-1] % tile_width == 0,
+                        "Prod_nc {} ND shard_shape[-1]={} must be tile-width-aligned ({})",
+                        tensor_name,
+                        prod_nc_nd_shard_shape[-1],
+                        tile_width);
+                }
+            }
+        };
+        prod_nc_validate_shard_grid_subset_program(input, "input");
+        prod_nc_validate_shard_grid_subset_program(output, "output");
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
