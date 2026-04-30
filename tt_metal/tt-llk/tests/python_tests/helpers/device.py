@@ -15,6 +15,7 @@ from ttexalens.hardware.risc_debug import CallstackEntry
 from ttexalens.tt_exalens_lib import (
     ParsedElfFile,
     TTException,
+    advance_simulated_clock,
     arc_msg,
     callstack,
     check_context,
@@ -172,6 +173,12 @@ def commit_tensix_soft_reset(
     get_register_store(location, device_id).write_register(
         "RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset
     )
+
+    # This path bypasses umd's deassert_risc_reset API (which has its own simulated-clock
+    # advance). On TTSim a freshly-deasserted RISC needs simulated cycles to clear CRT init
+    # before the next host op lands — pre-pay them explicitly. No-op on silicon.
+    if not value:
+        advance_simulated_clock(1000, device_id=device_id)
 
     end_time = time.time() + 0.1  # 100ms
     while time.time() < end_time:
