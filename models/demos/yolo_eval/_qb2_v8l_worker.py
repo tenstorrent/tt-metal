@@ -30,21 +30,27 @@ import cv2
 import numpy as np
 import torch
 
-# Cross-tile merge + seam-adjacent merge from the production 640 SAHI script —
-# WBF / IoS / seam logic gives much better dedup than plain NMS for objects
-# that straddle tile boundaries (matches the supervisor camera transport).
-from models.demos.yolo_eval.yolov8l_sahi_640_pipelined import _cross_tile_merge, _merge_seam_adjacent
+# Cross-tile merge + seam-adjacent merge + overlap grid builder, all from the
+# production 640 SAHI script. The overlap grid is the architectural fix for
+# duplicate boxes on tile seams: when adjacent tiles share an overlap band,
+# an object straddling the seam is FULLY visible in both tiles, so cross-tile
+# WBF gets a high IoU/IoS match and dedup actually works.
+from models.demos.yolo_eval.yolov8l_sahi_640_pipelined import (
+    _cross_tile_merge,
+    _merge_seam_adjacent,
+    build_overlap_grid,
+)
+from models.demos.yolo_eval.yolov8l_sahi_pipelined import _tile_nms, slice_and_preprocess
 
-# Re-use SAHI primitives from the existing pipeline (slice + preprocess + merge).
-from models.demos.yolo_eval.yolov8l_sahi_pipelined import TileGrid, _tile_nms, slice_and_preprocess
-
-_LETTERBOX_RES = 1280
+# Letterbox to 1216 (not 1280) so that with 640×640 tiles, build_overlap_grid
+# shifts the last row/col inward to start=576, giving a 64-px overlap zone
+# on both axes. Same 4-chip cost; sustained dedup quality.
+_LETTERBOX_RES = 1216
 _TILE = 640
-# Seam pairs for our fixed 2×2 grid. Each pair is (prev-tile inner edge,
-# next-tile inner edge). Hard cuts (no overlap) → end == start. For 1280
-# split into two 640 tiles per axis, both seams are at 640.
-_SEAMS_X: tuple = ((640, 640),)
-_SEAMS_Y: tuple = ((640, 640),)
+# Seams are computed from the grid below at startup, so they always reflect
+# the actual tile geometry (no manual coupling to constants).
+_SEAMS_X: tuple = ()
+_SEAMS_Y: tuple = ()
 # bfloat8 sigmoid noise floor — class logits hover near zero at 640×640 on
 # the YOLOv8L mesh path, producing sigmoid ≈ 0.50. Conf below this lets the
 # floor noise through; conf at or above it correctly suppresses the noise
@@ -131,18 +137,45 @@ def main() -> int:
 
     TAG = "[qb2-v8l]"
 
-    # 1280x1280 letterboxed → 2x2 grid of 640x640 tiles → 4 chips.
-    grid = TileGrid.build(_LETTERBOX_RES, _LETTERBOX_RES, tile_h=_TILE, tile_w=_TILE)
+    # 1216x1216 letterboxed → 2x2 grid with 64px overlap on each axis → 4 chips.
+    # build_overlap_grid shifts the last row/col inward when it would extend
+    # past the frame: x_starts=[0,576], y_starts=[0,576] for 1216 / 640.
+    grid = build_overlap_grid(_LETTERBOX_RES, _LETTERBOX_RES, _TILE, _TILE, add_whole_frame=False)
     n_tiles = grid.n_tiles
     if n_tiles != 4:
         print(f"{TAG} unexpected n_tiles={n_tiles} (need 4 for 2x2)", file=sys.stderr, flush=True)
         return 2
 
+    # Derive seams from the grid (same idiom as the production supervisor
+    # demo). For our case: col_starts={0,576}, col_ends={640,1216}; the
+    # interior seam pair is (640, 576) on each axis.
+    _col_starts = sorted({ts.col_start for ts in grid.tiles})
+    _col_ends = sorted({ts.col_start + ts.src_w for ts in grid.tiles})
+    _row_starts = sorted({ts.row_start for ts in grid.tiles})
+    _row_ends = sorted({ts.row_start + ts.src_h for ts in grid.tiles})
+    seams_x = tuple(
+        zip(
+            [e for e in _col_ends if e < _LETTERBOX_RES],
+            [s for s in _col_starts if s > 0],
+        )
+    )
+    seams_y = tuple(
+        zip(
+            [e for e in _row_ends if e < _LETTERBOX_RES],
+            [s for s in _row_starts if s > 0],
+        )
+    )
     print(
-        f"{TAG} TileGrid {_LETTERBOX_RES}x{_LETTERBOX_RES} "
-        f"-> {grid.n_cols}x{grid.n_rows} = {n_tiles} tiles of {_TILE}x{_TILE}",
+        f"{TAG} OverlapGrid {_LETTERBOX_RES}x{_LETTERBOX_RES} "
+        f"-> {grid.n_cols}x{grid.n_rows} = {n_tiles} tiles of {_TILE}x{_TILE}; "
+        f"seams_x={seams_x} seams_y={seams_y}",
         flush=True,
     )
+    for i, ts in enumerate(grid.tiles):
+        print(
+            f"{TAG}   tile {i}: start=({ts.col_start},{ts.row_start}) " f"src={ts.src_w}x{ts.src_h}",
+            flush=True,
+        )
 
     # --- Open 2x2 sub-mesh ---
     mesh_shape = ttnn.MeshShape(2, 2)
@@ -255,8 +288,8 @@ def main() -> int:
                         boxes,
                         scores,
                         cls_ids,
-                        seams_x=_SEAMS_X,
-                        seams_y=_SEAMS_Y,
+                        seams_x=seams_x,
+                        seams_y=seams_y,
                         tol=args.seam_tol,
                         perp_overlap_frac=args.seam_perp_overlap_frac,
                     )

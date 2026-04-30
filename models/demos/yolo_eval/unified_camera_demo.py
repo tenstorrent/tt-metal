@@ -64,7 +64,11 @@ DETS_V11S_FILE = os.path.join(TMP, "qb2_dets_v11s.json")
 DETS_V8L_FILE = os.path.join(TMP, "qb2_dets_v8l.json")
 
 LETTERBOX_640 = 640
-LETTERBOX_1280 = 1280
+# 1216 (not 1280) so the 4-tile SAHI grid has a 64-px overlap zone on each
+# axis: build_overlap_grid shifts the last row/col inward to start=576 when
+# tile_w + col_start would exceed frame_w. Same source coverage, dramatically
+# better cross-tile dedup because adjacent tiles fully share the seam region.
+LETTERBOX_V8L = 1216
 JPEG_Q_INPUT = 75  # input frames don't need to be archival quality
 
 
@@ -190,9 +194,9 @@ async def frame_writer_loop(hub: IngressHub, stop: asyncio.Event) -> None:
         # Cheap on CPU: 1920x1080 → 640x640 + 1280x1280 letterbox is < 5 ms
         # combined; well under the 33 ms 30 fps budget.
         lb640 = _letterbox(bgr, LETTERBOX_640)
-        lb1280 = _letterbox(bgr, LETTERBOX_1280)
+        lb_v8l = _letterbox(bgr, LETTERBOX_V8L)
         await asyncio.to_thread(_write_jpeg, CAM_640_FILE, lb640, JPEG_Q_INPUT)
-        await asyncio.to_thread(_write_jpeg, CAM_1280_FILE, lb1280, JPEG_Q_INPUT)
+        await asyncio.to_thread(_write_jpeg, CAM_1280_FILE, lb_v8l, JPEG_Q_INPUT)
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +240,7 @@ async def dets_forward_loop(hub: IngressHub, mode_state: dict, stop: asyncio.Eve
             payload = {
                 "k": "dets",
                 "mode": mode,
-                "input_res": LETTERBOX_1280,
+                "input_res": LETTERBOX_V8L,
                 "v8l": {"fps": v8l.get("fps", 0), "dets": v8l.get("dets", [])},
             }
             hub.send_dets(payload)
@@ -338,17 +342,20 @@ class ModeController:
             "wbf",
             "--merge-match",
             "ios",
-            # Tightened merge: lower IoS threshold (more aggressive WBF), wider
-            # seam tolerance, and a much smaller perpendicular-overlap floor
-            # for seam-adjacent merge. Tuned to suppress the duplicate boxes
-            # users see along the x=640 / y=640 hard-cut SAHI seams.
+            # Aggressive merge for hard-cut 2×2 seams: low IoS (cross-tile
+            # WBF fuses on weaker matches), wide seam tolerance, and a
+            # near-zero perpendicular-overlap floor. --class-agnostic lets
+            # the cross-tile WBF dedup boxes that picked different class
+            # labels in adjacent tiles (typical for partially-occluded
+            # objects straddling a seam).
             "--merge-threshold",
-            "0.5",
+            "0.35",
+            "--class-agnostic",
             "--seam-merge",
             "--seam-tol",
-            "160",
+            "240",
             "--seam-perp-overlap-frac",
-            "0.05",
+            "0.02",
         ]
         print(f"[qb2] spawn yolov8l-sahi: {' '.join(cmd)}", flush=True)
         p = subprocess.Popen(cmd, env=self._env(), start_new_session=True)
