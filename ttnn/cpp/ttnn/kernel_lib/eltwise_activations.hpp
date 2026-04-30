@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "api/compute/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/tanh_derivative.h"
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+/**
+ * @file eltwise_activations.hpp
+ * @brief Activation op structs (and their derivatives) for the V2 eltwise
+ *        helper family. Backward-pass kernels (gelu_bw, tanh_bw, etc.) use the
+ *        derivative variants chained with a CopyTile + binary mul.
+ *
+ * NOTE: this file does NOT include `sfpu_helpers.hpp`. Calls go directly into
+ * `compute_kernel_api/eltwise_unary/...h`.
+ */
+
+namespace compute_kernel_lib {
+
+// =============================================================================
+// TanhDerivative — used by tanh_bw. Programs the SFPU type register for
+// tanh_derivative; init is HW-light so hoist-safe per init_hoist_survey.md.
+// =============================================================================
+
+template <Dst Slot = Dst::D0>
+struct TanhDerivative : UnaryOp<TanhDerivative<Slot>, Slot> {
+    // Per init_hoist_survey: derivative inits touch only the SFPU type
+    // register (not the polynomial LUT) — safe to coexist with another LUT op.
+    static constexpr bool clobbers_sfpu_lut = false;
+
+    ALWI static void init() { ckernel::tanh_derivative_tile_init(); }
+    ALWI static void call(uint32_t dst) { ckernel::tanh_derivative_tile(dst); }
+};
+
+// =============================================================================
+// GeluDerivative — used by gelu_bw. Same shape as TanhDerivative.
+// =============================================================================
+
+template <Dst Slot = Dst::D0>
+struct GeluDerivative : UnaryOp<GeluDerivative<Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = false;
+
+    ALWI static void init() { ckernel::gelu_derivative_tile_init(); }
+    ALWI static void call(uint32_t dst) { ckernel::gelu_derivative_tile(dst); }
+};
+
+}  // namespace compute_kernel_lib
