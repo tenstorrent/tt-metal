@@ -87,9 +87,21 @@ async function run() {
     const slackTsMapRaw = core.getInput('slack_ts_map') || '{}';
     let slackTsMap = {};
     try {
-      slackTsMap = JSON.parse(slackTsMapRaw);
-      core.info(`Parsed slack_ts_map with ${Object.keys(slackTsMap).length} entries`);
+      const parsedSlackTsMap = JSON.parse(slackTsMapRaw);
+      const isPlainObject =
+        typeof parsedSlackTsMap === 'object' &&
+        parsedSlackTsMap !== null &&
+        !Array.isArray(parsedSlackTsMap);
+
+      if (isPlainObject) {
+        slackTsMap = parsedSlackTsMap;
+        core.info(`Parsed slack_ts_map with ${Object.keys(slackTsMap).length} entries`);
+      } else {
+        slackTsMap = {};
+        core.warning('Invalid slack_ts_map value; expected a non-null plain object. Falling back to global slack_ts.');
+      }
     } catch (e) {
+      slackTsMap = {};
       core.warning(`Failed to parse slack_ts_map, falling back to global slack_ts: ${e.message}`);
     }
 

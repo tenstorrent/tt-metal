@@ -123,11 +123,13 @@ runs:
         chunk_index=0
         current_chunk_text=""
 
-        # ── Per-job granularity ──────────────────────────────────────────
-        # Each failing job gets its own top-level Slack message (and its
-        # own boundary marker so the send step opens a new thread).
-        # The boundary name is "workflow_name / job_name" so the ts_map
-        # can route auto-triage threads to the correct message.
+        # ── Per-pipeline granularity ─────────────────────────────────────
+        # Each regression (pipeline) gets ONE top-level Slack message.
+        # A single boundary marker is written at the start of each regression
+        # so the send step opens a new thread for it.  Failing jobs are
+        # appended to the same message; if they overflow the size limit the
+        # overflow is split into additional chunks that thread under the same
+        # top-level message (no new boundary written for overflow chunks).
         for i in $(seq 0 $((REGRESSION_COUNT - 1))); do
           regression=$(jq -c ".[$i]" "$tmp_file")
           regression_name=$(echo "$regression" | jq -r '.name // "Unknown"')
@@ -138,42 +140,43 @@ runs:
 
           echo "Processing regression $((i + 1)): $regression_name with $failing_jobs_count failing jobs"
 
-          if [ "$failing_jobs_count" -eq 0 ]; then
-            # No failing jobs — emit a single top-level message with just the header.
-            if [ -n "$current_chunk_text" ]; then
-              echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
-              chunk_index=$((chunk_index + 1))
-              current_chunk_text=""
-            fi
-            echo "$regression_name" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
-            current_chunk_text="${HEADER_PREFIX}${regression_header}"
-          else
-            # Each failing job gets its own top-level Slack message.
-            for j in $(seq 0 $((failing_jobs_count - 1))); do
-              job=$(echo "$regression" | jq -c ".failing_jobs[$j]")
-              job_text=$(format_single_job "$job")
-              job_name=$(echo "$job" | jq -r 'if type == "object" then .name // "Unknown" else . end')
+          # Flush any accumulated text from the previous regression.
+          if [ -n "$current_chunk_text" ]; then
+            echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
+            chunk_index=$((chunk_index + 1))
+            current_chunk_text=""
+          fi
 
-              # Flush any accumulated text from the previous job/regression.
-              if [ -n "$current_chunk_text" ]; then
+          # Write ONE boundary marker for this pipeline.  Overflow chunks for
+          # the same regression will NOT get a new boundary file, so they
+          # thread under this regression's top-level message.
+          echo "$regression_name" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
+          echo "New regression boundary [$chunk_index]: $regression_name"
+
+          # Start building the message for this regression.
+          current_chunk_text="${HEADER_PREFIX}${regression_header}"
+
+          # Append failing jobs; split into overflow chunks only when the size
+          # limit is reached (overflow chunks thread under the same message).
+          for j in $(seq 0 $((failing_jobs_count - 1))); do
+            job=$(echo "$regression" | jq -c ".failing_jobs[$j]")
+            job_text=$(format_single_job "$job")
+
+            if [ -n "$job_text" ]; then
+              candidate="${current_chunk_text}${NEWLINE}${job_text}"
+              candidate_length=${#candidate}
+
+              if [ "$candidate_length" -gt "$((MAX_BLOCK_TEXT_LENGTH - CHUNK_INDICATOR_BUFFER))" ]; then
+                # Flush current chunk without a new boundary — overflow threads
+                # under the same regression's top-level message.
                 echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
                 chunk_index=$((chunk_index + 1))
-                current_chunk_text=""
+                current_chunk_text="${HEADER_PREFIX}${regression_header}${NEWLINE}${job_text}"
+              else
+                current_chunk_text="$candidate"
               fi
-
-              # Boundary key: "workflow_name / job_name" — used by the
-              # send step to record per-job ts entries in slack_ts_map.
-              boundary_key="${regression_name} / ${job_name}"
-              echo "$boundary_key" > "${GITHUB_WORKSPACE}/slack_regression_boundary_${chunk_index}.txt"
-              echo "  → Job boundary [$chunk_index]: $boundary_key"
-
-              # Build message: workflow header + single job line
-              current_chunk_text="${HEADER_PREFIX}${regression_header}"
-              if [ -n "$job_text" ]; then
-                current_chunk_text="${current_chunk_text}${NEWLINE}${job_text}"
-              fi
-            done
-          fi
+            fi
+          done
         done
 
         # Save the last chunk if it has content
@@ -327,9 +330,10 @@ runs:
       run: |
         set -euo pipefail
 
-        # Ensure payload files are cleaned up even if this step fails
+        # Ensure payload and boundary files are cleaned up even if this step fails
         cleanup_payload_files() {
           rm -f "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || true
+          rm -f "${GITHUB_WORKSPACE}"/slack_regression_boundary_*.txt 2>/dev/null || true
         }
         trap cleanup_payload_files EXIT
 
@@ -402,6 +406,7 @@ runs:
               boundary_regression_name=$(cat "$boundary_file" 2>/dev/null || echo "")
               CURRENT_REGRESSION_TS=""
               echo "New regression boundary for: $boundary_regression_name"
+              rm -f "$boundary_file" || echo "⚠️ Failed to remove boundary file: $boundary_file"
             fi
 
             # Build request body with channel and optional thread_ts
