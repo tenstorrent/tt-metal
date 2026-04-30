@@ -164,3 +164,32 @@
 - Weight cache working (634 files, 18s load)
 
 ### Next Steps
+
+## Session 6 — 2026-04-30
+
+**Status**: 105-video back-to-back suite complete — 98/100 decodable tests PASS
+**PCC**: All 8 unit tests PASS; TP MLP PCC=0.999946 RMS=0.993
+**Block Hash**: COMPLETE
+
+### Work Done
+- Decode trace for fast decode (~8s/test from ~88s)
+- Prefill bucketing (power-of-2 padding, SDPA partial-tile hang fix)
+- Fixed 3 DRAM OOM: ViT 8-crop batching, eager LM head slice, adaptive SDPA
+- Ran all 105 video tests back-to-back (single warm-up, trace reused)
+- Implemented TP MLP with trace-safe AllReduce:
+  - Column-parallel w1/w3: ShardTensor2dMesh(dims=(-2,-1))
+  - Row-parallel w2: ShardTensor2dMesh(dims=(-1,-2))
+  - AllReduce = reduce_scatter_minimal_async + all_gather_async (CCL async, trace-safe)
+  - Root cause of broken AllGather: ring-ordering mismatch on T3K
+  - Root cause of broken all_reduce: ttnn.all_reduce not replay-safe in decode traces
+
+### Final Results (105-video suite, T3K)
+- **98/100 PASS** (5 corrupt .webm excluded, same on GPU ref)
+- Replicated MLP baseline: 91/100 = 91%
+- **TP MLP reduce_scatter+all_gather: 98/100 = 98%** (+7%)
+
+| MLP variant | PASS/100 | Notes |
+|-------------|----------|-------|
+| Replicated bf8b | 91% | Phase 1 baseline |
+| TP AllGather | 87-84% | Ring-ordering mismatch |
+| **TP reduce_scatter+all_gather** | **98%** | Correct, trace-safe |
