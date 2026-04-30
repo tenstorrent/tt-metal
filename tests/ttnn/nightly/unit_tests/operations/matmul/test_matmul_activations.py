@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -249,8 +249,6 @@ def test_matmul_with_fused_activations(
         check_ulp=False,
     )
 
-    logger.info(f"✓ Matmul with {activation} activation passed")
-
 
 @pytest.mark.parametrize(
     "activation",
@@ -352,8 +350,6 @@ def test_matmul_with_custom_activation_params(
         pcc_threshold=0.95,
         check_ulp=False,
     )
-
-    logger.info(f"✓ Matmul with custom {activation.op_type} parameters passed")
 
 
 @pytest.mark.parametrize(
@@ -469,8 +465,6 @@ def test_activation_with_different_program_configs(
         pcc_threshold=0.97,
         check_ulp=False,
     )
-
-    logger.info(f"✓ {config_type} config with {activation} activation passed")
 
 
 # ============================================================================
