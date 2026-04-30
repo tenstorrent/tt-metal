@@ -68,7 +68,9 @@ PCC_THRESHOLD = 0.99
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 SEQ_LEN_1K = 1024
+SEQ_LEN_2K = 2 * 1024
 SEQ_LEN_25K = 25 * 1024
+SEQ_LEN_100K = 100 * 1024
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
@@ -94,9 +96,17 @@ SEQ_LEN_25K = 25 * 1024
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
+# isl_total constraint: seq_len_per_chip = isl_total / sp_factor must be
+# divisible by 64 (the hardcoded 8x8 bincount core grid in
+# tt_moe_routing_setup.py:222). Equivalently, isl_total must be a multiple
+# of 64 * sp_factor. The constraint fires whenever an MoE layer's routing
+# setup runs (so any num_layers >= first_k_dense_replace + 1 = 4).
+#
+# Per-mesh validity (note 32x4 Quad requires per-chip >= 64 → isl >= 64*32):
+#   1024 / 25*1024 fit 2x4 and 8x4; 100*1024 also fits 32x4.
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_2K, 8), (SEQ_LEN_25K, 8), (SEQ_LEN_100K, 8)],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -156,6 +166,22 @@ SEQ_LEN_25K = 25 * 1024
             4,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4-subgroups-4",
+        ),
+        # Multi-host Quad. No requires_mesh_topology: that marker uses local
+        # ttnn.get_num_devices() (32) and would always skip the 128-device
+        # 32x4 case. is_galaxy() skipif on num_layers=61 and the mesh_device
+        # fixture handle the gating; under tt-run, ttnn.using_distributed_env()
+        # is True so the fixture's "more devices than available" skip no-ops.
+        pytest.param(
+            (32, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+            },
+            1,
+            ttnn.Topology.Linear,
+            4,
+            id="mesh-32x4-subgroups-4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
