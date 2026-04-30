@@ -495,18 +495,18 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
         per_core_N = N / in1_tile.get_width();
     }
     // K-iteration tuning: pre-refactor hardcoded in0_block_w to 1 or 2 regardless of K
-    // size. With real K sizes (hundreds of tiles in modern models) that's orders of
-    // magnitude more outer-K iterations than necessary. determine_largest_in0_block_w
-    // picks the largest in0_block_w that (a) divides Kt, (b) fits in L1 once double-
-    // buffered in0 + in1 + fixed output/interm footprint is counted, (c) stays under
-    // kMaxAutoTunedInBlockW. The cap limits bf16 accumulation drift: in0_block_w is
-    // the MATH accumulation depth between packer pushes, and bf16's 7-bit mantissa can
-    // miss PCC=0.9999 thresholds on numerically-sensitive downstream paths
-    // (silu + sharded output etc.) at larger block widths. 4 gives a 2x K-iteration
-    // reduction vs the pre-refactor pick of 2 while staying inside what matmul tests
-    // tolerate. Callers that want larger in0_block_w can still pass an explicit
-    // program_config.
-    constexpr uint32_t kMaxAutoTunedInBlockW = 4;
+    // size. determine_largest_in0_block_w picks the largest in0_block_w that (a) divides
+    // Kt, (b) fits in L1 once double-buffered in0 + in1 + fixed output/interm footprint
+    // is counted, (c) stays under kMaxAutoTunedInBlockW. The cap limits bf16 accumulation
+    // drift: in0_block_w is the MATH accumulation depth between packer pushes, and bf16's
+    // 7-bit mantissa can miss tight PCC envelopes at larger block widths. Cap=2 matches
+    // pre-refactor behavior on the common Kt-even path; the only auto-tuner role left is
+    // the L1-budget fallback to 1 on tight shapes. We tried cap=4 (2x K-iteration win on
+    // Kt%4==0) and matmul gtests held PCC=0.9999, but BGE-M3's 24-layer encoder
+    // accumulates the per-matmul drift past the rtol=0.01 dense-similarity envelope
+    // (regression confirmed on test_bge_m3_vllm_dense_embedding). Callers that want
+    // larger in0_block_w can still pass an explicit program_config.
+    constexpr uint32_t kMaxAutoTunedInBlockW = 2;
     const uint32_t Kt = K / in0_tile.get_width();
     const uint32_t in0_tile_size =
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype()));
