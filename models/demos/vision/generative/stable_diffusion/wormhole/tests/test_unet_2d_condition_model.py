@@ -74,21 +74,17 @@ def test_unet_2d_condition_model_512x512(
     ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
-
-    # Developer convenience: set save_to_disk=True to cache the model locally after the first run,
-    # then set load_from_disk=True on subsequent runs to skip the slow HF download/preprocessing.
-    # Both default to False so CI never writes ~1-3 GB to disk unnecessarily.
-    save_to_disk = False
     load_from_disk = False
-
-    if load_from_disk:
-        model = torch.load("unet.pt")
-    else:
+    if not load_from_disk:
         model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
-        if save_to_disk:
-            torch.save(model, "unet.pt")
-
-    config = model.config
+        config = model.config
+        # Uncomment the lines below to cache the model to disk for faster local iteration,
+        # then set load_from_disk = True on subsequent runs to skip the HF download/preprocessing.
+        # torch.save(model, "unet.pt")
+        # torch.save(config, "unet_config.pt")
+    else:
+        model = torch.load("unet.pt")
+        config = torch.load("unet_config.pt")
 
     parameters = preprocess_model_parameters(
         model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
