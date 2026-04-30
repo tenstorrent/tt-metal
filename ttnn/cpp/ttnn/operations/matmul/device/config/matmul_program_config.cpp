@@ -248,6 +248,26 @@ bool row_major_output_fits_in_l1(
     return estimated_size + l1_safety_margin_bytes < max_l1_space;
 }
 
+// matmul_block helper deadlocks when last K-block packs row-major to interm with FUSE_BIAS
+// (pack_last_to_interm) + !packer_l1_acc + num_k_blocks > 1: the upfront
+// reserve_back(row_group_tiles) on the shared interm CB blocks because the previous
+// K-block's subblock-major spill still occupies the full out_block_tiles capacity, and the
+// in1_subblock loop's reload pop_front(1) calls — which would free space — happen AFTER
+// the reserve. The packer_l1_acc=true path has spill_row_major + L1_ACC drain + retire-
+// then-pack ordering that avoid the pre-reserve hazard, so it is safe. Auto-config gates
+// row_major_output off in the unsafe combination so the factory falls back to the
+// subblock-major path (per-pair reserve+pack+push at 1-tile granularity).
+bool row_major_output_kblock_reload_safe(
+    const uint32_t bias_single_tile_size,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t Kt,
+    uint32_t in0_block_w) {
+    const bool fuse_bias = bias_single_tile_size > 0;
+    const bool packer_l1_acc = compute_kernel_config.has_value() ? compute_kernel_config->packer_l1_acc : false;
+    const bool num_k_blocks_gt_1 = (in0_block_w > 0) && (Kt > in0_block_w);
+    return !(fuse_bias && !packer_l1_acc && num_k_blocks_gt_1);
+}
+
 // Delegates to the auto-tuner with fast-path preference and no layout constraints —
 // callers here are auto-config sites that emit row_major_output=true on mcast configs
 // or non-mcast configs whose factory always emits ROW_MAJOR_OUTPUT=1. DST capacity is
@@ -366,18 +386,25 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
-    const bool rmo_fits_systolic = row_major_output_fits_in_l1(
-        input_tensor_a,
-        input_tensor_b,
-        transpose_a,
-        transpose_b,
-        bias_single_tile_size,
-        batch_and_m_tiles_per_core,
-        n_tiles_per_core,
-        k_tiles_per_core,
-        l1_safety_margin_bytes,
-        compute_kernel_config,
-        output_dtype);
+    // Systolic config sets in0_block_w = k_tiles_per_core, so num_k_blocks per core is 1
+    // (compute does a single K-block matmul). Use k_tiles_per_core as the deadlock check's
+    // "Kt" so the gate sees Kt == in0_block_w and stays off — the deadlock requires
+    // num_k_blocks > 1.
+    const bool rmo_fits_systolic =
+        row_major_output_fits_in_l1(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            batch_and_m_tiles_per_core,
+            n_tiles_per_core,
+            k_tiles_per_core,
+            l1_safety_margin_bytes,
+            compute_kernel_config,
+            output_dtype) &&
+        row_major_output_kblock_reload_safe(
+            bias_single_tile_size, compute_kernel_config, k_tiles_per_core, k_tiles_per_core);
     auto_tune::SubblockTuneInputs subblock_inputs_systolic{
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs_systolic.per_core_M = out_block_h;
@@ -524,18 +551,20 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
-    const bool rmo_fits = row_major_output_fits_in_l1(
-        input_tensor_a,
-        input_tensor_b,
-        transpose_a,
-        transpose_b,
-        bias_single_tile_size,
-        per_core_M,
-        per_core_N,
-        in0_block_w,
-        l1_safety_margin_bytes,
-        compute_kernel_config,
-        output_dtype);
+    const bool rmo_fits =
+        row_major_output_fits_in_l1(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            per_core_M,
+            per_core_N,
+            in0_block_w,
+            l1_safety_margin_bytes,
+            compute_kernel_config,
+            output_dtype) &&
+        row_major_output_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, Kt, in0_block_w);
     auto_tune::SubblockTuneInputs subblock_inputs{
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs.per_core_M = out_block_h;
@@ -801,18 +830,23 @@ MatmulProgramConfig create_matmul_program_config(
         n_size / ttnn::TILE_SIZE,
         output_tile_size_bytes_2dmcast,
         num_l1_banks_2dmcast);
-    const bool rmo_fits = row_major_output_fits_in_l1(
-        input_tensor_a,
-        input_tensor_b,
-        transpose_a,
-        transpose_b,
-        bias_single_tile_size,
-        m_tiles_per_core,
-        n_tiles_per_core,
-        k_tiles_per_core,
-        l1_margin_2dmcast,
-        compute_kernel_config,
-        output_dtype);
+    // Each core sees the full K dim in 2D mcast (in0 is mcasted along the row, in1 along
+    // the column), so num_k_blocks = Kt / k_tiles_per_core where in0_block_w = k_tiles_per_core.
+    const uint32_t Kt_2dmcast = k_size / ttnn::TILE_SIZE;
+    const bool rmo_fits =
+        row_major_output_fits_in_l1(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            m_tiles_per_core,
+            n_tiles_per_core,
+            k_tiles_per_core,
+            l1_margin_2dmcast,
+            compute_kernel_config,
+            output_dtype) &&
+        row_major_output_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, Kt_2dmcast, k_tiles_per_core);
     auto_tune::SubblockTuneInputs subblock_inputs{
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs.per_core_M = out_block_h;
@@ -952,18 +986,20 @@ MatmulProgramConfig get_matmul_program_config(
                 N,
                 output_tile_size_bytes_1dmc,
                 num_l1_banks_1dmc);
-            const bool rmo_fits = row_major_output_fits_in_l1(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                per_core_M,
-                per_core_N,
-                in0_block_w,
-                l1_margin_1dmc,
-                compute_kernel_config,
-                output_dtype);
+            const bool rmo_fits =
+                row_major_output_fits_in_l1(
+                    input_tensor_a,
+                    input_tensor_b,
+                    transpose_a,
+                    transpose_b,
+                    bias_single_tile_size,
+                    per_core_M,
+                    per_core_N,
+                    in0_block_w,
+                    l1_margin_1dmc,
+                    compute_kernel_config,
+                    output_dtype) &&
+                row_major_output_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, K, in0_block_w);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
@@ -1060,18 +1096,20 @@ MatmulProgramConfig get_matmul_program_config(
                 N,
                 output_tile_size_bytes_2dmc,
                 num_l1_banks_2dmc);
-            const bool rmo_fits = row_major_output_fits_in_l1(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                per_core_M,
-                per_core_N,
-                in0_block_w,
-                l1_margin_2dmc,
-                compute_kernel_config,
-                output_dtype);
+            const bool rmo_fits =
+                row_major_output_fits_in_l1(
+                    input_tensor_a,
+                    input_tensor_b,
+                    transpose_a,
+                    transpose_b,
+                    bias_single_tile_size,
+                    per_core_M,
+                    per_core_N,
+                    in0_block_w,
+                    l1_margin_2dmc,
+                    compute_kernel_config,
+                    output_dtype) &&
+                row_major_output_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, K, in0_block_w);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
@@ -1614,18 +1652,20 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 Nt,
                 output_tile_size_bytes_simple,
                 num_l1_banks_simple);
-            const bool rmo_fits = row_major_output_fits_in_l1(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                per_core_M,
-                per_core_N,
-                in0_block_w,
-                l1_margin_simple,
-                compute_kernel_config,
-                output_dtype);
+            const bool rmo_fits =
+                row_major_output_fits_in_l1(
+                    input_tensor_a,
+                    input_tensor_b,
+                    transpose_a,
+                    transpose_b,
+                    bias_single_tile_size,
+                    per_core_M,
+                    per_core_N,
+                    in0_block_w,
+                    l1_margin_simple,
+                    compute_kernel_config,
+                    output_dtype) &&
+                row_major_output_kblock_reload_safe(bias_single_tile_size, compute_kernel_config, Kt, in0_block_w);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
