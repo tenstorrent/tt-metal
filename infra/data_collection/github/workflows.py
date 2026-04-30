@@ -30,12 +30,31 @@ def search_for_tt_smi_version_in_log_file_(log_file):
 
 def search_for_tt_smi_reset_in_log_file_(log_file):
 
+    timestamp_pattern = re.compile(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z"
+    )
+
     def parse_ts(line):
         try:
-            ts = line.split(" ")[0]
-            ts = ts.replace("z", "Z")  # normalize
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        except:
+            line = line.strip()
+
+            # Only accept proper GitHub timestamps at start
+            if not timestamp_pattern.match(line):
+                return None
+
+            ts = line.split(" ")[0].replace("z", "Z")
+
+            # Remove Z
+            ts = ts[:-1]
+
+            # Fix GitHub fractional seconds (7 digits → 6)
+            if "." in ts:
+                base, frac = ts.split(".")
+                ts = f"{base}.{frac[:6]}"
+
+            return datetime.fromisoformat(ts)
+
+        except Exception:
             return None
 
     def strip_ansi(text):
@@ -49,17 +68,28 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
 
     capturing = False
     reset_lines = []
+    pre_reset_buffer = []
+    last_seen_ts = None
 
     for line in lines:
         line_clean = line.strip()
         lower = line_clean.lower()
 
+        ts = parse_ts(line)
+        if ts:
+            last_seen_ts = ts
+
+        pre_reset_buffer.append((line, last_seen_ts))
+        if len(pre_reset_buffer) > 20:
+            pre_reset_buffer.pop(0)
+
         if "tt-smi reset" in lower:
             capturing = True
+            reset_lines.extend(pre_reset_buffer)
             logger.info(f"FOUND RESET LINE: {line_clean}")
 
         if capturing:
-            reset_lines.append(line)
+            reset_lines.append((line, last_seen_ts))
 
         if capturing and "tt-smi reset was successful" in lower.replace(".", ""):
             break
@@ -73,13 +103,22 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             "error_summary": "No tt-smi reset found",
         }
 
-    joined = "\n".join(reset_lines).lower()
+    joined = "\n".join([l for (l, _) in reset_lines]).lower()
+
     if "tt-smi reset was successful" in joined:
-        ts_list = [parse_ts(l) for l in reset_lines if parse_ts(l)]
+
+        ts_list = [ts for (_, ts) in reset_lines if ts]
+
+        print("\nDEBUG TIMESTAMPS:")
+        for (l, ts) in reset_lines:
+            if ts:
+                print("OK:", ts, "|", l)
 
         duration = None
         if len(ts_list) >= 2:
             duration = (ts_list[-1] - ts_list[0]).total_seconds()
+        elif len(ts_list) == 1:
+            duration = 0
 
         return {
             "final_status": "SUCCESS",
@@ -89,42 +128,38 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             "error_summary": None,
         }
 
-    return {
-        "final_status": "FAILURE",
-        "num_reset_attempts": None,
-        "num_reset_retries": None,
-        "total_reset_time_sec": None,
-        "error_summary": "Reset detected but not successful",
-    }
-
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
-    log_files = logs_dir.glob("*.log")
+
+    assert logs_dir.exists(), f"Logs dir does not exist: {logs_dir}"
+    assert logs_dir.is_dir(), f"Logs path is not a dir: {logs_dir}"
+
+    log_files = list(logs_dir.glob("*.log"))
+    assert log_files, f"No log files found in {logs_dir}"
 
     github_job_ids_to_tt_smi_versions = {}
     github_job_ids_to_tt_smi_resets = {}
 
     for log_file in log_files:
-        github_job_id = log_file.name.replace(".log", "")
-        assert github_job_id.isnumeric(), f"{github_job_id}"
-        github_job_id = int(github_job_id)
+        github_job_id_str = log_file.name.replace(".log", "")
+        assert github_job_id_str.isnumeric(), f"Unexpected log filename: {log_file.name}"
+        github_job_id = int(github_job_id_str)
 
         tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
         if tt_smi_version:
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
 
         tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
-
-        if tt_smi_reset is None:
-            tt_smi_reset = {
-                "final_status": "UNKNOWN",
-                "num_reset_attempts": None,
-                "num_reset_retries": None,
-                "total_reset_time_sec": None,
-                "error_summary": "Parsing failed",
-            }
+        assert tt_smi_reset is not None, f"Parser returned None for {log_file}"
 
         github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
+
+        if github_job_id in [72824250364, 72824250365, 72824250368]:
+            logger.info(f"DEBUG RESET {github_job_id}: {tt_smi_reset}")
+
+    assert 72824250364 in github_job_ids_to_tt_smi_resets, "72824250364 missing from reset map"
+    assert 72824250365 in github_job_ids_to_tt_smi_resets, "72824250365 missing from reset map"
+    assert 72824250368 in github_job_ids_to_tt_smi_resets, "72824250368 missing from reset map"
 
     return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
 

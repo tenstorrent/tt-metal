@@ -96,12 +96,18 @@ def create_cicd_json_for_data_analysis(
         raw_job.pop("steps", None)
         raw_job.pop("tt_smi_reset", None)
 
+        reset_data = github_job_id_to_smi_resets.get(github_job_id)
+
+        if github_job_id in [72824250364, 72824250365, 72824250368]:
+            logger.info(f"RESET DATA FOR {github_job_id}: {reset_data}")
+            assert reset_data is not None, f"Missing reset_data for {github_job_id}"
+
         job = pydantic_models.Job(
             **raw_job,
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
             tests=tests,
             steps=steps,
-            tt_smi_reset=TtSmiReset(**github_job_id_to_smi_resets.get(github_job_id)),
+            tt_smi_reset=TtSmiReset(**reset_data) if reset_data else None,
         )
         jobs.append(job)
 
