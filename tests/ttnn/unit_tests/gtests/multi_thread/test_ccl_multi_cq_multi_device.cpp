@@ -101,6 +101,22 @@ protected:
         }
         setenv("TT_METAL_FABRIC_HEALTH_PROBE", "1", /*overwrite=*/0);
         MeshDeviceFixtureBase::SetUp();
+        // FIX QW (#42429): Skip immediately if cluster is degraded after SetUp — the
+        // pre-AllGather quiesce_devices() in each test body takes ~100 s on a degraded
+        // cluster (Phase 2.5 + FIX AC teardown burns 5 s per dead ETH channel), only to
+        // produce a SKIP via FIX AA anyway.  By skipping here we avoid that burn.
+        // MeshDeviceFixtureBase::SetUp() → FabricFirmwareInitializer::init()/configure()
+        // already set fabric_relay_path_broken_ (FIX E2) and
+        // fabric_channels_not_ready_for_traffic_ (FIX AN/QD/QU), so the flags are
+        // accurate by the time we reach this check.
+        for (auto* idev : mesh_device_->get_devices()) {
+            if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic()) {
+                GTEST_SKIP() << "FIX QW (#42429): cluster degraded (device " << idev->id()
+                             << " fabric_relay_path_broken=" << idev->is_fabric_relay_path_broken()
+                             << " channels_not_ready=" << idev->is_fabric_channels_not_ready_for_traffic()
+                             << ") — skipping to avoid ~100 s quiesce burn before FIX AA SKIP.";
+            }
+        }
     }
     void TearDown() override {
         MeshDeviceFixtureBase::TearDown();
