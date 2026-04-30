@@ -851,19 +851,34 @@ class TtMolmo2Model(LightweightModule):
             ttnn.deallocate(attn_mask)
 
         x_ttnn = self.ln_f(x_ttnn, mode=Mode.PREFILL)
+
+        # Slice to the last real token on CPU BEFORE applying lm_head.
+        # Applying lm_head to all S tokens allocates S×vocab_size×2 bytes of DRAM
+        # (e.g. 7179×152064×2 = 2.19 GB for a 30-frame video), which OOMs on T3K.
+        # Downloading [1,1,S,4096] and re-uploading [1,1,1,4096] is cheap compared to OOM.
+        x_norm_cpu = ttnn.to_torch(ttnn.get_device_tensors(x_ttnn)[0]).float()
+        ttnn.deallocate(x_ttnn)
+        x_last = x_norm_cpu[:, :, S - 1 : S, :].to(torch.bfloat16)  # [1, 1, 1, 4096]
+        x_last_ttnn = ttnn.from_torch(
+            x_last,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
         logits = ttnn.linear(
-            x_ttnn,
+            x_last_ttnn,
             self.lm_head,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
         )
-        ttnn.deallocate(x_ttnn)
+        ttnn.deallocate(x_last_ttnn)
 
         logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().squeeze(0)
         ttnn.deallocate(logits)
-        # Eager path uses actual S — return last token's logits [1, 1, vocab]
-        return logits_cpu[:, S - 1 : S, :]
+        return logits_cpu  # [1, 1, vocab_size] — last token only
 
     def forward_decode_step(self, new_token_id: int, current_pos: int) -> torch.Tensor:
         """Single-token decode using the filled KV cache.
