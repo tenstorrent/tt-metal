@@ -18,6 +18,24 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+namespace {
+template <tt::CBIndex CbA, tt::CBIndex CbB>
+struct AddTilesOp : compute_kernel_lib::UnaryOp<AddTilesOp<CbA, CbB>, compute_kernel_lib::Dst::D0> {
+    static constexpr bool clobbers_sfpu_lut = false;
+    static constexpr bool clashes_with_fpu = true;
+    ALWI static void init() { add_tiles_init(CbA, CbB); }
+    ALWI static void call(uint32_t dst) { add_tiles(CbA, CbB, 0, 0, dst); }
+};
+
+template <bool LegacyRsqrt>
+struct RsqrtOp : compute_kernel_lib::UnaryOp<RsqrtOp<LegacyRsqrt>, compute_kernel_lib::Dst::D0> {
+    static constexpr bool clobbers_sfpu_lut = true;
+    ALWI static void init() { rsqrt_tile_init<LegacyRsqrt>(); }
+    ALWI static void call(uint32_t dst) { rsqrt_tile<LegacyRsqrt>(dst); }
+};
+}  // namespace
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -84,18 +102,14 @@ void kernel_main() {
          * 1/sqrt(var + eps)
          */
         cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
         reconfig_data_format(cb_var, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
-        add_tiles_init(cb_var, cb_eps);
-        ACQ();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        compute_kernel_lib::eltwise_pipeline<cb_recip_sqrt_var>(
+            onetile,
+            compute_kernel_lib::eltwise_chain(
+                AddTilesOp<tt::CBIndex::c_8, tt::CBIndex::c_4>{}, RsqrtOp<LEGACY_RSQRT>{}));
+
         cb_pop_front(cb_var, 1);
 
         /*

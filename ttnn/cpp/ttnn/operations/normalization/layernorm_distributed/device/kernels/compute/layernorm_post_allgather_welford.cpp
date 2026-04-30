@@ -22,6 +22,23 @@
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "chain_llk.hpp"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+namespace {
+template <tt::CBIndex CbA, tt::CBIndex CbB>
+struct AddTilesAt1 : compute_kernel_lib::UnaryOp<AddTilesAt1<CbA, CbB>, compute_kernel_lib::Dst::D0> {
+    static constexpr bool clobbers_sfpu_lut = false;
+    static constexpr bool clashes_with_fpu = true;
+    ALWI static void init() { add_tiles_init(CbA, CbB); }
+    ALWI static void call(uint32_t dst) { add_tiles(CbA, CbB, 1, 0, dst); }
+};
+struct RsqrtOpLegacy : compute_kernel_lib::UnaryOp<RsqrtOpLegacy, compute_kernel_lib::Dst::D0> {
+    static constexpr bool clobbers_sfpu_lut = true;
+    ALWI static void init() { rsqrt_tile_init<true>(); }
+    ALWI static void call(uint32_t dst) { rsqrt_tile<true>(dst); }
+};
+}  // namespace
+
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats = tt::CBIndex::c_1;
 
@@ -130,20 +147,11 @@ void kernel_main() {
          */
 
         cb_wait_front(cb_stats_reduced, 2);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
         reconfig_data_format(cb_stats_reduced, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        tile_regs_acquire();
-        tile_regs_wait();
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        compute_kernel_lib::eltwise_pipeline<cb_recip_sqrt_var>(
+            onetile, compute_kernel_lib::eltwise_chain(AddTilesAt1<cb_stats_reduced, cb_eps>{}, RsqrtOpLegacy{}));
 
         if constexpr (do_gamma && do_beta) {
             /*
