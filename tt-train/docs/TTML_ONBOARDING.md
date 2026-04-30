@@ -387,11 +387,54 @@ print(f"Prediction for [1, 1]: {prediction.flatten()[0]:.4f}")  # Should be ~1.0
 ctx.close_device()
 ```
 
+### **Dataset Preparation: Tokenization**
+
+Training configs come in two flavors, determined by the data file format:
+
+| Suffix | Data format | Vocab size | Use case |
+|--------|------------|-----------|----------|
+| `*_char.yaml` | Plain text (`.txt`) | Auto-detected from characters (~68-96) | Quick experiments, small models |
+| `*_bpe.yaml` | Pre-tokenized (`.yaml`) | From model config (e.g. 32k, 50k) | Realistic training, correct parameter counts |
+
+The tokenization mode is detected automatically from the `data_path` file extension — no `tokenizer_type` field needed.
+
+**Character tokenization** (`*_char` configs) works out of the box with `data/shakespeare.txt` — no preprocessing needed. The vocab is auto-generated from the text characters. Model configs for char omit `vocab_size` (it's set automatically).
+
+**Pre-tokenized data** requires a tokenized dataset. Each model needs its own tokenized file because vocabularies differ. The model config must specify `vocab_size`, and the script validates that all token IDs in the data fit within it. Use `tools/dataset_to_tokens.py` to generate one:
+
+```bash
+cd tt-train
+source /path/to/tt-metal/python_env/bin/activate
+
+# GPT-2 (50,257 vocab) — data/tokenized_shakespeare.yaml
+python tools/dataset_to_tokens.py \
+    --text_file data/shakespeare.txt \
+    --hf_tokenizer gpt2 \
+    --output_file data/tokenized_shakespeare
+
+# TinyLlama (32,000 vocab) — data/tokenized_shakespeare_tinyllama.yaml
+python tools/dataset_to_tokens.py \
+    --text_file data/shakespeare.txt \
+    --hf_tokenizer TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+    --output_file data/tokenized_shakespeare_tinyllama
+```
+
+The script produces a YAML file containing `tokenizer_vocab_size`, `data_length`, and the flat `tokens` list. The training script validates that all token IDs fit within the model's `vocab_size`.
+
+> **Important**: Using a tokenized dataset with the wrong model causes either a crash (token IDs out of bounds) or incorrect parameter counts. Each pre-tokenized training config is paired with the correct tokenized data for its model.
+
 ### **Example 2: NanoGPT Training**
 
 [Full Python nanogpt training example](/tt-train/sources/examples/nano_gpt/train_nanogpt.py).
 
-To run the nanogpt Python training example: `python3 tt-train/sources/examples/nano_gpt/train_nanogpt.py -c training_shakespeare_nanogpt.yaml`
+To run the nanogpt Python training example:
+```bash
+# Character tokenization (small vocab, quick experiment)
+python3 tt-train/sources/examples/nano_gpt/train_nanogpt.py -c training_shakespeare_nanogpt_char.yaml
+
+# BPE tokenization (full 50k vocab, realistic parameter counts)
+python3 tt-train/sources/examples/nano_gpt/train_nanogpt.py -c training_shakespeare_nanogpt_bpe.yaml
+```
 
 [Full C++ nanogpt training example](/tt-train/sources/examples/nano_gpt/main.cpp).
 
@@ -399,7 +442,7 @@ To run the nanogpt C++ training example:
 ```bash
 export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
 cd tt-train
-./build/sources/examples/nano_gpt/nano_gpt -c ./configs/training_configs/training_shakespeare_nanogpt.yaml
+./build/tt-train/sources/examples/nano_gpt/nano_gpt -c ./tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml
 ```
 
 A complete language model training example:

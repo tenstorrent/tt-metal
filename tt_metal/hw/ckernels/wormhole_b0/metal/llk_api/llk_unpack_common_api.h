@@ -193,6 +193,8 @@ inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srcb_new_operand);
+    _llk_unpack_reconfig_zero_src_flag_(
+        unpack_dst_format[get_operand_id(srca_new_operand)], unpack_dst_format[get_operand_id(srcb_new_operand)]);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
@@ -209,6 +211,8 @@ inline void llk_unpack_reconfig_data_format(
         srca_old_operand, srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
         srcb_old_operand, srcb_new_operand);
+    _llk_unpack_reconfig_zero_src_flag_(
+        unpack_dst_format[get_operand_id(srca_new_operand)], unpack_dst_format[get_operand_id(srcb_new_operand)]);
 }
 
 // TODO NC: Remove as a part of tt-metal#36411

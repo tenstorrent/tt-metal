@@ -15,7 +15,7 @@ using namespace ckernel;
  * @brief MOP configuration for pack of contiguous tiles
  * @details Sets up MOP for packing out tile by tile from the math destination register via Packer 0.
  * Packer 1 (SrcS / PACR1) is not supported here: it requires autoloop programming; use
- * _llk_pack_srcs_config_ / _llk_pack_srcs_ in llk_srcs_tdma.h instead.
+ * _llk_pack_srcs_config_ / _llk_pack_srcs_ in llk_srcs.h instead.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 16-31
  * @param num_tiles: number of tiles to pack at a time

@@ -667,6 +667,7 @@ def assert_numeric_metrics(
     check_frobenius=True,
     check_pcc=True,
     check_ulp=False,
+    assert_on_fail=True,
 ):
     """
     Run one or more numeric similarity checks between a golden tensor and an actual tensor.
@@ -674,6 +675,9 @@ def assert_numeric_metrics(
     Intended for TTNN tests that compare PyTorch reference output against device or CPU
     round-trip results. Individual checks can be disabled when a metric does not apply
     (for example, skip Frobenius for degenerate or non-finite cases).
+
+    This enhanced version evaluates ALL enabled metrics before asserting, providing
+    comprehensive debugging information even when multiple metrics fail.
 
     Args:
         expected_result (Union[ttnn.Tensor, torch.Tensor]): Reference (golden) tensor.
@@ -688,34 +692,118 @@ def assert_numeric_metrics(
         check_frobenius (bool, optional): If True, run relative Frobenius check. Defaults to True.
         check_pcc (bool, optional): If True, run PCC when the tensor has more than one element. Defaults to True.
         check_ulp (bool, optional): If True, run ULP comparison (non-finite mismatches fail). Defaults to False.
+        assert_on_fail (bool, optional): If True, assert when any check fails. If False, return (passed, message) tuple.
+            Defaults to True.
 
     Returns:
-        None
+        None if assert_on_fail=True (default behavior)
+        (bool, str) tuple if assert_on_fail=False: (all_checks_passed, detailed_message)
 
     Raises:
-        AssertionError: If any enabled check fails (shape mismatch, tolerance exceeded, or PCC/ULP below threshold).
+        AssertionError: If assert_on_fail=True and any enabled check fails (shape mismatch, tolerance exceeded, or PCC/ULP below threshold).
 
     Notes:
         - PCC is skipped when ``torch.numel(expected_result) == 1`` because correlation is undefined for a scalar.
         - Allclose and Frobenius use helpers that normalize ``ttnn.Tensor`` inputs to PyTorch tensors.
+        - All enabled metrics are evaluated before asserting, allowing comprehensive debugging.
     """
+    # Normalize tensors
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
+
+    # Validate shapes
+    expected_shape = list(expected_result.shape)
+    actual_shape = list(actual_result.shape)
+    if expected_shape != actual_shape:
+        message = f"Shape mismatch: expected {expected_shape} vs actual {actual_shape}"
+        if assert_on_fail:
+            raise AssertionError(message)
+        return False, message
+
     # Align dtypes first so all downstream numeric checks compare values in the same precision.
     if expected_result.dtype != actual_result.dtype:
         actual_result = actual_result.type(expected_result.dtype)
 
-    # Element-wise tolerance check (absolute + relative).
+    # Collect all metric results
+    overall_passed = True
+    messages = []
+    num_checks_enabled = 0
+    num_checks_passed = 0
+
+    # Check 1: Element-wise tolerance check (absolute + relative).
     if check_allclose:
-        assert_allclose(expected_result, actual_result, rtol=rtol, atol=atol)
+        num_checks_enabled += 1
+        passed, message = comp_allclose(expected_result, actual_result, rtol, atol)
+        # Convert to Python boolean if it's a tensor
+        passed = bool(passed.item() if hasattr(passed, "item") else passed)
+        if passed:
+            num_checks_passed += 1
+            messages.append(f"[ALLCLOSE PASSED] {message}")
+        else:
+            messages.append(f"[ALLCLOSE FAILED] {message}")
+        overall_passed = overall_passed and passed
 
-    # Global error-magnitude check using relative Frobenius norm.
+    # Check 2: Global error-magnitude check using relative Frobenius norm.
     if check_frobenius:
-        assert_relative_frobenius(expected_result, actual_result, threshold=frobenius_threshold)
+        num_checks_enabled += 1
+        rel_frob, is_zero = comp_relative_frobenius(expected_result, actual_result)
+        passed = rel_frob <= frobenius_threshold
+        if passed:
+            num_checks_passed += 1
+            prefix = "[FROBENIUS PASSED]"
+        else:
+            prefix = "[FROBENIUS FAILED]"
 
-    # PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
-    if check_pcc and torch.numel(expected_result) != 1:
-        passing_pcc, pcc_message = comp_pcc(expected_result, actual_result, pcc_threshold)
-        assert passing_pcc, f"pcc={pcc_message}"
+        if is_zero:
+            message = f"Expected norm is 0. Absolute error {rel_frob:.6e} {'<=' if passed else '>'} threshold {frobenius_threshold}"
+        else:
+            message = (
+                f"Relative Frobenius norm {rel_frob:.6e} {'<=' if passed else '>'} threshold {frobenius_threshold}"
+            )
+        messages.append(f"{prefix} {message}")
+        overall_passed = overall_passed and passed
 
-    # ULP-based comparison is stricter for floating-point representation differences.
+    # Check 3: PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
+    if check_pcc:
+        if torch.numel(expected_result) == 1:
+            messages.append("[PCC SKIPPED] PCC undefined for scalar tensors")
+        else:
+            num_checks_enabled += 1
+            passed, pcc_value = comp_pcc(expected_result, actual_result, pcc_threshold)
+            # Convert to Python boolean if it's a tensor
+            passed = bool(passed.item() if hasattr(passed, "item") else passed)
+            if passed:
+                num_checks_passed += 1
+                messages.append(f"[PCC PASSED] PCC={pcc_value:.6f} >= threshold {pcc_threshold}")
+            else:
+                messages.append(f"[PCC FAILED] PCC={pcc_value:.6f} < threshold {pcc_threshold}")
+            overall_passed = overall_passed and passed
+
+    # Check 4: ULP-based comparison is stricter for floating-point representation differences.
     if check_ulp:
-        assert_with_ulp(expected_result, actual_result, ulp_threshold=ulp_threshold, allow_nonfinite=False)
+        num_checks_enabled += 1
+        passed, message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite=False)
+        # Convert to Python boolean if it's a tensor
+        passed = bool(passed.item() if hasattr(passed, "item") else passed)
+        if passed:
+            num_checks_passed += 1
+            messages.append(f"[ULP PASSED] {message}")
+        else:
+            messages.append(f"[ULP FAILED] {message}")
+        overall_passed = overall_passed and passed
+
+    # Build final message
+    if num_checks_enabled == 0:
+        header = "No checks enabled"
+    else:
+        header = f"Numeric metrics: {num_checks_passed}/{num_checks_enabled} checks passed"
+        if not overall_passed:
+            header = f"Numeric metrics comparison failed: {num_checks_passed}/{num_checks_enabled} checks passed"
+
+    details = "\n".join(messages)
+    full_message = header if not details else header + "\n" + details
+    # Return or assert based on flag
+    if assert_on_fail:
+        assert overall_passed, full_message
+    else:
+        return overall_passed, full_message

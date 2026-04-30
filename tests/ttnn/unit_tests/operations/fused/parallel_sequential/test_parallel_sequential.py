@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 
 
 def stress_test_program_cache(fn):
@@ -244,7 +244,6 @@ class TestInfrastructure:
 class TestSequentialExecution:
     """Core sequential chain execution tests."""
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_phases", [2, 3, 4])
     @stress_test_program_cache
     def test_norm_chain(self, device, num_phases):
@@ -392,7 +391,6 @@ class TestSequentialExecution:
 class TestShardedExecution:
     """Sharded (L1) execution tests."""
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize(
         "shard_type",
         [
@@ -448,7 +446,8 @@ class TestShardedExecution:
         golden = rms_norm_golden(sh_ln_golden(torch_input, weight=torch_w), torch_w)
         check_pcc(golden, out, label=f"sharded {shard_type}")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
+    @skip_with_llk_assert("Program too large for kernel config buffer. Will not fix.")
     @stress_test_program_cache
     def test_sharded_three_phase(self, device):
         """3-phase LN->RMS->LN block-sharded on 4x4 grid."""
@@ -500,7 +499,6 @@ class TestShardedExecution:
         golden = sh_ln_golden(g, weight=torch_ws[2])
         check_pcc(golden, out, label="sharded 3-phase")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @stress_test_program_cache
     def test_sharded_with_bias_residual(self, device):
         """LN(bias+residual)->RMS block-sharded, single-stage."""
@@ -711,7 +709,7 @@ class TestMatmulFusion:
         golden = torch_rms_norm(torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float(), torch_w.float())
         check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
     @pytest.mark.parametrize("num_rms", [2, 3, 4])
     @stress_test_program_cache
     def test_matmul_followed_by_n_rms(self, device, num_rms):
@@ -943,7 +941,6 @@ class TestBranchingTopology:
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
             check_pcc(goldens[i], outs[i], label=label)
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     @stress_test_program_cache
     def test_asymmetric_deep_left(self, device):
         """Deep left + shallow right.
@@ -1058,7 +1055,6 @@ class TestParallelExecution:
             )
             check_pcc(golden, chain_outs[i][0], label=f"chain {i}")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @stress_test_program_cache
     def test_matmul_plus_fused_chain(self, device):
         """Matmul + 3-phase norm chain on disjoint cores."""

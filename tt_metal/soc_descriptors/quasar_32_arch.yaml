@@ -21,7 +21,7 @@ dram_views:
       address_offset: 0
     },
     {
-      channel: 0,
+      channel: 1,
       eth_endpoint: [0,0],
       worker_endpoint: [0,0],
       address_offset: 0
