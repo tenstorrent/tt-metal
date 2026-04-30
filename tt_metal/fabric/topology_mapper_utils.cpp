@@ -1818,6 +1818,8 @@ void add_pinning_constraints(
             }
         }
     }
+    // TODO: Would like to communicate this to the caller so they can fail the mapping if any pinnings are skipped.
+    // https://github.com/tenstorrent/tt-metal/issues/43451
     if (!success) {
         log_warning(
             tt::LogFabric,
